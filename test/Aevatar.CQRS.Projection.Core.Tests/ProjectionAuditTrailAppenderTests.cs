@@ -1,0 +1,242 @@
+using System.Security.Cryptography;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Core.Projection;
+using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+
+namespace Aevatar.CQRS.Projection.Core.Tests;
+
+public sealed class ProjectionAuditTrailAppenderTests
+{
+    [Fact]
+    public async Task AppendAsync_ShouldWriteAuditArtifactDocument_WithCopiedFieldsAndContentHash()
+    {
+        var store = new RecordingAuditTrailArtifactStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+        var record = CreateRecord("audit-1");
+
+        var result = await appender.AppendAsync(record);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Appended);
+        result.AuditId.Should().Be("audit-1");
+        result.AuditActorId.Should().Be("actor-audit-1");
+        result.OccurredAt.Should().Be(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00"));
+        var document = store.Documents.Should().ContainSingle().Subject;
+        document.Id.Should().Be("audit-1");
+        document.AuditId.Should().Be("audit-1");
+        document.ContentHash.Should().Be(ComputeContentHash(record));
+        document.Record.Should().NotBeSameAs(record);
+        document.Record.Should().Be(record);
+        document.OccurredAt.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00"));
+        document.UpdatedAt.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00"));
+        document.AuditActorId.Should().Be("actor-audit-1");
+        document.ScopeId.Should().Be("scope-audit-1");
+        document.OperationName.Should().Be("audit.operation");
+        document.Outcome.Should().Be(AuditOutcome.Success);
+        document.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
+        document.TargetKind.Should().Be("workflow");
+        document.TargetId.Should().Be("target-audit-1");
+        document.RequestId.Should().Be("request-audit-1");
+        document.CommandId.Should().Be("command-audit-1");
+        document.CorrelationId.Should().Be("trace-audit-1");
+        document.SessionId.Should().Be("session-audit-1");
+        document.WorkflowRunId.Should().Be("run-audit-1");
+        document.CommittedEventId.Should().Be("event-audit-1");
+        document.CommittedActorId.Should().Be("committed-actor-audit-1");
+        document.CommittedActorType.Should().Be("CommittedActorType");
+        document.CommittedEventTypeUrl.Should().Be("type.googleapis.com/aevatar.audit.TestEvent");
+        document.CommittedStateVersion.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenExistingContentHashMatches_ShouldReturnDuplicateWithoutWriting()
+    {
+        var record = CreateRecord("audit-1");
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            Existing = new AuditTrailDocument
+            {
+                AuditId = "audit-1",
+                ContentHash = ComputeContentHash(record),
+            },
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(record);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Duplicate);
+        result.AuditId.Should().Be("audit-1");
+        store.Documents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenExistingContentHashDiffers_ShouldReturnConflictWithoutWriting()
+    {
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            Existing = new AuditTrailDocument
+            {
+                AuditId = "audit-1",
+                ContentHash = "different-content",
+            },
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(CreateRecord("audit-1"));
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Conflict);
+        result.Message.Should().Contain("different content");
+        store.Documents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenArtifactStoreReportsConflict_ShouldReturnConflict()
+    {
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            WriteResult = AuditTrailArtifactWriteResult.Conflict(),
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(CreateRecord("audit-1"));
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Conflict);
+        result.Message.Should().Contain("write conflict");
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenAuditIdIsBlank_ShouldReturnConflictWithoutReadingStore()
+    {
+        var store = new RecordingAuditTrailArtifactStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(CreateRecord(" "));
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Conflict);
+        result.AuditId.Should().BeEmpty();
+        result.Message.Should().Contain("Audit id is required");
+        store.ReadCount.Should().Be(0);
+        store.Documents.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(ThrowOn.Read)]
+    [InlineData(ThrowOn.Write)]
+    public async Task AppendAsync_WhenArtifactStoreThrows_ShouldReturnStoreUnavailable(ThrowOn throwOn)
+    {
+        var store = new RecordingAuditTrailArtifactStore { ThrowOn = throwOn };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(CreateRecord("audit-1"));
+
+        result.Status.Should().Be(AuditTrailAppendStatus.StoreUnavailable);
+        result.AuditId.Should().Be("audit-1");
+        result.Message.Should().Be($"artifact store {throwOn.ToString().ToLowerInvariant()} failed");
+    }
+
+    [Theory]
+    [InlineData(CancelOn.Read)]
+    [InlineData(CancelOn.Write)]
+    public async Task AppendAsync_WhenArtifactStoreObservesCancelledToken_ShouldPreserveCancellation(CancelOn cancelOn)
+    {
+        var store = new RecordingAuditTrailArtifactStore { CancelOn = cancelOn };
+        var appender = new ProjectionAuditTrailAppender([store]);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        Func<Task> act = () => appender.AppendAsync(CreateRecord("audit-1"), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    private static AuditRecord CreateRecord(string auditId) =>
+        new()
+        {
+            AuditId = auditId,
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00")),
+            ScopeId = $"scope-{auditId}",
+            AuditActorId = $"actor-{auditId}",
+            OperationName = "audit.operation",
+            Outcome = AuditOutcome.Success,
+            SensitivityLevel = AuditSensitivityLevel.Confidential,
+            Target = new AuditTarget
+            {
+                Kind = "workflow",
+                Id = $"target-{auditId}",
+            },
+            Correlation = new AuditCorrelation
+            {
+                TraceId = $"trace-{auditId}",
+                RequestId = $"request-{auditId}",
+                CommandId = $"command-{auditId}",
+                SessionId = $"session-{auditId}",
+                WorkflowRunId = $"run-{auditId}",
+            },
+            CommittedFactRef = new AuditCommittedFactReference
+            {
+                CommittedEventId = $"event-{auditId}",
+                ActorId = $"committed-actor-{auditId}",
+                ActorType = "CommittedActorType",
+                EventTypeUrl = "type.googleapis.com/aevatar.audit.TestEvent",
+                StateVersion = 42,
+            },
+        };
+
+    private static string ComputeContentHash(AuditRecord record) =>
+        Convert.ToHexString(SHA256.HashData(record.ToByteArray())).ToLowerInvariant();
+
+    private sealed class RecordingAuditTrailArtifactStore : IAuditTrailArtifactStore
+    {
+        public AuditTrailDocument? Existing { get; init; }
+
+        public AuditTrailArtifactWriteResult WriteResult { get; init; } = AuditTrailArtifactWriteResult.Applied();
+
+        public CancelOn CancelOn { get; init; } = CancelOn.None;
+
+        public ThrowOn ThrowOn { get; init; } = ThrowOn.None;
+
+        public int ReadCount { get; private set; }
+
+        public List<AuditTrailDocument> Documents { get; } = [];
+
+        public Task<AuditTrailDocument?> GetAsync(string auditId, CancellationToken ct = default)
+        {
+            ReadCount++;
+            if (ThrowOn == ThrowOn.Read)
+                throw new InvalidOperationException("artifact store read failed");
+
+            if (CancelOn == CancelOn.Read)
+                ct.ThrowIfCancellationRequested();
+
+            return Task.FromResult(Existing?.Clone());
+        }
+
+        public Task<AuditTrailArtifactWriteResult> UpsertAsync(AuditTrailDocument document, CancellationToken ct = default)
+        {
+            if (ThrowOn == ThrowOn.Write)
+                throw new InvalidOperationException("artifact store write failed");
+
+            if (CancelOn == CancelOn.Write)
+                ct.ThrowIfCancellationRequested();
+
+            Documents.Add(document.Clone());
+            return Task.FromResult(WriteResult);
+        }
+    }
+
+    public enum CancelOn
+    {
+        None = 0,
+        Read = 1,
+        Write = 2,
+    }
+
+    public enum ThrowOn
+    {
+        None = 0,
+        Read = 1,
+        Write = 2,
+    }
+}

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 
 namespace Aevatar.AI.ToolProviders.AgentCatalog;
@@ -27,17 +28,20 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly IUserAgentCatalogCommandPort _commandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
+    private readonly ISecretVault _secretVault;
     private readonly IScheduledAgentApiKeyIssuer? _apiKeyIssuer;
 
     public AgentDeliveryTargetTool(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
         ICallerScopeResolver callerScopeResolver,
+        ISecretVault secretVault,
         IScheduledAgentApiKeyIssuer? apiKeyIssuer = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
+        _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
         _apiKeyIssuer = apiKeyIssuer;
     }
 
@@ -119,7 +123,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         {
             return action switch
             {
-                "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _apiKeyIssuer, token, caller, root, ct),
+                "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _secretVault, _apiKeyIssuer, token, caller, root, ct),
                 "upsert" => await UpsertAsync(_queryPort, _commandPort, caller, root, ct),
                 "delete" => await DeleteAsync(_queryPort, _commandPort, caller, root, ct),
                 _ => await ListAsync(_queryPort, caller, ct),
@@ -133,6 +137,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
         ICallerScopeResolver callerScopeResolver,
+        ISecretVault secretVault,
         IScheduledAgentApiKeyIssuer? apiKeyIssuer,
         string token,
         OwnerScope caller,
@@ -206,6 +211,14 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (!key.Success)
             return key.ToErrorJson();
 
+        var storedKey = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            BuildScheduledNyxApiKeyOwnerScopeKey(caller, keyScopeId, conversationId.value!, deliveryTargetId.value!),
+            key.ApiKeyId ?? string.Empty,
+            key.FullKey ?? string.Empty,
+            "delivery-target-create"),
+            ct);
+
         try
         {
             await commandPort.UpsertAsync(
@@ -214,7 +227,8 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                     AgentId = deliveryTargetId.value!,
                     ConversationId = conversationId.value!,
                     NyxProviderSlug = nyxProviderSlug.value!,
-                    NyxApiKey = key.FullKey ?? string.Empty,
+                    NyxApiKey = string.Empty,
+                    NyxApiKeyReference = storedKey.Reference,
                     ApiKeyId = key.ApiKeyId ?? string.Empty,
                     AgentType = "delivery_target",
                     TemplateName = "explicit_delivery_target",
@@ -240,8 +254,34 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             nyx_provider_slug = nyxProviderSlug.value,
             api_key_id = key.ApiKeyId,
             note = "Delivery target create accepted. Projection is propagating; try 'list' after a few seconds.",
-        });
+            });
     }
+
+    private static string BuildScheduledNyxApiKeyOwnerScopeKey(
+        OwnerScope caller,
+        string scopeId,
+        string conversationId,
+        string deliveryTargetId)
+    {
+        var platform = Normalize(caller.Platform) ?? OwnerScope.NyxIdPlatform;
+        var nyxUserId = Normalize(caller.NyxUserId) ?? string.Empty;
+        var registrationScopeId = Normalize(caller.RegistrationScopeId) ?? string.Empty;
+        var senderId = Normalize(caller.SenderId) ?? string.Empty;
+        return string.Join(
+            ":",
+            "scheduled",
+            Escape(platform),
+            Escape(nyxUserId),
+            Escape(registrationScopeId),
+            Escape(senderId),
+            Escape(Normalize(scopeId) ?? string.Empty),
+            Escape(Normalize(conversationId) ?? string.Empty),
+            Escape(Normalize(deliveryTargetId) ?? string.Empty));
+    }
+
+    private static string Escape(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(":", "\\:", StringComparison.Ordinal);
 
     private static string? GetStr(JsonElement el, params string[] properties)
     {
@@ -423,11 +463,17 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
     private static (string? value, string? error) GetRequired(JsonElement args, string errorMessage, params string[] keys)
     {
-        var value = GetStr(args, keys)?.Trim();
+        var value = Normalize(GetStr(args, keys));
         if (!string.IsNullOrWhiteSpace(value))
             return (value, null);
 
         return (null, JsonSerializer.Serialize(new { error = errorMessage }));
+    }
+
+    private static string? Normalize(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
 
     private static string ResolveDeliveryPlatform(UserAgentCatalogReadModelEntry entry) =>

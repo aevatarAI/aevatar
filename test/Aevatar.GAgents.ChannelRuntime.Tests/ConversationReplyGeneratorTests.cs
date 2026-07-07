@@ -57,6 +57,15 @@ public sealed class ConversationReplyGeneratorTests
                 SenderBinding = new AgentToolSenderBindingContext(senderBindingId),
             };
 
+    // A channel-relay tool context carries the typed channel identity (platform/sender/message) that
+    // survives metadata stripping and every LLM round — the signal the human-only tool gate keys on.
+    private static AgentToolExecutionContext RelayToolContext(string senderBindingId, string messageId = "msg-relay") =>
+        AgentToolExecutionContext.Empty with
+        {
+            SenderBinding = new AgentToolSenderBindingContext(senderBindingId),
+            Channel = new AgentToolChannelContext("lark", "ou_user_1", "scope-1", messageId, null),
+        };
+
     private static ChatActivity CreateLarkImageActivity(
         string id,
         string text,
@@ -374,6 +383,108 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_InChannelRelayTurn_GatesOutHumanSessionTools()
+    {
+        // Issue #2580 Item 2: in a channel-relay turn the effective credential is bot-class, so a
+        // tool declaring RequiresHumanSession is filtered out (never offered), while a delegated tool
+        // stays. A console/studio (non-channel) turn keeps the full set.
+        var providerFactory = new RecordingProviderFactory { Capabilities = MultimodalCapabilities };
+        var toolSource = new StubToolSource(
+            new HumanSessionStubTool("human_only_tool"),
+            new StubTool("delegated_tool"));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [toolSource]);
+        var activity = CreateLarkActivity("msg-gate", "hi", "om_gate", token: "runtime-token");
+        var channelMetadata = new Dictionary<string, string>
+        {
+            [ChannelMetadataKeys.Platform] = "lark",
+            [ChannelMetadataKeys.SenderId] = "ou_user_1",
+            [ChannelMetadataKeys.MessageId] = "msg-gate",
+        };
+
+        var channelPlan = await generator.BuildStepPlanAsync(
+            activity, channelMetadata, Control(token: "runtime-token"), RelayToolContext("bnd-1", "msg-gate"),
+            priorHistory: null, attachmentContext: null, forceDisableTools: false, CancellationToken.None);
+        var channelToolNames = OfferedToolNames(channelPlan);
+
+        channelToolNames.Should().Contain("delegated_tool");
+        channelToolNames.Should().NotContain("human_only_tool",
+            "the human-session tool would be rejected by the broker in a relay turn, so it must not be offered");
+
+        // A non-channel (console/studio) human-session turn (no typed channel context) keeps the full set.
+        var consolePlan = await generator.BuildStepPlanAsync(
+            activity, new Dictionary<string, string>(), Control(token: "runtime-token"), ToolContext("bnd-1"),
+            priorHistory: null, attachmentContext: null, forceDisableTools: false, CancellationToken.None);
+        var consoleToolNames = OfferedToolNames(consolePlan);
+
+        consoleToolNames.Should().Contain("delegated_tool");
+        consoleToolNames.Should().Contain("human_only_tool");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InLaterRelayRoundWithStrippedMetadata_StillGatesHumanSessionTools()
+    {
+        // Issue #2580 Item 2 regression (PR #2583 review): from the second LLM round the per-step
+        // metadata no longer carries channel.platform / sender_id / message_id (owned control keys
+        // stripped by AgentToolExecutionContextMapper.StripOwnedControlKeys), so a metadata-based gate
+        // would re-offer the human-only tools. With the typed channel context still present, the gate
+        // must stay on — otherwise a relay turn could call a relay-safe tool, advance a round, and
+        // regain nyxid_api_keys / nyxid_services under a bot-class token.
+        var providerFactory = new RecordingProviderFactory { Capabilities = MultimodalCapabilities };
+        var toolSource = new StubToolSource(
+            new HumanSessionStubTool("human_only_tool"),
+            new StubTool("delegated_tool"));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [toolSource]);
+        var activity = CreateLarkActivity("msg-round2", "next round", "om_round2", token: "runtime-token");
+
+        // Round 2+ shape: channel.* metadata keys already stripped, typed channel context retained.
+        var plan = await generator.BuildStepPlanAsync(
+            activity, new Dictionary<string, string>(), Control(token: "runtime-token"), RelayToolContext("bnd-1", "msg-round2"),
+            priorHistory: null, attachmentContext: null, forceDisableTools: false, CancellationToken.None);
+        var toolNames = OfferedToolNames(plan);
+
+        toolNames.Should().Contain("delegated_tool");
+        toolNames.Should().NotContain("human_only_tool",
+            "the durable typed channel context must keep the human-only gate on after the channel metadata is stripped");
+    }
+
+    private static IReadOnlyList<string> OfferedToolNames(AgentRunReplyStepPlan plan)
+    {
+        var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
+            [ChatMessage.User("hi")],
+            requestId: "req",
+            plan.Metadata,
+            plan.ToolContext,
+            plan.LlmControl,
+            round: 0,
+            finalNoTools: false);
+        return (llmRequest.Tools ?? []).Select(tool => tool.Name).ToArray();
+    }
+
+    private sealed class StubToolSource(params IAgentTool[] tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
+    }
+
+    private class StubTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => """{"type":"object","properties":{}}""";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class HumanSessionStubTool(string name) : StubTool(name), IAgentToolCapabilityDescriptor
+    {
+        public IReadOnlyCollection<string> Capabilities => [AgentToolCapabilities.RequiresHumanSession];
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithTextOnlyProviderAndImageAttachment_AddsHonestVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(
@@ -684,6 +795,78 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal)
             .Should()
             .BeLessThan(systemPrompt.IndexOf("ou_sender_1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_ThreadsChannelPlatformIntoOverlayRequest()
+    {
+        // Context-aware injection (issue #2498): the channel seam must resolve the overlay for the
+        // turn's channel platform so a lark turn gets lark-scoped members and other platforms do not.
+        var overlayProvider = new StubSystemSkillOverlayProvider("## overlay\n- context-aware");
+        var generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            overlayProvider: overlayProvider);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-overlay-platform",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_2" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.ChatType] = "group",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_2",
+                [ChannelMetadataKeys.ConversationId] = "oc_2",
+            },
+            streamingSink: null,
+            CancellationToken.None);
+
+        overlayProvider.LastRequest.Platform.Should().Be("lark");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_ResolvesOverlayPlatformFromTypedChannelContext()
+    {
+        // The per-step plan path strips owned control keys (channel.platform included) from the
+        // external metadata it hands to prompt construction, so the overlay platform must come from
+        // the typed channel context — reading metadata alone would silently degrade platform-scoped
+        // overlay members to global-only on every AgentRun turn (issue #2498).
+        var overlayProvider = new StubSystemSkillOverlayProvider("## overlay\n- per-step context-aware");
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            overlayProvider: overlayProvider);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = AgentToolChannelContext.Empty with { Platform = "lark" },
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "msg-overlay-step-platform",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference { CanonicalKey = "lark:group:oc_3" },
+                Content = new MessageContent { Text = "hello" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_sender_3",
+            },
+            llmControl: null,
+            toolContext: toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        overlayProvider.LastRequest.Platform.Should().Be("lark");
+        plan.InitialMessages.First(message => message.Role == "system").Content
+            .Should().Contain("per-step context-aware");
     }
 
     [Theory]
@@ -2110,10 +2293,15 @@ public sealed class ConversationReplyGeneratorTests
 
     private sealed class StubSystemSkillOverlayProvider(string? overlayMarkdown) : ISystemSkillOverlayProvider
     {
-        public SystemSkillOverlay? GetCurrent() =>
-            overlayMarkdown is null
+        public SystemSkillOverlayRequest LastRequest { get; private set; }
+
+        public SystemSkillOverlay? GetCurrent(SystemSkillOverlayRequest request)
+        {
+            LastRequest = request;
+            return overlayMarkdown is null
                 ? null
                 : new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown };
+        }
     }
 
     private sealed class RecordingStreamingSink : IStreamingReplySink

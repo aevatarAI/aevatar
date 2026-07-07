@@ -2,6 +2,10 @@ import { Input, Typography } from 'antd';
 import React, { useMemo } from 'react';
 import { RuntimeEventPreviewPanel } from '@/shared/agui/runtimeConversationPresentation';
 import { AevatarContextDrawer } from '@/shared/ui/aevatarPageShells';
+import {
+  getUserFacingIdentifierLabel,
+  sanitizeUserFacingText,
+} from '@/shared/ui/userFacingIdentifiers';
 import type {
   CurrentRunRequest,
   InvokeHistoryEntry,
@@ -55,25 +59,29 @@ function readEventString(event: unknown, key: string): string {
   return typeof value === 'string' ? value : '';
 }
 
+function sanitizeVisibleText(value: string | null | undefined): string {
+  return sanitizeUserFacingText(value) || '';
+}
+
 function getEventPreview(event: unknown): string {
   const delta = readEventString(event, 'delta');
   if (delta) {
-    return delta;
+    return sanitizeVisibleText(delta);
   }
 
   const message = readEventString(event, 'message');
   if (message) {
-    return message;
+    return sanitizeVisibleText(message);
   }
 
   const name = readEventString(event, 'name');
   if (name) {
-    return name;
+    return sanitizeVisibleText(name);
   }
 
   const stepName = readEventString(event, 'stepName');
   if (stepName) {
-    return stepName;
+    return sanitizeVisibleText(stepName);
   }
 
   return '';
@@ -586,7 +594,13 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                     )}
                     value={
                       <MetadataValue
-                        value={historyEntry.endpointLabel || endpointLabel}
+                        value={getUserFacingIdentifierLabel(
+                          historyEntry.endpointLabel || endpointLabel,
+                          t(
+                            'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready',
+                            'Endpoint ready',
+                          ),
+                        )}
                       />
                     }
                   />
@@ -623,7 +637,9 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                       <div style={{ minWidth: 0 }}>
                         <div style={contractValueStyle}>{item.label}</div>
                         {item.detail ? (
-                          <div style={helperTextStyle}>{item.detail}</div>
+                          <div style={helperTextStyle}>
+                            {sanitizeVisibleText(item.detail)}
+                          </div>
                         ) : null}
                       </div>
                     </div>
@@ -698,7 +714,17 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                     'pages.studio.studioinvokediagnosticsdrawer.endpoint.2',
                     'Endpoint',
                   )}
-                  value={<MetadataValue value={endpointLabel} />}
+                  value={
+                    <MetadataValue
+                      value={getUserFacingIdentifierLabel(
+                        endpointLabel,
+                        t(
+                          'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready',
+                          'Endpoint ready',
+                        ),
+                      )}
+                    />
+                  }
                 />
                 <MetadataItem
                   label={t(
@@ -732,27 +758,6 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                     </div>
                   }
                 />
-                <MetadataItem
-                  label={t(
-                    'pages.studio.studioinvokediagnosticsdrawer.run.id',
-                    'Run ID',
-                  )}
-                  value={<MetadataValue value={invokeResult.runId} />}
-                />
-                <MetadataItem
-                  label={t(
-                    'pages.studio.studioinvokediagnosticsdrawer.command.id',
-                    'Command ID',
-                  )}
-                  value={<MetadataValue value={invokeResult.commandId} />}
-                />
-                <MetadataItem
-                  label={t(
-                    'pages.studio.studioinvokediagnosticsdrawer.actor.id',
-                    'Actor ID',
-                  )}
-                  value={<MetadataValue value={invokeResult.actorId} />}
-                />
               </div>
             </div>
 
@@ -761,7 +766,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                 {t('pages.studio.studioinvokediagnosticsdrawer.output', 'Output')}
               </span>
               {outputText ? (
-                <p style={outputTextStyle}>{outputText}</p>
+                <p style={outputTextStyle}>{sanitizeVisibleText(outputText)}</p>
               ) : (
                 <Typography.Text style={helperTextStyle} type="secondary">
                   {t(
@@ -780,7 +785,7 @@ const StudioInvokeDiagnosticsDrawer: React.FC<
                 )}
               </summary>
               <pre style={rawOutputStyle}>
-                {currentRawOutput ||
+                {sanitizeVisibleText(currentRawOutput) ||
                   t(
                     'pages.studio.studioinvokediagnosticsdrawer.no.raw.json',
                     'No raw JSON.',

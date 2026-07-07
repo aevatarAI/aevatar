@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Platform.Lark;
@@ -172,15 +173,32 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ErrorJson: null);
     }
 
-    public ScheduledAgentCreateMapResult Map(
+    private readonly ISecretVault _secretVault;
+
+    public ScheduledAgentCreateRequestMapper(ISecretVault secretVault)
+    {
+        _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
+    }
+
+    public async Task<ScheduledAgentCreateMapResult> MapAsync(
         ScheduledAgentCreatePlannedRequest request,
-        ScheduledAgentApiKeyIssueResult issuedKey)
+        ScheduledAgentApiKeyIssueResult issuedKey,
+        CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(issuedKey);
 
         if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId) || string.IsNullOrWhiteSpace(issuedKey.FullKey))
             return ScheduledAgentCreateMapResult.Failed("api_key_unavailable");
+
+        var ownerScopeKey = BuildScheduledNyxApiKeyOwnerScopeKey(request.Caller, request.ScopeId, request.ConversationId, request.ReceiveTarget.Primary.ReceiveId);
+        var storedKey = await _secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            ownerScopeKey,
+            issuedKey.ApiKeyId,
+            issuedKey.FullKey,
+            "scheduled-agent-create"),
+            ct);
 
         var command = new InitializeSkillRunnerCommand
         {
@@ -212,7 +230,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
             {
                 ConversationId = request.ConversationId,
                 NyxProviderSlug = request.PrimaryOutboundSlug,
-                NyxApiKey = issuedKey.FullKey,
+                NyxApiKey = string.Empty,
+                NyxApiKeyReference = storedKey.Reference,
                 ApiKeyId = issuedKey.ApiKeyId,
                 LarkReceiveId = request.ReceiveTarget.Primary.ReceiveId,
                 LarkReceiveIdType = request.ReceiveTarget.Primary.ReceiveIdType,
@@ -240,6 +259,32 @@ internal sealed class ScheduledAgentCreateRequestMapper
             RunImmediately: request.RunImmediately,
             ErrorJson: null);
     }
+
+    private static string BuildScheduledNyxApiKeyOwnerScopeKey(
+        OwnerScope caller,
+        string scopeId,
+        string conversationId,
+        string receiveId)
+    {
+        var platform = Normalize(caller.Platform) ?? OwnerScope.NyxIdPlatform;
+        var nyxUserId = Normalize(caller.NyxUserId) ?? string.Empty;
+        var registrationScopeId = Normalize(caller.RegistrationScopeId) ?? string.Empty;
+        var senderId = Normalize(caller.SenderId) ?? string.Empty;
+        return string.Join(
+            ":",
+            "scheduled",
+            Escape(platform),
+            Escape(nyxUserId),
+            Escape(registrationScopeId),
+            Escape(senderId),
+            Escape(Normalize(scopeId) ?? string.Empty),
+            Escape(Normalize(conversationId) ?? string.Empty),
+            Escape(Normalize(receiveId) ?? string.Empty));
+    }
+
+    private static string Escape(string value) =>
+        value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(":", "\\:", StringComparison.Ordinal);
 
     private static string? Normalize(string? value)
     {

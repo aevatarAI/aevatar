@@ -20,7 +20,9 @@ public sealed class AevatarPlatformCompositionOptions
 
     public bool EnableWorkflowCapability { get; set; } = true;
 
-    public bool EnableScriptingCapability { get; set; } = true;
+    // Security lockdown (2026-07): scripting executes tenant-supplied C# in-process via Roslyn.
+    // The capability is disabled by default; a host must opt in explicitly to compose it.
+    public bool EnableScriptingCapability { get; set; }
 
     public bool EnableMakerExtensions { get; set; }
 
@@ -50,8 +52,7 @@ public static class AevatarPlatformHostBuilderExtensions
                 aiOptions.EnableOrnnSkills = true;
                 aiOptions.OrnnNyxIdSlug = builder.Configuration["Aevatar:Ornn:NyxIdSlug"];
                 aiOptions.EnableSystemSkillOverlay = ReadBoolean(builder.Configuration["Aevatar:SystemSkills:Enabled"]);
-                aiOptions.SystemSkillOverlayTag = builder.Configuration["Aevatar:SystemSkills:Tag"];
-                aiOptions.SystemSkillOverlayOrgServiceToken = builder.Configuration["Aevatar:SystemSkills:OrgServiceToken"];
+                aiOptions.SystemSkillOverlaySetName = builder.Configuration["Aevatar:SystemSkills:SetName"];
                 if (TimeSpan.TryParse(builder.Configuration["Aevatar:SystemSkills:RefreshTtl"], out var refreshTtl))
                     aiOptions.SystemSkillOverlayRefreshTtl = refreshTtl;
                 if (int.TryParse(builder.Configuration["Aevatar:SystemSkills:MaxSkills"], out var maxSkills))

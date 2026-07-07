@@ -112,6 +112,12 @@ public static class IdentityServiceCollectionExtensions
         var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
         if (configuration is not null)
             aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
+        // Default ES ACL probe: reports Unavailable (no cluster to inspect) so the
+        // startup guard resolves and never blocks on the InMemory projection
+        // provider (dev/tests). A host that runs the Elasticsearch projection store
+        // replaces this with a real HTTP-backed probe that inspects the cluster
+        // security API using the same endpoint/credentials as the projection store.
+        services.TryAddSingleton<IOAuthClientEsAclProbe, UnavailableOAuthClientEsAclProbe>();
 
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
         // callers before model binding/DI resolution kicks in.

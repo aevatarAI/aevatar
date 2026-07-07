@@ -17,6 +17,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Scripting.Application;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -41,6 +42,9 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddWorkflowProjectionReadModelProviders(configuration);
+        // Scripting is opt-in: the host composes the scripting capability first, and
+        // AddGAgentServiceCapability bridges to it only when present.
+        services.AddScriptCapability(configuration);
         services.AddGAgentServiceCapability(configuration);
         services.Replace(ServiceDescriptor.Singleton<IScriptDefinitionSnapshotPort, InMemoryHarnessScriptDefinitionSnapshotPort>());
         services.Replace(ServiceDescriptor.Singleton<IServiceCommandPort, InMemoryHarnessServiceCommandPort>());
@@ -174,6 +178,9 @@ public sealed class ScriptingServiceRevisionRepublishIntegrationTests
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
         services.AddWorkflowProjectionReadModelProviders(configuration);
+        // Scripting is opt-in: the host composes the scripting capability first, and
+        // AddGAgentServiceCapability bridges to it only when present.
+        services.AddScriptCapability(configuration);
         services.AddGAgentServiceCapability(configuration);
         services.AddAttachOnlyScriptEvolutionApplicationService();
         services.Replace(ServiceDescriptor.Singleton<IScriptDefinitionSnapshotPort, InMemoryHarnessScriptDefinitionSnapshotPort>());

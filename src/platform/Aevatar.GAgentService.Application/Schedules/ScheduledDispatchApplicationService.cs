@@ -331,8 +331,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
         var hasDurableSenderBearerToken = durableToken.Length > 0;
         var hasScopeOwnerNyxId = auth.ScopeOwnerNyxId != null;
+        if (hasDurableSenderBearerToken)
+        {
+            throw new ArgumentException(
+                "Durable sender bearer token schedule auth is no longer supported; use senderNyxId or scopeOwnerNyxId so the dispatch can mint a short-lived NyxID token at fire time.",
+                nameof(auth));
+        }
+
         if (Convert.ToInt32(hasSenderNyxId) +
-            Convert.ToInt32(hasDurableSenderBearerToken) +
             Convert.ToInt32(hasScopeOwnerNyxId) != 1)
         {
             throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth));
@@ -346,9 +352,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                     NormalizeRequired(ownerSource.Scope, nameof(ownerSource.Scope)),
                     NormalizeOwnerSubject(ownerSource.OwnerSubject)));
         }
-
-        if (hasDurableSenderBearerToken)
-            return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: durableToken);
 
         var source = auth.SenderNyxId!;
         if (source.Subject == null)

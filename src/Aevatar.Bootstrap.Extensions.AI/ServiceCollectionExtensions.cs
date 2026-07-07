@@ -4,6 +4,7 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions.Voice;
 using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -76,15 +77,11 @@ public sealed class AevatarAIFeatureOptions
     /// </summary>
     public bool EnableSystemSkillOverlay { get; set; }
     /// <summary>
-    /// Host-bound Ornn tag used to select system skills. Bound from
-    /// <c>Aevatar:SystemSkills:Tag</c>; this value is sensitive and should come from host secrets.
+    /// Non-secret name of the public, org-owned Ornn skillset that sources the overlay (issue #2498).
+    /// Bound from <c>Aevatar:SystemSkills:SetName</c>. No organization service token is needed: set
+    /// ownership is the trust anchor and the set is read publicly through the existing ornn-api proxy.
     /// </summary>
-    public string? SystemSkillOverlayTag { get; set; }
-    /// <summary>
-    /// Host-bound organization service token used by the future materializer. Bound from
-    /// <c>Aevatar:SystemSkills:OrgServiceToken</c>; this value is a secret.
-    /// </summary>
-    public string? SystemSkillOverlayOrgServiceToken { get; set; }
+    public string? SystemSkillOverlaySetName { get; set; }
     /// <summary>
     /// Bound from <c>Aevatar:SystemSkills:RefreshTtl</c>.
     /// </summary>
@@ -135,6 +132,7 @@ public static class ServiceCollectionExtensions
             .ScanAssemblies(typeof(RoleGAgent).Assembly)
             .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
+        services.AddToolExecutionAuditObserver();
         // No container-level IToolApprovalHandler: a yielding handler is only valid on
         // actors that implement the pending-approval continuation (RoleGAgent wires its
         // own). Surfaces without that capability fall back to MissingApprovalHandler and
@@ -1199,14 +1197,21 @@ public static class ServiceCollectionExtensions
 
     private static void RegisterSystemSkillOverlay(IServiceCollection services, AevatarAIFeatureOptions options)
     {
-        if (!options.EnableSystemSkillOverlay || string.IsNullOrWhiteSpace(options.SystemSkillOverlayTag))
+        if (!options.EnableSystemSkillOverlay || string.IsNullOrWhiteSpace(options.SystemSkillOverlaySetName))
             return;
+
+        // Ensure the Ornn skill client (with the configured slug) is registered even when a host enables
+        // the overlay without the Ornn skill tools; the overlay reads the set through this client.
+        services.AddOrnnSkillClient(o =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
+                o.NyxIdSlug = options.OrnnNyxIdSlug;
+        });
 
         services.AddSystemSkillOverlay(o =>
         {
             o.Enabled = options.EnableSystemSkillOverlay;
-            o.Tag = options.SystemSkillOverlayTag ?? string.Empty;
-            o.OrgServiceToken = options.SystemSkillOverlayOrgServiceToken ?? string.Empty;
+            o.SetName = options.SystemSkillOverlaySetName ?? string.Empty;
             o.RefreshTtl = options.SystemSkillOverlayRefreshTtl;
             o.MaxSkills = options.SystemSkillOverlayMaxSkills;
             o.MaxBytes = options.SystemSkillOverlayMaxBytes;

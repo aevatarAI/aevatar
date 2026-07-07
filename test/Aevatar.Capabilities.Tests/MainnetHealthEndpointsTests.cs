@@ -1,4 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Hosting;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -22,6 +25,8 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHealthEndpointsTests
 {
+    private const string AuditIdentityTestKeyBase64 = "YXVkaXQgaWRlbnRpdHkga2V5IG1hdGVyaWFsIGZvciB0ZXN0cw==";
+
     [Fact]
     public async Task MainnetHost_ShouldExposeHealthEndpoints_AndDocumentThemInOpenApi()
     {
@@ -62,8 +67,10 @@ public sealed class MainnetHealthEndpointsTests
         });
         builder.Services.AddSingleton<IResponsesWebSubstituteBackend, ResponsesWebSubstituteBackendAdapter>();
         builder.Services.AddSingleton<ResponsesWebSubstituteToolExecutionService>();
+        builder.Services.AddSingleton<IAuditTrailQueryPort, ReadyAuditTrailQueryPort>();
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
+        builder.AddAuditTrailCapabilityBundle();
 
         await using var app = builder.Build();
         app.UseAevatarDefaultHost();
@@ -83,12 +90,14 @@ public sealed class MainnetHealthEndpointsTests
         using var readinessPayload = JsonDocument.Parse(readinessBody);
         readinessPayload.RootElement.GetProperty("ok").GetBoolean().Should().BeTrue();
         readinessPayload.RootElement.GetProperty("service").GetString().Should().Be("Aevatar.Mainnet.Host.Api");
-        readinessPayload.RootElement
+        var readinessComponents = readinessPayload.RootElement
             .GetProperty("components")
             .EnumerateArray()
             .Select(static component => component.GetProperty("name").GetString())
-            .Should()
-            .Contain(["workflow-bundle", "gagent-service", "studio", "scripting-bundle"]);
+            .ToArray();
+        readinessComponents.Should().Contain(["workflow-bundle", "gagent-service", "studio", "audit-trail"]);
+        // Security lockdown: the scripting capability must never be composed into the mainnet host.
+        readinessComponents.Should().NotContain("scripting-bundle");
 
         var apiHealthResponse = await client.GetAsync("/api/health");
         var apiHealthBody = await apiHealthResponse.Content.ReadAsStringAsync();
@@ -142,8 +151,25 @@ public sealed class MainnetHealthEndpointsTests
             ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
             ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+            ["Audit:ActorIdentityHasher:ActiveKeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyBase64"] = AuditIdentityTestKeyBase64,
         });
         return builder;
+    }
+
+    private sealed class ReadyAuditTrailQueryPort : IAuditTrailQueryPort
+    {
+        public Task<AuditTrailPage> QueryAsync(
+            AuditTrailQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new AuditTrailPage(
+                [],
+                null,
+                DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch));
+        }
     }
 
     private sealed class TemporaryAevatarHomeScope : IDisposable

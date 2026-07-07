@@ -115,6 +115,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             return Failure("missing_app_secret");
         if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
             return Failure("missing_webhook_base_url");
+        if (!NyxRelayCallbackUrl.IsSecureBaseUrl(request.WebhookBaseUrl))
+            return Failure("insecure_webhook_base_url");
         if (string.IsNullOrWhiteSpace(request.ScopeId))
             return Failure("missing_scope_id");
         if (string.IsNullOrWhiteSpace(_nyxOptions.BaseUrl))
@@ -122,7 +124,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
 
         var registrationId = Guid.NewGuid().ToString("N");
         var nyxBaseUrl = _nyxOptions.BaseUrl.TrimEnd('/');
-        var relayCallbackUrl = $"{request.WebhookBaseUrl.Trim().TrimEnd('/')}/api/webhooks/nyxid-relay";
+        var relayCallbackUrl = NyxRelayCallbackUrl.Build(request.WebhookBaseUrl);
         var label = string.IsNullOrWhiteSpace(request.Label)
             ? $"Aevatar Lark Bot {registrationId[..8]}"
             : request.Label.Trim();

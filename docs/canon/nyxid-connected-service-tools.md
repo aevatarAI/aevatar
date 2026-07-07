@@ -6,7 +6,7 @@ owner: eanzhao
 
 # NyxID Connected-Service LLM Tools
 
-把一个 Aevatar service 发布成 NyxID service 后，只要在它的 live OpenAPI operation 上加显式标记，Aevatar 就能在直连 NyxID 的会话里把这些 endpoint 动态注册成独立 LLM 工具。工具调用经 NyxID proxy 下发，凭证注入、审计、approval、node routing、delegation 仍由 NyxID 负责。
+把一个 Aevatar service 发布成 NyxID service 后，只要在它的 live OpenAPI operation 上加显式标记，Aevatar 就能在直连 NyxID 的会话里把这些 endpoint 动态注册成独立 LLM 工具。工具调用经 NyxID proxy 下发，凭证注入、proxy/broker 侧审计、approval、node routing、delegation 仍由 NyxID 负责；Aevatar 侧只记录自己的平台 tool invocation 与 typed receipt 审计。
 
 NyxID 始终是唯一真实源：service 列表与 OpenAPI spec 每次发现都从 NyxID live surface 读取，仓库内不保留 service/endpoint 影子目录，执行始终回到 NyxID proxy。
 
@@ -78,6 +78,13 @@ LLM tool_call
 ```
 
 token 可见性与 `NyxIdProxyTool` 一致：user token 优先，org-only 的 service 用 org token 下发。token 只从 `AgentToolRequestContext` 读取，不落盘、不缓存。
+
+平台审计只在 canonical tool chain 的 `ToolExecutionAuditMiddleware` 中完成。它消费
+typed `AgentToolExecutionContext`、`ToolCallContext.CredentialSource` 和最终
+`AgentToolReceipt`，写入 Aevatar 的 `AuditRecord`；默认不记录完整 tool
+arguments、完整 result 或 `receipt.result_json`。connected-service proxy 不
+复制 NyxID broker 的 credential-injection/proxy-level audit，也不从 metadata
+bag 或 telemetry span 推导审计事实。
 
 ## 4. 启用方式（route policy 决定）
 

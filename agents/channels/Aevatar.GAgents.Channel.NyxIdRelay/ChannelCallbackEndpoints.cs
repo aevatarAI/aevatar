@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -28,16 +30,43 @@ public static class ChannelCallbackEndpoints
 
         // Registration CRUD — requires authentication
         group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
-        group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
+        group.MapPost("/registrations", HandleRegisterAsync)
+            .WithEndpointAudit(
+                "channel.registration.create",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.Static("channel-registration", "new"),
+                ChannelRegistrationRequestSummary)
+            .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
-        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
+        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync)
+            .WithEndpointAudit(
+                "channel.registration.delete",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
-        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
+        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync)
+            .WithEndpointAudit(
+                "channel.registration.test-reply",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
+    }
+
+    private static ValueTask<string> ChannelRegistrationRequestSummary(EndpointAuditSanitizationContext context)
+    {
+        return ValueTask.FromResult(
+            $"{context.HttpContext.Request.Method} {EndpointAuditSanitizers.ResolveRoutePattern(context.HttpContext)}");
     }
 
     // ─── Registration CRUD ───
@@ -217,11 +246,22 @@ public static class ChannelCallbackEndpoints
     /// the existing channel-bot client (no browser→NyxID CORS, no NyxID change).
     /// Status read failures degrade to <c>unknown</c> — polling must never 500.
     /// </summary>
+    /// <remarks>
+    /// L1 (cross-tenant disclosure): a registration the caller does not own is
+    /// indistinguishable from a non-existent one — the handler returns 404 rather
+    /// than a populated degraded response, so an authenticated caller cannot probe
+    /// another tenant's bot platform/last-activity by guessing registration ids.
+    /// The one exception is a NyxID-verified platform admin, who is allowed the
+    /// cross-account view (mirrors <see cref="HandleListRegistrationsAsync"/>) and
+    /// still only gets aevatar's own relay-activity observation, never the foreign
+    /// owner's NyxID live status.
+    /// </remarks>
     private static async Task<IResult> HandleGetStatusAsync(
         string registrationId,
         HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -238,6 +278,17 @@ public static class ChannelCallbackEndpoints
         if (!string.IsNullOrWhiteSpace(callerScope)
             && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
         {
+            // L1: only a platform admin may see a foreign registration's status.
+            // For any other caller a mismatched scope is a 404 (existence-hiding),
+            // NOT a populated degraded response — otherwise the platform/activity of
+            // another tenant's bot leaks to anyone who can guess a registration id.
+            var token = ResolveBearerAccessToken(http);
+            var caller = string.IsNullOrWhiteSpace(token)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+            if (!caller.IsElevated)
+                return Results.NotFound(new { error = "Registration not found" });
+
             var observedAt = registration.LastInboundAtUtc;
             return Results.Json(new
             {

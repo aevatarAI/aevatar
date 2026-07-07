@@ -1,3 +1,5 @@
+using Aevatar.Audit.Core.Projection;
+using Aevatar.Audit.Core.Stores;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -33,6 +35,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddMainnetAgentProjectionDocumentStores(BuildInMemoryConfiguration());
 
         using var provider = services.BuildServiceProvider();
+        Assert.IsType<InMemoryAuditTrailStore>(provider.GetRequiredService<IAuditTrailArtifactStore>());
+        Assert.DoesNotContain(typeof(IProjectionReadModel), typeof(AuditTrailArtifactStorageDocument).GetInterfaces());
         AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
@@ -59,6 +63,8 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
 
         using var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetRequiredService<IAuditTrailArtifactStore>());
+        Assert.DoesNotContain(typeof(IProjectionReadModel), typeof(AuditTrailArtifactStorageDocument).GetInterfaces());
         AssertProviderStore<ChannelBotRegistrationDocument, ElasticsearchProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, ElasticsearchProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, ElasticsearchProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
@@ -74,6 +80,9 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
         Assert.IsType<ElasticsearchProjectionDocumentStore<AevatarOAuthClientDocument, string>>(
             provider.GetRequiredService<IProjectionIndexConsistencyProbe<AevatarOAuthClientDocument>>());
+        Assert.Equal(
+            AevatarOAuthClientEsAclEnforcementMode.Strict,
+            provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value.EnforcementMode);
         Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
@@ -91,6 +100,7 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
 
         using var provider = services.BuildServiceProvider();
         AssertProviderStore<ChannelBotRegistrationDocument, InMemoryProjectionDocumentStore<ChannelBotRegistrationDocument, string>>(provider);
+        Assert.IsType<InMemoryAuditTrailStore>(provider.GetRequiredService<IAuditTrailArtifactStore>());
         AssertProviderStore<ConversationDeliveryCurrentStateDocument, InMemoryProjectionDocumentStore<ConversationDeliveryCurrentStateDocument, string>>(provider);
         AssertProviderStore<ProjectionScopeStatusDocument, InMemoryProjectionDocumentStore<ProjectionScopeStatusDocument, string>>(provider);
         AssertProviderStore<StreamingProxyRoomParticipantsSnapshot, InMemoryProjectionDocumentStore<StreamingProxyRoomParticipantsSnapshot, string>>(provider);
@@ -115,9 +125,11 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
     }
 
     [Fact]
-    public async Task AevatarOAuthClientEsAclStartupGuard_WhenElasticsearchHostAclMissing_ShouldFailClosed()
+    public async Task AevatarOAuthClientEsAclStartupGuard_WhenStrictAndElasticsearchHostAclMissing_ShouldFailClosed()
     {
         var services = BuildAgentServices();
+        services.Configure<AevatarOAuthClientEsAclOptions>(options =>
+            options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict);
         services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
 
         await using var provider = services.BuildServiceProvider();

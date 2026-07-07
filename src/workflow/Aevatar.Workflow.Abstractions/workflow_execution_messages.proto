@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.Workflow.Abstractions";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 import "Interactions/interaction_spec.proto";
 
 enum WorkflowChatInputPartKind {
@@ -73,6 +74,7 @@ message WorkflowLlmControlContext {
 
 message WorkflowCallerCredential {
   string bearer_token = 1;
+  aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
 }
 
 message WorkflowExternalIngressContext {
@@ -596,7 +598,13 @@ message WorkflowHumanApprovalResolvedEvent
   string feedback = 8;
   WorkflowHumanApprovalResolutionSource resolution_source = 9;
 }
-message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
+message SecureValueCapturedEvent {
+  string run_id = 1;
+  string step_id = 2;
+  string variable = 3;
+  string value = 4;
+  aevatar.credentials.RuntimeSecretReference value_reference = 5;
+}
 message WorkflowRunStoppedEvent { string run_id = 1; string reason = 2; }
 message WorkflowRoleActorLinkedEvent
 {
@@ -665,6 +673,8 @@ message WorkflowLlmExecutionIntent
   // Direct/studio path, where no inbound channel stamps the caller scope. Empty when the
   // run has no scope (e.g. anonymous local runs); the role actor only fills an empty caller.
   string scope_id = 18;
+  // Per-schedule correlation id threaded from the owning workflow run for tool audit identity.
+  string schedule_id = 19;
 }
 
 message WorkflowToolRuntimeContextPayload

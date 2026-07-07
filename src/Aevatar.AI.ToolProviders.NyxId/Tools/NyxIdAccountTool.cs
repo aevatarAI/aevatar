@@ -4,8 +4,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to view current NyxID user profile and account status.</summary>
-public sealed class NyxIdAccountTool : IAgentTool
+public sealed class NyxIdAccountTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdAccountTool(NyxIdApiClient client) => _client = client;

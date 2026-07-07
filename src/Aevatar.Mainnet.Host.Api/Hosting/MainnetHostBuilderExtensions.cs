@@ -18,6 +18,8 @@ using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
+using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.Audit.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
@@ -123,10 +125,16 @@ public static class MainnetHostBuilderExtensions
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
+            // Mainnet invariant: the scripting capability (in-process Roslyn compile/execute of
+            // tenant-supplied C#) must never be composed into this host. Stated explicitly so a
+            // future change to the platform default cannot silently re-enable it here.
+            options.EnableScriptingCapability = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
+        builder.Services.AddAuditTrailCore(builder.Configuration);
+        builder.AddAuditTrailCapabilityBundle();
 
         // 06-26 ornn skills invocation page: host-side catalog read surface (composes the Ornn skill client).
         builder.Services.AddSingleton<IUserSkillCatalogQueryService, UserSkillCatalogQueryService>();
@@ -174,6 +182,11 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
             builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
+        // Single-use jti replay guard for NyxID identity assertions. In-memory + node-local by
+        // default (bounded by each assertion's short lifetime); swap for a distributed backing
+        // (e.g. Garnet) to make replay detection cluster-wide without touching callers.
+        builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard>(
+            sp => new InMemoryIdentityAssertionReplayGuard(sp.GetRequiredService<TimeProvider>()));
         builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         // Default model for direct OpenAI-compatible ingress (/v1/responses, /v1/messages,
@@ -219,22 +232,6 @@ public static class MainnetHostBuilderExtensions
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
         builder.Services.AddLarkAgentAuthoring();
-        // Bridge the scheduled-agent key issuer (registered by AddLarkAgentAuthoring)
-        // onto the Studio IStudioRunCredentialIssuer port so C1-provisioned scheduled
-        // workflow runs mint a durable run credential under the caller's account.
-        // Lives here for the same reason as the LLM-config bridge: the host is the
-        // only layer that depends on both Studio.Application and the issuer. When no
-        // outbound slug is configured, the adapter mints nothing and provisioning
-        // falls back to the caller's forwarded token (C1 stays slug-free).
-        builder.Services.TryAddSingleton(sp =>
-        {
-            var options = new StudioRunCredentialIssuerOptions();
-            builder.Configuration
-                .GetSection(StudioRunCredentialIssuerOptions.ConfigurationSection)
-                .Bind(options);
-            return options;
-        });
-        builder.Services.TryAddSingleton<IStudioRunCredentialIssuer, ScheduledAgentKeyStudioRunCredentialIssuer>();
         builder.Services.AddSkillBackedHumanInteractionDelivery();
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();

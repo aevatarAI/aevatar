@@ -11,6 +11,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
@@ -219,10 +220,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.RequiresNyxidProxySuccess.Should().BeTrue();
 
         var method = typeof(SkillRunnerGAgent).GetMethod(
-            "TryCreateStreamingSink",
-            BindingFlags.Instance | BindingFlags.NonPublic);
+            "TryCreateStreamingSinkAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(CancellationToken)],
+            modifiers: null);
         method.Should().NotBeNull();
-        var sink = method!.Invoke(_agent, []);
+        var task = (Task<SkillRunnerStreamingReplySink?>)method!.Invoke(_agent, [CancellationToken.None])!;
+        var sink = await task;
 
         sink.Should().BeNull();
     }
@@ -1193,6 +1198,114 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_WithRawOutboundNyxApiKey_DoesNotPersistOrReemitRawKey()
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var captured = new List<EventEnvelope>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+
+        var store = new InMemoryEventStore();
+        using var provider = BuildServiceProvider(
+            store,
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = CreateAgent("skill-runner-raw-outbound-scrub", provider);
+        await agent.ActivateAsync();
+
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.NyxApiKey = "raw-outbound-secret";
+        initialize.OutboundConfig.NyxApiKeyReference = null;
+
+        await agent.HandleInitializeAsync(initialize);
+
+        var persisted = await store.GetEventsAsync("skill-runner-raw-outbound-scrub");
+        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
+#pragma warning disable CS0612 // asserting deprecated field stays empty on new writes
+        initialized.OutboundConfig.NyxApiKey.Should().BeEmpty();
+        agent.State.OutboundConfig.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        agent.State.OutboundConfig.NyxApiKeyReference.Should().BeNull();
+
+        captured.Should().ContainSingle();
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        var command = captured[0].Payload.Unpack<UserAgentCatalogUpsertCommand>();
+#pragma warning disable CS0612 // asserting registry command no longer re-emits raw keys
+        command.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        command.NyxApiKeyReference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithOutboundReferenceAndRawKey_PersistsAndReemitsReferenceOnly()
+    {
+        var catalogActor = Substitute.For<IActor>();
+        var runtime = Substitute.For<IActorRuntime>();
+        runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(catalogActor));
+
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var captured = new List<EventEnvelope>();
+        dispatch.DispatchAsync(
+                UserAgentCatalogGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(captured.Add),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+
+        var store = new InMemoryEventStore();
+        using var provider = BuildServiceProvider(
+            store,
+            services =>
+            {
+                services.AddSingleton(runtime);
+                services.AddSingleton(dispatch);
+            });
+        var agent = CreateAgent("skill-runner-reference-outbound", provider);
+        await agent.ActivateAsync();
+
+        var reference = new SecretReference
+        {
+            Ref = "sec-scheduled-runner",
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = "scope-key-runner",
+        };
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.NyxApiKey = "raw-outbound-secret";
+        initialize.OutboundConfig.NyxApiKeyReference = reference;
+
+        await agent.HandleInitializeAsync(initialize);
+
+        var persisted = await store.GetEventsAsync("skill-runner-reference-outbound");
+        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
+#pragma warning disable CS0612 // asserting deprecated field stays empty on new writes
+        initialized.OutboundConfig.NyxApiKey.Should().BeEmpty();
+        agent.State.OutboundConfig.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        agent.State.OutboundConfig.NyxApiKeyReference.Should().NotBeNull();
+        agent.State.OutboundConfig.NyxApiKeyReference!.Ref.Should().Be("sec-scheduled-runner");
+
+        captured.Should().ContainSingle();
+        captured[0].Payload.Is(UserAgentCatalogUpsertCommand.Descriptor).Should().BeTrue();
+        var command = captured[0].Payload.Unpack<UserAgentCatalogUpsertCommand>();
+#pragma warning disable CS0612 // asserting registry command no longer re-emits raw keys
+        command.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+        command.NyxApiKeyReference.Should().NotBeNull();
+        command.NyxApiKeyReference!.Ref.Should().Be("sec-scheduled-runner");
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_WithLegacyOwnershipFields_DerivesOwnerScopeAndPreservesLegacyFields()
     {
         var catalogActor = Substitute.For<IActor>();
@@ -1245,14 +1358,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // with chat_id), the typed open_id target should be sent verbatim — this is what fixes the
         // production 400 where the relay's ConversationId fell through to ou_*.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_chat_legacy",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_chat_legacy";
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_1"}}""");
@@ -1281,20 +1389,27 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // Backward compatibility: state persisted before the typed lark_receive_id fields existed
         // still resolves through the prefix heuristic on ConversationId. The send still succeeds
         // (no exception); the sender emits a Debug breadcrumb that is not visible to xUnit.
-        var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "ou_legacy_user",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-        };
-        await _agent.HandleInitializeAsync(initialize);
+        var store = new InMemoryEventStore();
+        using var provider = BuildServiceProvider(store);
+        const string actorId = "skill-runner-legacy-raw-state";
+        await AppendLegacyInitializedEventAsync(
+            store,
+            actorId,
+            new SkillRunnerOutboundConfig
+            {
+                ConversationId = "ou_legacy_user",
+                NyxProviderSlug = "api-lark-bot",
+                NyxApiKey = "nyx-api-key",
+            });
+        var agent = CreateAgent(actorId, provider);
+        await agent.ActivateAsync();
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
-        AttachNyxIdApiClient(_agent, handler);
+        AttachNyxIdApiClient(agent, handler);
 
-        await InvokeSendOutputAsync(_agent, "legacy report body");
+        await InvokeSendOutputAsync(agent, "legacy report body");
 
+        handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.RequestUri!.ToString()
             .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=open_id");
         using var body = JsonDocument.Parse(handler.LastBody!);
@@ -1307,14 +1422,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // Lark reports business errors as HTTP 200 with `code != 0`. Ignoring the response would
         // let HandleTriggerAsync persist SkillRunnerExecutionCompletedEvent on a silent failure.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-        };
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":230002,"msg":"invalid receive_id"}""");
@@ -1333,14 +1442,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // HTTP non-2xx from NyxID gets packaged into a Nyx envelope that ProxyRequestAsync returns
         // verbatim. Ignoring it would mask transport / auth failures.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-        };
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"error":true,"message":"upstream timeout"}""");
@@ -1362,14 +1465,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // `last_error` with no clue what to do. Surface explicit "delete and recreate" guidance
         // so the failure becomes self-documenting.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_relay_app_user_1",
-            LarkReceiveIdType = "open_id",
-        };
+        initialize.OutboundConfig.LarkReceiveId = "ou_relay_app_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler(
@@ -1398,16 +1495,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // retry branch never fired in the actual production path. Pin the wrapped envelope
         // shape end-to-end.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "oc_dm_chat_1",
-            LarkReceiveIdType = "chat_id",
-            LarkReceiveIdFallback = "on_user_1",
-            LarkReceiveIdTypeFallback = "union_id",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        initialize.OutboundConfig.LarkReceiveIdFallback = "on_user_1";
+        initialize.OutboundConfig.LarkReceiveIdTypeFallback = "union_id";
         await _agent.HandleInitializeAsync(initialize);
 
         // First (primary) attempt: NyxIdApiClient.SendAsync HTTP-400 envelope wrapping Lark
@@ -1434,14 +1526,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // Lark code; previously it never did. Pin both the recovery hint and the nested-body
         // unwrap together.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "on_relay_tenant_user_1",
-            LarkReceiveIdType = "union_id",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "on_relay_tenant_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "union_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler(
@@ -1467,16 +1554,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // fallback typed pair when the primary attempt fails with 230002, and that the retry
         // body uses the fallback `receive_id` / `receive_id_type`.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "oc_dm_chat_1",
-            LarkReceiveIdType = "chat_id",
-            LarkReceiveIdFallback = "on_user_1",
-            LarkReceiveIdTypeFallback = "union_id",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        initialize.OutboundConfig.LarkReceiveIdFallback = "on_user_1";
+        initialize.OutboundConfig.LarkReceiveIdTypeFallback = "union_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new SequencedHandler(
@@ -1500,16 +1582,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // 99992364 cross_tenant) propagate immediately so the user sees the actionable
         // recovery hint for the actual failure mode rather than a misleading retry.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "oc_dm_chat_1",
-            LarkReceiveIdType = "chat_id",
-            LarkReceiveIdFallback = "on_user_1",
-            LarkReceiveIdTypeFallback = "union_id",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        initialize.OutboundConfig.LarkReceiveIdFallback = "on_user_1";
+        initialize.OutboundConfig.LarkReceiveIdTypeFallback = "union_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new SequencedHandler(
@@ -1532,14 +1609,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // surfaced with the same recreate guidance so legacy agents (still pinned to union_id)
         // give users a way to recover without reading source.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "on_relay_tenant_user_1",
-            LarkReceiveIdType = "union_id",
-        };
+        initialize.OutboundConfig.LarkReceiveId = "on_relay_tenant_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "union_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler(
@@ -1567,15 +1638,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // messaged it. This test pins that the routing actually changes the proxy slug in
         // the outbound URL while the receive_id, body, and api key stay identical.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-            FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot-channel-loning";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_failure"}}""");
@@ -1603,15 +1669,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // the time the agent fires. If its send rejects, we still try the primary slug as
         // a last-resort attempt — better than the user seeing nothing.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-            FailureNotificationProviderSlug = "api-lark-bot-channel-revoked",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot-channel-revoked";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new SequencedHandler(
@@ -1638,15 +1699,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // empty in this case, but pin the runtime guard too so a future
         // mis-capture doesn't pay double-POST cost just to fail twice.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-            FailureNotificationProviderSlug = "api-lark-bot",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
@@ -1669,15 +1725,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // failure-notification fallback ever introducing a hidden dependency on the new
         // field being populated.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-            // FailureNotificationProviderSlug intentionally not set (legacy state shape).
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
@@ -1698,15 +1748,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // SkillRunnerExecutionFailedEvent persist (which surfaces last_error in
         // /agent-status, the one path users have to recover regardless of Lark visibility).
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig = new SkillRunnerOutboundConfig
-        {
-            ConversationId = "oc_dm_chat_1",
-            NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
-            LarkReceiveId = "ou_user_1",
-            LarkReceiveIdType = "open_id",
-            FailureNotificationProviderSlug = "api-lark-bot-channel-loning",
-        };
+        initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
+        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
+        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot-channel-loning";
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new SequencedHandler(
@@ -2652,7 +2697,10 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         var method = typeof(SkillRunnerGAgent).GetMethod(
             "BuildExecutionLlmControlAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic);
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            types: [typeof(CancellationToken)],
+            modifiers: null);
         method.Should().NotBeNull();
         var task = (Task<LLMControlContext>)method!.Invoke(agent, [CancellationToken.None])!;
         return await task;
@@ -2703,6 +2751,35 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .ContainSingle()
             .Subject;
     }
+
+    private static Task AppendLegacyInitializedEventAsync(
+        InMemoryEventStore store,
+        string actorId,
+        SkillRunnerOutboundConfig outboundConfig) =>
+        store.AppendAsync(
+            actorId,
+            [new StateEvent
+            {
+                EventId = "legacy-init-1",
+                Timestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 5, 19, 8, 0, 0, TimeSpan.Zero)),
+                Version = 1,
+                EventType = SkillRunnerInitializedEvent.Descriptor.FullName,
+                EventData = Any.Pack(new SkillRunnerInitializedEvent
+                {
+                    SkillName = "summary",
+                    TemplateName = "summary",
+                    SkillContent = "You are a summary report runner.",
+                    ExecutionPrompt = "Run the report.",
+                    ScheduleCron = string.Empty,
+                    ScheduleTimezone = SkillRunnerDefaults.DefaultTimezone,
+                    Enabled = true,
+                    ScopeId = "scope-1",
+                    ProviderName = SkillRunnerDefaults.DefaultProviderName,
+                    OutboundConfig = outboundConfig,
+                }),
+                AgentId = actorId,
+            }],
+            expectedVersion: 0);
 
     private static async Task<SkillRunnerExecutionCompletedEvent> ReadSingleCompletedEventAsync(
         InMemoryEventStore store,
@@ -2977,6 +3054,53 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             Task.FromResult(ProjectionWriteResult.Applied());
     }
 
+    private sealed class FixedScheduledSecretVault : ISecretVault
+    {
+        public const string ApiKeyId = "key-1";
+        private const string Ref = "sec-scheduled-test";
+        private const string OwnerScopeKey = "scope-key-1";
+        private const string Secret = "nyx-api-key";
+
+        public static SecretReference Reference() => new()
+        {
+            Ref = Ref,
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = OwnerScopeKey,
+        };
+
+        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new StoreSecretResult(Reference()));
+        }
+
+        public Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.Equals(request.Ref, Ref, StringComparison.Ordinal) &&
+                string.Equals(request.Purpose, CredentialSecretPurposes.ScheduledNyxApiKey, StringComparison.Ordinal) &&
+                string.Equals(request.OwnerScopeKey, OwnerScopeKey, StringComparison.Ordinal) &&
+                string.Equals(request.SubjectId, ApiKeyId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ResolveSecretResult(Reference(), Secret));
+            }
+
+            return Task.FromResult(new ResolveSecretResult(null, null));
+        }
+
+        public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new RotateSecretResult(Reference()));
+        }
+
+        public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new RevokeSecretResult(true));
+        }
+    }
+
     private sealed class FixedProjectionClock(DateTimeOffset now) : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionClock
     {
         public DateTimeOffset UtcNow => now;
@@ -3100,6 +3224,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         var services = new ServiceCollection();
         services.AddSingleton(eventStore);
+        services.AddSingleton<ISecretVault>(new FixedScheduledSecretVault());
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddSingleton<IActorRuntimeCallbackScheduler>(new RecordingCallbackScheduler());
         services.AddTransient(
@@ -3124,7 +3249,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         {
             ConversationId = "oc_chat_1",
             NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
+            ApiKeyId = FixedScheduledSecretVault.ApiKeyId,
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = FixedScheduledSecretVault.Reference(),
         },
     };
 
@@ -3153,7 +3280,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         {
             ConversationId = "oc_chat_1",
             NyxProviderSlug = "api-lark-bot",
-            NyxApiKey = "nyx-api-key",
+            ApiKeyId = FixedScheduledSecretVault.ApiKeyId,
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = FixedScheduledSecretVault.Reference(),
         },
     };
 

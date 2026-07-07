@@ -530,10 +530,14 @@ function createGAgentDraftRunTimeoutError(): Error {
 
 function getRunDebugLines(state: DraftRunState): string[] {
   return [
-    state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
-    state.actorId.trim() ? `actorId: ${state.actorId.trim()}` : '',
-    state.commandId.trim() ? `commandId: ${state.commandId.trim()}` : '',
-    state.events.length > 0 ? `events: ${state.events.length}` : '',
+    state.runId.trim() ? t("pages.studio.studiobuildpanels.current.run.ready", "current run: ready") : '',
+    state.actorId.trim() ? t("pages.studio.studiobuildpanels.runtime.actor.ready", "runtime actor: ready") : '',
+    state.commandId.trim() ? t("pages.studio.studiobuildpanels.command.accepted", "command: accepted") : '',
+    state.events.length > 0
+      ? t("pages.studio.studiobuildpanels.events.count", "events: {count}", {
+          count: state.events.length,
+        })
+      : '',
   ].filter(Boolean);
 }
 
@@ -1993,6 +1997,26 @@ function buildAppliedScriptDetail(
   };
 }
 
+function formatScriptDisplayLabel(
+  detail: ScopedScriptDetail | null | undefined,
+  fallback = 'Script',
+): string {
+  const record = detail as
+    | (ScopedScriptDetail & {
+        script?: { displayName?: string | null; name?: string | null } | null;
+        source?: { displayName?: string | null; name?: string | null } | null;
+      })
+    | null
+    | undefined;
+  const candidate =
+    record?.script?.displayName ||
+    record?.script?.name ||
+    record?.source?.displayName ||
+    record?.source?.name ||
+    '';
+  return candidate.trim() || fallback;
+}
+
 export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
   scopeId,
   scriptsQuery,
@@ -2400,7 +2424,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       setSaveObservationStatus('applied');
       setSaveStatus('applied');
       setSaveNotice(
-        `Save applied for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+        t("pages.studio.studiobuildpanels.save.applied", "Save applied."),
       );
     },
     [onRefreshScripts, onScriptDraftSaved, scopeId],
@@ -2455,7 +2479,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           setSaveStatus('failed');
           setSaveNotice(
             observation.message ||
-              `Save rejected for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+              t("pages.studio.studiobuildpanels.save.rejected", "Save rejected."),
           );
           return;
         }
@@ -2465,13 +2489,20 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         if (nextDelay == null) {
           saveObservationTimerRef.current = null;
           setSaveNotice(
-            `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Still waiting for catalog; use Refresh catalog to check again.`,
+            t(
+              "pages.studio.studiobuildpanels.save.accepted.waiting.for.catalog",
+              "Save accepted. Still waiting for catalog; use Refresh catalog to check again.",
+            ),
           );
           return;
         }
 
         setSaveNotice(
-          `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Waiting for catalog; checking again in ${Math.round(nextDelay / 1000)}s.`,
+          t(
+            "pages.studio.studiobuildpanels.save.accepted.checking.again",
+            "Save accepted. Waiting for catalog; checking again in {value1}s.",
+            { value1: Math.round(nextDelay / 1000) },
+          ),
         );
         saveObservationTimerRef.current = window.setTimeout(() => {
           void pollSaveObservation(
@@ -2622,7 +2653,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       setPromotionHistory((current) => [decision, ...current].slice(0, 6));
       setPromotionNotice(
         decision.accepted
-          ? `Promotion accepted: ${decision.candidateRevision || decision.proposalId}.`
+          ? 'Promotion accepted.'
           : decision.failureReason || `Promotion ${decision.status || 'not accepted'}.`,
       );
     } catch (error) {
@@ -2734,7 +2765,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     ...(pendingScriptDraft?.scriptId
                       ? [
                           {
-                            label: t("pages.studio.studiobuildpanels.draft", "{value1} (draft)", { value1: pendingScriptDraft.scriptId }),
+                            label: t("pages.studio.studiobuildpanels.script.draft", "Script draft"),
                             value: pendingScriptDraft.scriptId,
                           },
                         ]
@@ -2747,13 +2778,13 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     )
                       ? [
                           {
-                            label: t("pages.studio.studiobuildpanels.applied", "{value1} (applied)", { value1: observedAppliedScript.script.scriptId }),
+                            label: t("pages.studio.studiobuildpanels.script.applied", "Applied script"),
                             value: observedAppliedScript.script.scriptId,
                           },
                         ]
                       : []),
                     ...availableScripts.map((detail) => ({
-                      label: detail.script?.scriptId || 'script',
+                      label: formatScriptDisplayLabel(detail),
                       value: detail.script?.scriptId || '',
                     })),
                   ]}
@@ -2811,9 +2842,11 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               }}
             >
               <Typography.Text type="secondary">
-                {activeScript?.script?.scriptId || '-'} · {lifecycleStatus} {t("pages.studio.studiobuildpanels.validation.2", "· validation")}{' '}
+                {formatScriptDisplayLabel(activeScript, t("pages.studio.studiobuildpanels.script", "Script"))} · {lifecycleStatus} {t("pages.studio.studiobuildpanels.validation.2", "· validation")}{' '}
                 {validationStatus} {t("pages.studio.studiobuildpanels.save.2", "· save")}{saveObservationStatus} {t("pages.studio.studiobuildpanels.rev.2", "· rev")}{' '}
-                {currentRevision || t("pages.studio.studiobuildpanels.generated.on.save.2", "generated on save")}
+                {currentRevision
+                  ? t("pages.studio.studiobuildpanels.version.ready", "version ready")
+                  : t("pages.studio.studiobuildpanels.generated.on.save.2", "generated on save")}
               </Typography.Text>
             </div>
           ) : null}
@@ -3152,11 +3185,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 >
                   <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.run.facts.2", "Run facts")}</div>
                   {[
-                    ['Run', lastRunResult.runId],
-                    ['Runtime', lastRunResult.runtimeActorId],
-                    ['Definition', lastRunResult.definitionActorId],
                     ['Command type', lastRunResult.commandTypeUrl],
-                    ['Source hash', lastRunResult.sourceHash],
                     ['Activity', lastRunResult.activityUrl],
                   ].map(([label, value]) => (
                     <div key={label} style={{ display: 'grid', gap: 2 }}>
@@ -3223,8 +3252,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                         {decision.accepted ? t("pages.studio.studiobuildpanels.accepted.2", "Accepted") : decision.status || t("pages.studio.studiobuildpanels.decision.2", "Decision")}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        {decision.scriptId} · {decision.baseRevision || '-'} →{' '}
-                        {decision.candidateRevision || '-'}
+                        {t("pages.studio.studiobuildpanels.script.promotion.version.summary", "Script promotion version summary")}
                       </Typography.Text>
                       {decision.failureReason ? (
                         <Typography.Text type="danger">

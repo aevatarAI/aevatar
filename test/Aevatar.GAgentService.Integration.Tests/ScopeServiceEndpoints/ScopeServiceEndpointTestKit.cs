@@ -4,6 +4,12 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Hosting.EndpointAudit;
+using Aevatar.Audit;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -261,7 +267,8 @@ public abstract class ScopeServiceEndpointTestKit
             RecordingRetryCompensationDispatchService retryCompensationDispatchService,
             RecordingServiceRunRegistrationPort serviceRunRegistrationPort,
             FakeServiceRunQueryPort serviceRunQueryPort,
-            RecordingWorkflowFileIngressPort workflowFileIngressPort)
+            RecordingWorkflowFileIngressPort workflowFileIngressPort,
+            RecordingAuditTrailAppender auditTrailAppender)
         {
             _app = app;
             Client = client;
@@ -288,6 +295,7 @@ public abstract class ScopeServiceEndpointTestKit
             ServiceRunRegistrationPort = serviceRunRegistrationPort;
             ServiceRunQueryPort = serviceRunQueryPort;
             WorkflowFileIngressPort = workflowFileIngressPort;
+            AuditTrailAppender = auditTrailAppender;
         }
 
         public HttpClient Client { get; }
@@ -346,6 +354,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public RecordingWorkflowFileIngressPort WorkflowFileIngressPort { get; }
 
+        public RecordingAuditTrailAppender AuditTrailAppender { get; }
+
         public static async Task<ScopeServiceEndpointTestHost> StartAsync(
             bool authenticationEnabled = true,
             IUserConfigQueryPort? userConfigQueryPort = null)
@@ -397,6 +407,7 @@ public abstract class ScopeServiceEndpointTestKit
                 LinkedQueryPort = serviceRunQueryPort,
             };
             var workflowFileIngressPort = new RecordingWorkflowFileIngressPort();
+            var auditTrailAppender = new RecordingAuditTrailAppender();
             builder.Services.AddSingleton<IServiceGovernanceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceGovernanceQueryPort>(queryPort);
             builder.Services.AddSingleton<IScopeBindingCommandPort>(scopeBindingPort);
@@ -428,6 +439,8 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
             builder.Services.AddSingleton<IServiceRunQueryPort>(serviceRunQueryPort);
             builder.Services.AddSingleton<IWorkflowFileIngressPort>(workflowFileIngressPort);
+            builder.Services.AddSingleton<IAuditTrailAppender>(auditTrailAppender);
+            builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
             builder.Services.AddSingleton<WorkflowMultipartFileInputParser>();
             builder.Services.AddSingleton(Options.Create(new WorkflowMultipartFileIngressOptions()));
             builder.Services.AddSingleton(Options.Create(new WorkflowFormFileIngressOptions()));
@@ -448,6 +461,7 @@ public abstract class ScopeServiceEndpointTestKit
             }
 
             var app = builder.Build();
+            app.UseRouting();
             if (authenticationEnabled)
             {
                 app.UseAuthentication();
@@ -508,6 +522,7 @@ public abstract class ScopeServiceEndpointTestKit
                     await next();
                 });
             }
+            app.UseMiddleware<EndpointAuditCaptureMiddleware>();
             app.UseAuthorization();
             app.MapScopeServiceEndpoints();
             await app.StartAsync();
@@ -547,7 +562,8 @@ public abstract class ScopeServiceEndpointTestKit
                 retryCompensationDispatchService,
                 serviceRunRegistrationPort,
                 serviceRunQueryPort,
-                workflowFileIngressPort);
+                workflowFileIngressPort,
+                auditTrailAppender);
         }
 
         private static bool TryGetRequestedScopeId(string? path, out string scopeId)
@@ -625,6 +641,36 @@ public abstract class ScopeServiceEndpointTestKit
                     ? null
                     : new ScopeBindingGAgentResult(
                         request.GAgent.AgentKind)));
+        }
+    }
+
+    protected sealed class RecordingAuditTrailAppender : IAuditTrailAppender
+    {
+        public List<AuditRecord> Records { get; } = [];
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            return Task.FromResult(AuditTrailAppendResult.Appended(
+                record.AuditId,
+                record.AuditActorId,
+                record.OccurredAt.ToDateTimeOffset()));
+        }
+    }
+
+    private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey)
+        {
+            return new AuditActorIdentity($"hashed:{canonicalActorKey}", "kid-test");
+        }
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId)
+        {
+            return auditActorId == $"hashed:{canonicalActorKey}" &&
+                   identityKeyId == "kid-test";
         }
     }
 

@@ -1,3 +1,5 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -8,6 +10,7 @@ using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.Contexts;
+using Aevatar.GAgentService.Projection.Audit;
 using Aevatar.GAgentService.Projection.Metadata;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Projectors;
@@ -201,12 +204,24 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IResponsesAgentToolStateQueryPort, ResponsesAgentToolStateQueryReader>();
         services.TryAddSingleton<ScheduledDispatchQueryPort>();
         services.TryAddSingleton<IScheduledDispatchQueryPort>(sp => sp.GetRequiredService<ScheduledDispatchQueryPort>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationSucceededAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationFailedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationRetiredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRevisionPublishedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceDeploymentActivatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceDeploymentDeactivatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchConfiguredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchEnabledAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchDisabledAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchDeletedAuditTranslator>());
         services.AddProjectionArtifactMaterializer<
             ServiceCatalogProjectionContext,
             ServiceCatalogProjector>();
+        services.AddAuditCommittedFactMaterializer<ServiceCatalogProjectionContext>();
         services.AddProjectionArtifactMaterializer<
             ServiceDeploymentCatalogProjectionContext,
             ServiceDeploymentCatalogProjector>();
+        services.AddAuditCommittedFactMaterializer<ServiceDeploymentCatalogProjectionContext>();
         services.AddCurrentStateProjectionMaterializer<
             ServiceServingSetProjectionContext,
             ServiceServingSetProjector>();
@@ -222,6 +237,7 @@ public static class ServiceCollectionExtensions
         services.AddProjectionArtifactMaterializer<
             ServiceRevisionCatalogProjectionContext,
             ServiceRevisionCatalogProjector>();
+        services.AddAuditCommittedFactMaterializer<ServiceRevisionCatalogProjectionContext>();
         services.AddProjectionArtifactMaterializer<
             ServiceInvocationCatalogProjectionContext,
             ServiceInvocationCatalogProjector>();
@@ -240,6 +256,7 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ScheduledDispatchProjectionContext,
             ScheduledDispatchCurrentStateProjector>();
+        services.AddAuditCommittedFactMaterializer<ScheduledDispatchProjectionContext>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<GAgentDraftRunProjectionContext>,
             GAgentDraftRunSessionEventProjector>());

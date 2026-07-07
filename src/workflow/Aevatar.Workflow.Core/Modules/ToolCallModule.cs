@@ -127,7 +127,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private static Task<WorkflowToolExecutionResult> ExecuteToolAsync(
+    private static async Task<WorkflowToolExecutionResult> ExecuteToolAsync(
         IWorkflowTool tool,
         string argumentsJson,
         StepRequestEvent request,
@@ -136,15 +136,16 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         CancellationToken ct,
         ToolApprovalGrant? approvalGrant = null)
     {
-        var callerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var credential)
-            ? credential
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+        var callerCredential = credential.Found
+            ? credential.Credential
             : new WorkflowCallerCredential();
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
             ctx,
             ctx.AgentId ?? string.Empty,
             request.RunId ?? string.Empty,
             request.StepId ?? string.Empty);
-        return tool.ExecuteAsync(
+        return await tool.ExecuteAsync(
             new WorkflowToolExecutionRequest(
                 ArgumentsJson: argumentsJson,
                 RunId: request.RunId ?? string.Empty,
@@ -156,7 +157,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 RuntimeContext: runtimeContext,
                 ApprovalGrant: approvalGrant,
                 InputFileRefs: request.InputFileRefs,
-                IdempotencyKey: request.IdempotencyKey ?? string.Empty),
+                IdempotencyKey: request.IdempotencyKey ?? string.Empty,
+                ScheduleId: ctx.ScheduleId ?? string.Empty),
             ct);
     }
 

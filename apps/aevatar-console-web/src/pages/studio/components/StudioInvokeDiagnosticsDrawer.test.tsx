@@ -87,9 +87,11 @@ describe('StudioInvokeDiagnosticsDrawer', () => {
     expect(screen.getByText('Events')).toBeTruthy();
     expect(screen.getByText('Run details')).toBeTruthy();
     expect(screen.getByText('Event payload')).toBeTruthy();
-    expect(screen.getByText('run-alpha')).toBeTruthy();
-    expect(screen.getByText('cmd-alpha')).toBeTruthy();
-    expect(screen.getByText('actor-alpha')).toBeTruthy();
+    expect(screen.queryByText('run-alpha')).toBeNull();
+    expect(screen.queryByText('cmd-alpha')).toBeNull();
+    expect(screen.queryByText('actor-alpha')).toBeNull();
+    expect(screen.getByText('Summarize the ticket')).toBeTruthy();
+    expect(screen.getAllByText('Chat').length).toBeGreaterThan(0);
     expect(screen.queryByRole('tablist')).toBeNull();
   });
 });

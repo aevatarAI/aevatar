@@ -127,6 +127,56 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_WhenSystemSkillOverlayEnabledWithSetName_RegistersOrnnProviderWithBoundOptions()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.EnableSystemSkillOverlay = true;
+            options.SystemSkillOverlaySetName = "aevatar-system";
+            options.OrnnNyxIdSlug = "ornn-api-custom";
+            options.SystemSkillOverlayRefreshTtl = TimeSpan.FromMinutes(15);
+            options.SystemSkillOverlayMaxSkills = 32;
+            options.SystemSkillOverlayMaxBytes = 32768;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ISystemSkillOverlayProvider>()
+            .Should().BeOfType<Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay.OrnnSystemSkillOverlayProvider>();
+
+        var overlayOptions = provider.GetRequiredService<SystemSkillOverlayOptions>();
+        overlayOptions.SetName.Should().Be("aevatar-system");
+        overlayOptions.RefreshTtl.Should().Be(TimeSpan.FromMinutes(15));
+        overlayOptions.MaxSkills.Should().Be(32);
+        overlayOptions.MaxBytes.Should().Be(32768);
+
+        // The overlay reads Ornn through the host-configured NyxID proxy slug even when the
+        // model-facing Ornn skill tools are not enabled.
+        provider.GetRequiredService<Aevatar.AI.ToolProviders.Ornn.OrnnOptions>()
+            .NyxIdSlug.Should().Be("ornn-api-custom");
+    }
+
+    [Fact]
+    public void AddAevatarAIFeatures_WhenSystemSkillOverlayEnabledWithoutSetName_DoesNotRegisterProvider()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = false;
+            options.EnableSystemSkillOverlay = true;
+            options.SystemSkillOverlaySetName = "   ";
+        });
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetService<ISystemSkillOverlayProvider>().Should().BeNull();
+    }
+
+    [Fact]
     public void AddAevatarAIFeatures_ShouldRegisterWorkflowRolePrimaryKind()
     {
         var services = new ServiceCollection();
@@ -389,7 +439,9 @@ public class AIFeatureBootstrapCoverageTests
         var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-reload-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempHome);
         var previousHome = Environment.GetEnvironmentVariable(AevatarPaths.HomeEnv);
+        var previousAllowPlaintext = Environment.GetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv);
         Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, tempHome);
+        Environment.SetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv, "true");
 
         try
         {
@@ -432,6 +484,7 @@ public class AIFeatureBootstrapCoverageTests
         finally
         {
             Environment.SetEnvironmentVariable(AevatarPaths.HomeEnv, previousHome);
+            Environment.SetEnvironmentVariable(LocalSecretProtectionOptions.AllowPlaintextSecretsEnv, previousAllowPlaintext);
             Directory.Delete(tempHome, recursive: true);
         }
     }

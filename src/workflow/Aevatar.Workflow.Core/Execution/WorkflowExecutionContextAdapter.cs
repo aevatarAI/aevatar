@@ -34,6 +34,8 @@ internal sealed class WorkflowExecutionContextAdapter :
 
     public string ScopeId => _stateHost.ScopeId;
 
+    public string ScheduleId => _stateHost.ScheduleId;
+
     public WorkflowExecutionRuntimeContext RuntimeContext => _stateHost.RuntimeContext;
 
     public IWorkflowExecutionStateHost StateHost => _stateHost;

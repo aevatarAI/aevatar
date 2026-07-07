@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -107,8 +108,9 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
         public async Task WorkflowRunGAgent_ReplayContract_ShouldRestoreExecutionContextAfterChatStart()
         {
             var eventStore = new InMemoryEventStore();
+            var runtimeSecretStore = new InMemoryRuntimeSecretStore();
             var runtime = new RecordingActorRuntime();
-            var agent1 = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+            var agent1 = CreateRunAgent(runtime: runtime, eventStore: eventStore, runtimeSecretStore: runtimeSecretStore);
             SetAgentId(agent1, "workflow-run-context-replay");
 
             await agent1.ActivateAsync();
@@ -138,18 +140,26 @@ public sealed class WorkflowGAgentReplayContractTests : WorkflowGAgentTestBase
                 },
             });
 
-            agent1.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
+            agent1.State.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
+            agent1.State.ExecutionContext.CallerCredential.RuntimeSecretReference.Should().NotBeNull();
+            var credential1 = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(agent1);
+            credential1.Found.Should().BeTrue();
+            credential1.Credential.BearerToken.Should().Be("secret");
             agent1.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
             await agent1.DeactivateAsync();
 
             var persisted = await eventStore.GetEventsAsync(agent1.Id);
             persisted.Should().ContainSingle(x => x.EventType.Contains(nameof(WorkflowRunExecutionStartedEvent), StringComparison.Ordinal));
 
-            var agent2 = CreateRunAgent(runtime: runtime, eventStore: eventStore);
+            var agent2 = CreateRunAgent(runtime: runtime, eventStore: eventStore, runtimeSecretStore: runtimeSecretStore);
             SetAgentId(agent2, "workflow-run-context-replay");
             await agent2.ActivateAsync();
 
-            agent2.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
+            agent2.State.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
+            agent2.State.ExecutionContext.CallerCredential.RuntimeSecretReference.Should().NotBeNull();
+            var credential2 = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(agent2);
+            credential2.Found.Should().BeTrue();
+            credential2.Credential.BearerToken.Should().Be("secret");
             agent2.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model-main");
             agent2.State.ExecutionContext.Llm.MaxToolRoundsOverride.Should().Be(4);
             agent2.State.ExecutionContext.Llm.UserMemoryPrompt.Should().Be("memory-main");

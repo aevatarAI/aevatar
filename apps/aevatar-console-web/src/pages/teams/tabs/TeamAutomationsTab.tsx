@@ -1915,13 +1915,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 <FactLine
                   rows={2}
                   secondary
-                  text={intl.formatMessage(
-                    {
-                      id: "teams.automations.preview.runsThroughService",
-                      defaultMessage: "Runs through {serviceId}",
-                    },
-                    { serviceId: schedule.serviceId },
-                  )}
+                  text={intl.formatMessage({
+                    id: "teams.automations.preview.runsThroughService",
+                    defaultMessage: "Runs through published service",
+                  })}
                 />
               </div>
               <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
@@ -2105,7 +2102,13 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 <Typography.Text ellipsis strong>
                   {selectedMember.name}
                 </Typography.Text>
-                <FactLine secondary text={selectedMember.serviceId} />
+                <FactLine
+                  secondary
+                  text={intl.formatMessage({
+                    id: "teams.automations.member.publishedServiceReady",
+                    defaultMessage: "Published service ready",
+                  })}
+                />
                 <DetailPill
                   compact
                   style={selectedMember.lifecycleStyle}
@@ -2293,13 +2296,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               />
               <Typography.Text style={{ fontSize: 12 }} type="secondary">
                 {activeFormMember?.serviceIdentity
-                  ? intl.formatMessage(
-                      {
-                        id: "teams.automations.form.identityReady",
-                        defaultMessage: "Targets published service {serviceId}.",
-                      },
-                      { serviceId: activeFormMember.serviceIdentity.serviceId },
-                    )
+                  ? intl.formatMessage({
+                      id: "teams.automations.form.identityReady",
+                      defaultMessage: "Targets the member's published service.",
+                    })
                   : intl.formatMessage({
                       id: "teams.automations.form.identityMissing",
                       defaultMessage:

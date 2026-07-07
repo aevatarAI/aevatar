@@ -641,7 +641,8 @@ describe('StudioWorkflowBuildPanel', () => {
       />,
     );
 
-    expect(screen.getByText('orders-script (draft)')).toBeInTheDocument();
+    expect(screen.getByText('Script draft')).toBeInTheDocument();
+    expect(screen.queryByText('orders-script (draft)')).not.toBeInTheDocument();
     expect(
       (screen.getByLabelText('Mock script code editor') as HTMLTextAreaElement).value,
     ).toContain('DraftBehavior');
@@ -771,8 +772,8 @@ describe('StudioWorkflowBuildPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
 
     expect(await screen.findByLabelText('Script dry run facts')).toBeInTheDocument();
-    expect(screen.getByText('run-script-1')).toBeInTheDocument();
-    expect(screen.getByText('runtime-run')).toBeInTheDocument();
+    expect(screen.queryByText('run-script-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('runtime-run')).not.toBeInTheDocument();
     expect(screen.getByText('type.googleapis.com/AppScriptCommand')).toBeInTheDocument();
   });
 
@@ -1627,8 +1628,10 @@ describe('StudioWorkflowBuildPanel', () => {
 
     const debugDetailsToggle = await screen.findByText('Debug details');
     fireEvent.click(debugDetailsToggle);
-    expect(await screen.findByText(/runId: run-1/i)).toBeInTheDocument();
-    expect(screen.getByText(/actorId: actor-1/i)).toBeInTheDocument();
+    expect(await screen.findByText(/current run: ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/runtime actor: ready/i)).toBeInTheDocument();
+    expect(screen.queryByText(/runId: run-1/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/actorId: actor-1/i)).not.toBeInTheDocument();
   });
 
   it('prefers the final workflow output over earlier streamed node text', async () => {

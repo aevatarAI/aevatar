@@ -27,207 +27,149 @@ public sealed class WorkflowBoardSnapshotQueryService : IWorkflowBoardSnapshotQu
         WorkflowBoardSnapshotRequest request,
         CancellationToken ct = default)
     {
-        var normalizedSelections = NormalizeAndValidate(request);
+        var normalized = NormalizeAndValidate(request);
+        var teams = normalized.TeamId == null
+            ? await BuildScopeSliceAsync(normalized, ct)
+            : await BuildTeamSliceAsync(normalized, ct);
+        var watermarkFacts = teams
+            .SelectMany(static team => team.Members.Select(member => BuildMemberWatermarkFact(team, member)))
+            .ToArray();
+
+        return new WorkflowBoardSnapshot(
+            normalized.ScopeId,
+            _clock.GetUtcNow(),
+            BuildWatermark(normalized, watermarkFacts),
+            CalculateCounts(teams),
+            teams,
+            LatestNodeUpdate(teams));
+    }
+
+    private async Task<IReadOnlyList<WorkflowBoardTeamSnapshot>> BuildScopeSliceAsync(
+        WorkflowBoardSnapshotRequest request,
+        CancellationToken ct)
+    {
+        var teamRows = await ListTeamsAsync(request.ScopeId, ct);
+        var memberRows = await ListMembersAsync(
+            request.ScopeId,
+            teamId: null,
+            NormalizeTake(request.Take),
+            ct);
+
+        return await BuildTeamsAsync(teamRows, memberRows, ct);
+    }
+
+    private async Task<IReadOnlyList<WorkflowBoardTeamSnapshot>> BuildTeamSliceAsync(
+        WorkflowBoardSnapshotRequest request,
+        CancellationToken ct)
+    {
+        var teamId = request.TeamId!;
+        var team = await ReadTeamAsync(request.ScopeId, teamId, ct);
+        if (team == null)
+            throw new WorkflowBoardSnapshotRequestException("teamId was not found.");
+
+        if (team.IsArchived)
+            throw new WorkflowBoardSnapshotRequestException("teamId is archived.");
+
+        var memberRows = request.MemberId == null
+            ? await ListMembersAsync(request.ScopeId, teamId, NormalizeTake(request.Take), ct)
+            : [await ReadRequiredMemberAsync(request.ScopeId, teamId, request.MemberId, ct)];
+
+        return await BuildTeamsAsync([team], memberRows, ct);
+    }
+
+    private async Task<IReadOnlyList<WorkflowBoardTeamSnapshot>> BuildTeamsAsync(
+        IReadOnlyList<WorkflowBoardRosterTeam> teamRows,
+        IReadOnlyList<WorkflowBoardRosterMember> memberRows,
+        CancellationToken ct)
+    {
+        var teamById = teamRows
+            .Where(static team => !team.IsArchived)
+            .ToDictionary(static team => team.TeamId, StringComparer.Ordinal);
         var teams = new List<WorkflowBoardTeamSnapshot>();
-        var invalidSelections = new List<WorkflowBoardInvalidSelection>();
-        var watermarkFacts = new List<string>();
+        var membersByTeam = memberRows
+            .Where(static member => !member.IsArchived)
+            .Where(static member => !string.IsNullOrWhiteSpace(member.TeamId))
+            .GroupBy(static member => member.TeamId!, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                group => group.ToArray(),
+                StringComparer.Ordinal);
 
-        foreach (var selection in normalizedSelections)
+        foreach (var team in teamRows)
         {
-            var team = await ReadTeamAsync(request.ScopeId, selection.TeamId, ct);
-            if (team == null)
-            {
-                foreach (var memberId in selection.MemberIds)
-                {
-                    invalidSelections.Add(new WorkflowBoardInvalidSelection(
-                        selection.TeamId,
-                        memberId,
-                        WorkflowBoardInvalidSelectionReason.TeamNotFound,
-                        "Selected team is no longer available."));
-                }
-
-                watermarkFacts.Add($"team:{selection.TeamId}:missing");
+            if (team.IsArchived || !membersByTeam.TryGetValue(team.TeamId, out var members))
                 continue;
-            }
 
-            if (team.IsArchived)
+            var mappedMembers = new List<WorkflowBoardMemberSnapshot>();
+            foreach (var member in members)
             {
-                foreach (var memberId in selection.MemberIds)
-                {
-                    invalidSelections.Add(new WorkflowBoardInvalidSelection(
-                        selection.TeamId,
-                        memberId,
-                        WorkflowBoardInvalidSelectionReason.Archived,
-                        "Selected team is archived."));
-                }
+                if (!teamById.ContainsKey(member.TeamId!))
+                    continue;
 
-                watermarkFacts.Add($"team:{team.TeamId}:archived:{FormatTimestamp(team.UpdatedAt)}");
-                continue;
+                var execution = await GetExecutionSnapshotAsync(team.TeamId, member, ct);
+                mappedMembers.Add(MapMember(member, execution));
             }
 
-            watermarkFacts.Add(
-                $"team:{team.TeamId}:{team.DisplayName}:{team.TotalMemberCount?.ToString() ?? "null"}:{FormatTimestamp(team.UpdatedAt)}");
-
-            var members = new List<WorkflowBoardMemberSnapshot>();
-            foreach (var memberId in selection.MemberIds)
-            {
-                var member = await ReadMemberAsync(request.ScopeId, memberId, ct);
-                if (member == null)
-                {
-                    invalidSelections.Add(new WorkflowBoardInvalidSelection(
-                        selection.TeamId,
-                        memberId,
-                        WorkflowBoardInvalidSelectionReason.MemberNotFound,
-                        "Selected member is no longer available."));
-                    watermarkFacts.Add($"member:{memberId}:missing");
-                    continue;
-                }
-
-                if (member.IsArchived)
-                {
-                    invalidSelections.Add(new WorkflowBoardInvalidSelection(
-                        selection.TeamId,
-                        memberId,
-                        WorkflowBoardInvalidSelectionReason.Archived,
-                        "Selected member is archived."));
-                    watermarkFacts.Add($"member:{member.MemberId}:archived:{FormatTimestamp(member.UpdatedAt)}");
-                    continue;
-                }
-
-                if (!string.Equals(member.TeamId, selection.TeamId, StringComparison.Ordinal))
-                {
-                    invalidSelections.Add(new WorkflowBoardInvalidSelection(
-                        selection.TeamId,
-                        member.MemberId,
-                        WorkflowBoardInvalidSelectionReason.MemberNotInTeam,
-                        "Selected member does not belong to the selected team."));
-                    watermarkFacts.Add(
-                        $"member:{member.MemberId}:team:{member.TeamId ?? "null"}:{FormatTimestamp(member.UpdatedAt)}");
-                    continue;
-                }
-
-                var execution = await GetExecutionSnapshotAsync(
-                    request.ScopeId,
-                    selection.TeamId,
-                    member,
-                    ct);
-                members.Add(MapMember(member, execution));
-                watermarkFacts.Add(BuildMemberWatermarkFact(member, execution));
-            }
-
-            if (members.Count > 0)
+            if (mappedMembers.Count > 0)
             {
                 teams.Add(new WorkflowBoardTeamSnapshot(
                     team.TeamId,
                     team.DisplayName,
                     team.TotalMemberCount,
-                    members.Count,
-                    members));
+                    mappedMembers));
             }
         }
 
-        return new WorkflowBoardSnapshot(
-            request.ScopeId,
-            _clock.GetUtcNow(),
-            BuildWatermark(request.ScopeId, normalizedSelections, watermarkFacts),
-            CalculateTotals(teams),
-            teams,
-            invalidSelections,
-            LatestNodeUpdate(teams));
+        return teams;
     }
 
-    private static IReadOnlyList<WorkflowBoardTeamSelection> NormalizeAndValidate(
-        WorkflowBoardSnapshotRequest request)
+    private static WorkflowBoardSnapshotRequest NormalizeAndValidate(WorkflowBoardSnapshotRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         if (string.IsNullOrWhiteSpace(request.ScopeId))
             throw new WorkflowBoardSnapshotRequestException("scopeId is required.");
 
-        if (request.TeamSelections == null || request.TeamSelections.Count == 0)
-            throw new WorkflowBoardSnapshotRequestException("teamSelections is required.");
+        var scopeId = request.ScopeId.Trim();
+        var teamId = NormalizeOptionalId(request.TeamId, "teamId");
+        var memberId = NormalizeOptionalId(request.MemberId, "memberId");
+        if (memberId != null && teamId == null)
+            throw new WorkflowBoardSnapshotRequestException("memberId requires teamId.");
 
-        if (request.TeamSelections.Count > WorkflowBoardSnapshotRequestLimits.MaxSelectedTeams)
-            throw new WorkflowBoardSnapshotRequestException(
-                $"At most {WorkflowBoardSnapshotRequestLimits.MaxSelectedTeams} teams can be selected.");
-
-        if (request.PreviousWatermark != null)
-        {
-            if (string.IsNullOrWhiteSpace(request.PreviousWatermark))
-                throw new WorkflowBoardSnapshotRequestException("previousWatermark must not be blank when present.");
-
-            if (request.PreviousWatermark.Length > WorkflowBoardSnapshotRequestLimits.MaxPreviousWatermarkLength)
-                throw new WorkflowBoardSnapshotRequestException(
-                    $"previousWatermark must be at most {WorkflowBoardSnapshotRequestLimits.MaxPreviousWatermarkLength} characters.");
-        }
-
-        var selections = new List<WorkflowBoardTeamSelection>();
-        var seenRows = new HashSet<string>(StringComparer.Ordinal);
-        var selectedMemberCount = 0;
-
-        foreach (var selection in request.TeamSelections)
-        {
-            if (string.IsNullOrWhiteSpace(selection.TeamId))
-                throw new WorkflowBoardSnapshotRequestException("teamId is required.");
-
-            if (selection.MemberIds == null || selection.MemberIds.Count == 0)
-                throw new WorkflowBoardSnapshotRequestException("memberIds is required.");
-
-            var teamId = selection.TeamId.Trim();
-            var memberIds = new List<string>();
-            foreach (var rawMemberId in selection.MemberIds)
-            {
-                if (string.IsNullOrWhiteSpace(rawMemberId))
-                    throw new WorkflowBoardSnapshotRequestException("memberIds must not contain blank values.");
-
-                var memberId = rawMemberId.Trim();
-                if (!seenRows.Add($"{teamId}\u001f{memberId}"))
-                    continue;
-
-                memberIds.Add(memberId);
-                selectedMemberCount++;
-            }
-
-            if (memberIds.Count == 0)
-                continue;
-
-            selections.Add(new WorkflowBoardTeamSelection(teamId, memberIds));
-        }
-
-        if (selectedMemberCount == 0)
-            throw new WorkflowBoardSnapshotRequestException("memberIds is required.");
-
-        if (selectedMemberCount > WorkflowBoardSnapshotRequestLimits.MaxSelectedMembers)
-            throw new WorkflowBoardSnapshotRequestException(
-                $"At most {WorkflowBoardSnapshotRequestLimits.MaxSelectedMembers} members can be selected.");
-
-        return selections;
+        _ = NormalizeTake(request.Take);
+        return new WorkflowBoardSnapshotRequest(scopeId, teamId, memberId, request.Take);
     }
 
-    private async Task<WorkflowBoardExecutionSnapshot?> GetExecutionSnapshotAsync(
+    private async Task<IReadOnlyList<WorkflowBoardRosterTeam>> ListTeamsAsync(
         string scopeId,
-        string teamId,
-        WorkflowBoardRosterMember member,
         CancellationToken ct)
     {
-        if (_executionQueryPort == null)
-            return null;
-
-        var lookup = new WorkflowBoardExecutionLookup(
-            scopeId,
-            teamId,
-            member.MemberId,
-            member.WorkflowId,
-            member.PublishedServiceId,
-            member.ActorId);
         try
         {
-            return await _executionQueryPort.GetCurrentExecutionAsync(lookup, ct);
+            return await _rosterQueryPort.ListTeamsAsync(scopeId, ct);
         }
         catch (Exception ex) when (IsTransientReadModelFailure(ex, ct))
         {
             throw new WorkflowBoardReadModelUnavailableException(
-                "Workflow board execution read model is temporarily unavailable.",
+                "Workflow board roster read model is temporarily unavailable.",
+                ex);
+        }
+    }
+
+    private async Task<IReadOnlyList<WorkflowBoardRosterMember>> ListMembersAsync(
+        string scopeId,
+        string? teamId,
+        int take,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await _rosterQueryPort.ListMembersAsync(scopeId, teamId, take, ct);
+        }
+        catch (Exception ex) when (IsTransientReadModelFailure(ex, ct))
+        {
+            throw new WorkflowBoardReadModelUnavailableException(
+                "Workflow board roster read model is temporarily unavailable.",
                 ex);
         }
     }
@@ -266,6 +208,52 @@ public sealed class WorkflowBoardSnapshotQueryService : IWorkflowBoardSnapshotQu
         }
     }
 
+    private async Task<WorkflowBoardRosterMember> ReadRequiredMemberAsync(
+        string scopeId,
+        string teamId,
+        string memberId,
+        CancellationToken ct)
+    {
+        var member = await ReadMemberAsync(scopeId, memberId, ct);
+        if (member == null)
+            throw new WorkflowBoardSnapshotRequestException("memberId was not found.");
+
+        if (member.IsArchived)
+            throw new WorkflowBoardSnapshotRequestException("memberId is archived.");
+
+        if (!string.Equals(member.TeamId, teamId, StringComparison.Ordinal))
+            throw new WorkflowBoardSnapshotRequestException("memberId does not belong to teamId.");
+
+        return member;
+    }
+
+    private async Task<WorkflowBoardExecutionSnapshot?> GetExecutionSnapshotAsync(
+        string teamId,
+        WorkflowBoardRosterMember member,
+        CancellationToken ct)
+    {
+        if (_executionQueryPort == null)
+            return null;
+
+        var lookup = new WorkflowBoardExecutionLookup(
+            member.ScopeId,
+            teamId,
+            member.MemberId,
+            member.WorkflowId,
+            member.PublishedServiceId,
+            member.ActorId);
+        try
+        {
+            return await _executionQueryPort.GetCurrentExecutionAsync(lookup, ct);
+        }
+        catch (Exception ex) when (IsTransientReadModelFailure(ex, ct))
+        {
+            throw new WorkflowBoardReadModelUnavailableException(
+                "Workflow board execution read model is temporarily unavailable.",
+                ex);
+        }
+    }
+
     private static WorkflowBoardMemberSnapshot MapMember(
         WorkflowBoardRosterMember member,
         WorkflowBoardExecutionSnapshot? execution)
@@ -285,36 +273,51 @@ public sealed class WorkflowBoardSnapshotQueryService : IWorkflowBoardSnapshotQu
             ActorId = member.ActorId,
             RoleSummary = member.RoleSummary,
             CurrentExecutionId = execution?.CurrentExecutionId,
+            ExecutionRevision = execution?.Revision,
+            ExecutionStatus = MapExecutionStatus(execution),
+            Progress = MapProgress(execution),
             CurrentNode = execution?.CurrentNode,
             LastNodeUpdatedAt = execution?.LastNodeUpdatedAt,
-            Totals = execution?.Totals,
         };
     }
 
-    private static WorkflowBoardTotals CalculateTotals(IReadOnlyList<WorkflowBoardTeamSnapshot> teams)
+    private static WorkflowBoardMemberExecutionStatus MapExecutionStatus(WorkflowBoardExecutionSnapshot? execution)
     {
-        var allMembers = teams.SelectMany(static team => team.Members).ToArray();
-        if (allMembers.Length == 0 || allMembers.Any(static member => !HasAuthoritativeExecutionTotals(member)))
+        if (execution is not { Availability: WorkflowBoardExecutionAvailability.Available })
+            return WorkflowBoardMemberExecutionStatus.Unknown;
+
+        return execution.ExecutionStatus;
+    }
+
+    private static WorkflowBoardMemberProgress? MapProgress(WorkflowBoardExecutionSnapshot? execution)
+    {
+        if (execution is not { Availability: WorkflowBoardExecutionAvailability.Available })
+            return null;
+
+        if (execution.Summary is not
+            {
+                CompletedSteps: not null,
+                DefinitionStepCount: not null,
+            } summary)
         {
-            return new WorkflowBoardTotals(null, null, null, null);
+            return null;
         }
 
-        return new WorkflowBoardTotals(
-            allMembers.Sum(static member => member.Totals!.CompletedSteps!.Value),
-            allMembers.Sum(static member => member.Totals!.RunningNodes!.Value),
-            allMembers.Sum(static member => member.Totals!.WaitingOrPendingNodes!.Value),
-            allMembers.Sum(static member => member.Totals!.FailedNodes!.Value));
+        return new WorkflowBoardMemberProgress(
+            summary.CompletedSteps.Value,
+            summary.DefinitionStepCount.Value);
     }
 
-    private static bool HasAuthoritativeExecutionTotals(WorkflowBoardMemberSnapshot member) =>
-        member.ExecutionAvailability == WorkflowBoardExecutionAvailability.Available &&
-        member.Totals is
-        {
-            CompletedSteps: not null,
-            RunningNodes: not null,
-            WaitingOrPendingNodes: not null,
-            FailedNodes: not null,
-        };
+    private static WorkflowBoardSnapshotCounts CalculateCounts(IReadOnlyList<WorkflowBoardTeamSnapshot> teams)
+    {
+        var members = teams.SelectMany(static team => team.Members).ToArray();
+        return new WorkflowBoardSnapshotCounts(
+            members.Count(static member => member.ExecutionStatus == WorkflowBoardMemberExecutionStatus.Running),
+            members.Count(static member => member.ExecutionStatus == WorkflowBoardMemberExecutionStatus.Waiting),
+            members.Count(static member => member.ExecutionStatus == WorkflowBoardMemberExecutionStatus.Failed),
+            members.Count(static member => member.ExecutionStatus == WorkflowBoardMemberExecutionStatus.Retrying),
+            members.Count(static member => member.ExecutionStatus == WorkflowBoardMemberExecutionStatus.Completed));
+    }
 
     private static DateTimeOffset? LatestNodeUpdate(IReadOnlyList<WorkflowBoardTeamSnapshot> teams) =>
         teams.SelectMany(static team => team.Members)
@@ -323,35 +326,65 @@ public sealed class WorkflowBoardSnapshotQueryService : IWorkflowBoardSnapshotQu
             .Max();
 
     private static string BuildMemberWatermarkFact(
-        WorkflowBoardRosterMember member,
-        WorkflowBoardExecutionSnapshot? execution) =>
+        WorkflowBoardTeamSnapshot team,
+        WorkflowBoardMemberSnapshot member) =>
         string.Join(
             ':',
             "member",
+            team.TeamId,
             member.MemberId,
-            member.TeamId ?? "null",
             member.DisplayName,
             member.PublishedServiceId ?? "null",
             member.WorkflowId ?? "null",
             member.WorkflowName ?? "null",
             member.ActorId ?? "null",
             member.RoleSummary ?? "null",
-            FormatTimestamp(member.UpdatedAt),
-            execution?.Revision ?? "execution-pending");
+            member.CurrentExecutionId ?? "null",
+            member.ExecutionRevision ?? "null",
+            member.ExecutionAvailability,
+            member.ExecutionStatus,
+            FormatTimestamp(member.LastNodeUpdatedAt));
 
     private static string BuildWatermark(
-        string scopeId,
-        IReadOnlyList<WorkflowBoardTeamSelection> selections,
+        WorkflowBoardSnapshotRequest request,
         IReadOnlyList<string> facts)
     {
-        var selectionMaterial = string.Join(
+        var filterMaterial = string.Join(
             '\n',
-            selections.Select(static selection =>
-                $"{selection.TeamId}:{string.Join(',', selection.MemberIds)}"));
+            request.ScopeId,
+            request.TeamId ?? "all-teams",
+            request.MemberId ?? "all-members",
+            NormalizeTake(request.Take).ToString());
         var factMaterial = string.Join('\n', facts);
-        var selectionHash = Hash($"{scopeId}\n{selectionMaterial}");
+        var filterHash = Hash(filterMaterial);
         var factHash = Hash(factMaterial);
-        return $"workflow-board:v1:{selectionHash}:{factHash}";
+        return $"workflow-board:v2:{filterHash}:{factHash}";
+    }
+
+    private static string? NormalizeOptionalId(string? value, string fieldName)
+    {
+        if (value == null)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(value))
+            throw new WorkflowBoardSnapshotRequestException($"{fieldName} must not be blank.");
+
+        return value.Trim();
+    }
+
+    private static int NormalizeTake(int? take)
+    {
+        if (take == null)
+            return WorkflowBoardSnapshotRequestLimits.DefaultMemberRows;
+
+        if (take <= 0)
+            throw new WorkflowBoardSnapshotRequestException("take must be greater than zero.");
+
+        if (take > WorkflowBoardSnapshotRequestLimits.MaxMemberRows)
+            throw new WorkflowBoardSnapshotRequestException(
+                $"take must be at most {WorkflowBoardSnapshotRequestLimits.MaxMemberRows}.");
+
+        return take.Value;
     }
 
     private static string Hash(string value)
@@ -408,22 +441,37 @@ public sealed class StudioWorkflowBoardRosterQueryPort : IWorkflowBoardRosterQue
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
     }
 
+    public async Task<IReadOnlyList<WorkflowBoardRosterTeam>> ListTeamsAsync(
+        string scopeId,
+        CancellationToken ct = default)
+    {
+        var roster = await _teamQueryPort.ListAsync(
+            scopeId,
+            new StudioTeamRosterPageRequest(PageSize: WorkflowBoardSnapshotRequestLimits.MaxMemberRows),
+            ct);
+        return roster.Teams.Select(MapTeam).ToArray();
+    }
+
+    public async Task<IReadOnlyList<WorkflowBoardRosterMember>> ListMembersAsync(
+        string scopeId,
+        string? teamId,
+        int take,
+        CancellationToken ct = default)
+    {
+        var roster = await _memberQueryPort.ListAsync(
+            scopeId,
+            new StudioMemberRosterPageRequest(PageSize: take, TeamId: teamId),
+            ct);
+        return roster.Members.Select(MapMember).ToArray();
+    }
+
     public async Task<WorkflowBoardRosterTeam?> GetTeamAsync(
         string scopeId,
         string teamId,
         CancellationToken ct = default)
     {
         var team = await _teamQueryPort.GetAsync(scopeId, teamId, ct);
-        if (team == null)
-            return null;
-
-        return new WorkflowBoardRosterTeam(
-            team.TeamId,
-            team.ScopeId,
-            team.DisplayName,
-            string.Equals(team.LifecycleStage, TeamLifecycleStageNames.Archived, StringComparison.Ordinal),
-            team.MemberCount,
-            team.UpdatedAt);
+        return team == null ? null : MapTeam(team);
     }
 
     public async Task<WorkflowBoardRosterMember?> GetMemberAsync(
@@ -432,12 +480,26 @@ public sealed class StudioWorkflowBoardRosterQueryPort : IWorkflowBoardRosterQue
         CancellationToken ct = default)
     {
         var member = await _memberQueryPort.GetAsync(scopeId, memberId, ct);
-        if (member == null)
-            return null;
+        return member == null ? null : MapMember(member.Summary, member.ImplementationRef ?? member.Summary.ImplementationRef, member.LastBinding);
+    }
 
-        var summary = member.Summary;
-        var implementationRef = member.ImplementationRef ?? summary.ImplementationRef;
-        return new WorkflowBoardRosterMember(
+    private static WorkflowBoardRosterTeam MapTeam(StudioTeamSummaryResponse team) =>
+        new(
+            team.TeamId,
+            team.ScopeId,
+            team.DisplayName,
+            string.Equals(team.LifecycleStage, TeamLifecycleStageNames.Archived, StringComparison.Ordinal),
+            team.MemberCount,
+            team.UpdatedAt);
+
+    private static WorkflowBoardRosterMember MapMember(StudioMemberSummaryResponse summary) =>
+        MapMember(summary, summary.ImplementationRef, lastBinding: null);
+
+    private static WorkflowBoardRosterMember MapMember(
+        StudioMemberSummaryResponse summary,
+        StudioMemberImplementationRefResponse? implementationRef,
+        StudioMemberBindingContractResponse? lastBinding) =>
+        new(
             summary.MemberId,
             summary.ScopeId,
             summary.TeamId,
@@ -446,8 +508,7 @@ public sealed class StudioWorkflowBoardRosterQueryPort : IWorkflowBoardRosterQue
             summary.PublishedServiceId,
             implementationRef?.WorkflowId,
             null,
-            member.LastBinding?.ExpectedActorId,
+            lastBinding?.ExpectedActorId,
             summary.Description,
             summary.UpdatedAt);
-    }
 }

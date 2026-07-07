@@ -10,7 +10,7 @@ namespace Aevatar.Mainnet.Host.Api.Voice;
 //   - Talk: a REAL in-browser voice client over /ws/voice — mic (PCM16 mono 24kHz) ↔ response audio,
 //     half-duplex, status driven by the server's VoiceControlFrame stream (sessionAccepted / realtimeFrame).
 //     Wire format mirrors voice-presence's AevatarVoiceClient.cs; auth reuses this page's NyxID OIDC token
-//     passed as the ?access_token= query param. No actor id → /ws/voice auto-provisions the caller's
+//     carried in the Sec-WebSocket-Protocol header ("aevatar-bearer.<token>"), not the URL. No actor id → /ws/voice auto-provisions the caller's
 //     default voice agent (module voice_presence_openai; per-session NyxID ephemeral via slug openai-realtime).
 //   - Default agent: the zero-config agent's real runtime defaults (provider/model/persona), read-only —
 //     aevatar has no default-agent config write. Plus the one real voice HTTP write as an advanced action:
@@ -350,7 +350,7 @@ internal static class VoiceConsolePage
      - GET  /api/studio/context → {scopeId, scopeResolved, scopeSource}  (scope chip)
      - POST /api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable?agentKind=...
             body {moduleName} → 202 / 4xx-5xx {error,detail}   (advanced: attach to a specific actor)
-     - WS   /ws/voice?codec=pcm16&mode=half_duplex&access_token=<NyxID JWT>  (the Talk client)
+     - WS   /ws/voice?codec=pcm16&mode=half_duplex  (Talk client; NyxID JWT via Sec-WebSocket-Protocol "aevatar-bearer.<token>")
    The default voice agent is auto-provisioned by /ws/voice with no actor id; it has no config write API,
    so the Default-agent view shows real runtime defaults read-only.
    =========================================================================== */
@@ -808,10 +808,13 @@ async function startVoice(){
   voice.playCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE });
   voice.playHead = voice.playCtx.currentTime;
 
-  // 2) open WS — token on the access_token query param (validated equivalent to the bearer header).
+  // 2) open WS — token carried in the Sec-WebSocket-Protocol header (NOT the URL), so it never
+  //    lands in request-URL access logs (stdout → Elasticsearch). Server reads "aevatar-bearer.<token>".
   vStatus("connecting","正在连接 /ws/voice…");
-  const url = location.origin.replace(/^http/,"ws") + "/ws/voice?codec=pcm16&mode=half_duplex&access_token=" + encodeURIComponent(token.access_token);
-  let ws; try { ws = new WebSocket(url); } catch(e){ vStatus("error","无法建立 WebSocket：" + (e&&e.message||e)); stopVoice(true); return; }
+  const url = location.origin.replace(/^http/,"ws") + "/ws/voice?codec=pcm16&mode=half_duplex";
+  let ws;
+  try { ws = new WebSocket(url, ["aevatar-voice-v1", "aevatar-bearer." + token.access_token]); }
+  catch(e){ vStatus("error","无法建立 WebSocket：" + (e&&e.message||e)); stopVoice(true); return; }
   ws.binaryType = "arraybuffer";
   voice.ws = ws;
 
