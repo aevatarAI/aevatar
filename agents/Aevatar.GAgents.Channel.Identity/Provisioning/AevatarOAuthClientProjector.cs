@@ -50,9 +50,14 @@ public sealed class AevatarOAuthClientProjector
             Id = context.RootActorId,
             ClientId = state.ClientId ?? string.Empty,
             ClientIdIssuedAtUnix = state.ClientIdIssuedAtUnix,
+            // Mirror both the vault ref (new writes) and legacy bytes (empty
+            // for new, populated for legacy state) so the provider can dual-
+            // read. No decryption here — the ref stays opaque in the readmodel.
+            HmacKeyRef = state.HmacKeyRef,
             HmacKey = state.HmacKey ?? Google.Protobuf.ByteString.Empty,
             HmacKid = state.HmacKid ?? string.Empty,
             HmacKeyRotatedAtUnix = state.HmacKeyRotatedAtUnix,
+            PreviousHmacKeyRef = state.PreviousHmacKeyRef,
             PreviousHmacKey = state.PreviousHmacKey ?? Google.Protobuf.ByteString.Empty,
             PreviousHmacKid = state.PreviousHmacKid ?? string.Empty,
             PreviousHmacDemotedAtUnix = state.PreviousHmacDemotedAtUnix,
