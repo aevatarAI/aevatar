@@ -2,40 +2,35 @@ namespace Aevatar.Studio.Application.Studio.WorkflowBoards;
 
 public static class WorkflowBoardSnapshotRequestLimits
 {
-    public const int MaxSelectedTeams = 4;
-    public const int MaxSelectedMembers = 24;
-    public const int MaxPreviousWatermarkLength = 256;
+    public const int DefaultMemberRows = 20;
+    public const int MaxMemberRows = 100;
 }
 
 public sealed record WorkflowBoardSnapshotRequest(
     string ScopeId,
-    IReadOnlyList<WorkflowBoardTeamSelection> TeamSelections,
-    string? PreviousWatermark = null);
-
-public sealed record WorkflowBoardTeamSelection(
-    string TeamId,
-    IReadOnlyList<string> MemberIds);
+    string? TeamId = null,
+    string? MemberId = null,
+    int? Take = null);
 
 public sealed record WorkflowBoardSnapshot(
     string ScopeId,
     DateTimeOffset GeneratedAt,
     string Watermark,
-    WorkflowBoardTotals Totals,
+    WorkflowBoardSnapshotCounts Counts,
     IReadOnlyList<WorkflowBoardTeamSnapshot> Teams,
-    IReadOnlyList<WorkflowBoardInvalidSelection> InvalidSelections,
     DateTimeOffset? LastNodeUpdatedAt = null);
 
-public sealed record WorkflowBoardTotals(
-    int? CompletedSteps,
-    int? RunningNodes,
-    int? WaitingOrPendingNodes,
-    int? FailedNodes);
+public sealed record WorkflowBoardSnapshotCounts(
+    int Running,
+    int Waiting,
+    int Failed,
+    int Retrying,
+    int Completed);
 
 public sealed record WorkflowBoardTeamSnapshot(
     string TeamId,
     string TeamName,
     int? TotalMemberCount,
-    int SelectedMemberCount,
     IReadOnlyList<WorkflowBoardMemberSnapshot> Members);
 
 public sealed record WorkflowBoardMemberSnapshot(
@@ -52,10 +47,16 @@ public sealed record WorkflowBoardMemberSnapshot(
     public string? ActorId { get; init; }
     public string? RoleSummary { get; init; }
     public string? CurrentExecutionId { get; init; }
+    public string? ExecutionRevision { get; init; }
+    public WorkflowBoardMemberExecutionStatus ExecutionStatus { get; init; }
+    public WorkflowBoardMemberProgress? Progress { get; init; }
     public WorkflowBoardCurrentNode? CurrentNode { get; init; }
     public DateTimeOffset? LastNodeUpdatedAt { get; init; }
-    public WorkflowBoardTotals? Totals { get; init; }
 }
+
+public sealed record WorkflowBoardMemberProgress(
+    int CompletedSteps,
+    int TotalSteps);
 
 public sealed record WorkflowBoardCurrentNode(
     string NodeId,
@@ -108,20 +109,15 @@ public enum WorkflowBoardExecutionAvailability
     PendingBackendContract,
 }
 
-public sealed record WorkflowBoardInvalidSelection(
-    string TeamId,
-    string? MemberId,
-    WorkflowBoardInvalidSelectionReason Reason,
-    string Message);
-
-public enum WorkflowBoardInvalidSelectionReason
+public enum WorkflowBoardMemberExecutionStatus
 {
     Unknown = 0,
-    TeamNotFound,
-    MemberNotFound,
-    MemberNotInTeam,
-    Unauthorized,
-    Archived,
+    Running,
+    Waiting,
+    Failed,
+    Retrying,
+    Completed,
+    Stopped,
 }
 
 public sealed record WorkflowBoardRosterTeam(
@@ -160,11 +156,19 @@ public sealed record WorkflowBoardExecutionSnapshot(
     IReadOnlyList<WorkflowBoardFailedNode> FailedNodes)
 {
     public string? CurrentExecutionId { get; init; }
+    public WorkflowBoardMemberExecutionStatus ExecutionStatus { get; init; }
     public WorkflowBoardCurrentNode? CurrentNode { get; init; }
     public DateTimeOffset? LastNodeUpdatedAt { get; init; }
-    public WorkflowBoardTotals? Totals { get; init; }
+    public WorkflowBoardExecutionSummary? Summary { get; init; }
     public string? Revision { get; init; }
 }
+
+public sealed record WorkflowBoardExecutionSummary(
+    int? CompletedSteps,
+    int? RunningNodes,
+    int? WaitingOrPendingNodes,
+    int? FailedNodes,
+    int? DefinitionStepCount);
 
 public interface IWorkflowBoardSnapshotQueryPort
 {
@@ -175,6 +179,16 @@ public interface IWorkflowBoardSnapshotQueryPort
 
 public interface IWorkflowBoardRosterQueryPort
 {
+    Task<IReadOnlyList<WorkflowBoardRosterTeam>> ListTeamsAsync(
+        string scopeId,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowBoardRosterMember>> ListMembersAsync(
+        string scopeId,
+        string? teamId,
+        int take,
+        CancellationToken ct = default);
+
     Task<WorkflowBoardRosterTeam?> GetTeamAsync(
         string scopeId,
         string teamId,

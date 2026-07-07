@@ -112,6 +112,12 @@ public static class IdentityServiceCollectionExtensions
         var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
         if (configuration is not null)
             aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
+        // Default ES ACL probe: reports Unavailable (no cluster to inspect) so the
+        // startup guard resolves and never blocks on the InMemory projection
+        // provider (dev/tests). A host that runs the Elasticsearch projection store
+        // replaces this with a real HTTP-backed probe that inspects the cluster
+        // security API using the same endpoint/credentials as the projection store.
+        services.TryAddSingleton<IOAuthClientEsAclProbe, UnavailableOAuthClientEsAclProbe>();
 
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
         // callers before model binding/DI resolution kicks in.
@@ -141,14 +147,6 @@ public static class IdentityServiceCollectionExtensions
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-rebuild"));
-
-        // ─── Operator admin surface (rebuild endpoint, issue #549) ───
-        // Bound from configuration when present; absence keeps the rebuild
-        // endpoint fail-secure (503 with "rebuild not configured"). Production
-        // sets the token via env var ChannelIdentity__Admin__RebuildToken.
-        var adminOptions = services.AddOptions<AevatarOAuthAdminOptions>();
-        if (configuration is not null)
-            adminOptions.Bind(configuration.GetSection(AevatarOAuthAdminOptions.SectionName));
 
         // ─── Broker (self-bootstrapping, no appsettings dependency) ───
         // Register broker as a *singleton* and inject IHttpClientFactory so

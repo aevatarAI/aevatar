@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -5,9 +8,6 @@ using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
-using System.Globalization;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace Aevatar.Workflow.Core.Execution;
 
@@ -353,27 +353,25 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 await CancelRetryBackoffAsync(state, evt.StepId, ctx, CancellationToken.None);
             }
 
-            var outputPreview = (evt.Output ?? string.Empty).Length > 200
-                ? evt.Output![..200] + "..."
-                : evt.Output ?? string.Empty;
+            // Do NOT log step output content: tool results routinely carry secrets
+            // (NyxID access tokens, refresh tokens, connector credentials). Logging a
+            // preview leaked partial credentials into stdout -> Elasticsearch. Length only.
             if (evt.Success)
             {
                 ctx.Logger.LogInformation(
-                    "workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
+                    "workflow_loop: step={StepId} completed success={Success} output=({Len} chars)",
                     evt.StepId,
                     evt.Success,
-                    (evt.Output ?? string.Empty).Length,
-                    outputPreview);
+                    (evt.Output ?? string.Empty).Length);
             }
             else
             {
                 ctx.Logger.LogError(
-                    "workflow_loop: step={StepId} failed run={RunId} error={Error} output=({Len} chars) {Preview}",
+                    "workflow_loop: step={StepId} failed run={RunId} error={Error} output=({Len} chars)",
                     evt.StepId,
                     runId,
                     string.IsNullOrWhiteSpace(evt.Error) ? "(none)" : evt.Error,
-                    (evt.Output ?? string.Empty).Length,
-                    outputPreview);
+                    (evt.Output ?? string.Empty).Length);
             }
 
             if (!string.IsNullOrWhiteSpace(evt.AssignedVariable))
@@ -515,6 +513,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 "workflow_loop: completion handling failed run={RunId} step={StepId}",
                 runId,
                 evt.StepId);
+
             await TryStartCompensationOrPublishTerminalFailureAsync(
                 ctx,
                 new WorkflowCompletedEvent
@@ -698,27 +697,27 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
                 return true;
             case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
-            {
-                var state = LoadState(ctx);
-                await CleanupRunAsync(
-                    state,
-                    ctx,
-                    ct,
-                    preserveTerminalFacts: true,
-                    preserveCurrentStepInputVariable: true);
-                var deadLetterError = error ?? string.Empty;
-                await PublishWorkflowCompletedAsync(
-                    ctx,
-                    new WorkflowCompletedEvent
-                    {
-                        WorkflowName = _workflow.Name,
-                        RunId = NormalizeRunId(runId),
-                        Success = false,
-                        Error = deadLetterError,
-                    },
-                    ct);
-                return true;
-            }
+                {
+                    var state = LoadState(ctx);
+                    await CleanupRunAsync(
+                        state,
+                        ctx,
+                        ct,
+                        preserveTerminalFacts: true,
+                        preserveCurrentStepInputVariable: true);
+                    var deadLetterError = error ?? string.Empty;
+                    await PublishWorkflowCompletedAsync(
+                        ctx,
+                        new WorkflowCompletedEvent
+                        {
+                            WorkflowName = _workflow.Name,
+                            RunId = NormalizeRunId(runId),
+                            Success = false,
+                            Error = deadLetterError,
+                        },
+                        ct);
+                    return true;
+                }
             case WorkflowCompensationTransitionStatus.NoCompensableLedger:
                 return false;
             default:
@@ -1080,57 +1079,57 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         switch (policy.Strategy.ToLowerInvariant())
         {
             case "skip":
-            {
-                var output = policy.DefaultOutput ?? evt.Output ?? string.Empty;
-                ctx.Logger.LogWarning(
-                    "workflow_loop: step={StepId} failed, on_error=skip output=({Len} chars)",
-                    step.Id,
-                    output.Length);
-
-                state.RetryAttemptsByStepId.Remove(step.Id);
-                await SaveStateAsync(state, ctx, ct);
-
-                var next = _workflow.GetNextStep(step.Id);
-                if (next == null)
                 {
-                    await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
-                    await PublishWorkflowCompletedAsync(
-                        ctx,
-                        new WorkflowCompletedEvent
-                        {
-                            WorkflowName = _workflow.Name,
-                            RunId = state.RunId,
-                            Success = true,
-                            Output = output,
-                        },
-                        ct);
-                }
-                else
-                {
-                    await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
-                }
+                    var output = policy.DefaultOutput ?? evt.Output ?? string.Empty;
+                    ctx.Logger.LogWarning(
+                        "workflow_loop: step={StepId} failed, on_error=skip output=({Len} chars)",
+                        step.Id,
+                        output.Length);
 
-                return true;
-            }
+                    state.RetryAttemptsByStepId.Remove(step.Id);
+                    await SaveStateAsync(state, ctx, ct);
+
+                    var next = _workflow.GetNextStep(step.Id);
+                    if (next == null)
+                    {
+                        await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
+                        await PublishWorkflowCompletedAsync(
+                            ctx,
+                            new WorkflowCompletedEvent
+                            {
+                                WorkflowName = _workflow.Name,
+                                RunId = state.RunId,
+                                Success = true,
+                                Output = output,
+                            },
+                            ct);
+                    }
+                    else
+                    {
+                        await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                    }
+
+                    return true;
+                }
             case "fallback" when !string.IsNullOrWhiteSpace(policy.FallbackStep):
-            {
-                var fallback = _workflow.GetStep(policy.FallbackStep);
-                if (fallback == null)
-                    return false;
+                {
+                    var fallback = _workflow.GetStep(policy.FallbackStep);
+                    if (fallback == null)
+                        return false;
 
-                ctx.Logger.LogWarning(
-                    "workflow_loop: step={StepId} failed, on_error=fallback -> {Fallback}",
-                    step.Id,
-                    policy.FallbackStep);
+                    ctx.Logger.LogWarning(
+                        "workflow_loop: step={StepId} failed, on_error=fallback -> {Fallback}",
+                        step.Id,
+                        policy.FallbackStep);
 
-                state.RetryAttemptsByStepId.Remove(step.Id);
-                await SaveStateAsync(state, ctx, ct);
-                var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
-                    ? evt.Error ?? string.Empty
-                    : evt.Output;
-                await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
-                return true;
-            }
+                    state.RetryAttemptsByStepId.Remove(step.Id);
+                    await SaveStateAsync(state, ctx, ct);
+                    var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
+                        ? evt.Error ?? string.Empty
+                        : evt.Output;
+                    await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+                    return true;
+                }
             default:
                 return false;
         }
@@ -1866,14 +1865,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     {
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
         var effectiveTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(_workflow, step);
-        var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
+        // Do NOT log step input content: tool-call arguments routinely carry secrets
+        // (e.g. {"token":"<NyxID JWT>"}). A preview leaked partial credentials into
+        // stdout -> Elasticsearch. Length only.
         ctx.Logger.LogInformation(
-            "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
+            "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars)",
             step.Id,
             canonicalStepType,
             string.IsNullOrWhiteSpace(effectiveTargetRole) ? "(none)" : effectiveTargetRole,
-            input.Length,
-            inputPreview);
+            input.Length);
 
         var request = new StepRequestEvent
         {

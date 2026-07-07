@@ -1300,7 +1300,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var resumedState = resumedCtx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
         resumedState.Pending.Should().BeEmpty();
         resumedState.Captured.Should().ContainKey("run-secure::api_key");
-        resumedState.Captured["run-secure::api_key"].Value.Should().Be("top-secret-value");
+        resumedState.Captured["run-secure::api_key"].Value.Should().BeEmpty(); resumedState.Captured["run-secure::api_key"].ValueReference.Should().NotBeNull(); (await SecureInputRuntimeContextAccess.TryGetCapturedValueAsync(resumedCtx, "run-secure", "api_key")).Should().Be((true, "top-secret-value"));
 
         await resumedModule.HandleAsync(
             Envelope(new WorkflowCompletedEvent
@@ -1348,7 +1348,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
             CancellationToken.None);
 
         var capturedState = ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);
-        capturedState.Captured["run-secure-recapture::api_key"].Value.Should().Be("old-secret");
+        capturedState.Captured["run-secure-recapture::api_key"].Value.Should().BeEmpty(); capturedState.Captured["run-secure-recapture::api_key"].ValueReference.Should().NotBeNull(); (await SecureInputRuntimeContextAccess.TryGetCapturedValueAsync(ctx, "run-secure-recapture", "api_key")).Should().Be((true, "old-secret"));
         ctx.Published.Clear();
 
         await module.HandleAsync(

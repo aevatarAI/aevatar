@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Authentication.Abstractions\Aevatar.Authentication.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core\Aevatar.CQRS.Projection.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.CQRS.Projection.Core.Abstractions\Aevatar.CQRS.Projection.Core.Abstractions.csproj" />
@@ -39,6 +40,6 @@
     <Protobuf Include="protos\*.proto"
               GrpcServices="None"
               ProtoRoot="protos"
-              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Identity.Abstractions\protos;..\Aevatar.GAgents.Channel.Abstractions\protos" />
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Identity.Abstractions\protos;..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>

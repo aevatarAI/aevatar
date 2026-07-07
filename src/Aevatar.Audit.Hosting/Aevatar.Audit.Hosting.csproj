@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aevatar.Audit.Hosting</AssemblyName>
+    <RootNamespace>Aevatar.Audit.Hosting</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.Audit.Hosting.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Authentication.Abstractions\Aevatar.Authentication.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
+  </ItemGroup>
+</Project>

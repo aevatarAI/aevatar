@@ -6,83 +6,98 @@ owner: eanzhao
 
 # System Skill Overlay Authoring Contract
 
-This document records the authoring and rollout contract for system skill
-overlays. The runtime validation is implemented in
-`OverlayAuthoringContract`; this page is the governance reference for authors,
-operators, and review.
+This document records the authoring, sourcing, and rollout contract for the system
+skill overlay. The runtime is implemented by `OrnnSystemSkillOverlayProvider`
+(source + cache) and `SystemSkillOverlayDefaultProvider` (built-in fallback); this
+page is the governance reference for authors, operators, and review.
 
-## Authoring Frontmatter
+## Source: a public, org-owned Ornn skillset
 
-Every overlay skill must start with YAML-style frontmatter. The builder only
-materializes skills whose frontmatter satisfies all six fields below.
+The overlay is sourced from a **public, org-owned Ornn skillset** whose non-secret
+name is host configuration (`Aevatar:SystemSkills:SetName`, e.g. `aevatar-system`).
+There is **no organization service token secret** (issue #2498):
 
-| Field | Type | Required | Meaning |
-|---|---|---:|---|
-| `title` | string | yes | Human-readable overlay title. |
-| `scope` | string | yes | Operational scope owned by the authoring team. |
-| `priority` | integer | yes | Relative ordering and selection priority. |
-| `max_bytes` | integer | yes | Author-declared byte budget for the overlay body. |
-| `applies_to` | enum string | yes | One of `channel`, `dm`, or `both`. |
-| `non_override` | boolean | yes | Must state whether the overlay is non-overriding guidance. |
+- **Trust anchor is set membership.** Only the owning org can add members, so members
+  can be public without a tag-squat injection vector — the overlay reads by *set
+  membership*, not a squattable tag.
+- **No secret.** Public read reuses aevatar's existing `ornn-api` NyxID proxy access
+  with the per-turn user token; the only host fact is the non-secret set name.
+- **Anti-squat.** The set name is resolved to a stable `guid` once and then read by
+  that guid. On a pinned-guid miss the provider keeps last-known-good and never
+  silently re-resolves by name.
 
-The builder rejects missing fields, non-integer `priority` or `max_bytes`,
-non-boolean `non_override`, and unsupported `applies_to` values. Rejected
-skills are skipped and are not partially included.
+## Authoring an overlay member
 
-## Provenance Model
+A member is a normal Ornn skill added to the set. Two things make it an overlay member:
 
-Overlay materialization reads from Ornn using the host-bound organization
-service token. A source skill is trusted only when it is private and carries the
-configured organization system-skill tag. The token is a host secret and must
-not be exposed in prompts, logs, docs, or client responses.
+| Aspect | Contract |
+|---|---|
+| Set membership | The skill is a member of the org-owned set (the trust anchor). |
+| Scope tag | The skill carries exactly one platform-scope tag: `overlay-scope-global` (cross-platform, always injected) or `overlay-scope-<platform>` (e.g. `overlay-scope-lark`), injected only when the turn's channel platform matches. |
+| Body | The overlay content is the skill's `SKILL.md` body. Any leading YAML frontmatter (name/description/version/metadata) is stripped and never enters the prompt. |
 
-The materialized `SystemSkillOverlay` stores:
+A member **without** an `overlay-scope-*` tag is skipped (not injected) — scoping is
+fail-closed, so a mistagged member never bleeds into the wrong platform.
 
-- `overlay_markdown`: the composed overlay body.
-- `source_watermark`: a deterministic hash of the included skill names,
-  descriptions, and bodies.
-- `materialized_at`: the refresh timestamp.
+## Context-aware injection and budget
 
-The watermark is the operational provenance handle for a turn. It identifies
-which composed overlay was used without logging raw overlay content.
+The provider pre-renders one overlay variant per platform seen in the set:
 
-## Injection Seams and Built-in Default
+- `overlay-scope-global` members are included in **every** variant.
+- `overlay-scope-<platform>` members are included **only** in that platform's variant.
+- Direct chat is inherently a `dm` turn → it resolves the `dm` platform like any other
+  (an `overlay-scope-dm` member targets direct chat); with no `dm`-scoped members that
+  is exactly the global-only variant.
+- Channel platform resolution is **typed-context first**: the seam reads
+  `AgentToolExecutionContext.Channel.Platform` and only falls back to the
+  `channel.platform` metadata key, because the per-step plan path strips owned control
+  keys from metadata before prompt construction.
 
-The kernel (`system-prompt.md`) carries only invariants, runtime read contracts,
-the skill extension mechanism, and a one-line internal tool index. The
-per-domain capability how-to lives in the overlay layer and is force-injected on
-both reply seams:
+Each variant is rendered within `MaxSkills`/`MaxBytes` (full bodies first, degrading
+to catalog lines, then a catalog-only block). A deterministic `source_watermark`
+(SHA-256 over every member's name, description, body, and scope) is the operational
+provenance handle for a turn; it changes whenever any member is edited or retagged.
 
-- Direct chat: `RoleGAgent.DecorateSystemPrompt` appends the Ornn-materialized
-  actor-state overlay when present, otherwise the built-in default overlay.
-- Channel/relay: `NyxIdConversationReplyGenerator.BuildSystemPrompt` appends the
-  overlay resolved from `ISystemSkillOverlayProvider`, after the kernel and
-  before the channel runtime facts (`kernel > overlay > runtime facts`).
+## Injection seams and the built-in default
 
-`ISystemSkillOverlayProvider` always resolves to a real implementation in
-production. `SystemSkillOverlayDefaultProvider` supplies a built-in default
-overlay (an embedded resource carrying the capability how-to the kernel no
-longer holds), so neither seam can silently lose capability behavior before a
-host wires the Ornn-sourced overlay. A host that enables the Ornn overlay
-augments or replaces the default; the default remains the no-regression floor.
+The kernel (`system-prompt.md`) carries only invariants, runtime read contracts, the
+skill extension mechanism, a one-line internal tool index, and the cross-platform
+grant-before-link principle. Per-domain capability how-to lives in the overlay and is
+force-injected on **both** reply seams from the **same host-level source**
+(`ISystemSkillOverlayProvider`):
 
-This invariant is enforced by `check_system_skill_overlay_dual_seam_injection`,
-which requires both injection seams, a non-test `ISystemSkillOverlayProvider`
-implementation, and its DI registration — so a test stub can never stand in for
-the production provider.
+- Direct chat: `NyxIdChatGAgent.DecorateSystemPrompt` resolves `GetCurrent` for a `dm`
+  turn. The base `RoleGAgent` never resolves the overlay — non-channel subclasses
+  (classifier, workflow roles) must not receive channel capability how-to.
+- Channel/relay: `NyxIdConversationReplyGenerator.BuildSystemPrompt` resolves
+  `GetCurrent` for the turn's `channel.platform`, after the kernel and before the
+  channel runtime facts (`kernel > overlay > runtime facts`).
+
+`GetCurrent(request)` is a **synchronous cached read** — never a query-time fetch.
+Staleness triggers a single-flight, out-of-band background refresh using the per-turn
+token supplied by the seam; the token is used only to read the public set and is never
+persisted or logged. When the set is unreachable or empty, the provider degrades to the
+built-in default overlay (`SystemSkillOverlayDefaultProvider`, exposed as
+`ISystemSkillOverlayFallback`) — the no-regression floor (coarse, platform-agnostic).
+
+These invariants are enforced by `check_system_skill_overlay_dual_seam_injection`
+(both seams inject via a real provider + DI registration, and `Aevatar.AI.Core` never
+resolves the provider), `check_system_skill_overlay_set_source` (non-secret `SetName`,
+no `OrgServiceToken`, skillset source, synchronous `GetCurrent`), and
+`check_system_skill_overlay_golden_tasks_doc_present` (golden-tasks document exists;
+no eval harness runs yet).
 
 ## Rollout Policy
 
-System skill overlays must roll out in stages:
+System skill overlays roll out in stages:
 
-1. Staging: validate authoring contract acceptance, prompt ordering, and eval
-   golden-task results against staging hosts.
-2. Canary: enable one selected agent or one selected channel path and inspect
-   sampled overlay watermark/token logs for unexpected prompt growth or missing
-   overlay injection.
-3. Fleet: expand only after staging and canary have clean eval, CI, and
-   observability signals.
+1. Staging: validate prompt ordering, per-platform scoping, and eval golden-task
+   results against staging hosts.
+2. Canary: enable one selected agent or channel path and inspect sampled overlay
+   watermark logs for unexpected prompt growth or missing injection.
+3. Fleet: expand only after staging and canary have clean eval, CI, and observability
+   signals.
 
-Instant fleet rollout is forbidden. Any rollback must disable the host
-configuration or remove the organization tag from the offending source skill;
-do not patch around the authoring contract in runtime code.
+Instant fleet rollout is forbidden. Rollback disables the host configuration
+(`Aevatar:SystemSkills:Enabled`) or removes the offending member from the set; do not
+patch around the sourcing contract in runtime code.

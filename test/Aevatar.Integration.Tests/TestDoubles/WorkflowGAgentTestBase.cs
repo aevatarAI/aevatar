@@ -3,6 +3,8 @@ using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -95,14 +97,15 @@ public abstract class WorkflowGAgentTestBase
             IEventModuleFactory<IWorkflowExecutionContext>? eventModuleFactory = null,
             IEnumerable<IWorkflowModulePack>? packs = null,
             IEventStore? eventStore = null,
-            IWorkflowDefinitionResolver? workflowResolver = null)
+            IWorkflowDefinitionResolver? workflowResolver = null,
+            IRuntimeSecretStore? runtimeSecretStore = null)
         {
             runtime ??= new RecordingActorRuntime();
             eventModuleFactory ??= new RecordingEventModuleFactory();
             packs ??= [];
             eventStore ??= new InMemoryEventStore();
 
-            var services = BuildServices(eventStore, workflowResolver);
+            var services = BuildServices(eventStore, workflowResolver, runtimeSecretStore);
             var agent = new WorkflowRunGAgent(runtime, runtime, eventModuleFactory, packs, workflowResolver)
             {
                 Services = services,
@@ -114,12 +117,15 @@ public abstract class WorkflowGAgentTestBase
 
         internal static ServiceProvider BuildServices(
             IEventStore eventStore,
-            IWorkflowDefinitionResolver? workflowResolver)
+            IWorkflowDefinitionResolver? workflowResolver,
+            IRuntimeSecretStore? runtimeSecretStore = null)
         {
+            runtimeSecretStore ??= new InMemoryRuntimeSecretStore();
             var services = new ServiceCollection()
                 .AddSingleton(eventStore)
                 .AddSingleton<IEventStore>(eventStore)
                 .AddSingleton<IStreamProvider, InMemoryStreamProvider>()
+                .AddSingleton(runtimeSecretStore)
                 .AddSingleton<InMemoryActorRuntimeCallbackScheduler>()
                 .AddSingleton<IActorRuntimeCallbackScheduler>(sp =>
                     sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>())

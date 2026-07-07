@@ -85,7 +85,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         }
         """;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
 
@@ -136,7 +136,6 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             ScheduleTimezone = Normalize(args.ScheduleTimezone),
             RunImmediately = args.RunImmediately ?? true,
             CallerSubjectExternalUserId = Normalize(AgentToolRequestContext.OwnerSubject),
-            CallerBearerToken = Normalize(AgentToolRequestContext.NyxIdAccessToken),
         };
 
         try

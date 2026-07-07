@@ -1000,6 +1000,7 @@ bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
 bash "${SCRIPT_DIR}/studio_catalog_storage_serializer_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
 bash "${SCRIPT_DIR}/workflow_observatory_readonly_guard.sh"
+bash "${SCRIPT_DIR}/backend_console_static_asset_guard.sh"
 
 studio_catalog_query_ports=(
   "src/Aevatar.Studio.Application/Studio/Abstractions/IConnectorCatalogQueryPort.cs"
@@ -1870,7 +1871,8 @@ command_side_readmodel_violations="$(
     src/Aevatar.Mainnet.Host.Api \
     -g '*.cs' \
     -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs' \
-    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' || true
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/HttpOAuthClientEsAclProbe.cs' || true
 )"
 
 if [ -n "${command_side_readmodel_violations}" ]; then
@@ -2030,12 +2032,23 @@ check_orchestration_class_guard() {
 }
 
 check_system_skill_overlay_dual_seam_injection() {
-  local role_gagent_file="src/Aevatar.AI.Core/RoleGAgent.cs"
+  local nyxid_chat_gagent_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatGAgent.cs"
   local conversation_reply_generator_file="agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs"
   local prompt_injection_test_file="test/Aevatar.AI.Tests/SystemSkillOverlayPromptInjectionTests.cs"
 
-  if ! rg -q "DecorateSystemPrompt" "${role_gagent_file}" || ! rg -q "_systemSkillOverlay" "${role_gagent_file}"; then
-    echo "System skill overlay direct-chat seam must inject the overlay in RoleGAgent.DecorateSystemPrompt."
+  # Direct-chat seam: the chartered chat actor (NyxIdChatGAgent) injects the overlay inside its
+  # DecorateSystemPrompt via the shared host-level provider (issue #2498).
+  if ! rg -q "override string DecorateSystemPrompt" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${nyxid_chat_gagent_file}"; then
+    echo "System skill overlay direct-chat seam must inject the overlay in NyxIdChatGAgent.DecorateSystemPrompt via the shared provider (SystemSkillOverlayRequest.DirectChat)."
+    exit 1
+  fi
+
+  # Non-channel isolation (#2586): the base RoleGAgent serves classifier/workflow subclasses too, so
+  # Aevatar.AI.Core must never resolve the overlay provider — otherwise every RoleGAgent subclass
+  # gets channel capability how-to force-injected into its system prompt each turn.
+  if rg -q "ISystemSkillOverlayProvider>" src/Aevatar.AI.Core -g '*.cs'; then
+    echo "Aevatar.AI.Core must not resolve ISystemSkillOverlayProvider; overlay injection belongs to the two chartered seams (NyxIdChatGAgent + ConversationReplyGenerator)."
     exit 1
   fi
 
@@ -2086,11 +2099,47 @@ check_system_skill_overlay_dual_seam_injection() {
   fi
 }
 
-check_system_skill_overlay_eval_gate_present() {
+# Honest scope: this only asserts the golden-tasks document exists and is non-empty. No eval is
+# executed — there is no eval harness yet. Rename to check_system_skill_overlay_eval_gate once a
+# real runner consumes the tasks and its exit code gates CI.
+check_system_skill_overlay_golden_tasks_doc_present() {
   local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
 
   if [ ! -s "${eval_file}" ]; then
-    echo "System skill overlay golden-task eval gate artifact is required."
+    echo "System skill overlay golden-tasks document is required (tools/eval/system_skill_overlay_golden_tasks.md)."
+    exit 1
+  fi
+}
+
+check_system_skill_overlay_set_source() {
+  local options_file="src/Aevatar.AI.Abstractions/ToolProviders/SystemSkillOverlayOptions.cs"
+  local provider_file="src/Aevatar.AI.ToolProviders.Ornn/SystemSkillOverlay/OrnnSystemSkillOverlayProvider.cs"
+  local provider_interface="src/Aevatar.AI.Abstractions/ToolProviders/ISystemSkillOverlayProvider.cs"
+
+  # The overlay source is a public, org-owned skillset resolved by a non-secret name — never an org
+  # service token secret (issue #2498). Reintroducing OrgServiceToken re-adds a secret and a squat vector.
+  if rg -q -e 'OrgServiceToken' agents src -g '*.cs'; then
+    echo "System skill overlay must not reintroduce OrgServiceToken; the public org-owned set is read with no secret."
+    exit 1
+  fi
+  if ! rg -q -e '\bSetName\b' "${options_file}"; then
+    echo "System skill overlay options must expose the non-secret SetName as the overlay source."
+    exit 1
+  fi
+
+  # Members come from the skillset (membership = trust anchor), not a squattable tag search.
+  if ! rg -q -e 'GetSkillSetAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must resolve members from the skillset (GetSkillSetAsync)."
+    exit 1
+  fi
+  if rg -q -e 'SearchSkillsAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must not fall back to a tag search (SearchSkillsAsync); the set is the source."
+    exit 1
+  fi
+
+  # Never query-time: the seam read GetCurrent must be a synchronous cached read, not an awaited fetch.
+  if rg -q -e 'Task<[^>]*>[[:space:]]+GetCurrent' "${provider_interface}"; then
+    echo "ISystemSkillOverlayProvider.GetCurrent must be a synchronous cached read (never a query-time fetch)."
     exit 1
   fi
 }
@@ -2108,13 +2157,17 @@ check_orchestration_class_guard \
   190 \
   10
 check_system_skill_overlay_dual_seam_injection
-check_system_skill_overlay_eval_gate_present
+check_system_skill_overlay_golden_tasks_doc_present
+check_system_skill_overlay_set_source
 
 echo "Running CQRS/EventSourcing boundary guard..."
 bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
 
 echo "Running committed-state projection guard..."
 bash tools/ci/committed_state_projection_guard.sh
+
+echo "Running audit trail guard..."
+bash tools/ci/audit_trail_guards.sh
 
 echo "Running projection activation provider coverage guard..."
 bash tools/ci/projection_activation_provider_coverage_guard.sh

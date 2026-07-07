@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Aevatar.Authentication.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
@@ -7,7 +8,6 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -17,53 +17,42 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// </summary>
 public sealed class IdentityOAuthClientRebuildEndpointTests
 {
-    private const string AdminToken = "test-admin-token-very-secret";
     private const string OperatorClientId = "17cecaad-214b-4521-9dba-d435462e4095";
+    private const string AdminBearer = "admin-bearer-token";
+    private const string LegacyStaticTokenHeader = "X-Aevatar-Admin-Token";
 
     [Fact]
-    public async Task Returns503_WhenAdminTokenNotConfigured()
+    public async Task Returns503_WhenAuthorizerMissing()
     {
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
             static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
-            adminTokenConfigured: string.Empty,
-            adminTokenHeader: AdminToken,
+            authorizer: null,
+            bearer: AdminBearer,
             body: SampleBody(),
             dispatch: dispatch);
 
         var doc = await ReadJsonAsync(result);
-        doc.RootElement.GetProperty("error").GetString().Should().Be("rebuild_not_configured");
+        doc.RootElement.GetProperty("error").GetString().Should().Be("rebuild_admin_authorizer_unavailable");
         dispatch.Commands.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task Returns401_WhenAdminTokenHeaderMissing()
+    public async Task Returns403_WhenLegacyStaticTokenHeaderIsPresentedWithoutBearer()
     {
+        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+            static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
-            adminTokenConfigured: AdminToken,
-            adminTokenHeader: null,
+            authorizer: new FakePlatformAdminAuthorizer(true),
+            bearer: null,
+            legacyStaticTokenHeader: "legacy-token",
             body: SampleBody(),
-            dispatch: new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
-                static _ => OAuthClientReceipt()));
+            dispatch: dispatch);
 
         var ctx = NewHttpContext();
         await result.ExecuteAsync(ctx);
-        ctx.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
-    }
-
-    [Fact]
-    public async Task Returns401_WhenAdminTokenHeaderMismatch()
-    {
-        var result = await InvokeRebuildAsync(
-            adminTokenConfigured: AdminToken,
-            adminTokenHeader: "wrong-token",
-            body: SampleBody(),
-            dispatch: new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
-                static _ => OAuthClientReceipt()));
-
-        var ctx = NewHttpContext();
-        await result.ExecuteAsync(ctx);
-        ctx.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        ctx.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        dispatch.Commands.Should().BeEmpty();
     }
 
     [Fact]
@@ -72,8 +61,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
             static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
-            adminTokenConfigured: AdminToken,
-            adminTokenHeader: AdminToken,
+            authorizer: new FakePlatformAdminAuthorizer(true),
+            bearer: AdminBearer,
             body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
                 client_id: null,
                 client_id_issued_at_unix: null),
@@ -90,8 +79,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
             static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
-            adminTokenConfigured: AdminToken,
-            adminTokenHeader: AdminToken,
+            authorizer: new FakePlatformAdminAuthorizer(true),
+            bearer: AdminBearer,
             body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
                 client_id: OperatorClientId,
                 client_id_issued_at_unix: long.MaxValue),
@@ -109,8 +98,11 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
             static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
-            adminTokenConfigured: AdminToken,
-            adminTokenHeader: AdminToken,
+            authorizer: new FakePlatformAdminAuthorizer(
+                elevated: true,
+                role: "user",
+                grantSource: PlatformAdminGrantSources.AllowedEmail),
+            bearer: AdminBearer,
             body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
                 client_id: OperatorClientId,
                 client_id_issued_at_unix: 1700000000),
@@ -132,14 +124,15 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var doc = JsonDocument.Parse(text);
         doc.RootElement.GetProperty("status").GetString().Should().Be("rebuild_pending");
         doc.RootElement.GetProperty("status_url").GetString().Should().Be("/api/oauth/aevatar-client/status");
+        doc.RootElement.GetProperty("admin_grant_source").GetString().Should().Be(PlatformAdminGrantSources.AllowedEmail);
     }
 
     [Fact]
     public async Task Returns503_WhenDispatchThrows()
     {
         var result = await InvokeRebuildAsync(
-            adminTokenConfigured: AdminToken,
-            adminTokenHeader: AdminToken,
+            authorizer: new FakePlatformAdminAuthorizer(true),
+            bearer: AdminBearer,
             body: SampleBody(),
             dispatch: new ThrowingCommandDispatch<ProvisionAevatarOAuthClientCommand>());
 
@@ -152,8 +145,8 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     public async Task Returns503_WhenDispatchRejects()
     {
         var result = await InvokeRebuildAsync(
-            adminTokenConfigured: AdminToken,
-            adminTokenHeader: AdminToken,
+            authorizer: new FakePlatformAdminAuthorizer(true),
+            bearer: AdminBearer,
             body: SampleBody(),
             dispatch: new RejectingCommandDispatch<ProvisionAevatarOAuthClientCommand>());
 
@@ -171,40 +164,40 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             client_id: OperatorClientId,
             client_id_issued_at_unix: 1700000000);
 
-    // Refactor (iter27/cluster-028-identity-oauth-endpoint):
-    //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
-    //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
     private static Task<IResult> InvokeRebuildAsync(
-        string adminTokenConfigured,
-        string? adminTokenHeader,
+        IPlatformAdminAuthorizer? authorizer,
+        string? bearer,
         IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest body,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch,
+        string? legacyStaticTokenHeader = null,
         CancellationToken ct = default)
     {
         var http = NewHttpContext();
-        if (adminTokenHeader is not null)
-            http.Request.Headers[AevatarOAuthAdminOptions.RebuildTokenHeader] = adminTokenHeader;
-
-        var options = new StaticOptionsMonitor<AevatarOAuthAdminOptions>(
-            new AevatarOAuthAdminOptions { RebuildToken = adminTokenConfigured });
+        if (!string.IsNullOrEmpty(bearer))
+            http.Request.Headers.Authorization = "Bearer " + bearer;
+        if (legacyStaticTokenHeader is not null)
+            http.Request.Headers[LegacyStaticTokenHeader] = legacyStaticTokenHeader;
 
         return IdentityOAuthEndpoints.HandleAevatarOAuthClientRebuildCoreAsync(
             http: http,
             body: body,
-            adminOptions: options,
+            adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,
             ct: ct);
     }
 
-    private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
-        where T : class
+    private sealed class FakePlatformAdminAuthorizer(
+        bool elevated,
+        string role = "admin",
+        string grantSource = PlatformAdminGrantSources.NyxIdPlatformRole) : IPlatformAdminAuthorizer
     {
-        public T CurrentValue => value;
-
-        public T Get(string? name) => value;
-
-        public IDisposable? OnChange(Action<T, string?> listener) => null;
+        public Task<PlatformCaller> ResolveCallerAsync(string bearerToken, CancellationToken ct = default)
+        {
+            return Task.FromResult(elevated
+                ? new PlatformCaller(true, role, "admin@example.com", "admin-1", grantSource)
+                : PlatformCaller.NotElevated);
+        }
     }
 
     private static async Task<JsonDocument> ReadJsonAsync(IResult result)

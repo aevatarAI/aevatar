@@ -6,6 +6,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
@@ -707,7 +709,8 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_Success_ShouldMintScopedKey_MapCommand_AndReturnAcceptedOnly()
     {
         var caller = OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender");
-        var harness = CreateHarness(scope: caller);
+        var secretVault = new InMemorySecretVault();
+        var harness = CreateHarness(scope: caller, secretVault: secretVault);
         InitializeSkillRunnerCommand? captured = null;
         string? capturedAgentId = null;
         bool? capturedRunImmediately = null;
@@ -790,8 +793,12 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.ExternalTriggerSources[1].SourceId.Should().Be("channel-lark");
             captured.ExternalTriggerSources[1].Kind.Should().Be(ExternalTriggerSourceKind.ChannelInbound);
             captured.ExternalTriggerSources[1].Enabled.Should().BeFalse();
-            captured.OutboundConfig.NyxApiKey.Should().Be("full-secret-key");
+            captured.OutboundConfig.NyxApiKey.Should().BeEmpty();
             captured.OutboundConfig.ApiKeyId.Should().Be("key-created");
+            captured.OutboundConfig.NyxApiKeyReference.Should().NotBeNull();
+            captured.OutboundConfig.NyxApiKeyReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+            captured.OutboundConfig.NyxApiKeyReference.OwnerScopeKey.Should().NotBeNullOrWhiteSpace();
+            captured.OutboundConfig.NyxApiKeyReference.Ref.Should().NotBe("full-secret-key");
             captured.OutboundConfig.NyxProviderSlug.Should().Be("api-lark-bot");
             captured.OutboundConfig.FailureNotificationProviderSlug.Should().Be("api-lark-bot-inbound");
             captured.OutboundConfig.ConversationId.Should().Be("oc_conversation");
@@ -821,6 +828,14 @@ public sealed class ScheduledAgentCreatorToolTests
             preflight.Authorization.Should().NotBeNull();
             preflight.Authorization!.Scheme.Should().Be("Bearer");
             preflight.Authorization.Parameter.Should().Be("full-secret-key");
+
+            var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
+                captured.OutboundConfig.NyxApiKeyReference.Ref,
+                CredentialSecretPurposes.ScheduledNyxApiKey,
+                captured.OutboundConfig.NyxApiKeyReference.OwnerScopeKey,
+                "key-created",
+                "scheduled-agent-creator-test"));
+            resolved.Secret.Should().Be("full-secret-key");
         });
     }
 
@@ -1064,7 +1079,8 @@ public sealed class ScheduledAgentCreatorToolTests
         RoutingJsonHandler? handler = null,
         OwnerScope? scope = null,
         bool callerScopeUnavailable = false,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null)
+        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
+        ISecretVault? secretVault = null)
     {
         handler ??= CreateSuccessHandler();
 
@@ -1096,6 +1112,7 @@ public sealed class ScheduledAgentCreatorToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(new ScheduledAgentCreatorOptions());
         services.AddSingleton<ScheduledAgentCreateRequestMapper>();
+        services.AddSingleton(secretVault ?? new InMemorySecretVault());
         if (ownerLlmConfigSource is not null)
             services.AddSingleton(ownerLlmConfigSource);
         services.AddSingleton<ScheduledAgentApiKeyIssuer>();

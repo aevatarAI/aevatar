@@ -25,7 +25,10 @@ type WorkflowStudioHeaderProps = {
   readonly automationsHref: string;
   readonly automationsPlaceholderReason?: string;
   readonly canOpenAutomations: boolean;
+  readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
+  readonly invokeHref: string;
+  readonly invokePlaceholderReason?: string;
   readonly memberPublished: boolean;
   readonly publishedRunsHref: string;
   readonly publishedRunsPlaceholderReason?: string;
@@ -48,6 +51,7 @@ type WorkflowStudioHeaderProps = {
   readonly currentDraftRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
   readonly onOpenAutomations: () => void;
+  readonly onOpenInvoke: () => void;
   readonly onOpenPublishedRuns: () => void;
   readonly onRefreshPublishStatus: () => void;
   readonly onAddNode: () => void;
@@ -565,14 +569,18 @@ type HeaderActionsProps = {
   readonly automationsPlaceholderReason?: string;
   readonly canOpenAutomations: boolean;
   readonly canOpenDraftRunPanel: boolean;
+  readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
   readonly canSave: boolean;
   readonly canViewYaml: boolean;
+  readonly invokeHref: string;
+  readonly invokePlaceholderReason?: string;
   readonly onAddNode: () => void;
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onOpenAutomations: () => void;
   readonly onOpenDraftRunPanel: () => void;
+  readonly onOpenInvoke: () => void;
   readonly onOpenPublishedRuns: () => void;
   readonly onPasteYamlClick: () => void;
   readonly onPublishMember: () => void;
@@ -600,14 +608,18 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   automationsPlaceholderReason,
   canOpenAutomations,
   canOpenDraftRunPanel,
+  canOpenInvoke,
   canOpenPublishedRuns,
   canSave,
   canViewYaml,
+  invokeHref,
+  invokePlaceholderReason,
   onAddNode,
   onDeleteConnection,
   onDeleteNode,
   onOpenAutomations,
   onOpenDraftRunPanel,
+  onOpenInvoke,
   onOpenPublishedRuns,
   onPasteYamlClick,
   onPublishMember,
@@ -700,6 +712,23 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
       >
         <span className="workflow-studio-header__action-label">
           {t('teamMemberWorkflowStudio.header.run', 'Run')}
+        </span>
+      </Button>
+      <Button
+        aria-label={t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
+        className="workflow-studio-header__compact-button"
+        disabled={!canOpenInvoke}
+        href={canOpenInvoke ? invokeHref : undefined}
+        icon={<PlayCircleOutlined />}
+        onClick={(event) => {
+          event.preventDefault();
+          onOpenInvoke();
+        }}
+        size="small"
+        title={invokePlaceholderReason}
+      >
+        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+          {t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
         </span>
       </Button>
       <Button
@@ -920,7 +949,10 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   automationsHref,
   automationsPlaceholderReason,
   canOpenAutomations,
+  canOpenInvoke,
   canOpenPublishedRuns,
+  invokeHref,
+  invokePlaceholderReason,
   memberPublished,
   publishedRunsHref,
   publishedRunsPlaceholderReason,
@@ -938,6 +970,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   currentDraftRunPlaceholderReason,
   onPublishMember,
   onOpenAutomations,
+  onOpenInvoke,
   onOpenPublishedRuns,
   onRefreshPublishStatus,
   onAddNode,
@@ -1009,14 +1042,18 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           automationsPlaceholderReason={automationsPlaceholderReason}
           canOpenAutomations={canOpenAutomations}
           canOpenDraftRunPanel={canOpenDraftRunPanel}
+          canOpenInvoke={canOpenInvoke}
           canOpenPublishedRuns={canOpenPublishedRuns}
           canSave={canSave}
           canViewYaml={canViewYaml}
+          invokeHref={invokeHref}
+          invokePlaceholderReason={invokePlaceholderReason}
           onAddNode={onAddNode}
           onDeleteConnection={onDeleteConnection}
           onDeleteNode={onDeleteNode}
           onOpenAutomations={onOpenAutomations}
           onOpenDraftRunPanel={onOpenDraftRunPanel}
+          onOpenInvoke={onOpenInvoke}
           onOpenPublishedRuns={onOpenPublishedRuns}
           onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}

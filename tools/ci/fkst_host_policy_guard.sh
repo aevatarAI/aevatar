@@ -6,8 +6,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-ZERO_SHA="0000000000000000000000000000000000000000"
-
 resolve_diff_target_from_shas() {
   local base_sha="$1"
   local head_sha="$2"
@@ -62,11 +60,14 @@ while IFS= read -r changed_path; do
 done <<< "${CHANGED_PATHS}"
 PRODUCT_PATHS="${PRODUCT_PATHS%$'\n'}"
 
+# Informational only: this classification is printed for reviewers; the guard itself
+# enforces nothing based on it. The only enforced gate below is the unresolved P1/P2
+# review-comment scan.
 if [[ -n "${PRODUCT_PATHS}" ]]; then
-  echo "Product/runtime-impact paths changed:"
+  echo "Product/runtime-impact paths changed (informational):"
   printf '%s\n' "${PRODUCT_PATHS}"
 else
-  echo "No product/runtime-impact paths changed; runtime verification evidence is not required."
+  echo "No product/runtime-impact paths changed (informational)."
 fi
 
 if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" && -z "${PR_NUMBER:-}" ]]; then
@@ -74,7 +75,7 @@ if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" && -z "${PR_NUMBER:-}" ]]; then
   exit 0
 fi
 
-python3 - "${PRODUCT_PATHS}" <<'PY'
+python3 - <<'PY'
 import json
 import os
 import re

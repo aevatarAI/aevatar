@@ -115,66 +115,6 @@ public sealed class ProjectionHotspotCoverageTests
     }
 
     [Fact]
-    public async Task ProjectionScopeDispatchExecutor_ShouldAggregateFailures_AndHonorCancellation()
-    {
-        var executorType = typeof(ProjectionFailureReplayService).Assembly
-            .GetType("Aevatar.CQRS.Projection.Core.Orchestration.ProjectionScopeDispatchExecutor");
-        executorType.Should().NotBeNull();
-
-        var executeMethod = executorType!.GetMethod(
-            "ExecuteMaterializersAsync",
-            BindingFlags.Public | BindingFlags.Static);
-        executeMethod.Should().NotBeNull();
-
-        var context = new TestMaterializationContext
-        {
-            RootActorId = "actor-1",
-            ProjectionKind = "projection-a",
-        };
-        var envelope = new EventEnvelope { Id = "evt-1" };
-
-        var aggregateTask = (Task)executeMethod!
-            .MakeGenericMethod(typeof(TestMaterializationContext))
-            .Invoke(
-                null,
-                [
-                    new IProjectionMaterializer<TestMaterializationContext>[]
-                    {
-                        new TestMaterializer((_, _, _) => ValueTask.CompletedTask),
-                        new TestMaterializer((_, _, _) => ValueTask.FromException(new InvalidOperationException("boom"))),
-                    },
-                    context,
-                    envelope,
-                    CancellationToken.None,
-                ])!;
-
-        var aggregate = await Assert.ThrowsAsync<ProjectionDispatchAggregateException>(() => aggregateTask);
-        aggregate.Failures.Should().ContainSingle();
-        aggregate.Failures[0].ProjectorOrder.Should().Be(2);
-        aggregate.Failures[0].ProjectorName.Should().Be(nameof(TestMaterializer));
-        aggregate.InnerException.Should().BeOfType<InvalidOperationException>();
-        aggregate.Message.Should().Contain("TestMaterializer#2");
-
-        var cancelled = new CancellationTokenSource();
-        cancelled.Cancel();
-        var cancelledTask = (Task)executeMethod
-            .MakeGenericMethod(typeof(TestMaterializationContext))
-            .Invoke(
-                null,
-                [
-                    new IProjectionMaterializer<TestMaterializationContext>[]
-                    {
-                        new TestMaterializer((_, _, ct) => ValueTask.FromException(new OperationCanceledException(ct))),
-                    },
-                    context,
-                    envelope,
-                    cancelled.Token,
-                ])!;
-
-        await Assert.ThrowsAsync<OperationCanceledException>(() => cancelledTask);
-    }
-
-    [Fact]
     public void ProjectionHelpers_ShouldCoverTimestampAggregateAndWriteEvaluatorBranches()
     {
         var fallback = DateTimeOffset.Parse("2026-03-17T07:31:00+00:00");

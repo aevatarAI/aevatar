@@ -25,6 +25,18 @@ public sealed class AevatarActorRuntimeOptions
 
     public string OrleansGarnetConnectionString { get; set; } = DefaultOrleansGarnetConnectionString;
 
+    public string SecretStoreBackend { get; set; } = string.Empty;
+
+    public string SecretStoreConnectionString { get; set; } = string.Empty;
+
+    public int SecretStoreDatabase { get; set; } = -1;
+
+    public string SecretStoreKeyringPath { get; set; } = string.Empty;
+
+    public string SecretStoreVaultPrefix { get; set; } = "aevatar:secret-vault";
+
+    public string SecretStoreRuntimePrefix { get; set; } = "aevatar:runtime-secrets";
+
     public int OrleansQueueCount { get; set; } = 8;
 
     public int OrleansQueueCacheSize { get; set; } = 4096;

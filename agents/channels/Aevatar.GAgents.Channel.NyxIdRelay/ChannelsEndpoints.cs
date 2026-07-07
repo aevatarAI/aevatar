@@ -1,6 +1,7 @@
-using System.Text;
+using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -16,6 +17,13 @@ public static class ChannelsEndpoints
 {
     private const string PageRoute = "/channels";
 
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "channels",
+        Assembly: typeof(ChannelsEndpoints).Assembly,
+        ResourceSuffix: "channels.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
+
     public static IEndpointRouteBuilder MapChannels(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -23,15 +31,18 @@ public static class ChannelsEndpoints
         app.MapGet(PageRoute, GetChannelsPage)
             .WithTags("Channels")
             .WithName("GetChannelsPage")
-            .WithSummary("Lark bot onboarding (inline self-contained page).")
+            .WithSummary("Lark bot onboarding served from an embedded static asset.")
             .AllowAnonymous();
 
         return app;
     }
 
-    internal static IResult GetChannelsPage(HttpContext http)
+    internal static IResult GetChannelsPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(ChannelsPage.Html, "text/html", Encoding.UTF8);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 }

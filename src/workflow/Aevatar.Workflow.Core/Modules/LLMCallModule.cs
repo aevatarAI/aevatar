@@ -391,6 +391,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             // channel stamps the caller scope there). Empty stays empty; the role actor only
             // fills a caller scope that is otherwise unset.
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+            ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
@@ -414,8 +415,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
-            ? callerCredential
+        var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+        intent.CallerCredential = callerCredential.Found
+            ? callerCredential.Credential
             : new WorkflowCallerCredential();
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);

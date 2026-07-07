@@ -45,6 +45,7 @@ import {
   AevatarStatusTag,
 } from "@/shared/ui/aevatarPageShells";
 import { AevatarCompactText, aevatarMonoFontFamily } from "@/shared/ui/compactText";
+import { getUserFacingIdentifierLabel } from "@/shared/ui/userFacingIdentifiers";
 import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import InventoryReadinessState from "@/shared/ui/InventoryReadinessState";
 import {
@@ -338,7 +339,10 @@ const EndpointRow: React.FC<{
         <Tag color="cyan" style={compactHintTagStyle} variant="filled">
           {t("pages.services.index.copy.3", "Endpoint")}</Tag>
         <Typography.Text strong>
-          {endpoint.displayName || endpoint.endpointId}
+          {getUserFacingIdentifierLabel(
+            endpoint.displayName || endpoint.endpointId,
+            t("pages.services.index.endpoint", "Endpoint"),
+          )}
         </Typography.Text>
       </Space>
       <AevatarStatusTag
@@ -358,7 +362,9 @@ const EndpointRow: React.FC<{
         wordBreak: "break-word",
       }}
     >
-      {endpoint.requestTypeUrl || endpoint.endpointId}
+      {endpoint.requestTypeUrl
+        ? t("pages.services.index.request.contract.ready", "Request contract ready")
+        : t("pages.services.index.endpoint.ready", "Endpoint ready")}
     </div>
   </div>
 );
@@ -371,7 +377,9 @@ const RevisionDigestCard: React.FC<{
       <Space wrap size={[8, 8]}>
         <Tag color="purple" style={compactHintTagStyle} variant="filled">
           {t("pages.services.index.copy.5", "Version")}</Tag>
-        <Typography.Text strong>{revision.revisionId}</Typography.Text>
+        <Typography.Text strong>
+          {revision.status || t("pages.services.index.copy.14", "Unpublished")}
+        </Typography.Text>
       </Space>
       <AevatarStatusTag domain="governance" status={revision.status || "draft"} />
     </div>
@@ -387,7 +395,9 @@ const RevisionDigestCard: React.FC<{
         overflowWrap: "anywhere",
       }}
     >
-      {revision.artifactHash || "n/a"}
+      {revision.artifactHash
+        ? t("pages.services.index.artifact.attached", "Artifact attached")
+        : "n/a"}
     </div>
     <Typography.Text type="secondary">
       {t("pages.services.index.copy.6", "Published")}{formatDateTime(revision.publishedAt)}
@@ -404,15 +414,16 @@ const DeploymentDigestCard: React.FC<{
         <Tag color="blue" style={compactHintTagStyle} variant="filled">
           {t("pages.services.index.copy.7", "Deployment")}</Tag>
         <DeploymentUnitOutlined />
-        <Typography.Text strong>{deployment.deploymentId}</Typography.Text>
+        <Typography.Text strong>
+          {deployment.status || t("pages.services.index.serving.3", "Serving missing")}
+        </Typography.Text>
       </Space>
       <AevatarStatusTag domain="governance" status={deployment.status || "pending"} />
     </div>
     <Typography.Text style={summaryFieldLabelStyle}>
-      {t("pages.services.index.copy.8", "Version")}{deployment.revisionId || t("pages.services.index.copy.9", "Unpublished")}
-    </Typography.Text>
-    <Typography.Text type="secondary">
-      {t("pages.services.index.actor.3", "Primary Actor")}{deployment.primaryActorId || t("pages.services.index.copy.10", "Not declared")}
+      {deployment.revisionId
+        ? t("pages.services.index.version.ready", "Version ready")
+        : t("pages.services.index.copy.9", "Unpublished")}
     </Typography.Text>
     <Typography.Text type="secondary">
       {t("pages.services.index.copy.11", "Activated at")}{formatDateTime(deployment.activatedAt)}
@@ -443,11 +454,15 @@ const RolloutDigestSection: React.FC<{
     >
       <DrawerMetric
         label={t("pages.services.index.copy.12", "Current deployment")}
-        value={activeDeployment?.deploymentId || t("pages.services.index.serving.3", "Serving missing")}
+        value={
+          activeDeployment
+            ? t("pages.services.index.serving", "Serving attached")
+            : t("pages.services.index.serving.3", "Serving missing")
+        }
       />
       <DrawerMetric
         label={t("pages.services.index.copy.13", "Latest version")}
-        value={latestRevision?.revisionId || t("pages.services.index.copy.14", "Unpublished")}
+        value={latestRevision?.status || t("pages.services.index.copy.14", "Unpublished")}
       />
       <DrawerMetric label={t("pages.services.index.copy.15", "Traffic endpoint")} value={traffic.length} />
       <DrawerMetric label={t("pages.services.index.copy.16", "Highest weight")} value={`${dominantTrafficWeight}%`} />
@@ -727,22 +742,18 @@ const ServicesPage: React.FC = () => {
                                 fontWeight: 700,
                               }}
                             >
-                              {service.displayName || service.serviceId}
+                              {getUserFacingIdentifierLabel(
+                                service.displayName || service.serviceId,
+                                t("pages.services.index.service", "Service"),
+                              )}
                             </Typography.Text>
                             <Typography.Text
                               style={{
                                 color: token.colorTextSecondary,
-                                fontFamily: serviceMonoFontFamily,
                                 fontSize: 10.5,
                               }}
                             >
-                              <AevatarCompactText
-                                head={4}
-                                maxWidth={220}
-                                monospace
-                                tail={4}
-                                value={service.serviceKey}
-                              />
+                              {formatDateTime(service.updatedAt)}
                             </Typography.Text>
                           </div>
                         </td>
@@ -759,13 +770,9 @@ const ServicesPage: React.FC = () => {
                         </td>
                         <td style={tableCellStyle}>
                           {service.primaryActorId ? (
-                            <AevatarCompactText
-                              head={4}
-                              maxWidth={180}
-                              monospace
-                              tail={4}
-                              value={service.primaryActorId}
-                            />
+                            <Typography.Text>
+                              {t("pages.services.index.actor", "Primary Actor linked")}
+                            </Typography.Text>
                           ) : (
                             <Typography.Text>{t("pages.services.index.copy.34", "Not declared")}</Typography.Text>
                           )}
@@ -930,16 +937,9 @@ const ServicesPage: React.FC = () => {
 
                 <div>
                   <Typography.Text style={summaryFieldLabelStyle}>{t("pages.services.index.copy.43", "Service identity")}</Typography.Text>
-                  <div
-                    style={{
-                      ...codeBlockStyle,
-                      marginTop: 8,
-                      maxHeight: "none",
-                      whiteSpace: "pre-wrap",
-                    }}
-                  >
-                    {selectedService.serviceKey}
-                  </div>
+                  <Typography.Text type="secondary">
+                    {t("pages.services.index.service.identity.ready", "Service identity ready")}
+                  </Typography.Text>
                 </div>
 
                 <div style={summaryFieldGridStyle}>
@@ -951,13 +951,7 @@ const ServicesPage: React.FC = () => {
                         selectedService.defaultServingRevisionId;
 
                       return revisionId ? (
-                        <AevatarCompactText
-                          head={4}
-                          maxWidth="100%"
-                          monospace
-                          tail={4}
-                          value={revisionId}
-                        />
+                        t("pages.services.index.version.ready", "Version ready")
                       ) : (
                         t("pages.services.index.copy.44", "Unpublished")
                       );
@@ -967,13 +961,7 @@ const ServicesPage: React.FC = () => {
                     label={t("pages.services.index.copy.45", "Current deployment")}
                     value={
                       selectedService.deploymentId ? (
-                        <AevatarCompactText
-                          head={4}
-                          maxWidth="100%"
-                          monospace
-                          tail={4}
-                          value={selectedService.deploymentId}
-                        />
+                        t("pages.services.index.serving", "Serving attached")
                       ) : (
                         t("pages.services.index.serving.6", "Serving missing")
                       )
@@ -983,13 +971,7 @@ const ServicesPage: React.FC = () => {
                     label={t("pages.services.index.actor.6", "Primary Actor")}
                     value={
                       selectedService.primaryActorId ? (
-                        <AevatarCompactText
-                          head={4}
-                          maxWidth="100%"
-                          monospace
-                          tail={4}
-                          value={selectedService.primaryActorId}
-                        />
+                        t("pages.services.index.actor", "Primary Actor linked")
                       ) : (
                         t("pages.services.index.copy.46", "Not declared")
                       )

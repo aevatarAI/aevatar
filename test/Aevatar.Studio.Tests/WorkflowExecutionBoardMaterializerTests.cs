@@ -437,6 +437,66 @@ public sealed class WorkflowExecutionBoardMaterializerTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldKeepDefinitionStepCountSeparateFromMaterializedNodes()
+    {
+        var store = new RecordingDocumentStore<WorkflowExecutionBoardDocument>(x => x.Id);
+        var materializer = new WorkflowExecutionBoardMaterializer(
+            store,
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-24T13:00:00Z")));
+        var context = CreateContext();
+
+        var completedSteps = new[]
+        {
+            "save_input",
+            "normalize_input",
+            "save_normalized",
+            "classify_request",
+            "route_intent",
+            "make_plan",
+        };
+        for (var i = 0; i < completedSteps.Length; i++)
+        {
+            var stepId = completedSteps[i];
+            await materializer.ProjectAsync(
+                context,
+                WrapCommitted(
+                    new StepCompletedEvent
+                    {
+                        RunId = "run-alpha",
+                        StepId = stepId,
+                        Success = true,
+                    },
+                    BuildState("running", workflowYaml: FifteenStepWorkflowYaml),
+                    version: i + 1,
+                    eventId: $"evt-completed-{i + 1}",
+                    observedAt: $"2026-06-24T13:00:{i + 1:D2}Z"));
+        }
+
+        await materializer.ProjectAsync(
+            context,
+            WrapCommitted(
+                new StepRequestEvent
+                {
+                    RunId = "run-alpha",
+                    StepId = "polish_response",
+                    StepType = "llm_call",
+                },
+                BuildState("running", workflowYaml: FifteenStepWorkflowYaml),
+                version: 7,
+                eventId: "evt-polish-running",
+                observedAt: "2026-06-24T13:00:07Z"));
+
+        var document = store.Stored["root-actor"];
+        document.NodeEntries.Should().HaveCount(7);
+        document.Summary.CompletedSteps.Should().Be(6);
+        document.Summary.RunningNodes.Should().Be(1);
+        document.Summary.WaitingOrPendingNodes.Should().Be(0);
+        document.Summary.FailedNodes.Should().Be(0);
+        document.Summary.DefinitionStepCount.Should().Be(15);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldSkipNonCommittedAndRelayedChildEnvelopes()
     {
         var store = new RecordingDocumentStore<WorkflowExecutionBoardDocument>(x => x.Id);
@@ -513,6 +573,52 @@ public sealed class WorkflowExecutionBoardMaterializerTests
             type: assign
             parameters:
               value: published
+        """;
+
+    private const string FifteenStepWorkflowYaml = """
+        name: fifteen_node_assistant_flow
+        roles: []
+        steps:
+          - id: save_input
+            type: assign
+            next: normalize_input
+          - id: normalize_input
+            type: transform
+            next: save_normalized
+          - id: save_normalized
+            type: assign
+            next: classify_request
+          - id: classify_request
+            type: llm_call
+            next: route_intent
+          - id: route_intent
+            type: switch
+            branches:
+              plan: make_plan
+              _default: make_fallback
+          - id: make_plan
+            type: assign
+            next: polish_response
+          - id: polish_response
+            type: llm_call
+            next: finalize_plan
+          - id: finalize_plan
+            type: assign
+          - id: make_fallback
+            type: assign
+            next: fallback_response
+          - id: fallback_response
+            type: llm_call
+          - id: audit_input
+            type: checkpoint
+          - id: audit_route
+            type: checkpoint
+          - id: audit_generation
+            type: checkpoint
+          - id: archive_result
+            type: assign
+          - id: publish_summary
+            type: assign
         """;
 
     private static EventEnvelope WrapCommitted(

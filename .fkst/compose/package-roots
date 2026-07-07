@@ -6,3 +6,4 @@ fkst-packages:packages/github-devloop-intake
 fkst-packages:packages/github-devloop-intake-default
 fkst-packages:packages/github-devloop
 fkst-packages:packages/github-devloop-pr
+fkst-packages:packages/github-devloop-ops

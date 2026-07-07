@@ -11,16 +11,18 @@ internal sealed class StudioAuthoringPreviewApplicationService : IStudioAuthorin
 {
     private readonly IStudioAuthoringLLMStreamPort _llmStreamPort;
     private readonly WorkflowAuthoringPreviewGenerator _workflowGenerator;
-    private readonly ScriptAuthoringPreviewGenerator _scriptGenerator;
+    // Nullable by design: the scripting capability is optional. Hosts composed without it
+    // have no script generator, and script authoring previews are rejected below.
+    private readonly ScriptAuthoringPreviewGenerator? _scriptGenerator;
 
     public StudioAuthoringPreviewApplicationService(
         IStudioAuthoringLLMStreamPort llmStreamPort,
         WorkflowAuthoringPreviewGenerator workflowGenerator,
-        ScriptAuthoringPreviewGenerator scriptGenerator)
+        ScriptAuthoringPreviewGenerator? scriptGenerator = null)
     {
         _llmStreamPort = llmStreamPort ?? throw new ArgumentNullException(nameof(llmStreamPort));
         _workflowGenerator = workflowGenerator ?? throw new ArgumentNullException(nameof(workflowGenerator));
-        _scriptGenerator = scriptGenerator ?? throw new ArgumentNullException(nameof(scriptGenerator));
+        _scriptGenerator = scriptGenerator;
     }
 
     public async IAsyncEnumerable<StudioAuthoringPreviewEvent> PreviewAsync(
@@ -75,7 +77,13 @@ internal sealed class StudioAuthoringPreviewApplicationService : IStudioAuthorin
             }
             case StudioAuthoringKind.Script:
             {
-                var result = await _scriptGenerator.GenerateAsync(
+                if (_scriptGenerator is not { } scriptGenerator)
+                {
+                    throw new InvalidOperationException(
+                        "Scripting capability is not enabled on this host; script authoring preview is unavailable.");
+                }
+
+                var result = await scriptGenerator.GenerateAsync(
                     new ScriptGenerateRequest(
                         prompt,
                         request.CurrentSource,

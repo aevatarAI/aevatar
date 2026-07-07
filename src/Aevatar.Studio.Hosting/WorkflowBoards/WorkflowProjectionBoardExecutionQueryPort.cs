@@ -122,13 +122,17 @@ internal sealed class WorkflowProjectionBoardExecutionQueryPort : IWorkflowBoard
             failedNodes)
         {
             CurrentExecutionId = string.IsNullOrWhiteSpace(document.RunId) ? null : document.RunId,
+            ExecutionStatus = MapExecutionStatus(document.CompletionStatus),
             CurrentNode = currentNode,
             LastNodeUpdatedAt = document.LastNodeUpdatedAt,
-            Totals = new WorkflowBoardTotals(
+            Summary = new WorkflowBoardExecutionSummary(
                 document.Summary.CompletedSteps,
                 document.Summary.RunningNodes,
                 document.Summary.WaitingOrPendingNodes,
-                document.Summary.FailedNodes),
+                document.Summary.FailedNodes,
+                document.Summary.HasDefinitionStepCount
+                    ? document.Summary.DefinitionStepCount
+                    : null),
             Revision = $"state-version-{document.StateVersion}:event-{document.LastEventId ?? string.Empty}",
         };
     }
@@ -159,9 +163,18 @@ internal sealed class WorkflowProjectionBoardExecutionQueryPort : IWorkflowBoard
             WorkflowBoardExecutionAvailability.Unavailable,
             Array.Empty<WorkflowBoardCompletedNode>(),
             Array.Empty<WorkflowBoardPendingNode>(),
-            Array.Empty<WorkflowBoardFailedNode>())
+            Array.Empty<WorkflowBoardFailedNode>());
+
+    private static WorkflowBoardMemberExecutionStatus MapExecutionStatus(
+        WorkflowExecutionBoardCompletionStatus status) =>
+        status switch
         {
-            Totals = new WorkflowBoardTotals(null, null, null, null),
+            WorkflowExecutionBoardCompletionStatus.Running => WorkflowBoardMemberExecutionStatus.Running,
+            WorkflowExecutionBoardCompletionStatus.WaitingForSignal => WorkflowBoardMemberExecutionStatus.Waiting,
+            WorkflowExecutionBoardCompletionStatus.Failed => WorkflowBoardMemberExecutionStatus.Failed,
+            WorkflowExecutionBoardCompletionStatus.Completed => WorkflowBoardMemberExecutionStatus.Completed,
+            WorkflowExecutionBoardCompletionStatus.Stopped => WorkflowBoardMemberExecutionStatus.Stopped,
+            _ => WorkflowBoardMemberExecutionStatus.Unknown,
         };
 
     private static WorkflowBoardCurrentNodeStatus MapCurrentStatus(WorkflowExecutionBoardNodeStatus status) =>

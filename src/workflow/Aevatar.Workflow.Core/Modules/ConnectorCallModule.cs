@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -337,12 +338,12 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, requestMetadata);
         var connectorRequest = new ConnectorRequest
         {
-            HttpAuthorization = ReconstructConnectorHttpAuthorization(ctx),
+            HttpAuthorization = await ReconstructConnectorHttpAuthorizationAsync(ctx, ct),
             RunId = runId,
             StepId = request.StepId,
             Connector = connectorName,
             Operation = operation,
-            Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
+            Payload = await ResolvePayloadAsync(request, isSecureStep, ctx, ct) ?? string.Empty,
             Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
         };
@@ -613,10 +614,11 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         await ctx.PublishAsync(skipped, TopologyAudience.Self, ct);
     }
 
-    private string? ResolvePayload(
+    private async Task<string?> ResolvePayloadAsync(
         StepRequestEvent request,
         bool isSecureStep,
-        IWorkflowExecutionContext ctx)
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
     {
         var mode = WorkflowParameterValueParser.GetString(
             request.Parameters,
@@ -641,7 +643,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 "secret_variable",
                 "secure_variable",
                 "variable");
-            return ResolveSecureVariable(ctx, request.RunId, variable);
+            return await ResolveSecureVariableAsync(ctx, request.RunId, variable, ct);
         }
 
         if (string.Equals(mode, "template", StringComparison.OrdinalIgnoreCase) ||
@@ -653,50 +655,77 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 "stdin_template",
                 "payload_template",
                 "stdin_value");
-            return ResolveSecureTemplate(ctx, request.RunId, template);
+            return await ResolveSecureTemplateAsync(ctx, request.RunId, template, ct);
         }
 
         return request.Input;
     }
 
-    private static string ResolveSecureVariable(
+    private static async Task<string> ResolveSecureVariableAsync(
         IWorkflowExecutionContext ctx,
         string? runId,
-        string variable)
+        string variable,
+        CancellationToken ct)
     {
         var normalizedVariable = NormalizeSecureVariableName(variable);
         if (string.IsNullOrWhiteSpace(normalizedVariable))
             throw new InvalidOperationException("connector_call secure stdin requires 'stdin_secret_variable'.");
 
-        if (SecureInputRuntimeContextAccess.TryGetCapturedValue(ctx, runId, normalizedVariable, out var value))
+        var captured = await SecureInputRuntimeContextAccess.TryGetCapturedValueAsync(ctx, runId, normalizedVariable, ct);
+        if (captured.Found)
         {
-            return value;
+            return captured.Value;
         }
 
         throw new InvalidOperationException(
             $"connector_call is missing captured secure value '{normalizedVariable}' for run '{WorkflowRunIdNormalizer.Normalize(runId)}'.");
     }
 
-    private static string ResolveSecureTemplate(
+    private static async Task<string> ResolveSecureTemplateAsync(
         IWorkflowExecutionContext ctx,
         string? runId,
-        string template)
+        string template,
+        CancellationToken ct)
     {
         if (string.IsNullOrEmpty(template))
             return string.Empty;
 
-        var withJsonEscapedSecureValues = SecureJsonPlaceholderPattern().Replace(template, match =>
+        var withJsonEscapedSecureValues = await ReplaceSecurePlaceholdersAsync(
+            template,
+            SecureJsonPlaceholderPattern(),
+            async variable =>
         {
-            var variable = match.Groups[1].Value;
-            var value = ResolveSecureVariable(ctx, runId, variable);
+            var value = await ResolveSecureVariableAsync(ctx, runId, variable, ct);
             return JsonEncodedText.Encode(value, JavaScriptEncoder.UnsafeRelaxedJsonEscaping).ToString();
         });
 
-        return SecurePlaceholderPattern().Replace(withJsonEscapedSecureValues, match =>
+        return await ReplaceSecurePlaceholdersAsync(
+            withJsonEscapedSecureValues,
+            SecurePlaceholderPattern(),
+            variable => ResolveSecureVariableAsync(ctx, runId, variable, ct));
+    }
+
+    private static async Task<string> ReplaceSecurePlaceholdersAsync(
+        string template,
+        Regex pattern,
+        Func<string, Task<string>> resolveAsync)
+    {
+        var matches = pattern.Matches(template);
+        if (matches.Count == 0)
+            return template;
+
+        var builder = new StringBuilder(template.Length);
+        var cursor = 0;
+        foreach (Match match in matches)
         {
+            builder.Append(template, cursor, match.Index - cursor);
             var variable = match.Groups[1].Value;
-            return ResolveSecureVariable(ctx, runId, variable);
-        });
+            builder.Append(await resolveAsync(variable));
+            cursor = match.Index + match.Length;
+        }
+
+        builder.Append(template, cursor, template.Length - cursor);
+        return builder.ToString();
     }
 
     private static string NormalizeSecureVariableName(string? variable) =>
@@ -828,13 +857,15 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
-    private static string ReconstructConnectorHttpAuthorization(
-        IWorkflowExecutionContext ctx)
+    private static async Task<string> ReconstructConnectorHttpAuthorizationAsync(
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
     {
-        if (WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(ctx, out var credential) &&
-            !string.IsNullOrWhiteSpace(credential.BearerToken))
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+        if (credential.Found &&
+            !string.IsNullOrWhiteSpace(credential.Credential.BearerToken))
         {
-            var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken);
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential.Credential.BearerToken);
             return parsed.IsValid ? $"Bearer {parsed.NormalizedBearerToken}" : string.Empty;
         }
 

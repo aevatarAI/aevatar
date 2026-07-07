@@ -7,12 +7,10 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the channel-free workflow scheduling tool
-    /// (<c>aevatar_provision_workflow_schedule</c>) as an <see cref="IAgentToolSource"/>.
-    /// The tool resolves the narrow <c>IWorkflowScheduleProvisioningPort</c> (registered
-    /// by Studio's <c>AddStudioApplication</c>); the host composes both. The tool joins
-    /// the host tool catalog; W2 scopes it to studio runs via the studio workflow's
-    /// <c>allowed_tools</c> allowlist.
+    /// Registers local, typed Studio provisioning tools as <see cref="IAgentToolSource"/>
+    /// implementations. Each tool resolves a narrow port from Studio's abstractions
+    /// package, so the tool provider never calls the local host through HTTP or NyxID
+    /// proxy and never references the Studio application implementation assembly.
     /// </summary>
     public static IServiceCollection AddStudioProvisioningTools(this IServiceCollection services)
     {
@@ -20,6 +18,10 @@ public static class ServiceCollectionExtensions
 
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, ProvisionWorkflowScheduleToolSource>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, CreateStudioTeamToolSource>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, CreateStudioMemberToolSource>());
         return services;
     }
 }

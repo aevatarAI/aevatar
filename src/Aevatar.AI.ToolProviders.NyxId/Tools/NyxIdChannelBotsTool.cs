@@ -5,8 +5,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID channel bots and conversation routes.</summary>
-public sealed class NyxIdChannelBotsTool : IAgentTool
+public sealed class NyxIdChannelBotsTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdChannelBotsTool(NyxIdApiClient client) => _client = client;

@@ -210,12 +210,12 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         'Rollout evidence',
         rolloutStatus,
         buildFreshDetail(
-          rolloutMatchesHandoff,
-          rollout?.updatedAt,
-          t("pages.deployments.releaseevidence.active.rollout.has.been", "Active rollout {value1} has been refreshed after this commit", { value1: rollout?.rolloutId }),
-          rollout?.rolloutId
-            ? t("pages.deployments.releaseevidence.activity.rollout.is.visible", "Activity rollout {value1} is visible, but updatedAt is earlier than this submission, please wait for refresh", { value1: rollout.rolloutId })
-            : t("pages.deployments.releaseevidence.wait.for.this.rollout", "Wait for this rollout to appear or refresh"),
+	          rolloutMatchesHandoff,
+	          rollout?.updatedAt,
+	          t("pages.deployments.releaseevidence.active.rollout.has.been", "Active rollout has been refreshed after this commit"),
+	          rollout?.rolloutId
+	            ? t("pages.deployments.releaseevidence.activity.rollout.is.visible", "Activity rollout is visible, but updatedAt is earlier than this submission, please wait for refresh")
+	            : t("pages.deployments.releaseevidence.wait.for.this.rollout", "Wait for this rollout to appear or refresh"),
           t("pages.deployments.releaseevidence.wait.for.this.rollout.2", "Wait for this rollout to appear or refresh"),
           handoff,
         ),
@@ -225,11 +225,11 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         'Serving evidence',
         buildFreshStatus(servingHasCandidate, serving?.updatedAt, handoff),
         buildFreshDetail(
-          servingHasCandidate,
-          serving?.updatedAt,
-          t("pages.deployments.releaseevidence.serving.targets.already.contain", "serving targets already contain {value1} after this commit", { value1: candidateRevisionId }),
-          t("pages.deployments.releaseevidence.serving.targets.already.contain.2", "serving targets already contain {value1}, but updatedAt is earlier than this submission, please wait for readmodel to refresh", { value1: candidateRevisionId }),
-          t("pages.deployments.releaseevidence.wait.for.serving.targets", "Wait for serving targets {value1} to appear", { value1: candidateRevisionId || t("pages.deployments.releaseevidence.revision", "Candidate revision") }),
+	          servingHasCandidate,
+	          serving?.updatedAt,
+	          t("pages.deployments.releaseevidence.serving.targets.already.contain", "Serving targets already contain the candidate revision after this commit"),
+	          t("pages.deployments.releaseevidence.serving.targets.already.contain.2", "Serving targets already contain the candidate revision, but updatedAt is earlier than this submission, please wait for readmodel to refresh"),
+	          t("pages.deployments.releaseevidence.wait.for.serving.targets", "Wait for candidate revision to appear in serving targets"),
           handoff,
         ),
       ),
@@ -238,10 +238,10 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         'Traffic evidence',
         buildFreshStatus(trafficHasCandidate, traffic?.updatedAt, handoff),
         buildFreshDetail(
-          trafficHasCandidate,
-          traffic?.updatedAt,
-          t("pages.deployments.releaseevidence.traffic.split.already.contains", "Traffic split already contains {value1} after this commit", { value1: candidateRevisionId }),
-          t("pages.deployments.releaseevidence.traffic.split.already.contains.2", "Traffic split already contains {value1}, but updatedAt is earlier than this submission, please wait for readmodel to refresh", { value1: candidateRevisionId }),
+	          trafficHasCandidate,
+	          traffic?.updatedAt,
+	          t("pages.deployments.releaseevidence.traffic.split.already.contains", "Traffic split already contains the candidate revision after this commit"),
+	          t("pages.deployments.releaseevidence.traffic.split.already.contains.2", "Traffic split already contains the candidate revision, but updatedAt is earlier than this submission, please wait for readmodel to refresh"),
           t("pages.deployments.releaseevidence.wait.for.traffic.split", "Wait for traffic split to point to candidate revision"),
           handoff,
         ),
@@ -293,13 +293,13 @@ export function buildDeploymentReleaseEvidenceSnapshot({
         'Deployment catalog',
         catalogStatus,
         buildFreshDetail(
-          inactive,
-          deployment?.updatedAt,
-          t("pages.deployments.releaseevidence.has.left.active.after", "{value1} has left active after this commit", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment", "Target deployment") }),
-          t("pages.deployments.releaseevidence.is.no.longer.displayed", "{value1} is no longer displayed as active, but updatedAt is earlier than this submission, please wait for the catalog to refresh", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.2", "Target deployment") }),
-          deployment
-            ? t("pages.deployments.releaseevidence.wait.for.state.to", "Wait for {value1} state to leave active", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.3", "Target deployment") })
-            : t("pages.deployments.releaseevidence.wait.for.to.appear", "Wait for {value1} to appear in catalog and show inactive status", { value1: deploymentId || t("pages.deployments.releaseevidence.deployment.4", "Target deployment") }),
+	          inactive,
+	          deployment?.updatedAt,
+	          t("pages.deployments.releaseevidence.has.left.active.after", "Target deployment has left active after this commit"),
+	          t("pages.deployments.releaseevidence.is.no.longer.displayed", "Target deployment is no longer displayed as active, but updatedAt is earlier than this submission, please wait for the catalog to refresh"),
+	          deployment
+	            ? t("pages.deployments.releaseevidence.wait.for.state.to", "Wait for target deployment state to leave active")
+	            : t("pages.deployments.releaseevidence.wait.for.to.appear", "Wait for target deployment to appear in catalog and show inactive status"),
           handoff,
         ),
       ),

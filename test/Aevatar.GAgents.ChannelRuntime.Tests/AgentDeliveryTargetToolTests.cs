@@ -2,6 +2,8 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -61,14 +63,17 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
+        var secretVault = new InMemorySecretVault();
 
-        var missingQuery = () => new AgentDeliveryTargetTool(null!, commandPort, resolver);
-        var missingCommand = () => new AgentDeliveryTargetTool(queryPort, null!, resolver);
-        var missingResolver = () => new AgentDeliveryTargetTool(queryPort, commandPort, null!);
+        var missingQuery = () => new AgentDeliveryTargetTool(null!, commandPort, resolver, secretVault);
+        var missingCommand = () => new AgentDeliveryTargetTool(queryPort, null!, resolver, secretVault);
+        var missingResolver = () => new AgentDeliveryTargetTool(queryPort, commandPort, null!, secretVault);
+        var missingSecretVault = () => new AgentDeliveryTargetTool(queryPort, commandPort, resolver, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
         missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+        missingSecretVault.Should().Throw<ArgumentNullException>().WithParameterName("secretVault");
     }
 
     [Fact]
@@ -158,6 +163,8 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("aelf-twitter-approval", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
+        queryPort.ExistsActiveAsync("aelf-twitter-approval", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(false));
 
         UserAgentCatalogUpsertCommand? captured = null;
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
@@ -165,6 +172,7 @@ public sealed class AgentDeliveryTargetToolTests
             .Returns(Task.CompletedTask);
 
         var issuer = new RecordingApiKeyIssuer();
+        var secretVault = new InMemorySecretVault();
         var resolver = Substitute.For<ICallerScopeResolver>();
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
@@ -174,6 +182,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(commandPort);
         services.AddSingleton(resolver);
         services.AddSingleton<IScheduledAgentApiKeyIssuer>(issuer);
+        services.AddSingleton<ISecretVault>(secretVault);
         var tool = CreateTool(services);
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
@@ -211,7 +220,11 @@ public sealed class AgentDeliveryTargetToolTests
             captured!.AgentId.Should().Be("aelf-twitter-approval");
             captured.ConversationId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
             captured.NyxProviderSlug.Should().Be("api-lark-bot-2");
-            captured.NyxApiKey.Should().Be("secret-created-key");
+            captured.NyxApiKey.Should().BeEmpty();
+            captured.NyxApiKeyReference.Should().NotBeNull();
+            captured.NyxApiKeyReference!.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+            captured.NyxApiKeyReference.Ref.Should().NotBe("secret-created-key");
+            captured.NyxApiKeyReference.OwnerScopeKey.Should().NotBeNullOrWhiteSpace();
             captured.ApiKeyId.Should().Be("key-aelf-twitter-approval");
             captured.AgentType.Should().Be("delivery_target");
             captured.TemplateName.Should().Be("explicit_delivery_target");
@@ -220,6 +233,14 @@ public sealed class AgentDeliveryTargetToolTests
             captured.LarkReceiveIdType.Should().BeEmpty();
             captured.OwnerScope.Should().NotBeNull();
             captured.OwnerScope!.MatchesStrictly(caller).Should().BeTrue();
+
+            var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
+                captured.NyxApiKeyReference.Ref,
+                CredentialSecretPurposes.ScheduledNyxApiKey,
+                captured.NyxApiKeyReference.OwnerScopeKey,
+                captured.ApiKeyId,
+                "test"));
+            resolved.Secret.Should().Be("secret-created-key");
         }
         finally
         {
@@ -244,7 +265,7 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new RecordingApiKeyIssuer());
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), new RecordingApiKeyIssuer());
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -293,7 +314,7 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, issuer);
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -343,6 +364,7 @@ public sealed class AgentDeliveryTargetToolTests
             queryPort,
             commandPort,
             resolver,
+            new InMemorySecretVault(),
             new RecordingApiKeyIssuer());
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
@@ -388,7 +410,7 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, issuer);
+        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -788,7 +810,7 @@ public sealed class AgentDeliveryTargetToolTests
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
-        var source = new AgentDeliveryTargetToolSource(queryPort, commandPort, callerScopeResolver);
+        var source = new AgentDeliveryTargetToolSource(queryPort, commandPort, callerScopeResolver, new InMemorySecretVault());
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle();
@@ -856,14 +878,17 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
+        var secretVault = new InMemorySecretVault();
 
-        var missingQuery = () => new AgentDeliveryTargetToolSource(null!, commandPort, resolver);
-        var missingCommand = () => new AgentDeliveryTargetToolSource(queryPort, null!, resolver);
-        var missingResolver = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, null!);
+        var missingQuery = () => new AgentDeliveryTargetToolSource(null!, commandPort, resolver, secretVault);
+        var missingCommand = () => new AgentDeliveryTargetToolSource(queryPort, null!, resolver, secretVault);
+        var missingResolver = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, null!, secretVault);
+        var missingSecretVault = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, resolver, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
         missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+        missingSecretVault.Should().Throw<ArgumentNullException>().WithParameterName("secretVault");
     }
 
     [Fact]
@@ -1103,6 +1128,7 @@ public sealed class AgentDeliveryTargetToolTests
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
             provider.GetService<IUserAgentCatalogCommandPort>() ?? Substitute.For<IUserAgentCatalogCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
+            provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
             provider.GetService<IScheduledAgentApiKeyIssuer>());
     }
 
@@ -1115,6 +1141,7 @@ public sealed class AgentDeliveryTargetToolTests
         return new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
+            .AddSingleton<ISecretVault>(new InMemorySecretVault())
             .AddSingleton(resolver);
     }
 

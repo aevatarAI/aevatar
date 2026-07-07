@@ -7,6 +7,7 @@ import type {
 } from "./runtimeEventSemantics";
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 import { t } from "@/shared/i18n/messages";
+import { sanitizeUserFacingText } from "@/shared/ui/userFacingIdentifiers";
 
 function renderInline(text: string): React.ReactNode[] {
   const parts = text.split(/(`[^`]+`)/g);
@@ -115,19 +116,19 @@ function renderContent(text: string): React.ReactNode {
 
 function formatEventPreview(event: RuntimeEvent): string {
   if (event.type === "TEXT_MESSAGE_CONTENT") {
-    return String(event.delta || "").slice(0, 120);
+    return sanitizeUserFacingText(String(event.delta || "")).slice(0, 120);
   }
 
   if (event.type === "RUN_ERROR") {
-    return String(event.message || "");
+    return sanitizeUserFacingText(String(event.message || ""));
   }
 
   if (event.type === "STEP_STARTED" || event.type === "STEP_FINISHED") {
-    return String(event.stepName || "");
+    return sanitizeUserFacingText(String(event.stepName || ""));
   }
 
   if (event.type === "CUSTOM") {
-    return String((event.name as string) || "custom");
+    return sanitizeUserFacingText(String((event.name as string) || "custom")) || "custom";
   }
 
   return "";
@@ -325,7 +326,7 @@ function ToolCallIndicator({
             whiteSpace: "pre-wrap",
           }}
         >
-          {tool.result.slice(0, 500)}
+          {sanitizeUserFacingText(tool.result).slice(0, 500)}
         </pre>
       ) : null}
     </div>

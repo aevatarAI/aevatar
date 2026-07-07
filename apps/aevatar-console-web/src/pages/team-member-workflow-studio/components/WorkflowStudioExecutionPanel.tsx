@@ -19,6 +19,10 @@ import {
   type ExecutionLogStatus,
 } from "@/shared/studio/execution";
 import type { StudioExecutionDetail } from "@/shared/studio/models";
+import {
+  getUserFacingIdentifierLabel,
+  sanitizeUserFacingText,
+} from "@/shared/ui/userFacingIdentifiers";
 
 type WorkflowStudioExecutionPanelProps = {
   readonly activeLogIndex?: number | null;
@@ -132,6 +136,10 @@ function formatConsoleDateTime(value: string | null | undefined): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function sanitizeVisibleText(value: string | null | undefined): string {
+  return sanitizeUserFacingText(value) || "";
 }
 
 function isDetailPaneVisible(
@@ -304,8 +312,8 @@ function buildOverviewEntries(
         status: eventStatus,
         statusLog: log,
         stepId: "",
-        subtitle: log.meta || categoryLabels[category],
-        title: log.title,
+        subtitle: sanitizeVisibleText(log.meta) || categoryLabels[category],
+        title: getUserFacingIdentifierLabel(log.title, categoryLabels[category]),
       });
       return;
     }
@@ -337,8 +345,11 @@ function buildOverviewEntries(
       status,
       statusLog: log,
       stepId: log.stepId || "",
-      subtitle: log.meta || categoryLabels[category],
-      title: log.stepId || log.title,
+      subtitle: sanitizeVisibleText(log.meta) || categoryLabels[category],
+      title: getUserFacingIdentifierLabel(
+        log.stepId,
+        log.title || categoryLabels[category],
+      ),
     });
 
     if (log.tone === "started") {
@@ -357,7 +368,7 @@ function buildOverviewEntries(
       activeEntry.rawText = (log.rawText || activeEntry.rawText).trim();
       activeEntry.status = status;
       activeEntry.statusLog = log;
-      activeEntry.subtitle = log.meta || activeEntry.subtitle;
+      activeEntry.subtitle = sanitizeVisibleText(log.meta) || activeEntry.subtitle;
 
       if (log.tone === "pending") {
         activeEntry.pendingText = log.clipboardText.trim();
@@ -455,7 +466,7 @@ function renderDataBlock(
     readonly testId?: string;
   } = {},
 ): React.ReactNode {
-  const text = value.trim();
+  const text = sanitizeVisibleText(value);
   const blockHeight = options.height;
 
   return (
@@ -747,7 +758,7 @@ function renderSelectedDetails(
   if (entry.rowType !== "node") {
     return renderDataBlock(
       t("teamMemberWorkflowStudio.executionPanel.eventPayload", "Event payload"),
-      jsonText || entry.previewText,
+      jsonText || sanitizeVisibleText(entry.previewText),
       t(
         "teamMemberWorkflowStudio.executionPanel.emptyEventPayload",
         "No event payload was captured.",

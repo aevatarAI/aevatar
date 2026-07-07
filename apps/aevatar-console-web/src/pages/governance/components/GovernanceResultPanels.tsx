@@ -227,7 +227,6 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
   actions,
   description,
   draft,
-  revisionId,
   includeDefaultFields = true,
   extraFields = [],
   metrics = [],
@@ -236,11 +235,9 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
   const fields: GovernanceSummaryField[] = [
     ...(includeDefaultFields
       ? [
-          { label: t("pages.governance.governanceresultpanels.serve", "Serve"), value: draft.serviceId },
           { label: t("pages.governance.governanceresultpanels.team", "team"), value: draft.tenantId },
           { label: t("pages.governance.governanceresultpanels.application", "application"), value: draft.appId },
           { label: t("pages.governance.governanceresultpanels.namespace", "namespace"), value: draft.namespace },
-          revisionId ? { label: t("pages.governance.governanceresultpanels.version", "Version"), value: revisionId } : null,
         ]
       : []),
     ...extraFields,

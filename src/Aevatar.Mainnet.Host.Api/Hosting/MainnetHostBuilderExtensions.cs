@@ -18,6 +18,9 @@ using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
+using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.Audit.Hosting;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
@@ -123,10 +126,17 @@ public static class MainnetHostBuilderExtensions
         builder.AddAevatarPlatform(options =>
         {
             options.EnableMakerExtensions = true;
+            // Mainnet invariant: the scripting capability (in-process Roslyn compile/execute of
+            // tenant-supplied C#) must never be composed into this host. Stated explicitly so a
+            // future change to the platform default cannot silently re-enable it here.
+            options.EnableScriptingCapability = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
+        builder.Services.AddAuditTrailCore(builder.Configuration);
+        builder.AddAuditTrailCapabilityBundle();
+        builder.Services.AddBackendConsoleStaticAssets(builder.Configuration);
 
         // 06-26 ornn skills invocation page: host-side catalog read surface (composes the Ornn skill client).
         builder.Services.AddSingleton<IUserSkillCatalogQueryService, UserSkillCatalogQueryService>();
@@ -174,6 +184,11 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
             builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
+        // Single-use jti replay guard for NyxID identity assertions. In-memory + node-local by
+        // default (bounded by each assertion's short lifetime); swap for a distributed backing
+        // (e.g. Garnet) to make replay detection cluster-wide without touching callers.
+        builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard>(
+            sp => new InMemoryIdentityAssertionReplayGuard(sp.GetRequiredService<TimeProvider>()));
         builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         // Default model for direct OpenAI-compatible ingress (/v1/responses, /v1/messages,
@@ -236,7 +251,11 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
-        // 06-20-observatory-admin-cross-scope: NyxID-backed platform-admin authorizer for the run observatory.
+        // Fail-fast: device HMAC verification must never be disabled in production.
+        var deviceEventOptions = builder.Configuration.GetSection("Aevatar:DeviceEvents").Get<DeviceEventOptions>()
+            ?? new DeviceEventOptions();
+        deviceEventOptions.EnsureNotSkippingHmacInProduction(builder.Environment.IsProduction());
+        // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
         builder.Services.AddNyxIdTools(o =>
         {
@@ -299,6 +318,9 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
+                    CreateToolSource<ProvisionWorkflowScheduleToolSource>,
+                    CreateToolSource<CreateStudioTeamToolSource>,
+                    CreateToolSource<CreateStudioMemberToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,

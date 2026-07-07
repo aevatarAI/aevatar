@@ -32,6 +32,8 @@ internal interface IWorkflowExecutionStateHost
 
     string ScopeId => string.Empty;
 
+    string ScheduleId => string.Empty;
+
     WorkflowExecutionRuntimeContext RuntimeContext { get; }
 
     WorkflowRunExecutionContextState ExecutionContextSnapshot { get; }

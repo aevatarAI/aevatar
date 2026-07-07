@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -35,7 +36,8 @@ namespace Aevatar.Workflow.Core;
 [GAgent("workflow.run")]
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
-      IWorkflowExecutionStateHost
+      IWorkflowExecutionStateHost,
+      IRuntimeSecretStoreAccessor
 {
     private const string RunningStatus = "running";
     private const string CompletedStatus = "completed";
@@ -108,6 +110,11 @@ public sealed class WorkflowRunGAgent
         : State.RunId;
 
     public string ScopeId => State.ScopeId ?? string.Empty;
+
+    public string ScheduleId => State.ScheduleId ?? string.Empty;
+
+    IRuntimeSecretStore? IRuntimeSecretStoreAccessor.RuntimeSecretStore =>
+        (IRuntimeSecretStore?)Services.GetService(typeof(IRuntimeSecretStore));
 
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
 
@@ -436,7 +443,10 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        var callerCredentialDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(request.CallerCredential);
+        var callerCredentialDelta = await WorkflowCallerCredentialRuntimeContextAccess.BuildCredentialDeltaAsync(
+            this,
+            request.CallerCredential,
+            CancellationToken.None);
         _runtimeContext.ApplyRequestMetadata(request.Metadata);
         _runtimeContext.ApplySenderNyxIdAccessToken(request.LlmControl?.SenderNyxIdAccessToken);
         var llmControlDelta = WorkflowRunExecutionContextStateAccess.BuildLlmControlDelta(request.LlmControl);
@@ -1468,6 +1478,7 @@ public sealed class WorkflowRunGAgent
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
+                RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
             };
         }
 

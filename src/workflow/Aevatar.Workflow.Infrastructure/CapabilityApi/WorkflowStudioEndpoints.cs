@@ -1,6 +1,7 @@
-using System.Text;
+using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -16,6 +17,13 @@ public static class WorkflowStudioEndpoints
     private const string SchedulesRoute = "/schedules";
     private const string CallbackRoute = "/workflow/studio/callback";
 
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "workflow-studio",
+        Assembly: typeof(WorkflowStudioEndpoints).Assembly,
+        ResourceSuffix: "CapabilityApi.workflow-studio.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
+
     public static IEndpointRouteBuilder MapWorkflowStudio(this IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -23,7 +31,7 @@ public static class WorkflowStudioEndpoints
         app.MapGet(PageRoute, GetStudioPage)
             .WithTags("WorkflowStudio")
             .WithName("GetWorkflowStudioPage")
-            .WithSummary("Conversational workflow studio (inline self-contained page).")
+            .WithSummary("Conversational workflow studio served from an embedded static asset.")
             .AllowAnonymous();
 
         // Standalone schedules view: same self-contained shell + login gate as the studio
@@ -45,9 +53,12 @@ public static class WorkflowStudioEndpoints
         return app;
     }
 
-    internal static IResult GetStudioPage(HttpContext http)
+    internal static IResult GetStudioPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(WorkflowStudioPage.Html, "text/html", Encoding.UTF8);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 }

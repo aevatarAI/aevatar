@@ -21,7 +21,6 @@ scope_id="main-flow-${run_id}"
 team_id="team-${run_id}"
 member_id="member-${run_id}"
 workflow_id="workflow-${run_id}"
-service_member_id="service-${run_id}"
 cluster_id="aevatar-main-flow-smoke-cluster-${timestamp}"
 service_id="aevatar-mainnet-host-api-main-flow-smoke"
 log_dir="${AEVATAR_MAIN_FLOW_SMOKE_LOG_DIR:-/tmp/aevatar-main-flow-smoke-${timestamp}}"
@@ -56,6 +55,7 @@ start_host() {
     AEVATAR_ActorRuntime__Provider=Orleans \
     AEVATAR_ActorRuntime__OrleansStreamBackend=InMemory \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory \
+    AEVATAR_ActorRuntime__SecretStoreBackend=InMemory \
     AEVATAR_Orleans__ClusteringMode=Development \
     AEVATAR_Orleans__ClusterId="${cluster_id}" \
     AEVATAR_Orleans__ServiceId="${service_id}" \
@@ -71,6 +71,9 @@ start_host() {
     Projection__Policies__DenyInMemoryDocumentReadStore=false \
     Projection__Policies__DenyInMemoryGraphFactStore=false \
     Projection__Policies__Environment=Development \
+    Audit__ActorIdentityHasher__ActiveKeyId=main-flow-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__KeyId=main-flow-smoke-key \
+    Audit__ActorIdentityHasher__Keys__0__Key="main-flow-smoke-audit-hasher-key-0001" \
     dotnet "${APP_DLL}" >"${log_file}" 2>&1
   ) &
 

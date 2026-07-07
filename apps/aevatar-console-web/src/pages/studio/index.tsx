@@ -689,7 +689,7 @@ function describeWorkflowDraftAcceptedReceipt(
 ): string {
   return (
     trimOptional(receipt.readiness.message) ||
-    `Workflow draft ${receipt.workflowId} was accepted. Studio is waiting for the scoped workspace projection.`
+    'Workflow draft was accepted. Studio is waiting for the scoped workspace projection.'
   );
 }
 
@@ -735,11 +735,11 @@ async function waitForWorkflowDraftMaterialized(input: {
 
   throw lastNotFound instanceof Error
     ? new Error(
-        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+        'Workflow draft was accepted but is not readable yet. Retry saving in a moment.',
         { cause: lastNotFound },
       )
     : new Error(
-        `Workflow draft ${input.receipt.workflowId} was accepted but is not readable yet. Retry saving in a moment.`,
+        'Workflow draft was accepted but is not readable yet. Retry saving in a moment.',
       );
 }
 
@@ -5545,7 +5545,7 @@ const StudioPage: React.FC = () => {
     ): Promise<StudioWorkflowFile> => {
       if (!resolvedStudioScopeId) {
         throw new Error(
-          `Workflow draft ${receipt.workflowId} was accepted without a workspace scope.`,
+          'Workflow draft was accepted without a workspace scope.',
         );
       }
 
@@ -5958,7 +5958,7 @@ const StudioPage: React.FC = () => {
         void message.success(
           createdScriptMember
             ? t("pages.studio.index.created.script.member.opened.draft", "Created Script member {member} and opened its draft.", { member: createdScriptMember.displayName })
-            : t("pages.studio.index.created.script.draft", "Created Script draft {scriptId}.", { scriptId }),
+            : t("pages.studio.index.created.script.draft", "Created Script draft."),
         );
         return;
       }

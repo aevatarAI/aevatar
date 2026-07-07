@@ -48,6 +48,7 @@ public sealed record WorkflowToolExecutionRequest
             WorkflowToolRuntimeContext.Empty,
             null,
             null,
+            string.Empty,
             string.Empty)
     {
     }
@@ -72,6 +73,7 @@ public sealed record WorkflowToolExecutionRequest
             WorkflowToolRuntimeContext.Empty,
             null,
             InputFileRefs,
+            string.Empty,
             string.Empty)
     {
     }
@@ -87,7 +89,8 @@ public sealed record WorkflowToolExecutionRequest
         WorkflowToolRuntimeContext RuntimeContext,
         ToolApprovalGrant? ApprovalGrant = null,
         IReadOnlyList<WorkflowFileRef>? InputFileRefs = null,
-        string IdempotencyKey = "")
+        string IdempotencyKey = "",
+        string ScheduleId = "")
     {
         this.ArgumentsJson = ArgumentsJson;
         this.RunId = RunId;
@@ -100,6 +103,7 @@ public sealed record WorkflowToolExecutionRequest
         this.ApprovalGrant = ApprovalGrant;
         this.InputFileRefs = CopyInputFileRefs(InputFileRefs);
         this.IdempotencyKey = IdempotencyKey ?? string.Empty;
+        this.ScheduleId = ScheduleId ?? string.Empty;
     }
 
     public string ArgumentsJson { get; init; }
@@ -123,6 +127,8 @@ public sealed record WorkflowToolExecutionRequest
     public IReadOnlyList<WorkflowFileRef> InputFileRefs { get; private init; }
 
     public string IdempotencyKey { get; init; }
+
+    public string ScheduleId { get; init; }
 
     private static IReadOnlyList<WorkflowFileRef> CopyInputFileRefs(
         IReadOnlyList<WorkflowFileRef>? inputFileRefs) =>

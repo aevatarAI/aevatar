@@ -122,6 +122,49 @@ public sealed class ResponsesCallerScopeResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WithReplayedIdentityAssertion_ShouldFailClosedOnSecondUse()
+    {
+        // The replay guard makes each identity assertion single-use within its lifetime: the same
+        // signed jti presented twice against one validator is rejected the second time.
+        using var fixture = new IdentityAssertionFixture();
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var validator = fixture.CreateValidator();
+        var resolver = new NyxIdResponsesCallerScopeResolver(currentUserResolver, validator);
+        var replayedToken = fixture.CreateToken(subject: "identity-user", jti: "replay-jti");
+
+        var first = await resolver.ResolveAsync(CreateContext("bearer-token", identityToken: replayedToken));
+        first.ScopeId.Should().Be("identity-user");
+
+        var replay = () => resolver.ResolveAsync(CreateContext("bearer-token", identityToken: replayedToken));
+
+        await replay.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
+        // Fail-closed: a rejected replay must NOT fall through to the current-user lookup.
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WithFreshJtiAfterPriorUse_ShouldStillResolve()
+    {
+        // Positive control for the replay guard: a distinct jti (a re-minted assertion) still
+        // resolves — only an identical jti is treated as a replay.
+        using var fixture = new IdentityAssertionFixture();
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var validator = fixture.CreateValidator();
+        var resolver = new NyxIdResponsesCallerScopeResolver(currentUserResolver, validator);
+
+        var first = await resolver.ResolveAsync(CreateContext(
+            "bearer-token",
+            identityToken: fixture.CreateToken(subject: "identity-user", jti: "jti-a")));
+        var second = await resolver.ResolveAsync(CreateContext(
+            "bearer-token",
+            identityToken: fixture.CreateToken(subject: "identity-user", jti: "jti-b")));
+
+        first.ScopeId.Should().Be("identity-user");
+        second.ScopeId.Should().Be("identity-user");
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ResolveAsync_WithMalformedIdentityAssertion_ShouldFailClosedWithoutCurrentUserLookup()
     {
         using var fixture = new IdentityAssertionFixture();

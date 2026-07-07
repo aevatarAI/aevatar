@@ -51,9 +51,10 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             AgentId = command.AgentId.Trim(),
             ConversationId = MergeNonEmpty(command.ConversationId, existing?.ConversationId),
             NyxProviderSlug = MergeNonEmpty(command.NyxProviderSlug, existing?.NyxProviderSlug),
-#pragma warning disable CS0612 // legacy credential field preserved for internal delivery compatibility
-            NyxApiKey = MergeNonEmpty(command.NyxApiKey, existing?.NyxApiKey),
+#pragma warning disable CS0612 // legacy credential field must remain empty on new writes
+            NyxApiKey = string.Empty,
 #pragma warning restore CS0612
+            NyxApiKeyReference = command.NyxApiKeyReference?.Clone() ?? existing?.NyxApiKeyReference?.Clone(),
             CreatedAt = existing?.CreatedAt ?? now,
             UpdatedAt = now,
             Tombstoned = false,

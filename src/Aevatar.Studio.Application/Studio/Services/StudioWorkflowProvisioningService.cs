@@ -64,7 +64,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string scopeId,
         ProvisionWorkflowCallerCredential callerCredential,
         ProvisionWorkflowRequest request,
-        string? callerBearerToken = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(callerCredential);
@@ -73,7 +72,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
-        _ = callerBearerToken;
 
         // 1. Create the member (kind = workflow). The actor stamps the rename-safe
         //    published service id at creation, so we read it straight back — no

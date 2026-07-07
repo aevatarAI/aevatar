@@ -126,7 +126,10 @@ public sealed class ToolCallModuleContextTests
     {
         var tool = new CapturingWorkflowTool("nyxid_tool");
         var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = "schedule-tool",
+        };
         ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
             BearerToken = " typed-token ",
@@ -161,6 +164,7 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.IdempotencyKey.Should().Be("idem-tool-1");
         tool.LastRequest.ScopeId.Should().Be("scope-1");
         tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
+        tool.LastRequest.ScheduleId.Should().Be("schedule-tool");
         tool.LastRequest.RuntimeContext.ParentActorId.Should().Be("agent-1");
         tool.LastRequest.RuntimeContext.ParentRunId.Should().Be("run-1");
         tool.LastRequest.RuntimeContext.ParentStepId.Should().Be("call_proxy");
@@ -393,6 +397,8 @@ public sealed class ToolCallModuleContextTests
         public string? ScopeIdOverride { get; init; } = "scope-1";
 
         public string ScopeId => ScopeIdOverride!;
+
+        public string ScheduleId { get; init; } = string.Empty;
 
         public IServiceProvider Services { get; } = new EmptyServiceProvider();
 

@@ -277,7 +277,7 @@ public sealed class NyxIdProxyTool : IAgentTool
     private async Task<string> DiscoverMergedServicesAsync(
         string userToken, string? orgToken, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(orgToken) || orgToken == userToken)
+        if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
             return await _client.DiscoverProxyServicesAsync(userToken, ct);
 
         var userServicesJson = await _client.DiscoverProxyServicesAsync(userToken, ct);
@@ -340,7 +340,7 @@ public sealed class NyxIdProxyTool : IAgentTool
     private async Task<string> ResolveTokenForServiceAsync(
         string userToken, string? orgToken, string slug, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(orgToken) || orgToken == userToken)
+        if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
             return userToken;
 
         if (await ServiceExistsForTokenAsync(userToken, slug, ct))
@@ -537,6 +537,24 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>
+    /// Constant-time equality for two access tokens. Comparing secrets with <c>==</c> is
+    /// short-circuiting and leaks a length/prefix timing signal; <see cref="System.Security.Cryptography.CryptographicOperations.FixedTimeEquals"/>
+    /// over the UTF-8 bytes runs in time independent of where the tokens first differ.
+    /// Null is not a secret, so a null operand falls back to reference/<c>==</c> semantics
+    /// (only two nulls are equal); behavior is otherwise identical to <c>==</c> for
+    /// equal/unequal non-null tokens.
+    /// </summary>
+    internal static bool TokensEqual(string? left, string? right)
+    {
+        if (left is null || right is null)
+            return ReferenceEquals(left, right);
+
+        var leftBytes = System.Text.Encoding.UTF8.GetBytes(left);
+        var rightBytes = System.Text.Encoding.UTF8.GetBytes(right);
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
 
     private sealed record NyxIdProxyFileArtifactSuccess(
         bool Success,
