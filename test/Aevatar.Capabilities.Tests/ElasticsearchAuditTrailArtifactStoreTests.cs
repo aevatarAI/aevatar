@@ -166,7 +166,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        return $$"""{"_source":{{formatter.Format(storageDocument)}}}""";
+        return "{\"_source\":" + formatter.Format(storageDocument) + "}";
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)
