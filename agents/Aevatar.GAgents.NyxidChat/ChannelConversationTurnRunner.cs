@@ -557,6 +557,20 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     // Normal LLM messages are allowed to use the bot owner's LLM config when
     // the sender has no NyxID binding. Binding is only required by commands
     // that configure or inspect per-user state (/models, /model use, ...).
+    //
+    // A lookup FAILURE deliberately degrades to null (owner config, tools off)
+    // instead of failing the turn, even though null also trips the issue-#1318
+    // unbound-sender tool gate. Failing the turn was tried and is worse on the
+    // relay path: the deferred inbound-turn retry rebuilds its runtime context
+    // without the runtime-only reply token and terminally fails with
+    // missing_runtime_reply_token before ever re-invoking the runner, and letting
+    // the exception propagate drops the message outright (durable envelope retry
+    // refuses credential-carrying relay events). Typed transient classification
+    // is also unreliable at this seam — the production ES-backed reader surfaces
+    // 5xx/429 as InvalidOperationException. So: reply now on owner config, and
+    // the reply generator's tools-disabled system-prompt notice keeps the model
+    // honest about the missing tool surface instead of it denying the capability
+    // exists. Real cancellation still propagates.
     private async Task<ResolvedSenderBinding?> TryResolveSenderBindingAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -574,17 +588,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             existing = await queryPort.ResolveAsync(subject, ct);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
         catch (Exception ex) when (IsTransientBindingLookupFailure(ex))
         {
-            // Transient infra failures (DB blip, transient HTTP, JSON shape mismatch from
-            // upstream): degrade to owner credentials and keep the conversation alive.
+            // Transient infra failures (readmodel blip, transient HTTP/timeout, JSON
+            // shape mismatch from upstream): degrade to owner credentials and keep
+            // the conversation alive.
             _logger.LogWarning(
                 ex,
-                "Transient sender NyxID binding lookup failure; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                "Transient sender NyxID binding lookup failure; falling back to bot owner LLM config with tools disabled. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -592,12 +607,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
         catch (Exception ex)
         {
-            // Non-transient (programmer error, unexpected NRE, serialization break): surface
-            // at Error level so ops can distinguish from "sender just isn't bound" — but still
-            // fall through to owner credentials so the user gets a reply rather than nothing.
+            // Non-transient shape (includes the ES reader's InvalidOperationException
+            // wrapping of 5xx/429): surface at Error level so ops can distinguish from
+            // "sender just isn't bound" — but still fall through to owner credentials
+            // so the user gets an honest degraded reply rather than nothing.
             _logger.LogError(
                 ex,
-                "Sender NyxID binding lookup raised non-transient exception; falling back to bot owner LLM config. subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lookup raised non-transient exception; falling back to bot owner LLM config with tools disabled. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -612,7 +628,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     /// <summary>
     /// Distinguish infra-shaped binding lookup failures (worth a Warning + owner fallback)
-    /// from logic/programmer errors (worth an Error log so ops sees them).
+    /// from logic/programmer errors (worth an Error log so ops sees them). Both degrade to
+    /// the owner-config reply; see <see cref="TryResolveSenderBindingAsync"/> for why the
+    /// turn must not fail here.
     /// </summary>
     private static bool IsTransientBindingLookupFailure(Exception ex) =>
         ex is HttpRequestException
