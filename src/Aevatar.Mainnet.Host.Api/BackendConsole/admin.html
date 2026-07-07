@@ -1353,7 +1353,7 @@ function statsForEmployee(eid){ return null; }
    token: localStorage[aevatar-console:nyxid:pkce:token]；
    code 交换经共享 /auto/callback 完成后回跳本页（returnTo=/admin）。
    ============================================================ */
-var OIDC={ authority:'https://nyx.chrono-ai.fun', clientId:'37a93189-2734-406e-bca1-7dbdf25c5a53',
+var OIDC={ authority:'https://nyx.chrono-ai.fun', clientId:'a6ff2946-f02f-4c35-8203-1ec46132b660',
   scope:'openid profile email proxy', redirectUri:location.origin+'/auto/callback', storageKey:'aevatar-console:nyxid:pkce' };
 var TOKEN_KEY=OIDC.storageKey+':token', PKCE_KEY=OIDC.storageKey+':pkce';
 function getToken(){ try{ var t=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null'); return (t&&t.access_token)?t:null; }catch(e){ return null; } }

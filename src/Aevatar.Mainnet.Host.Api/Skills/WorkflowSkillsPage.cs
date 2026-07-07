@@ -349,7 +349,7 @@ function nowMs(){ return Date.now(); }
 
 /* OIDC Authorization Code + PKCE against NyxID — shared client + token key with the observatory page,
    so a login on either page authenticates both. The page itself is the anonymous shell. */
-const CFG = { authority:"https://nyx.chrono-ai.fun", clientId:"37a93189-2734-406e-bca1-7dbdf25c5a53", scope:"openid profile email proxy", redirectUri:location.origin+"/auto/callback", storageKey:"aevatar-console:nyxid:pkce" };
+const CFG = { authority:"https://nyx.chrono-ai.fun", clientId:"a6ff2946-f02f-4c35-8203-1ec46132b660", scope:"openid profile email proxy", redirectUri:location.origin+"/auto/callback", storageKey:"aevatar-console:nyxid:pkce" };
 const TOKEN_KEY = CFG.storageKey + ":token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
 function b64url(buf){ return btoa(String.fromCharCode.apply(null,new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }

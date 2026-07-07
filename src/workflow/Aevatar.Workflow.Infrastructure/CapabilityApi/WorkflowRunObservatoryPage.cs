@@ -935,7 +935,7 @@ const CFG = {
   // nyxid REST API (different origin than this app; CORS-enabled, allows the Authorization header).
   // Used admin-only to resolve a run's scopeId (≈ nyxid user id) to that user's display name.
   nyxidApi: "https://nyx-api.chrono-ai.fun",
-  clientId: "37a93189-2734-406e-bca1-7dbdf25c5a53",
+  clientId: "a6ff2946-f02f-4c35-8203-1ec46132b660",
   scope: "openid profile email proxy",
   redirectUri: location.origin + "/auto/callback",
   storageKey: "aevatar-console:nyxid:pkce",

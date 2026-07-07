@@ -43,7 +43,7 @@ internal static class AutoConsoleCallbackPage
 (function(){
   "use strict";
   var AUTHORITY = "https://nyx.chrono-ai.fun";
-  var CLIENT_ID = "37a93189-2734-406e-bca1-7dbdf25c5a53";
+  var CLIENT_ID = "a6ff2946-f02f-4c35-8203-1ec46132b660";
   var REDIRECT_URI = location.origin + "/auto/callback";
   var STORAGE_KEY = "aevatar-console:nyxid:pkce";
   var TOKEN_KEY = STORAGE_KEY + ":token";
