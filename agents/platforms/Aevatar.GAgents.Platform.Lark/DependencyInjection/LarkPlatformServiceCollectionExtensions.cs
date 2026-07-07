@@ -1,3 +1,4 @@
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -31,10 +32,16 @@ public static class LarkPlatformServiceCollectionExtensions
         });
         services.TryAddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<LarkChannelNativeMessageProducer>();
+        services.TryAddSingleton<NyxIdToolOptions>();
+        services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
+        services.TryAddSingleton<LarkChannelNativeMessageSender>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
             sp => sp.GetRequiredService<LarkMessageComposer>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, LarkChannelNativeMessageSender>(
+            sp => sp.GetRequiredService<LarkChannelNativeMessageSender>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
 
         return services;

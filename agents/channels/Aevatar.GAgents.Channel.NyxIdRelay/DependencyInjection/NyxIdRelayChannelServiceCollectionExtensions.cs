@@ -5,7 +5,6 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -30,6 +29,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public/manual projection refresh dispatch, new=startup-owned projection refresh
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.TryAddSingleton<ChannelRegistrationCommandFacade>();
@@ -58,7 +58,6 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
 
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
-        services.TryAddSingleton<ILarkOutboundRelayDispatcher, LarkOutboundRelayDispatcher>();
         // Mainnet workflow/human interaction delivery must go through the channel-neutral
         // relay path; platform packages keep only native rendering/transport adapters.
         services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, NyxIdRelayChannelInteractionNotificationPort>());

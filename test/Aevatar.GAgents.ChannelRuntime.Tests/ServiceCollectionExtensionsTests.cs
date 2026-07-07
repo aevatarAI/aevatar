@@ -92,6 +92,12 @@ public sealed class ServiceCollectionExtensionsTests
             .Should().Be(0);
         services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
             .Should().Be(2);
+        provider.GetServices<IChannelNativeMessageSender>()
+            .Select(sender => sender.GetType())
+            .Should()
+            .Contain(typeof(LarkChannelNativeMessageSender))
+            .And
+            .Contain(typeof(TelegramChannelNativeMessageSender));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ChannelRelayRegistrationFacade));
         services.Should().Contain(descriptor =>
@@ -99,6 +105,42 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
         registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldNotOwnPlatformNativeMessageSenders()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdRelayChannel();
+
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelNativeMessageSender));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(LarkChannelNativeMessageSender));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(TelegramChannelNativeMessageSender));
+        services.Any(IsLarkOutboundRelayDispatcherDescriptor).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddLarkAndTelegramPlatform_ShouldRegisterPlatformNativeMessageSenders()
+    {
+        var services = new ServiceCollection();
+
+        services.AddLarkPlatform();
+        services.AddTelegramPlatform();
+
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(LarkChannelNativeMessageSender));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(TelegramChannelNativeMessageSender));
+        services.Count(descriptor => descriptor.ServiceType == typeof(IChannelNativeMessageSender))
+            .Should()
+            .Be(2);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ILarkOutboundDispatcher) &&
+            descriptor.ImplementationType == typeof(LarkOutboundDispatcher));
     }
 
     [Fact]
@@ -123,6 +165,14 @@ public sealed class ServiceCollectionExtensionsTests
         var implementationTypeName = descriptor.ImplementationType?.FullName;
         return serviceTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true ||
                implementationTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true;
+    }
+
+    private static bool IsLarkOutboundRelayDispatcherDescriptor(ServiceDescriptor descriptor)
+    {
+        var serviceTypeName = descriptor.ServiceType.FullName;
+        var implementationTypeName = descriptor.ImplementationType?.FullName;
+        return serviceTypeName?.Contains("LarkOutboundRelayDispatcher", StringComparison.Ordinal) == true ||
+               implementationTypeName?.Contains("LarkOutboundRelayDispatcher", StringComparison.Ordinal) == true;
     }
 
     [Fact]
