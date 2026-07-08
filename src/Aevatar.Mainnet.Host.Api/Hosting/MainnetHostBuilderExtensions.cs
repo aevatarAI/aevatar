@@ -322,6 +322,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<CreateStudioTeamToolSource>,
                     CreateToolSource<CreateStudioMemberToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
+                    CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,

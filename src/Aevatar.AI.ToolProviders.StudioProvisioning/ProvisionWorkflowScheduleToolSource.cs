@@ -90,3 +90,22 @@ public sealed class BindStudioMemberWorkflowToolSource : IAgentToolSource
                 : [new BindStudioMemberWorkflowTool(_bindingPort)]);
     }
 }
+
+public sealed class ScheduleStudioMemberWorkflowToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberWorkflowSchedulePort? _schedulePort;
+
+    public ScheduleStudioMemberWorkflowToolSource(IStudioMemberWorkflowSchedulePort? schedulePort = null)
+    {
+        _schedulePort = schedulePort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _schedulePort is null
+                ? []
+                : [new ScheduleStudioMemberWorkflowTool(_schedulePort)]);
+    }
+}
