@@ -8,6 +8,7 @@ import {
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import MissionWallPage from "./index";
+import { MISSION_WALL_STALE_SNAPSHOT_FALLBACK_MS } from "./hooks/useMissionWallData";
 
 type StudioAuthSession = import("@/shared/studio/models").StudioAuthSession;
 type StudioMemberSummary = import("@/shared/studio/models").StudioMemberSummary;
@@ -608,6 +609,59 @@ describe("MissionWallPage", () => {
     expect(screen.getByTestId("mission-wall-run-list"))
       .toHaveTextContent("Live Risk Workflow");
     expect(screen.queryByText("No focus run")).not.toBeInTheDocument();
+  });
+
+  it("expires the stale workflow board after repeated refetch errors exceed the fallback window", async () => {
+    jest.useFakeTimers();
+    let nowMs = Date.parse(NOW);
+    jest.setSystemTime(nowMs);
+    jest.spyOn(Date, "now").mockImplementation(() => nowMs);
+    let failSnapshot = false;
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockImplementation(
+      async () => {
+        if (failSnapshot) {
+          throw new Error("workflow board unavailable");
+        }
+
+        return workflowBoardSnapshot([
+          workflowBoardMember({
+            actorId: "actor-risk-run",
+            completedSteps: 1,
+            currentNodeStatus: "waiting",
+            executionStatus: "running",
+            lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
+            member: riskMember,
+            runId: "run-risk",
+            totalSteps: 3,
+            workflowName: "Live Risk Workflow",
+          }),
+        ]);
+      },
+    );
+
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(MissionWallPage),
+    );
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+
+    failSnapshot = true;
+    nowMs += 1_000;
+    jest.setSystemTime(nowMs);
+    await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+
+    nowMs += MISSION_WALL_STALE_SNAPSHOT_FALLBACK_MS + 1_000;
+    jest.setSystemTime(nowMs);
+    await jest.advanceTimersByTimeAsync(
+      MISSION_WALL_STALE_SNAPSHOT_FALLBACK_MS + 1_000,
+    );
+    await waitFor(() => {
+      expect(screen.queryByText("Live Risk Workflow")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Live").closest(".mission-wall-metric"))
+      .toHaveTextContent("Disconnected");
   });
 
   it("auto-focuses a newly observed workflow run so its topology appears without a page reload", async () => {

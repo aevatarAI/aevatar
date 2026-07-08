@@ -109,6 +109,7 @@ function buildLiveState(input: {
   readonly generatedAt: string;
   readonly hasCriticalError: boolean;
   readonly hasPartialRunError: boolean;
+  readonly hasSnapshotUnavailable: boolean;
   readonly isLoading: boolean;
   readonly latestObservedAt?: string;
   readonly nowMs: number;
@@ -139,6 +140,18 @@ function buildLiveState(input: {
       message: t(
         "pages.missionwall.liveState.scopeUnavailable",
         "Mission wall could not load the authenticated scope.",
+      ),
+      status: "disconnected",
+    };
+  }
+
+  if (input.hasSnapshotUnavailable) {
+    return {
+      durableFreshnessSeconds,
+      lastObservedAt: input.latestObservedAt,
+      message: t(
+        "pages.missionwall.liveState.snapshotUnavailable",
+        "Mission wall snapshot could not be loaded.",
       ),
       status: "disconnected",
     };
@@ -244,18 +257,31 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     ((snapshotQuery.isSuccess && queriedRunCount === 0) || snapshotQuery.isError);
   const effectiveSnapshot = shouldUseCachedSnapshot
     ? cachedSnapshot
-    : queriedSnapshot;
+    : snapshotQuery.isError
+      ? undefined
+      : queriedSnapshot;
   React.useEffect(() => {
-    if (!queriedSnapshot || queriedRunCount === 0) {
+    if (
+      !snapshotQuery.isSuccess ||
+      snapshotQuery.dataUpdatedAt <= 0 ||
+      !queriedSnapshot ||
+      queriedRunCount === 0
+    ) {
       return;
     }
 
     snapshotCacheRef.current = {
-      cachedAtMs: nowMs,
+      cachedAtMs: snapshotQuery.dataUpdatedAt,
       key: snapshotCacheKey,
       snapshot: queriedSnapshot,
     };
-  }, [nowMs, queriedRunCount, queriedSnapshot, snapshotCacheKey]);
+  }, [
+    queriedRunCount,
+    queriedSnapshot,
+    snapshotCacheKey,
+    snapshotQuery.dataUpdatedAt,
+    snapshotQuery.isSuccess,
+  ]);
   const generatedAt = React.useMemo(
     () => effectiveSnapshot?.generatedAt ?? new Date().toISOString(),
     [
@@ -271,6 +297,9 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
   const runCount = workflowBoardSnapshotMemberCount(effectiveSnapshot);
   const hasCriticalError = authSessionQuery.isError;
   const hasStaleSnapshotFallback = Boolean(shouldUseCachedSnapshot);
+  const hasEffectiveSnapshot = Boolean(effectiveSnapshot);
+  const hasSnapshotUnavailable =
+    snapshotQuery.isError && !hasStaleSnapshotFallback && !hasEffectiveSnapshot;
   const isLoading =
     authSessionQuery.isLoading ||
     (Boolean(scopeId) && snapshotQuery.isLoading && !effectiveSnapshot);
@@ -281,6 +310,7 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
         generatedAt,
         hasCriticalError,
         hasPartialRunError: snapshotQuery.isError || hasStaleSnapshotFallback,
+        hasSnapshotUnavailable,
         isLoading,
         latestObservedAt,
         nowMs,
@@ -290,6 +320,7 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     [
       generatedAt,
       hasCriticalError,
+      hasSnapshotUnavailable,
       hasStaleSnapshotFallback,
       isLoading,
       latestObservedAt,

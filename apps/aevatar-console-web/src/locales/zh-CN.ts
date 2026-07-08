@@ -98,6 +98,8 @@ const zhCNMessages = {
     '部分已发布 service runs 无法加载。',
   'pages.missionwall.liveState.scopeUnavailable':
     'Mission wall 无法加载已认证 scope。',
+  'pages.missionwall.liveState.snapshotUnavailable':
+    'Mission wall snapshot 无法加载。',
   'pages.missionwall.liveStatus.degraded': '降级',
   'pages.missionwall.liveStatus.disconnected': '已断开',
   'pages.missionwall.liveStatus.idle': '空闲',
