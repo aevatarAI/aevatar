@@ -26,6 +26,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             registry,
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
+            [new LarkChannelNativeDeliveryTargetAdapter()],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-lark-1"), CancellationToken.None);
@@ -52,6 +53,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             registry,
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
+            [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
@@ -78,6 +80,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             registry,
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
+            [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
@@ -95,6 +98,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             registry,
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
+            [new LarkChannelNativeDeliveryTargetAdapter()],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
         template.TemplateVariable["run"] = "run-1";
@@ -129,6 +133,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             registry,
             [],
             [],
+            [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-discord-1"), CancellationToken.None);
@@ -145,12 +150,22 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             registry,
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [],
+            [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
 
         await act.Should().ThrowAsync<NotSupportedException>()
             .WithMessage("*No channel message sender is registered for platform: telegram*");
+    }
+
+    [Fact]
+    public void ScheduledDeliveryTarget_ShouldNotImplementLarkRouteContract()
+    {
+        typeof(ILarkChannelNativeDeliveryRoute)
+            .IsAssignableFrom(typeof(UserAgentDeliveryTarget))
+            .Should()
+            .BeFalse("platform route contracts must be adapted inside the Lark boundary");
     }
 
     private static ChannelInteractionNotificationRequest BuildApprovalRequest(string deliveryTargetId) =>

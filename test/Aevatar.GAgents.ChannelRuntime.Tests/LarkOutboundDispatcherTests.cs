@@ -176,6 +176,14 @@ public sealed class LarkOutboundDispatcherTests
         handler.Requests.Should().ContainSingle();
     }
 
+    [Fact]
+    public void LarkSendNewMessageRequest_UsesNyxApiKeySemanticName()
+    {
+        var request = CreateRequest();
+
+        request.NyxApiKey.Should().Be("nyx-api-key");
+    }
+
     private static LarkOutboundDispatcher CreateDispatcher(HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(

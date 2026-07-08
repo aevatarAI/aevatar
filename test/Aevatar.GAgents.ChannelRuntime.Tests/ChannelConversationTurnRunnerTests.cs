@@ -694,6 +694,58 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest!.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
     }
 
+    // A binding-lookup failure must NOT fail or drop the turn: the deferred relay retry
+    // cannot re-run a relay turn (the runtime-only reply token is never persisted, so the
+    // retry terminally fails with missing_runtime_reply_token before re-invoking the
+    // runner), and a propagated exception drops the message outright. The pinned contract
+    // is: degrade to an owner-config LLM reply with an EMPTY sender binding — the reply
+    // generator's tools-disabled notice then keeps the model honest about the missing
+    // tool surface (2026-07 incident). Covers both classifier branches, including the
+    // production ES reader's InvalidOperationException wrapping of 5xx/429.
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(TaskCanceledException))]
+    [InlineData(typeof(InvalidOperationException))]
+    public async Task RunInboundAsync_ShouldDegradeToOwnerConfigLlmReply_WhenSenderBindingLookupThrows(System.Type failureType)
+    {
+        var failure = (Exception)Activator.CreateInstance(failureType, "binding readmodel unavailable")!;
+        var bindingPort = new ThrowingIdentityBindingQueryPort(failure);
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(bindingPort)
+            .BuildServiceProvider();
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-binding-lookup-fails"),
+            CancellationToken.None);
+
+        bindingPort.Calls.Should().Be(1);
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().BeNullOrEmpty();
+    }
+
+    // Real cancellation is not a lookup failure and must still propagate.
+    [Fact]
+    public async Task RunInboundAsync_ShouldPropagateCancellation_WhenSenderBindingLookupIsCanceled()
+    {
+        using var cts = new CancellationTokenSource();
+        var bindingPort = new CancellingIdentityBindingQueryPort(cts);
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(bindingPort)
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+
+        var act = () => runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-binding-lookup-canceled"),
+            cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     [Fact]
     public async Task RunInboundAsync_ShouldSkipOwnerConfigOverrides_WhenSpecificFieldsEmpty()
     {
@@ -3686,6 +3738,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 ChunkAtUnixMs = 42,
             },
             currentPlatformMessageId: null,
+            NyxRelayTextOperationKind.Interim,
             RelayRuntimeContext("corr-stream-1", replyToken: "relay-token-stream-1", replyMessageId: "relay-msg-stream-1"),
             CancellationToken.None);
 
@@ -3732,10 +3785,11 @@ public sealed class ChannelConversationTurnRunnerTests
                 ChunkAtUnixMs = 42,
             },
             currentPlatformMessageId: "om_stream_1",
+            NyxRelayTextOperationKind.Interim,
             RelayRuntimeContext(
                 "corr-stream-update-1",
                 replyToken: "relay-token-stream-update-1",
-                replyMessageId: "relay-msg-stream-update-1"),
+            replyMessageId: "relay-msg-stream-update-1"),
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
@@ -3745,6 +3799,280 @@ public sealed class ChannelConversationTurnRunnerTests
         relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-stream-update-1");
         relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"om_stream_1\"");
         relayHandler.Requests[0].Body.Should().Contain("\"text\":\"updated stream\"");
+    }
+
+    [Fact]
+    public async Task RunStreamChunkAsync_FinalShortText_ShouldUpdateStatusMessageOnce()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"upstream_message_id":"om_stream_final_short"}""");
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"msg":"success","data":{"message_id":"unexpected_tail"}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+
+        var result = await runner.RunStreamChunkAsync(
+            new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = "corr-stream-final-short-1",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-stream-final-short-1",
+                    ConversationScope.Group,
+                    "oc_group_chat_1",
+                    new OutboundDeliveryContext
+                    {
+                        ReplyMessageId = "relay-msg-stream-final-short-1",
+                        CorrelationId = "corr-stream-final-short-1",
+                    },
+                    new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                        NyxProviderSlug = "api-lark-bot",
+                        NyxLarkChatId = "oc_group_chat_1",
+                    }),
+                AccumulatedText = "short final reply",
+                ChunkAtUnixMs = 42,
+            },
+            currentPlatformMessageId: "om_status_short",
+            NyxRelayTextOperationKind.Final,
+            RelayRuntimeContext(
+                "corr-stream-final-short-1",
+                replyToken: "relay-token-stream-final-short-1",
+                replyMessageId: "relay-msg-stream-final-short-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.PlatformMessageId.Should().Be("om_stream_final_short");
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply/update");
+        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"om_status_short\"");
+        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"short final reply\"");
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunStreamChunkAsync_FinalLongText_ShouldUpdateFirstSegmentAndSendTailSegments()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"upstream_message_id":"om_stream_final_long"}""");
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"msg":"success","data":{"message_id":"om_tail_1"}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+        var longText = new string('a', 30_010);
+
+        var result = await runner.RunStreamChunkAsync(
+            new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = "corr-stream-final-long-1",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-stream-final-long-1",
+                    ConversationScope.Group,
+                    "oc_group_chat_1",
+                    new OutboundDeliveryContext
+                    {
+                        ReplyMessageId = "relay-msg-stream-final-long-1",
+                        CorrelationId = "corr-stream-final-long-1",
+                    },
+                    new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                        NyxProviderSlug = "api-lark-bot",
+                        NyxLarkChatId = "oc_group_chat_1",
+                    }),
+                AccumulatedText = longText,
+                ChunkAtUnixMs = 42,
+            },
+            currentPlatformMessageId: "om_status_long",
+            NyxRelayTextOperationKind.Final,
+            RelayRuntimeContext(
+                "corr-stream-final-long-1",
+                replyToken: "relay-token-stream-final-long-1",
+                replyMessageId: "relay-msg-stream-final-long-1",
+                nyxUserAccessToken: "runtime-user-token-final-long-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.PlatformMessageId.Should().Be("om_stream_final_long");
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply/update");
+        relayHandler.Requests[0].Authorization.Should().Be("Bearer relay-token-stream-final-long-1");
+        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"om_status_long\"");
+        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"" + new string('a', 30_000) + "\"");
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer runtime-user-token-final-long-1");
+        nyxHandler.Requests[0].Path.Should()
+            .Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=chat_id");
+        nyxHandler.Requests[0].Body.Should().Contain("\"receive_id\":\"oc_group_chat_1\"");
+        nyxHandler.Requests[0].Body.Should().Contain("\"msg_type\":\"text\"");
+        nyxHandler.Requests[0].Body.Should().Contain(new string('a', 10));
+    }
+
+    [Fact]
+    public async Task RunStreamChunkAsync_InterimLongText_ShouldNotSegment()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"upstream_message_id":"om_stream_interim_long"}""");
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"msg":"success","data":{"message_id":"unexpected_tail"}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+
+        var result = await runner.RunStreamChunkAsync(
+            new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = "corr-stream-interim-long-1",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-stream-interim-long-1",
+                    ConversationScope.Group,
+                    "oc_group_chat_1",
+                    new OutboundDeliveryContext
+                    {
+                        ReplyMessageId = "relay-msg-stream-interim-long-1",
+                        CorrelationId = "corr-stream-interim-long-1",
+                    },
+                    new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                        NyxProviderSlug = "api-lark-bot",
+                        NyxLarkChatId = "oc_group_chat_1",
+                    }),
+                AccumulatedText = new string('b', 30_010),
+                ChunkAtUnixMs = 42,
+            },
+            currentPlatformMessageId: "om_interim_long",
+            NyxRelayTextOperationKind.Interim,
+            RelayRuntimeContext(
+                "corr-stream-interim-long-1",
+                replyToken: "relay-token-stream-interim-long-1",
+                replyMessageId: "relay-msg-stream-interim-long-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply/update");
+        relayHandler.Requests[0].Body.Should().Contain("\"message_id\":\"om_interim_long\"");
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunStreamChunkAsync_FinalLongText_TailSendFailure_ShouldReturnFailure()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"upstream_message_id":"om_stream_final_tail_failed"}""");
+        var nyxHandler = new RecordingJsonHandler("""{"code":99992364,"msg":"user id cross tenant"}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+
+        var result = await runner.RunStreamChunkAsync(
+            new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = "corr-stream-tail-failure-1",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-stream-tail-failure-1",
+                    ConversationScope.Group,
+                    "oc_group_chat_1",
+                    new OutboundDeliveryContext
+                    {
+                        ReplyMessageId = "relay-msg-stream-tail-failure-1",
+                        CorrelationId = "corr-stream-tail-failure-1",
+                    },
+                    new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                        NyxProviderSlug = "api-lark-bot",
+                        NyxLarkChatId = "oc_group_chat_1",
+                    }),
+                AccumulatedText = new string('c', 30_010),
+                ChunkAtUnixMs = 42,
+            },
+            currentPlatformMessageId: "om_status_tail_failure",
+            NyxRelayTextOperationKind.Final,
+            RelayRuntimeContext(
+                "corr-stream-tail-failure-1",
+                replyToken: "relay-token-stream-tail-failure-1",
+                replyMessageId: "relay-msg-stream-tail-failure-1",
+                nyxUserAccessToken: "runtime-user-token-tail-failure-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("relay_tail_segment_send_failed");
+        result.ErrorSummary.Should().Contain("user id cross tenant");
+        relayHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests[0].Authorization.Should().Be("Bearer runtime-user-token-tail-failure-1");
+    }
+
+    [Fact]
+    public async Task RunStreamChunkAsync_FinalLongText_MissingTailCredential_ShouldReturnFailureWithoutTailPost()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var relayHandler = new RecordingJsonHandler("""{"upstream_message_id":"om_stream_final_missing_tail_credential"}""");
+        var nyxHandler = new RecordingJsonHandler("""{"code":0,"msg":"success","data":{"message_id":"unexpected_tail"}}""");
+        var runner = CreateRunner(
+            registrationQueryPort,
+            adapter,
+            relayHandler: relayHandler,
+            nyxHandler: nyxHandler);
+
+        var result = await runner.RunStreamChunkAsync(
+            new LlmReplyStreamChunkEvent
+            {
+                CorrelationId = "corr-stream-tail-credential-missing-1",
+                RegistrationId = "reg-1",
+                Activity = BuildInboundActivity(
+                    "hello",
+                    "msg-stream-tail-credential-missing-1",
+                    ConversationScope.Group,
+                    "oc_group_chat_1",
+                    new OutboundDeliveryContext
+                    {
+                        ReplyMessageId = "relay-msg-stream-tail-credential-missing-1",
+                        CorrelationId = "corr-stream-tail-credential-missing-1",
+                    },
+                    new TransportExtras
+                    {
+                        NyxPlatform = "lark",
+                        NyxProviderSlug = "api-lark-bot",
+                        NyxLarkChatId = "oc_group_chat_1",
+                    }),
+                AccumulatedText = new string('d', 30_010),
+                ChunkAtUnixMs = 42,
+            },
+            currentPlatformMessageId: "om_status_tail_credential_missing",
+            NyxRelayTextOperationKind.Final,
+            RelayRuntimeContext(
+                "corr-stream-tail-credential-missing-1",
+                replyToken: "relay-token-stream-tail-credential-missing-1",
+                replyMessageId: "relay-msg-stream-tail-credential-missing-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("lark_tail_segment_credential_missing");
+        relayHandler.Requests.Should().ContainSingle();
+        nyxHandler.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -3782,6 +4110,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 ChunkAtUnixMs = 42,
             },
             currentPlatformMessageId: "om_stream_1",
+            NyxRelayTextOperationKind.Interim,
             RelayRuntimeContext(
                 "corr-stream-edit-unsupported-1",
                 replyToken: "relay-token-stream-edit-unsupported-1",
@@ -3832,6 +4161,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 ChunkAtUnixMs = 42,
             },
             currentPlatformMessageId: "om_stream_1",
+            NyxRelayTextOperationKind.Interim,
             RelayRuntimeContext(
                 "corr-stream-rate-limited-1",
                 replyToken: "relay-token-stream-rate-limited-1",
@@ -3869,6 +4199,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 ChunkAtUnixMs = 42,
             },
             currentPlatformMessageId: null,
+            NyxRelayTextOperationKind.Interim,
             RelayRuntimeContext("corr-stream-missing-delivery-1"),
             CancellationToken.None);
 
@@ -3895,6 +4226,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 ChunkAtUnixMs = 42,
             },
             currentPlatformMessageId: null,
+            NyxRelayTextOperationKind.Interim,
             new ConversationTurnRuntimeContext(new NyxRelayReplyTokenContext(
                 "corr-stream-expired-token-1",
                 "relay-token-expired",
@@ -3925,6 +4257,7 @@ public sealed class ChannelConversationTurnRunnerTests
                 ChunkAtUnixMs = 42,
             },
             currentPlatformMessageId: null,
+            NyxRelayTextOperationKind.Interim,
             RelayRuntimeContext("corr-stream-missing-activity-1"),
             CancellationToken.None);
 
@@ -4358,6 +4691,27 @@ public sealed class ChannelConversationTurnRunnerTests
         }
 
         public NyxIdApiClient CreateClient() => _client;
+    }
+
+    private sealed class ThrowingIdentityBindingQueryPort(Exception failure) : IExternalIdentityBindingQueryPort
+    {
+        public int Calls { get; private set; }
+
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
+        {
+            Calls++;
+            throw failure;
+        }
+    }
+
+    private sealed class CancellingIdentityBindingQueryPort(CancellationTokenSource cts) : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
+        {
+            cts.Cancel();
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<BindingId?>(null);
+        }
     }
 
     private sealed class StubUserLlmOptionsService : IUserLlmOptionsService

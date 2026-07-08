@@ -102,7 +102,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         actorPort.Ensured.Should().ContainSingle();
         actorPort.Created.Should().BeEmpty();
         actorPort.Updated.Should().BeEmpty();
-        queryPort.GetScheduleIds.Should().BeEmpty();
+        // Ensure performs exactly one readmodel read: the delete-tombstone guard
+        // (a deleted schedule surfaces as typed not-found instead of a silently
+        // swallowed reconfigure of the tombstoned actor).
+        queryPort.GetScheduleIds.Should().Equal("daily-report");
         var ensured = actorPort.Ensured.Single();
         ensured.Configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         ensured.Configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);

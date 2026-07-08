@@ -284,28 +284,82 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
                 StateEvent = commitResult.CommittedEvents[i].Clone(),
                 StateRoot = Any.Pack(_state),
             };
-            const ObserverAudience audience = ObserverAudience.CommittedFacts;
-            var context = new CommittedStatePublicationContext
-            {
-                ActorId = Id,
-                ActorType = GetType(),
-                Published = published,
-                SourceEnvelope = ActiveInboundEnvelope,
-                Audience = audience,
-            };
-
-            // Refactor (iter18/cluster-006):
-            //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
-            //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
-            foreach (var hook in ResolveCommittedStatePublicationHooks())
-                await hook.BeforePublishAsync(context, ct);
-
-            await CommittedStateEventPublisher.PublishAsync(
-                published,
-                audience,
-                ct,
-                ActiveInboundEnvelope);
+            await PublishCommittedStateAsync(published, ct);
         }
+    }
+
+    /// <summary>
+    /// Re-publishes the actor's <em>current</em> committed state to the projection
+    /// pipeline <em>without</em> appending a new domain event. This is the
+    /// disaster-recovery primitive for rebuilding a current-state readmodel that was
+    /// wiped/reset while the authoritative actor state survived: the committed-fact
+    /// channel is live-forward-only (no replay-on-attach), so a wiped readmodel is
+    /// otherwise unrecoverable until the next real commit. Because a current-state
+    /// materializer (<c>ICurrentStateProjectionMaterializer</c>) rebuilds a row from
+    /// the <c>state_root</c> snapshot alone, one re-emission of the current state fully
+    /// rematerializes the row; projection writes are monotonic covering writes, so this
+    /// is a no-op on a healthy readmodel and a rebuild on a wiped one.
+    /// </summary>
+    /// <param name="stateEventPayload">
+    /// The domain-event payload used only for projection routing/activation (it must be
+    /// a type the target actor's <c>IProjectionActivationPlanProvider</c> recognizes);
+    /// the materialized content comes from the current state snapshot, not this payload.
+    /// Reconstruct it from <see cref="State"/> at the call site.
+    /// </param>
+    /// <remarks>
+    /// CONTRACT: this re-broadcasts a committed fact to <em>all</em>
+    /// <see cref="ObserverAudience.CommittedFacts"/> consumers of this actor, at the
+    /// actor's current committed version with a deterministic synthetic event id. It is
+    /// therefore only safe for facts whose consumers are idempotent w.r.t. version — in
+    /// particular it must not be used on actor types whose committed events feed an audit
+    /// translator, or the audit trail would gain a duplicate entry. It appends nothing to
+    /// the event store (no <c>RaiseEvent</c>/<c>ConfirmEventsAsync</c>).
+    /// </remarks>
+    protected Task RepublishCommittedStateAsync(IMessage stateEventPayload, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(stateEventPayload);
+
+        var version = EnsureEventSourcingConfigured().CurrentVersion;
+        var published = new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = $"rebuild:{Id}:{version}",
+                Version = version,
+                EventType = stateEventPayload.Descriptor.FullName,
+                EventData = Any.Pack(stateEventPayload),
+                AgentId = Id ?? string.Empty,
+            },
+            StateRoot = Any.Pack(_state),
+        };
+        return PublishCommittedStateAsync(published, ct);
+    }
+
+    private async Task PublishCommittedStateAsync(
+        CommittedStateEventPublished published,
+        CancellationToken ct)
+    {
+        const ObserverAudience audience = ObserverAudience.CommittedFacts;
+        var context = new CommittedStatePublicationContext
+        {
+            ActorId = Id,
+            ActorType = GetType(),
+            Published = published,
+            SourceEnvelope = ActiveInboundEnvelope,
+            Audience = audience,
+        };
+
+        // Refactor (iter18/cluster-006):
+        //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
+        //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
+        foreach (var hook in ResolveCommittedStatePublicationHooks())
+            await hook.BeforePublishAsync(context, ct);
+
+        await CommittedStateEventPublisher.PublishAsync(
+            published,
+            audience,
+            ct,
+            ActiveInboundEnvelope);
     }
 
     private IReadOnlyList<ICommittedStatePublicationHook> ResolveCommittedStatePublicationHooks()

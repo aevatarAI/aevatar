@@ -130,6 +130,28 @@ public sealed class ChannelAbstractionsSurfaceTests
     }
 
     [Fact]
+    public void ChannelNativeDeliveryTarget_ShouldStayPlatformNeutral()
+    {
+        var propertyNames = typeof(ChannelNativeDeliveryTarget)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Select(static property => property.Name)
+            .ToArray();
+
+        propertyNames.ShouldBe([
+            nameof(ChannelNativeDeliveryTarget.AgentId),
+            nameof(ChannelNativeDeliveryTarget.Platform),
+            nameof(ChannelNativeDeliveryTarget.ConversationId),
+            nameof(ChannelNativeDeliveryTarget.NyxProviderSlug),
+            nameof(ChannelNativeDeliveryTarget.NyxApiKey),
+        ]);
+        propertyNames.ShouldNotContain(static name =>
+            name.StartsWith("Lark", StringComparison.Ordinal) ||
+            name.StartsWith("Telegram", StringComparison.Ordinal) ||
+            name.StartsWith("Slack", StringComparison.Ordinal) ||
+            name.StartsWith("Discord", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task PerEntryDocumentProjector_ShouldUpsertAndDeleteByVerdict()
     {
         var now = new DateTimeOffset(2026, 4, 21, 12, 0, 0, TimeSpan.Zero);

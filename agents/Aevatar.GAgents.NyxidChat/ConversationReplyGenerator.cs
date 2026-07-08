@@ -30,6 +30,34 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private const int MaxWorkingSetMessages = 200;
     private const int MaxInlineImageBytes = 10 * 1024 * 1024;
 
+    // Appended to the system prompt when the unbound-sender gate detaches the tool
+    // surface for a channel turn. The kernel prompt documents the deployment's tools
+    // unconditionally, so the model must be told the honest, recoverable reason no
+    // tool is attached — otherwise it reports the capability itself as missing.
+    // Wording is tool-name-agnostic by design (CLAUDE.md: no per-skill hardcoding);
+    // /init is the channel binding bootstrap the slash path already prompts for.
+    private const string UnboundSenderToolsDisabledNotice =
+        "## Tools disabled for this turn\n" +
+        "No tools are attached to this turn: the sender's identity is not bound, and " +
+        "channel tool execution requires a bound identity. Any tool or capability " +
+        "documentation above describes tools you cannot invoke right now. Do not claim " +
+        "a capability is missing from this deployment, and do not claim any action was " +
+        "performed. If the request needs a tool, tell the user tool execution is " +
+        "disabled for this turn because their identity is not bound, and that sending " +
+        "/init in this chat starts the binding that enables tools.";
+
+    // Appended instead of the unbound notice when a bound sender's attempt failed and
+    // the reply is retried on the bot owner's configuration with tools stripped — the
+    // same prompt/tool-surface honesty gap, different recoverable reason.
+    private const string DegradedTurnToolsDisabledNotice =
+        "## Tools disabled for this turn\n" +
+        "No tools are attached to this turn: the sender-scoped attempt failed and this " +
+        "reply is a degraded retry on the bot owner's configuration without tools. Any " +
+        "tool or capability documentation above describes tools you cannot invoke right " +
+        "now. Do not claim a capability is missing from this deployment, and do not claim " +
+        "any action was performed. If the request needs a tool, tell the user this turn " +
+        "ran degraded without tools and ask them to retry shortly.";
+
     private readonly ILLMProviderFactory _llmProviderFactory;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
     private readonly IReadOnlyList<IAgentRunMiddleware> _agentMiddlewares;
@@ -42,6 +70,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILarkNyxClient? _larkClient;
+    private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
     private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
@@ -82,7 +111,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ILarkNyxClient? larkClient = null,
         IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
-        ISystemSkillOverlayProvider? overlayProvider = null)
+        ISystemSkillOverlayProvider? overlayProvider = null,
+        ILarkOutboundClientFactory? larkOutboundClientFactory = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -96,6 +126,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _larkClient = larkClient;
+        _larkOutboundClientFactory = larkOutboundClientFactory;
         _overlayProvider = overlayProvider;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
@@ -172,6 +203,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     replyPlan.PrimaryToolContext,
                     priorHistory,
                     primaryTools,
+                    systemPromptSuffix: replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null,
                     streamingSink,
                     ct)
                 .ConfigureAwait(false);
@@ -195,6 +227,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     replyPlan.OwnerFallbackToolContext,
                     priorHistory,
                     fallbackTools,
+                    systemPromptSuffix: replyPlan.DisableTools
+                        ? UnboundSenderToolsDisabledNotice
+                        : DegradedTurnToolsDisabledNotice,
                     streamingSink,
                     ct)
                 .ConfigureAwait(false);
@@ -279,9 +314,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             tools,
             input.AttachmentVisibilityInstruction);
 
+        // The unbound-sender gate (issue #1318) detaches the entire tool surface while
+        // the kernel prompt still documents those tools; without this override the
+        // model reports the capability as missing instead of the actual, recoverable
+        // reason. Keyed on the plan's own gate (not forceDisableTools): per-step rebuilds
+        // discard InitialMessages, so this notice is stamped exactly once per run.
         var initialMessages = new List<ChatMessage>
         {
-            ChatMessage.System(BuildSystemPrompt(externalMetadata, effectiveToolContext, input.AttachmentVisibilityInstruction)),
+            ChatMessage.System(AppendSystemPromptSuffix(
+                BuildSystemPrompt(externalMetadata, effectiveToolContext, input.AttachmentVisibilityInstruction),
+                replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
@@ -330,6 +372,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AgentToolExecutionContext? baseToolContext,
         IReadOnlyList<ConversationHistoryEntry>? priorHistory,
         ToolManager tools,
+        string? systemPromptSuffix,
         IStreamingReplySink? streamingSink,
         CancellationToken ct)
     {
@@ -369,7 +412,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 Messages =
                 [
-                    ChatMessage.System(BuildSystemPrompt(effectiveMetadata, toolContext, input.AttachmentVisibilityInstruction)),
+                    ChatMessage.System(AppendSystemPromptSuffix(
+                        BuildSystemPrompt(effectiveMetadata, toolContext, input.AttachmentVisibilityInstruction),
+                        systemPromptSuffix)),
                 ],
                 Metadata = externalMetadata,
                 ToolContext = toolContext,
@@ -473,7 +518,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     "the selected LLM route does not support image input"));
         }
 
-        if (_larkClient is null)
+        if (_larkClient is null && _larkOutboundClientFactory is null)
         {
             return new UserInputParts(
                 text,
@@ -511,6 +556,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 continue;
             }
 
+            var larkClient = ResolveLarkResourceDownloadClient(source.Activity, out var providerSlug);
+            if (larkClient is null)
+            {
+                _logger.LogWarning(
+                    "Lark resource download client is unavailable for chat LLM input: provider={ProviderSlug} messageId={MessageId}",
+                    providerSlug,
+                    messageId);
+                unseenCount += source.Attachments.Count;
+                continue;
+            }
+
             foreach (var attachment in source.Attachments)
             {
                 if (attachment.Kind != AttachmentKind.Image)
@@ -535,7 +591,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 LarkMessageResourceDownloadResult downloaded;
                 try
                 {
-                    downloaded = await _larkClient.DownloadMessageResourceAsync(
+                    downloaded = await larkClient.DownloadMessageResourceAsync(
                             token,
                             new LarkMessageResourceDownloadRequest(
                                 messageId,
@@ -552,7 +608,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 {
                     _logger.LogWarning(
                         ex,
-                        "Failed to download Lark image attachment for chat LLM input: messageId={MessageId} resourceKey={ResourceKey}",
+                        "Failed to download Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey}",
+                        providerSlug,
                         messageId,
                         resourceKey);
                     unseenCount++;
@@ -564,6 +621,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     downloaded.Content.Length > MaxInlineImageBytes ||
                     !IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
                 {
+                    _logger.LogWarning(
+                        "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} status={Status} detail={Detail}",
+                        providerSlug,
+                        messageId,
+                        resourceKey,
+                        downloaded.HttpStatus,
+                        downloaded.Detail);
                     unseenCount++;
                     continue;
                 }
@@ -582,6 +646,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             : null;
 
         return new UserInputParts(text, parts, instruction);
+    }
+
+    private ILarkNyxClient? ResolveLarkResourceDownloadClient(ChatActivity activity, out string? providerSlug)
+    {
+        providerSlug = NormalizeOptional(activity.TransportExtras?.NyxProviderSlug);
+        if (providerSlug is not null && _larkOutboundClientFactory is not null)
+            return _larkOutboundClientFactory.ResolveNyxClient(providerSlug);
+
+        return _larkClient;
     }
 
     private sealed record AttachmentActivity(ChatActivity Activity, IReadOnlyList<AttachmentRef> Attachments);
@@ -1078,6 +1151,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             .ToArray();
         return valid.Length == 0 ? null : valid;
     }
+
+    private static string AppendSystemPromptSuffix(string prompt, string? suffix) =>
+        string.IsNullOrEmpty(suffix) ? prompt : $"{prompt.TrimEnd()}\n\n{suffix}";
 
     private string BuildSystemPrompt(
         IReadOnlyDictionary<string, string> metadata,

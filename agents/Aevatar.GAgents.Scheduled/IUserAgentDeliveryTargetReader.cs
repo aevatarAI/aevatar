@@ -1,3 +1,5 @@
+using Aevatar.GAgents.Channel.Abstractions;
+
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
@@ -35,4 +37,10 @@ public sealed record UserAgentDeliveryTarget(
     string LarkReceiveIdTypeFallback,
     SkillRunnerOutputFormat OutputFormat,
     string TemplateName,
-    string AgentType);
+    string AgentType)
+    : ChannelNativeDeliveryTarget(
+        AgentId,
+        Platform,
+        ConversationId,
+        NyxProviderSlug,
+        NyxApiKey);

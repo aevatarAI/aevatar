@@ -4,16 +4,12 @@ namespace Aevatar.GAgents.Channel.Abstractions;
 /// Credential-bearing delivery target consumed by channel-native outbound senders.
 /// </summary>
 /// <remarks>
-/// This DTO carries only native transport routing and credential material. Catalog,
-/// workflow, or scheduled-run ownership stays outside the sender abstraction.
+/// This DTO carries only channel-neutral identity and credential material. Platform-specific
+/// routing shape belongs to the platform sender boundary.
 /// </remarks>
-public sealed record ChannelNativeDeliveryTarget(
+public record ChannelNativeDeliveryTarget(
     string AgentId,
     string Platform,
     string ConversationId,
     string NyxProviderSlug,
-    string NyxApiKey,
-    string LarkReceiveId,
-    string LarkReceiveIdType,
-    string LarkReceiveIdFallback,
-    string LarkReceiveIdTypeFallback);
+    string NyxApiKey);
