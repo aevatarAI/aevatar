@@ -1397,6 +1397,7 @@ public sealed partial class ConversationGAgent :
                 AccumulatedText = failureText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            ApplyRuntimeReplyToken(failureChunk, runtimeContext);
             var sequence = state.EditCount + 1L;
             var generation = NextNyxRelayTextOperationGeneration(state);
             await TransitionNyxRelayStreamingPhaseAsync(
@@ -1471,6 +1472,7 @@ public sealed partial class ConversationGAgent :
                 AccumulatedText = finalText,
                 ChunkAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             };
+            ApplyRuntimeReplyToken(finalChunk, runtimeContext);
             var sequence = state.EditCount + 1L;
             var generation = NextNyxRelayTextOperationGeneration(state);
             await TransitionNyxRelayStreamingPhaseAsync(
@@ -2663,6 +2665,17 @@ public sealed partial class ConversationGAgent :
 
         request.ReplyToken = token.ReplyToken;
         request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
+    }
+
+    private static void ApplyRuntimeReplyToken(
+        LlmReplyStreamChunkEvent chunk,
+        ConversationTurnRuntimeContext runtimeContext)
+    {
+        if (runtimeContext.NyxRelayReplyToken is not { } token)
+            return;
+
+        chunk.ReplyToken = token.ReplyToken;
+        chunk.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
     }
 
     private async Task PersistMissingRuntimeCredentialFailureAsync(

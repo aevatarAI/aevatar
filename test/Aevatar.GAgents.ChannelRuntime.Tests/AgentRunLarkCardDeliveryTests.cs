@@ -520,6 +520,53 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task ConversationTextFallbackStatusThenReady_FinalFlushCarriesReplyToken()
+    {
+        var store = new InMemoryEventStore();
+        var publisher = new SelfHandlingConversationPublisher();
+        var runner = new RecordingTurnRunner();
+        var conversation = await CreateConversationAgentAsync(
+            ConversationActorId,
+            store,
+            publisher,
+            runner: runner);
+
+        conversation.State.PendingLlmReplyRequests.Add(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-card",
+            RunId = "run-1",
+            TargetActorId = ConversationActorId,
+            RegistrationId = "reg-1",
+            Activity = CreateActivity("runtime-user-access-token"),
+            ReplyToken = "runtime-ready-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            RequestedAtUnixMs = 10,
+        });
+
+        await conversation.HandleLlmReplyStreamChunkAsync(CreateTextStreamChunk("Processing your request. Please wait..."));
+        await conversation.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-card",
+            RegistrationId = "reg-1",
+            RunId = "run-1",
+            Activity = CreateActivity("runtime-user-access-token"),
+            ReplyToken = "runtime-ready-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            Outbound = new MessageContent { Text = "the complete final reply" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+
+        runner.StreamCalls.Select(call => call.Kind)
+            .Should().Equal(
+                NyxRelayTextOperationKind.Interim,
+                NyxRelayTextOperationKind.Final);
+        runner.StreamCalls[1].Text.Should().Be("the complete final reply");
+        runner.StreamCalls[1].CurrentPlatformMessageId.Should().Be("om");
+        runner.StreamCalls[1].ReplyToken.Should().Be("runtime-ready-token");
+    }
+
+    [Fact]
     public async Task CreateTimeout_MarksCreationFailedWithoutFallback()
     {
         var scheduler = new RecordingCallbackScheduler();
@@ -1369,7 +1416,8 @@ public sealed class AgentRunLarkCardDeliveryTests
             StreamCalls.Add(new StreamCall(
                 operation,
                 chunk.AccumulatedText,
-                currentPlatformMessageId));
+                currentPlatformMessageId,
+                runtimeContext.NyxRelayReplyToken?.ReplyToken));
             return Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId ?? "om"));
         }
 
@@ -1379,7 +1427,8 @@ public sealed class AgentRunLarkCardDeliveryTests
     private sealed record StreamCall(
         NyxRelayTextOperationKind Kind,
         string Text,
-        string? CurrentPlatformMessageId);
+        string? CurrentPlatformMessageId,
+        string? ReplyToken);
 
     private sealed class NoopActorDispatchPort : IActorDispatchPort
     {
