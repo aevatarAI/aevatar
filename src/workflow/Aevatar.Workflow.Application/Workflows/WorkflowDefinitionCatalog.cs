@@ -79,8 +79,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <para>
     /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
-    /// <c>ToolVisibility</c>). It INCLUDES Studio team/member creation, <c>aevatar_provision_workflow_schedule</c>
-    /// + the observe tools and EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
+    /// <c>ToolVisibility</c>). It INCLUDES Studio team/member creation, member workflow binding,
+    /// <c>aevatar_provision_workflow_schedule</c> + the observe tools and EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
     /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>, <c>aevatar_start_workflow</c>);
     /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
     /// unreliable while a tool is visible).
@@ -126,9 +126,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                          target_role: analyst
                          parameters:
                            prompt_prefix: "Summarize:"
-              3. Persist and schedule workflows by calling `aevatar_provision_workflow_schedule` with `workflow_yaml`
-                 and a `display_name`. This creates the workflow as a persisted member whose runs land in
-                 /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
+              3. If the user already has or just created a Studio member for the workflow, bind the YAML to that
+                 member by calling `aevatar_bind_member_workflow` with `member_id`, `workflow_yaml`, and optional
+                 `workflow_id`. This is what makes the workflow visible on the member's Studio workflow page.
+              4. If the user asks for a standalone scheduled/Observatory automation rather than a workflow on an
+                 existing Team/Member page, call `aevatar_provision_workflow_schedule` with `workflow_yaml`
+                 and a `display_name`. This creates its own persisted workflow member whose runs land in
+                 /workflow/observatory.
                  Scheduling rules:
                  - If the request is recurring — it says 每天, 每周, 每月, 每隔, 定时, daily, weekly, monthly, hourly,
                    "each", "every", "monitor", "keep watching" or any repeating cadence — you MUST pass BOTH
@@ -142,32 +146,37 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                    state the cron + timezone you set so the user can confirm.
                  - `run_immediately` defaults true so a demo run fires shortly after the bind; a demo fire is fine
                    alongside the cron, but it does not replace the cron for a recurring request.
-              3. If `aevatar_provision_workflow_schedule` returns an error, fix the `workflow_yaml` per the
-                 error message and call it again with the SAME `display_name` — provisioning is idempotent
+              5. If `aevatar_bind_member_workflow` or `aevatar_provision_workflow_schedule` returns an error,
+                 fix the `workflow_yaml` per the error message and call the same tool again. For schedule
+                 provisioning, use the SAME `display_name` — provisioning is idempotent
                  per display name (retries re-use the same member and schedule; they do not create
                  duplicates), and a failed validation provisions nothing. The flip side: re-provisioning an
                  existing `display_name` REPLACES that workflow and re-enables its schedule, so only reuse a
                  name to retry or update the same automation — give a different automation a fresh, specific
                  `display_name`.
-              4. `aevatar_provision_workflow_schedule` returns `Accepted` (the bind + run are asynchronous) — do
-                 NOT claim the workflow "ran successfully" from that receipt. Use `aevatar_observe_run` (and
-                 `aevatar_read_workflow_run_artifact` for outputs) to watch the demo/scheduled run, and tell the
-                 user to open /workflow/observatory to see the runs. Report honestly: state that the workflow was
-                 accepted and provisioned, then report the observed run status — never optimistically assume success.
-              5. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
+              6. `aevatar_bind_member_workflow` and `aevatar_provision_workflow_schedule` return Accepted receipts
+                 (binding/scheduling/run are asynchronous) — do NOT claim the workflow "ran successfully" from
+                 those receipts. Use `aevatar_observe_run` (and `aevatar_read_workflow_run_artifact` for outputs)
+                 to watch demo/scheduled runs, and tell the user to open /workflow/observatory to see runs. Report
+                 honestly: state that the workflow was accepted/bound or provisioned, then report any observed run
+                 status — never optimistically assume success.
+              7. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
                  non-deterministic, language-driven subtasks inside the workflow — but the deliverable for an
                  automation request is a runnable workflow, not a separately published skill.
 
               Hard rules:
-              - The deliverable is a runnable workflow persisted as a member whose runs are visible in
-                /workflow/observatory. Do NOT publish a prose skill as the answer to "build/automate/schedule X".
-              - Scheduling goes exclusively through `aevatar_provision_workflow_schedule` (Observatory-delivered).
-                Never deliver results to Lark/Telegram or any chat/bot, and never schedule a bot delivery.
+              - The deliverable is a runnable workflow bound to the requested Studio member, or a standalone
+                provisioned workflow whose runs are visible in /workflow/observatory. Do NOT publish a prose skill
+                as the answer to "build/automate/schedule X".
+              - For an existing Team/Member workflow page, binding goes through `aevatar_bind_member_workflow`.
+                Scheduling goes through `aevatar_provision_workflow_schedule` only for standalone Observatory
+                automations. Never deliver results to Lark/Telegram or any chat/bot, and never schedule a bot delivery.
               - The owning scope and your credentials come from the session; do not ask the user for scope,
                 channel, owner, or tokens.
             allowed_tools:
               - aevatar_create_team
               - aevatar_create_member
+              - aevatar_bind_member_workflow
               - aevatar_provision_workflow_schedule
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
