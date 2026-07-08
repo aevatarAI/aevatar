@@ -48,8 +48,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     // Appended instead of the unbound notice when a bound sender's attempt failed and
     // the reply is retried on the bot owner's configuration with tools stripped — the
-    // same prompt/tool-surface honesty gap, different recoverable reason.
-    private const string DegradedTurnToolsDisabledNotice =
+    // same prompt/tool-surface honesty gap, different recoverable reason. Internal:
+    // AgentRunReplyGenerationExecutor appends the same notice to the owner-fallback
+    // step's request copy on the per-step path.
+    internal const string DegradedTurnToolsDisabledNotice =
         "## Tools disabled for this turn\n" +
         "No tools are attached to this turn: the sender-scoped attempt failed and this " +
         "reply is a degraded retry on the bot owner's configuration without tools. Any " +
@@ -1121,7 +1123,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return valid.Length == 0 ? null : valid;
     }
 
-    private static string AppendSystemPromptSuffix(string prompt, string? suffix) =>
+    internal static string AppendSystemPromptSuffix(string prompt, string? suffix) =>
         string.IsNullOrEmpty(suffix) ? prompt : $"{prompt.TrimEnd()}\n\n{suffix}";
 
     private string BuildSystemPrompt(

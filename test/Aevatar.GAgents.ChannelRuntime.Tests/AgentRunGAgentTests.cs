@@ -1511,6 +1511,21 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
         providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
         providerFactory.Requests[1].ToolContext!.Routing.NyxIdRoutePreference.Should().BeNull();
+
+        // Funnel B honesty: the owner-fallback step reuses a system prompt that still documents
+        // tools while Tools=null, so its request copy must carry the degraded-turn notice; the
+        // sender-scoped attempt and the persisted step state must stay notice-free.
+        runtime.State.GenerationStep.OwnerFallbackStep.Should().BeTrue();
+        providerFactory.Requests[0].Messages
+            .First(message => message.Role == "system").Content
+            .Should().NotContain("Tools disabled for this turn");
+        providerFactory.Requests[1].Messages
+            .First(message => message.Role == "system").Content
+            .Should().Contain("Tools disabled for this turn")
+            .And.Contain("degraded retry on the bot owner's configuration");
+        runtime.State.GenerationStep.Messages
+            .Where(message => message.Role == "system")
+            .Should().OnlyContain(message => !message.Content.Contains("Tools disabled for this turn"));
     }
 
     [Fact]
@@ -3826,28 +3841,12 @@ public sealed class AgentRunGAgentTests
             CancellationToken ct) =>
             _inner.BuildToolStepContinuationAsync(request, ct);
 
+        // Sync (funnel B): delegate to the production decision so the harness cannot drift
+        // from the executor's owner-fallback eligibility (typed provider-call marker + policy).
         private static AgentRunOwnerFallbackStepRequested? BuildOwnerFallbackCommand(
             AgentRunReplyStepExecutionRequest request,
-            Exception ex)
-        {
-            if (request.StepState.FinalNoToolsStep)
-                return null;
-            if (!string.IsNullOrWhiteSpace(request.StepState.AccumulatedText))
-                return null;
-            if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
-                return null;
-
-            return new AgentRunOwnerFallbackStepRequested
-            {
-                RunId = request.RunId,
-                CorrelationId = request.Request.CorrelationId,
-                TargetActorId = request.Request.TargetActorId,
-                Attempt = request.Attempt,
-                StepIndex = request.StepIndex + 1,
-                Reason = ex.Message ?? string.Empty,
-                Request = request.Request.Clone(),
-            };
-        }
+            Exception ex) =>
+            AgentRunReplyGenerationExecutor.TryBuildOwnerFallbackCommand(request, ex);
 
         private async Task<AgentRunNextLlmStepRequestedEvent> BuildLegacyLlmStepContinuationAsync(
             AgentRunReplyStepExecutionRequest request,
@@ -4479,7 +4478,13 @@ public sealed class AgentRunGAgentTests
             Requests.Add(request);
             if (request.Tools is { Count: > 0 })
             {
-                throw new InvalidOperationException(
+                // Typed provider contract: NyxIdLLMProvider classifies upstream rejections
+                // into NyxIdUpstreamException before they escape (funnel B narrowing).
+                throw new NyxIdUpstreamException(
+                    NyxIdUpstreamFailureKind.RequestRejected,
+                    status: 400,
+                    routeName: "nyxid",
+                    model: "owner-model",
                     "Invalid schema for function 'aevatar_observe_run': schema must have type 'object' and not have 'oneOf' at the top level (HTTP 400).");
             }
 

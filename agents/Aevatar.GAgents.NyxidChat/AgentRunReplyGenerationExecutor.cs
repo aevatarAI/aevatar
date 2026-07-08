@@ -235,6 +235,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct: ct)
             .ConfigureAwait(false);
         var messages = workItem.StepState.Messages.Select(AgentRunReplyStepMappers.FromProto).ToList();
+        // The owner-fallback step reuses persisted step messages whose system prompt was built for
+        // the bound sender-scoped attempt and still documents the deployment's tools, while this
+        // step runs with Tools=null (2026-07 incident, funnel B). Mirror the in-place path's
+        // honesty override on this step's request copy only — FromProto yields fresh ChatMessage
+        // instances, so the persisted step state keeps its original system prompt.
+        if (workItem.StepState is { FinalNoToolsStep: true, OwnerFallbackStep: true })
+            AppendDegradedTurnToolsDisabledNotice(messages);
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
             messages,
             request.Activity.Id,
@@ -269,19 +276,35 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         var output = new StringBuilder(workItem.StepState.AccumulatedText ?? string.Empty);
         using var interactiveScope = TryBeginInteractiveScope(request);
-        var llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
-                    plan.StepExecutor.ResolveProvider(),
-                    llmRequest,
-                    async (chunk, token) =>
-                    {
-                        if (string.IsNullOrEmpty(chunk.DeltaContent))
-                            return;
-                        output.Append(chunk.DeltaContent);
-                        if (streamingState is not null)
-                            await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
-                    },
-                    ct)
-                .ConfigureAwait(false);
+        ChatRuntimeStepLlmResult llmResult;
+        try
+        {
+            llmResult = await plan.StepExecutor.ExecuteLlmStepAsync(
+                        plan.StepExecutor.ResolveProvider(),
+                        llmRequest,
+                        async (chunk, token) =>
+                        {
+                            if (string.IsNullOrEmpty(chunk.DeltaContent))
+                                return;
+                            output.Append(chunk.DeltaContent);
+                            if (streamingState is not null)
+                                await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+                        },
+                        ct)
+                    .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Typed scope marker for owner-fallback eligibility: only a failure of the LLM
+            // provider call itself may degrade the turn to the no-tools owner step. Failures in
+            // step-plan building (tool discovery included), request plumbing, or dispatch keep
+            // their original type and surface as a step failure (2026-07 incident, funnel B).
+            throw new LlmStepProviderCallFailedException(ex);
+        }
         if (streamingState is not null)
             await streamingState.FinalizeAsync(output.ToString(), ct).ConfigureAwait(false);
 
@@ -428,10 +451,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return typedIntent ?? scopedIntent;
     }
 
-    private AgentRunOwnerFallbackStepRequested? TryBuildOwnerFallbackCommand(
+    internal static AgentRunOwnerFallbackStepRequested? TryBuildOwnerFallbackCommand(
         AgentRunReplyStepExecutionRequest workItem,
         Exception ex)
     {
+        // Only a failure of the LLM provider call itself (LlmStepProviderCallFailedException,
+        // raised around ExecuteLlmStepAsync) is eligible for the degraded no-tools owner step;
+        // the retryability of its typed cause is then judged by LlmOwnerFallbackPolicy.
+        if (ex is not LlmStepProviderCallFailedException { InnerException: { } providerFailure })
+            return null;
         if (workItem.StepState.FinalNoToolsStep)
             return null;
         if (workItem.StepState.OwnerFallbackLlmControl is null &&
@@ -441,7 +469,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
         if (!string.IsNullOrWhiteSpace(workItem.StepState.AccumulatedText))
             return null;
-        if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
+        if (!LlmOwnerFallbackPolicy.IsRetryable(providerFailure))
             return null;
 
         return new AgentRunOwnerFallbackStepRequested
@@ -451,7 +479,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             TargetActorId = workItem.Request.TargetActorId,
             Attempt = workItem.Attempt,
             StepIndex = workItem.StepIndex + 1,
-            Reason = ex.Message ?? string.Empty,
+            Reason = providerFailure.Message ?? string.Empty,
             Request = workItem.Request.Clone(),
         };
     }
@@ -870,6 +898,22 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return control;
     }
 
+    private static void AppendDegradedTurnToolsDisabledNotice(List<ChatMessage> messages)
+    {
+        var systemIndex = messages.FindIndex(static message =>
+            string.Equals(message.Role, "system", StringComparison.OrdinalIgnoreCase));
+        if (systemIndex < 0)
+        {
+            messages.Insert(0, ChatMessage.System(NyxIdConversationReplyGenerator.DegradedTurnToolsDisabledNotice));
+            return;
+        }
+
+        messages[systemIndex] = ChatMessage.System(
+            NyxIdConversationReplyGenerator.AppendSystemPromptSuffix(
+                messages[systemIndex].Content ?? string.Empty,
+                NyxIdConversationReplyGenerator.DegradedTurnToolsDisabledNotice));
+    }
+
     private static string? NormalizeOptional(string? value)
     {
         var trimmed = value?.Trim();
@@ -1047,3 +1091,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         }
     }
 }
+
+// Typed scope marker: the wrapped failure came from the LLM provider call of a per-step
+// execution, the only failure class eligible for the degraded no-tools owner fallback
+// (2026-07 incident, funnel B). Message passes through the cause so step-failure
+// summaries stay unchanged.
+internal sealed class LlmStepProviderCallFailedException(Exception cause)
+    : InvalidOperationException(cause.Message, cause);

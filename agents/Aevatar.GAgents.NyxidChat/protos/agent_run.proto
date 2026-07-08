@@ -217,6 +217,13 @@ message AgentRunReplyStepState {
   // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
   // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
   bool empty_reply_retry = 25;
+  // This step is the bot-owner degraded retry after the sender-scoped LLM attempt failed
+  // (final_no_tools_step is also true). Distinguishes it from the other no-tools step sources —
+  // the unbound-sender gate (whose persisted system message already carries the tools-disabled
+  // notice) and tool-round exhaustion (where tool results are already in context) — so the
+  // executor can append the degraded-turn tools-disabled notice to this step's LLM request
+  // copy without persisting the notice into step messages.
+  bool owner_fallback_step = 26;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these

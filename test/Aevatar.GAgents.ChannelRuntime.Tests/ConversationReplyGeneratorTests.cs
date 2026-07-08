@@ -2105,7 +2105,11 @@ public sealed class ConversationReplyGeneratorTests
     {
         var providerFactory = new RecordingProviderFactory
         {
-            FailureBeforeSuccess = new InvalidOperationException(
+            FailureBeforeSuccess = new NyxIdUpstreamException(
+                NyxIdUpstreamFailureKind.RequestRejected,
+                status: 400,
+                routeName: "recording",
+                model: "sender-model",
                 "Invalid schema for function 'aevatar_observe_run': schema must have type 'object' and not have 'oneOf' at the top level (HTTP 400)."),
         };
         var prefsStore = new ScopedStubPreferencesStore
@@ -2156,7 +2160,11 @@ public sealed class ConversationReplyGeneratorTests
     {
         var providerFactory = new RecordingProviderFactory
         {
-            FailureBeforeSuccess = new InvalidOperationException(
+            FailureBeforeSuccess = new NyxIdUpstreamException(
+                NyxIdUpstreamFailureKind.RequestRejected,
+                status: 400,
+                routeName: "recording",
+                model: "owner-model",
                 "Invalid schema for function 'aevatar_observe_run': schema must have type 'object' and not have 'oneOf' at the top level (HTTP 400)."),
         };
         var generator = new NyxIdConversationReplyGenerator(
@@ -2461,7 +2469,16 @@ public sealed class ConversationReplyGeneratorTests
         {
             Requests.Add(request);
             if (Requests.Count <= FailuresBeforeSuccess)
-                throw new InvalidOperationException("simulated sender route failure");
+            {
+                // Typed provider contract: NyxIdLLMProvider classifies upstream failures into
+                // NyxIdUpstreamException before they escape (funnel B narrowing).
+                throw new NyxIdUpstreamException(
+                    NyxIdUpstreamFailureKind.ServiceUnavailable,
+                    status: 503,
+                    routeName: "recording",
+                    model: request.Model,
+                    "simulated sender route failure");
+            }
             if (FailureBeforeSuccess is not null && Requests.Count == 1)
                 throw FailureBeforeSuccess;
 

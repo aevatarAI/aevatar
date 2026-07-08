@@ -1063,6 +1063,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var next = current.Clone();
         next.NextStepIndex = nextStepIndex;
         next.FinalNoToolsStep = true;
+        // Typed cause marker: this no-tools step is the bot-owner degraded retry, so the
+        // executor appends the degraded-turn tools-disabled notice to the step's LLM request
+        // copy (the reused system prompt below still documents the deployment's tools).
+        next.OwnerFallbackStep = true;
         next.PendingToolCalls.Clear();
         next.AccumulatedText = string.Empty;
         next.LastFinishReason = string.Empty;
