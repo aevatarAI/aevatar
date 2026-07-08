@@ -1388,7 +1388,10 @@ describe("TeamDetailPage", () => {
     });
     expect((await screen.findAllByText("Team Alpha Operator")).length)
       .toBeGreaterThan(0);
-    expect(screen.getAllByText("服务 · alpha-service").length).toBeGreaterThan(0);
+    expect(screen.getByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.getByText("Waiting on approval")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.getAllByText("服务 · alpha-service")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "运行" }))
       .toHaveAttribute(
         "href",
@@ -1410,8 +1413,6 @@ describe("TeamDetailPage", () => {
           "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
         ),
       );
-    expect(screen.getByText("run-current")).toBeTruthy();
-    expect(screen.getByText("run-good")).toBeTruthy();
     expect(screen.getAllByRole("link", { name: "查看详情" })[0])
       .toHaveAttribute(
         "href",
@@ -1428,7 +1429,8 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
-    expect(await screen.findByText("run-current")).toBeTruthy();
+    expect(await screen.findByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
     expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
   });
 

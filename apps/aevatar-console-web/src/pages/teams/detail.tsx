@@ -1307,27 +1307,51 @@ const TeamDetailPage: React.FC = () => {
 
         return {
           detailsHref,
+          detailItems: [
+            {
+              label: t("teams.detail.overview.history.details.run", "Run"),
+              value: run.runId,
+            },
+            {
+              label: t("teams.detail.overview.history.details.service", "Service"),
+              value:
+                runServiceId ||
+                t("teams.detail.overview.history.serviceUnknown", "Service unknown"),
+            },
+            {
+              label: t("teams.detail.overview.history.details.revision", "Revision"),
+              value:
+                trimText(run.revisionId) ||
+                t("teams.detail.overview.history.revisionUnknown", "Revision unknown"),
+            },
+          ],
+          detailTooltipLabel: t(
+            "teams.detail.overview.history.details.tooltip",
+            "Run technical details",
+          ),
+          memberLabel:
+            matchedMember?.name ||
+            t("teams.detail.overview.history.memberUnknown", "Unknown member"),
           outputPreview:
             trimText(run.lastError) ||
             trimText(run.lastOutput) ||
             t("teams.detail.overview.history.noOutput", "No output snapshot captured yet."),
-          revisionLabel: trimText(run.revisionId)
-            ? t("teams.detail.overview.history.revision", "Revision · {revisionId}", {
-                revisionId: run.revisionId,
-              })
-            : t("teams.detail.overview.history.revisionUnknown", "Revision unknown"),
           runId: run.runId,
-          serviceLabel: runServiceId
-            ? t("teams.detail.overview.history.service", "Service · {serviceId}", {
-                serviceId: runServiceId,
-              })
-            : t("teams.detail.overview.history.serviceUnknown", "Service unknown"),
           statusLabel: formatFriendlyStatus(run.completionStatus, intl),
           statusStyle: resolveStatusPillStyle(token, run.completionStatus),
           updatedLabel: formatCompactTimestamp(run.lastUpdatedAt),
           workflowLabel:
             trimText(run.workflowName) ||
             t("teams.detail.overview.history.workflowUnknown", "Workflow unknown"),
+          workflowMetaLabel: t(
+            "teams.detail.overview.history.workflowMeta",
+            "Workflow · {workflowLabel}",
+            {
+              workflowLabel:
+                trimText(run.workflowName) ||
+                t("teams.detail.overview.history.workflowUnknown", "Workflow unknown"),
+            },
+          ),
         };
       }),
     [

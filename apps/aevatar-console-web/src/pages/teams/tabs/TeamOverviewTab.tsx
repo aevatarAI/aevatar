@@ -1,6 +1,8 @@
 import {
   ClockCircleOutlined,
+  EyeOutlined,
   HistoryOutlined,
+  InfoCircleOutlined,
   LinkOutlined,
   PlayCircleOutlined,
   ToolOutlined,
@@ -44,14 +46,19 @@ type OverviewConfigurationRow = {
 
 type OverviewRunRow = {
   readonly detailsHref?: string;
+  readonly detailItems: readonly {
+    readonly label: string;
+    readonly value: string;
+  }[];
+  readonly detailTooltipLabel: string;
+  readonly memberLabel: string;
   readonly outputPreview: string;
-  readonly revisionLabel: string;
   readonly runId: string;
-  readonly serviceLabel: string;
   readonly statusLabel: string;
   readonly statusStyle: React.CSSProperties;
   readonly updatedLabel: string;
   readonly workflowLabel: string;
+  readonly workflowMetaLabel: string;
 };
 
 type TeamOverviewTabProps = {
@@ -528,43 +535,63 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                   borderRadius: 8,
                   display: "grid",
                   gap: 12,
-                  gridTemplateColumns:
-                    "minmax(150px, 0.8fr) minmax(0, 1fr) max-content",
+                  gridTemplateColumns: "minmax(0, 1fr) max-content",
                   padding: 12,
                 }}
               >
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                   <Space size={6} wrap>
-                    <Typography.Text strong>{run.runId}</Typography.Text>
                     <DetailPill
                       compact
                       style={run.statusStyle}
                       text={run.statusLabel}
                     />
+                    <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                      <ClockCircleOutlined /> {run.updatedLabel}
+                    </Typography.Text>
+                    <Tooltip
+                      title={
+                        <div style={{ display: "grid", gap: 4 }}>
+                          {run.detailItems.map((item) => (
+                            <span key={item.label}>
+                              {item.label}: {item.value}
+                            </span>
+                          ))}
+                        </div>
+                      }
+                    >
+                      <span
+                        aria-label={run.detailTooltipLabel}
+                        role="img"
+                        style={{ color: token.colorTextTertiary, cursor: "help" }}
+                        tabIndex={0}
+                      >
+                        <InfoCircleOutlined />
+                      </span>
+                    </Tooltip>
                   </Space>
+                  <Typography.Text strong>{run.memberLabel}</Typography.Text>
                   <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                    <ClockCircleOutlined /> {run.updatedLabel}
-                  </Typography.Text>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                  <Typography.Text>
-                    {run.workflowLabel} · {run.revisionLabel}
-                  </Typography.Text>
-                  <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                    {run.serviceLabel}
+                    {run.workflowMetaLabel}
                   </Typography.Text>
                   <FactLine rows={2} secondary text={run.outputPreview} />
                 </div>
                 {run.detailsHref ? (
-                  <Button
-                    href={run.detailsHref}
-                    onClick={handleNavigate(run.detailsHref)}
-                    size="small"
-                  >
-                    {intl.formatMessage({
+                  <Tooltip
+                    title={intl.formatMessage({
                       id: "teams.detail.overview.history.actions.view",
                     })}
-                  </Button>
+                  >
+                    <Button
+                      aria-label={intl.formatMessage({
+                        id: "teams.detail.overview.history.actions.view",
+                      })}
+                      href={run.detailsHref}
+                      icon={<EyeOutlined />}
+                      onClick={handleNavigate(run.detailsHref)}
+                      size="small"
+                    />
+                  </Tooltip>
                 ) : null}
               </div>
             ))}
