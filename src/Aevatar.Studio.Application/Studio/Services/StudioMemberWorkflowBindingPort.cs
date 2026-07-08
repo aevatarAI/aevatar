@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -24,7 +26,7 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
             request.MemberId,
             new UpdateStudioMemberBindingRequest(
                 Workflow: new StudioMemberWorkflowBindingSpec(
-                    request.WorkflowId ?? string.Empty,
+                    ResolveWorkflowId(request),
                     [request.WorkflowYaml])),
             ct);
 
@@ -36,5 +38,17 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
             Status: receipt.Status,
             AckStage: receipt.AckStage,
             BindingRunRole: receipt.BindingRunRole);
+    }
+
+    private static string ResolveWorkflowId(StudioMemberWorkflowBindingRequest request) =>
+        string.IsNullOrWhiteSpace(request.WorkflowId)
+            ? $"workflow-{BuildWorkflowKey(request.ScopeId, request.MemberId)}"
+            : request.WorkflowId.Trim();
+
+    private static string BuildWorkflowKey(string scopeId, string memberId)
+    {
+        var identity = Encoding.UTF8.GetBytes($"{scopeId}\n{memberId}");
+        var hash = SHA256.HashData(identity);
+        return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
     }
 }
