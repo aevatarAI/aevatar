@@ -200,6 +200,8 @@ public class WorkflowDefinitionCatalogTests
         // member/provision path — NOT a bare "helpful assistant", NOT a Lark/skill-publishing playbook,
         // and NOT the loose-definition author-then-run-by-name path that hangs.
         role.SystemPrompt.Should().Contain("Studio agent");
+        role.SystemPrompt.Should().Contain("aevatar_create_team");
+        role.SystemPrompt.Should().Contain("aevatar_create_member");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
         role.SystemPrompt.Should().Contain("/workflow/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
@@ -213,6 +215,8 @@ public class WorkflowDefinitionCatalogTests
         // tools out of the studio surface, and brings the channel-free provision tool in.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("aevatar_create_team");
+        allowed.Should().Contain("aevatar_create_member");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
         allowed.Should().Contain("aevatar_observe_run");
         allowed.Should().Contain("aevatar_read_workflow_run_artifact");

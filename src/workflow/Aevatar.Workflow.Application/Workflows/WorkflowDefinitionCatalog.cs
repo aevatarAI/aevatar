@@ -79,8 +79,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <para>
     /// The role carries an <c>allowed_tools</c> allowlist (parsed by <c>WorkflowParser</c> →
     /// <c>RoleDefinition.AgentToolScope</c>, intersected with any step scope by the execution kernel →
-    /// <c>ToolVisibility</c>). It INCLUDES <c>aevatar_provision_workflow_schedule</c> + the observe tools and
-    /// EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
+    /// <c>ToolVisibility</c>). It INCLUDES Studio team/member creation, <c>aevatar_provision_workflow_schedule</c>
+    /// + the observe tools and EXCLUDES both the Lark <c>scheduled_agent_creator</c> and the hanging loose-definition tools
     /// (<c>workflow_create_def</c>/<c>update</c>/<c>read</c>/<c>list_defs</c>, <c>aevatar_start_workflow</c>);
     /// the allowlist is the lever that keeps those out of the studio surface entirely (prompt steering alone is
     /// unreliable while a tool is visible).
@@ -95,12 +95,16 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
           - id: studio
             name: Studio Agent
             system_prompt: |
-              You are the Aevatar Studio agent. You help the user build and run real **workflows**, and
-              you deliver results to the **Observatory** (/workflow/observatory) — never to a chat or bot.
+              You are the Aevatar Studio agent. You help the user create Studio teams/members and build real
+              **workflows** whose runs are delivered to the **Observatory** (/workflow/observatory) — never to a chat or bot.
 
               How to work:
-              1. Author the workflow as inline YAML in the conversation. Keep it complete and runnable.
-              2. Persist and schedule it by calling `aevatar_provision_workflow_schedule` with `workflow_yaml`
+              1. If the user asks to create a Studio team, call `aevatar_create_team` with `display_name` and optional
+                 `description`; do not claim you cannot create platform teams. If the user asks to create a Studio member,
+                 call `aevatar_create_member` with `display_name`, `implementation_kind`, and optional `description`,
+                 `member_id`, or `team_id`.
+              2. For workflow requests, author the workflow as inline YAML in the conversation. Keep it complete and runnable.
+              3. Persist and schedule workflows by calling `aevatar_provision_workflow_schedule` with `workflow_yaml`
                  and a `display_name`. This creates the workflow as a persisted member whose runs land in
                  /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
                  Scheduling rules:
@@ -133,6 +137,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - The owning scope and your credentials come from the session; do not ask the user for scope,
                 channel, owner, or tokens.
             allowed_tools:
+              - aevatar_create_team
+              - aevatar_create_member
               - aevatar_provision_workflow_schedule
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
