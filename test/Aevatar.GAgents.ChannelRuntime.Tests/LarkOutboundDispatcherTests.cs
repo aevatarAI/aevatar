@@ -133,7 +133,7 @@ public sealed class LarkOutboundDispatcherTests
 
     public static TheoryData<LarkSendNewMessageRequest, string> InvalidRequests => new()
     {
-        { CreateRequest(nyxBearerToken: " "), "NyxID bearer token is required." },
+        { CreateRequest(nyxApiKey: " "), "NyxID API key is required." },
         { CreateRequest(nyxProviderSlug: " "), "NyxID provider slug is required." },
         { CreateRequest(messageType: " "), "Lark message type is required." },
         { CreateRequest(contentJson: " "), "Lark message content JSON is required." },
@@ -176,6 +176,14 @@ public sealed class LarkOutboundDispatcherTests
         handler.Requests.Should().ContainSingle();
     }
 
+    [Fact]
+    public void LarkSendNewMessageRequest_UsesNyxApiKeySemanticName()
+    {
+        var request = CreateRequest();
+
+        request.NyxApiKey.Should().Be("nyx-api-key");
+    }
+
     private static LarkOutboundDispatcher CreateDispatcher(HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(
@@ -186,13 +194,13 @@ public sealed class LarkOutboundDispatcherTests
 
     private static LarkSendNewMessageRequest CreateRequest(
         LarkReceiveTarget? fallback = null,
-        string nyxBearerToken = "nyx-api-key",
+        string nyxApiKey = "nyx-api-key",
         string nyxProviderSlug = "api-lark-bot",
         string messageType = "text",
         string contentJson = """{"text":"hello"}""",
         LarkReceiveTarget? primaryTarget = null) =>
         new(
-            nyxBearerToken,
+            nyxApiKey,
             nyxProviderSlug,
             messageType,
             contentJson,

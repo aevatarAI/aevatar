@@ -20,7 +20,7 @@ public interface ILarkOutboundDispatcher
 }
 
 public sealed record LarkSendNewMessageRequest(
-    string NyxBearerToken,
+    string NyxApiKey,
     string NyxProviderSlug,
     string MessageType,
     string ContentJson,

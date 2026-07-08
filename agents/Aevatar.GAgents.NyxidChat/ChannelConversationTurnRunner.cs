@@ -1369,7 +1369,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 result = await dispatcher.SendNewMessageAsync(
                         new LarkSendNewMessageRequest(
-                            NyxBearerToken: nyxProxyCredential,
+                            NyxApiKey: nyxProxyCredential,
                             providerSlug,
                             "text",
                             contentJson,

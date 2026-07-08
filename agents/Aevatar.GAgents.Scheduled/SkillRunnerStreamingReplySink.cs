@@ -208,7 +208,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
         });
 
         var response = await _editClient.ProxyRequestAsync(
-            _initialMessageTemplate.NyxBearerToken,
+            _initialMessageTemplate.NyxApiKey,
             _initialMessageTemplate.NyxProviderSlug,
             $"open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId)}",
             "PUT",
