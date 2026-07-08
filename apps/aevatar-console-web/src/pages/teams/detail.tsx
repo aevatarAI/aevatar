@@ -1062,11 +1062,8 @@ const TeamDetailPage: React.FC = () => {
     trimText(preferredMemberSummary?.displayName) ||
     teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
     "--";
-  const currentMemberCardCaption = currentMemberId
-    ? t("teams.detail.overview.member.selectedCaption", "Selected from this team's members.")
-    : t("pages.teams.detail.copy.18", "No member selected yet");
   const currentMemberCardTooltip = currentMemberId
-    ? currentMemberCardCaption
+    ? t("teams.detail.overview.member.selectedCaption", "Selected from this team's members.")
     : t("pages.teams.detail.copy.19", "No member selected yet");
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
@@ -1105,27 +1102,14 @@ const TeamDetailPage: React.FC = () => {
   const currentRunPillText = hasVisibleRun
     ? t("pages.teams.detail.copy.25", "Run ·{value1}", { value1: currentRunFriendly })
     : t("pages.teams.detail.copy.26", "Next steps · Test team");
-  const currentServiceCardCaption = runtimeServiceId
+  const currentServiceCardTooltip = runtimeServiceId
     ? t("teams.detail.overview.service.boundCaption", "Traffic is routed through the bound service.")
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
       : t("pages.teams.detail.copy.27", "No service is visible yet.");
-  const currentServiceCardTooltip = runtimeServiceId
-    ? currentServiceCardCaption
-    : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
-      : t("pages.teams.detail.copy.28", "No service is visible yet.");
-  const currentRunCardCaption = hasVisibleRun
+  const currentRunCardTooltip = hasVisibleRun
     ? t("teams.detail.overview.run.visibleCaption", "Latest run is available.")
     : t("pages.teams.detail.copy.29", "The latest runs will be displayed here after the testing team.");
-  const currentRunCardTooltip = hasVisibleRun
-    ? currentRunCardCaption
-    : t("pages.teams.detail.copy.30", "The latest runs will be displayed here after the testing team.");
-  const teamStartupGuidance = hasVisibleRun
-    ? t("pages.teams.detail.copy.31", "The recent runs are visible and you can continue to test the team or adjust the member configuration.")
-    : hasRunnableTeamEntry
-      ? t("pages.teams.detail.copy.32", "The team portal is ready, but not yet visibly running. Click \"Test Team\" to generate the first run.")
-      : t("pages.teams.detail.copy.33", "No entrance available yet. Configure entry members and services first, and then test the team.");
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
@@ -1836,15 +1820,12 @@ const TeamDetailPage: React.FC = () => {
           background: token.colorFillQuaternary,
           color: token.colorTextSecondary,
         }}
-        currentMemberCardCaption={currentMemberCardCaption}
         currentMemberCardTooltip={currentMemberCardTooltip}
         currentMemberLabel={currentMemberLabel}
-        currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
         currentRunFriendly={currentRunFriendly}
         currentRunPillStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
         currentRunPillText={currentRunPillText}
-        currentServiceCardCaption={currentServiceCardCaption}
         currentServiceCardTooltip={currentServiceCardTooltip}
         currentServiceFriendly={currentServiceFriendly}
         currentServicePillStyle={{
@@ -1866,7 +1847,6 @@ const TeamDetailPage: React.FC = () => {
         }
         onNavigate={(href) => history.push(href)}
         onOpenTeamTest={openTeamTestModal}
-        startupGuidance={teamStartupGuidance}
         teamRunDisabled={!canRunTeamFromOverview}
         teamRunDisabledReason={teamRunDisabledReason}
       />

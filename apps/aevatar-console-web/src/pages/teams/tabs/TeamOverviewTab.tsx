@@ -14,7 +14,6 @@ import {
   DetailPill,
   FactLine,
 } from "../components/TeamDetailPrimitives";
-import { t } from "@/shared/i18n/messages";
 
 type OverviewCompositionRow = {
   readonly canConfigure?: boolean;
@@ -67,15 +66,12 @@ type TeamOverviewTabProps = {
   readonly currentDeploymentPillText: string;
   readonly currentHeaderStatusFriendly: string;
   readonly currentHeaderStatusStyle: React.CSSProperties;
-  readonly currentMemberCardCaption: string;
   readonly currentMemberCardTooltip: string;
   readonly currentMemberLabel: string;
-  readonly currentRunCardCaption: string;
   readonly currentRunCardTooltip: string;
   readonly currentRunFriendly: string;
   readonly currentRunPillStyle: React.CSSProperties;
   readonly currentRunPillText: string;
-  readonly currentServiceCardCaption: string;
   readonly currentServiceCardTooltip: string;
   readonly currentServiceFriendly: string;
   readonly currentServicePillStyle: React.CSSProperties;
@@ -89,7 +85,6 @@ type TeamOverviewTabProps = {
   readonly onClearEntryMember?: () => void;
   readonly onNavigate?: (href: string) => void;
   readonly onOpenTeamTest?: () => void;
-  readonly startupGuidance: string;
   readonly teamRunDisabled?: boolean;
   readonly teamRunDisabledReason?: string;
 };
@@ -114,15 +109,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   currentDeploymentPillText,
   currentHeaderStatusFriendly,
   currentHeaderStatusStyle,
-  currentMemberCardCaption,
   currentMemberCardTooltip,
   currentMemberLabel,
-  currentRunCardCaption,
   currentRunCardTooltip,
   currentRunFriendly,
   currentRunPillStyle,
   currentRunPillText,
-  currentServiceCardCaption,
   currentServiceCardTooltip,
   currentServiceFriendly,
   currentServicePillStyle,
@@ -136,7 +128,6 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   onClearEntryMember,
   onNavigate,
   onOpenTeamTest,
-  startupGuidance,
   teamRunDisabled = false,
   teamRunDisabledReason,
 }) => {
@@ -163,7 +154,6 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
   });
   const summaryItems = [
     {
-      caption: currentMemberCardCaption,
       label: intl.formatMessage({
         defaultMessage: "Current member",
         id: "teams.detail.overview.cards.currentMember",
@@ -172,31 +162,29 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
       value: currentMemberLabel,
     },
     {
-      caption: currentServiceCardCaption,
       label: intl.formatMessage({ id: "teams.detail.overview.cards.currentService" }),
       tooltip: currentServiceCardTooltip,
       value: currentServiceFriendly,
     },
     {
-      caption: currentRunCardCaption,
       label: intl.formatMessage({ id: "teams.detail.overview.cards.currentRun" }),
       tooltip: currentRunCardTooltip,
       value: currentRunFriendly,
     },
     {
-      caption: latestVisibleUpdateNote,
       label: intl.formatMessage({ id: "teams.detail.overview.cards.latestUpdate" }),
+      tooltip: latestVisibleUpdateNote,
       value: latestVisibleUpdateLabel,
     },
     {
-      caption: hasEntryMember
+      label: intl.formatMessage({ id: "teams.detail.overview.cards.entryMember" }),
+      tooltip: hasEntryMember
         ? intl.formatMessage({
             id: "teams.detail.overview.entry.configuredCaption",
           })
         : intl.formatMessage({
             id: "teams.detail.overview.entry.unconfiguredCaption",
           }),
-      label: intl.formatMessage({ id: "teams.detail.overview.cards.entryMember" }),
       value: entryMemberValue,
     },
   ];
@@ -218,9 +206,6 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               <Typography.Text strong style={{ fontSize: 16 }}>
                 {intl.formatMessage({ id: "teams.detail.overview.status.title" })}
               </Typography.Text>
-              <Typography.Text type="secondary">
-                {t("pages.teams.tabs.teamoverviewtab.copy", "Startup status")}
-              </Typography.Text>
               <DetailPill
                 style={currentHeaderStatusStyle}
                 text={currentHeaderStatusFriendly}
@@ -237,9 +222,6 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               />
               <DetailPill compact style={currentRunPillStyle} text={currentRunPillText} />
             </Space>
-            <Typography.Text type="secondary">
-              {startupGuidance}
-            </Typography.Text>
           </div>
           <Tooltip title={teamRunDisabled ? teamRunDisabledReason : undefined}>
             <Button
@@ -280,15 +262,11 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               <Typography.Text style={{ fontSize: 12 }} type="secondary">
                 {item.label}
               </Typography.Text>
-              <Typography.Text strong ellipsis>
-                {item.value}
-              </Typography.Text>
-              <FactLine
-                rows={1}
-                secondary
-                text={item.caption}
-                tooltipText={item.tooltip}
-              />
+              <Tooltip title={item.tooltip}>
+                <Typography.Text strong ellipsis>
+                  {item.value}
+                </Typography.Text>
+              </Tooltip>
             </div>
           ))}
         </div>
@@ -396,7 +374,6 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                         <DetailPill compact style={row.statusStyle} text={row.statusLabel} />
                       ) : null}
                     </Space>
-                    <FactLine rows={2} secondary text={row.summary} />
                   </div>
                   <Space.Compact>
                     <Tooltip
@@ -482,13 +459,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                   <Typography.Text style={{ fontSize: 12 }} type="secondary">
                     {row.label}
                   </Typography.Text>
-                  <Typography.Text strong>{row.value}</Typography.Text>
-                  <FactLine
-                    rows={2}
-                    secondary
-                    text={row.note}
-                    tooltipText={row.noteTooltip}
-                  />
+                  <Tooltip title={row.noteTooltip || row.note}>
+                    <Typography.Text strong>{row.value}</Typography.Text>
+                  </Tooltip>
                 </div>
               ))}
             </div>
