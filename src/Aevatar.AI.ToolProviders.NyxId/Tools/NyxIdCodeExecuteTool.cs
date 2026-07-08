@@ -68,9 +68,9 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(code))
             return """{"error":"Both 'language' and 'code' are required."}""";
 
-        // Resolve sandbox slug: context → API discovery → known slugs → give up
-        var slug = ResolveSandboxSlugFromContext()
-                   ?? await DiscoverSandboxSlugAsync(token, ct);
+        // Resolve sandbox slug: context -> API discovery -> known slugs -> give up
+        var contextSlug = ResolveSandboxSlugFromContext();
+        var slug = contextSlug ?? await DiscoverSandboxSlugAsync(token, ct);
 
         // Last resort: try well-known sandbox slugs directly
         if (string.IsNullOrWhiteSpace(slug))
@@ -88,6 +88,32 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         // contract first; on a NyxID-proxy 404 (slug exists but upstream returned 404, which
         // indicates the path doesn't exist on that backend), retry the legacy contract so a
         // host still pinned to the old sandbox keeps working.
+        var result = await ExecuteWithContractFallbackAsync(token, slug, language, code, ct);
+        if (!ShouldRetryWithLiveDiscoveredSlug(result, contextSlug, slug))
+            return result;
+
+        var recoveredSlug = await DiscoverSandboxSlugAsync(token, ct);
+        if (string.IsNullOrWhiteSpace(recoveredSlug) ||
+            string.Equals(recoveredSlug, slug, StringComparison.OrdinalIgnoreCase))
+        {
+            return result;
+        }
+
+        _logger.LogWarning(
+            "[code_execute] {Slug} returned a transient proxy error; retrying live discovered sandbox slug {RecoveredSlug}",
+            slug,
+            recoveredSlug);
+
+        return await ExecuteWithContractFallbackAsync(token, recoveredSlug, language, code, ct);
+    }
+
+    private async Task<string> ExecuteWithContractFallbackAsync(
+        string token,
+        string slug,
+        string language,
+        string code,
+        CancellationToken ct)
+    {
         var modernBody = JsonSerializer.Serialize(new { language = language, script = code });
         var modernResult = await _client.ProxyRequestAsync(token, slug, "/execute", "POST", modernBody, null, ct);
         if (!IsUpstream404(modernResult))
@@ -107,21 +133,66 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
     /// </summary>
     private static bool IsUpstream404(string proxyResponse)
     {
+        return TryGetProxyErrorStatus(proxyResponse, out var status) && status == 404;
+    }
+
+    private static bool ShouldRetryWithLiveDiscoveredSlug(
+        string proxyResponse,
+        string? contextSlug,
+        string selectedSlug)
+    {
+        if (string.IsNullOrWhiteSpace(contextSlug) ||
+            !string.Equals(contextSlug, selectedSlug, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return TryGetProxyErrorStatus(proxyResponse, out var status)
+            ? status >= 500
+            : TryGetProxyErrorMessage(proxyResponse, out _);
+    }
+
+    private static bool TryGetProxyErrorStatus(string proxyResponse, out int status)
+    {
+        status = 0;
+        if (!TryGetProxyErrorRoot(proxyResponse, out var root))
+            return false;
+
+        return root.TryGetProperty("status", out var statusProp) &&
+               statusProp.ValueKind == JsonValueKind.Number &&
+               statusProp.TryGetInt32(out status);
+    }
+
+    private static bool TryGetProxyErrorMessage(string proxyResponse, out string? message)
+    {
+        message = null;
+        if (!TryGetProxyErrorRoot(proxyResponse, out var root))
+            return false;
+
+        if (!root.TryGetProperty("message", out var messageProp) ||
+            messageProp.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        message = messageProp.GetString();
+        return !string.IsNullOrWhiteSpace(message);
+    }
+
+    private static bool TryGetProxyErrorRoot(string proxyResponse, out JsonElement root)
+    {
+        root = default;
         if (string.IsNullOrWhiteSpace(proxyResponse))
             return false;
+
         try
         {
             using var doc = JsonDocument.Parse(proxyResponse);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return false;
-            if (!root.TryGetProperty("error", out var errProp) ||
-                errProp.ValueKind != JsonValueKind.True)
-            {
+            root = doc.RootElement.Clone();
+            if (root.ValueKind != JsonValueKind.Object)
                 return false;
-            }
-            return root.TryGetProperty("status", out var statusProp) &&
-                   statusProp.ValueKind == JsonValueKind.Number &&
-                   statusProp.GetInt32() == 404;
+            return root.TryGetProperty("error", out var errProp) &&
+                   errProp.ValueKind == JsonValueKind.True;
         }
         catch (JsonException)
         {
@@ -166,20 +237,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         try
         {
             var json = await _client.DiscoverProxyServicesAsync(token, ct);
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            JsonElement items = root;
-            if (root.ValueKind == JsonValueKind.Object)
-            {
-                if (root.TryGetProperty("services", out var svc)) items = svc;
-                else if (root.TryGetProperty("data", out var data)) items = data;
-            }
-
-            if (items.ValueKind != JsonValueKind.Array)
-                return null;
-
-            foreach (var item in items.EnumerateArray())
+            foreach (var item in EnumerateServiceItems(json))
             {
                 var slug = item.TryGetProperty("slug", out var s) ? s.GetString() : null;
                 if (!string.IsNullOrWhiteSpace(slug) &&
@@ -196,6 +254,35 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         }
 
         return null;
+    }
+
+    private static List<JsonElement> EnumerateServiceItems(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var services = new List<JsonElement>();
+
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            services.AddRange(root.EnumerateArray().Select(item => item.Clone()));
+            return services;
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+            return services;
+
+        foreach (var propertyName in new[] { "services", "custom_services", "data" })
+        {
+            if (!root.TryGetProperty(propertyName, out var items) ||
+                items.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            services.AddRange(items.EnumerateArray().Select(item => item.Clone()));
+        }
+
+        return services;
     }
 
     /// <summary>

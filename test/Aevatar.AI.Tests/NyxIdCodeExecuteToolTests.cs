@@ -3,6 +3,9 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Net;
+using System.Text;
 
 namespace Aevatar.AI.Tests;
 
@@ -95,6 +98,32 @@ public class NyxIdCodeExecuteToolTests
         ClearMetadata();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ContextSandboxReturnsTransientError_RetriesLiveDiscoveredSandbox()
+    {
+        var handler = new CodeExecuteRecoveryHandler();
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            new HttpClient(handler),
+            NullLogger<NyxIdApiClient>.Instance);
+        var tool = new NyxIdCodeExecuteTool(client);
+        var servicesContext = """
+            <connected-services>
+            - **Chrono Sandbox** (slug: `stale-sandbox`) - base: https://sandbox.example.com
+            </connected-services>
+            """;
+        SetMetadata("test-token", servicesContext);
+
+        var result = await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+
+        result.Should().Be("""{"stdout":"1\n","stderr":"","exit_code":0}""");
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[0].Should().Be("POST /api/v1/proxy/s/stale-sandbox/execute");
+        handler.Requests[1].Should().Be("GET /api/v1/proxy/services");
+        handler.Requests[2].Should().Be("POST /api/v1/proxy/s/chrono-sandbox-service/execute");
+        ClearMetadata();
+    }
+
     private static NyxIdApiClient CreateDummyClient()
     {
         return new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://test.example.com" });
@@ -114,5 +143,36 @@ public class NyxIdCodeExecuteToolTests
     private static void ClearMetadata()
     {
         AgentToolRequestContext.Current = null;
+    }
+
+    private sealed class CodeExecuteRecoveryHandler : HttpMessageHandler
+    {
+        public List<string> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add($"{request.Method.Method} {request.RequestUri!.AbsolutePath}");
+
+            var responseBody = request.RequestUri.AbsolutePath switch
+            {
+                "/api/v1/proxy/s/stale-sandbox/execute" =>
+                    """{"error":"internal_error","error_code":1006,"message":"upstream internal error"}""",
+                "/api/v1/proxy/services" =>
+                    """{"services":[{"slug":"chrono-sandbox-service","name":"Chrono Sandbox"}]}""",
+                "/api/v1/proxy/s/chrono-sandbox-service/execute" =>
+                    """{"stdout":"1\n","stderr":"","exit_code":0}""",
+                _ => """{"error":"unexpected_request"}""",
+            };
+
+            var status = request.RequestUri.AbsolutePath == "/api/v1/proxy/s/stale-sandbox/execute"
+                ? HttpStatusCode.InternalServerError
+                : HttpStatusCode.OK;
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 }
