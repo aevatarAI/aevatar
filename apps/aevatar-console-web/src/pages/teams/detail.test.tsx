@@ -1161,7 +1161,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
-    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect((await screen.findAllByText("已完成")).length).toBeGreaterThan(0);
     expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
     expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
@@ -1365,6 +1365,71 @@ describe("TeamDetailPage", () => {
     expect(screen.getAllByText("版本标识").length).toBeGreaterThan(0);
     expect(screen.queryByText("连接器引用")).toBeNull();
     expect(screen.queryByText("服务能力")).toBeNull();
+  });
+
+  it("exposes run actions and recent execution history on the overview", async () => {
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
+      async () => ({
+        ...mockCreateRunsCatalog(),
+        serviceId: "alpha-service",
+        serviceKey: "scope-1:alpha-service",
+        runs: mockCreateRunsCatalog().runs.map((run) => ({
+          ...run,
+          serviceId: "alpha-service",
+        })),
+      }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "运行团队" })).toBeEnabled();
+    });
+    expect((await screen.findAllByText("Team Alpha Operator")).length)
+      .toBeGreaterThan(0);
+    expect(screen.getAllByText("服务 · alpha-service").length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: "运行" }))
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/invoke",
+        ),
+      );
+    expect(screen.getByRole("link", { name: "Workflow" }))
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+        ),
+      );
+    expect(screen.getByRole("link", { name: "更换服务" }))
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+        ),
+      );
+    expect(screen.getByText("run-current")).toBeTruthy();
+    expect(screen.getByText("run-good")).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "查看详情" })[0])
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/runs?runId=run-current",
+        ),
+      );
+
+    fireEvent.click(screen.getByRole("button", { name: "运行团队" }));
+    expect(await screen.findByTestId("team-test-modal-body")).toBeTruthy();
+  });
+
+  it("omits overview run details links when a run service is not bound to a roster member", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    expect(await screen.findByText("run-current")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
   });
 
   it("shows a readable team members view", async () => {

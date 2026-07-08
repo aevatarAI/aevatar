@@ -943,6 +943,7 @@ const TeamDetailPage: React.FC = () => {
           editStudioHref: isWorkflowMember ? workflowStudioHref : "",
           automationsHref: memberAutomationsHref,
           implementationKind: formatCompositionKind(member.implementationKind),
+          implementationKindRaw: trimText(member.implementationKind),
           invokeHref: isWorkflowMember ? memberInvokeHref : "",
           isServiceBound: isBoundMember,
           key: member.memberId,
@@ -960,6 +961,7 @@ const TeamDetailPage: React.FC = () => {
               ? t("teams.members.actions.publishedRuns.publishFirst", "Publish this member before viewing published runs.")
               : "",
           publishedRunsHref: memberPublishedRunsHref,
+          publishedServiceId,
           serviceId: publishedServiceId || "--",
           serviceIdentity: automationServiceRuntime?.identity,
           serviceRevisionId:
@@ -1208,15 +1210,134 @@ const TeamDetailPage: React.FC = () => {
     workflowNameValue,
   ]);
   const overviewCompositionRows = React.useMemo(
-    () =>
-      compositionDisplayRows.map((row) => ({
+    () => {
+      if (teamRosterRows.length > 0) {
+        return teamRosterRows.map((row) => {
+          const serviceLabel = row.isServiceBound
+            ? t("teams.detail.overview.composition.serviceBound", "Service · {serviceId}", {
+                serviceId: row.serviceId,
+              })
+            : t("teams.detail.overview.composition.serviceUnbound", "Service not bound");
+          const runDisabledReason = !row.workflowSupported
+            ? t("teams.members.actions.workflowOnlyTitle", "Only workflow members can use this action.")
+            : !row.isServiceBound
+              ? t("teams.members.actions.invokeRequiresBinding", "Bind this member to a published service before invoking it.")
+              : "";
+
+          return {
+            bindHref: row.workflowSupported ? row.editStudioHref : "",
+            bindLabel: row.isServiceBound
+              ? t("teams.detail.overview.composition.actions.changeService", "Change service")
+              : t("teams.detail.overview.composition.actions.bindService", "Bind service"),
+            canBind: row.workflowSupported,
+            canRun: row.canInvokeMember,
+            entryLabel: row.isEntryMember
+              ? intl.formatMessage({ id: "teams.members.entry" })
+              : "",
+            key: row.key,
+            kindLabel: row.implementationKind,
+            kindStyle: resolveCompositionKindPillStyle(
+              token,
+              row.implementationKindRaw,
+            ),
+            name: row.name,
+            runDisabledReason,
+            runHref: row.canInvokeMember ? row.invokeHref : "",
+            selectedLabel:
+              row.isSelectedMember && !row.isEntryMember
+                ? intl.formatMessage({ id: "teams.members.selected" })
+                : "",
+            serviceLabel,
+            statusLabel: row.lifecycleLabel,
+            statusStyle: row.lifecycleStyle,
+            summary:
+              row.description ||
+              (row.isServiceBound
+                ? t("teams.detail.overview.composition.memberReady", "Bound and ready to receive traffic.")
+                : t("teams.detail.overview.composition.memberDraft", "Not bound yet.")),
+            workflowHref: row.workflowSupported ? row.studioHref : "",
+          };
+        });
+      }
+
+      return compositionDisplayRows.map((row) => ({
         key: row.key,
         kindLabel: formatCompositionKind(row.kind),
         kindStyle: resolveCompositionKindPillStyle(token, row.kind),
         name: row.name,
         summary: row.summary,
-      })),
-    [compositionDisplayRows, token],
+      }));
+    },
+    [compositionDisplayRows, intl, teamRosterRows, token],
+  );
+  const entryRosterRow = React.useMemo(
+    () =>
+      entryMemberId
+        ? teamRosterRows.find((row) => row.memberId === entryMemberId) ?? null
+        : null,
+    [entryMemberId, teamRosterRows],
+  );
+  const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
+  const canRunTeamFromOverview = Boolean(
+    !isTeamArchived && entryRosterRow?.canInvokeAsEntry,
+  );
+  const teamRunDisabledReason = isTeamArchived
+    ? intl.formatMessage({ id: "teams.detail.test.archivedHint" })
+    : !entryMemberId
+      ? intl.formatMessage({ id: "teams.detail.test.entry.noneSelected" })
+      : !entryRosterRow?.canInvokeAsEntry
+        ? intl.formatMessage({ id: "teams.detail.test.entry.configuredNeedsBinding" })
+        : "";
+  const overviewLatestRuns = React.useMemo(
+    () =>
+      (runsQuery.data?.runs ?? []).slice(0, 5).map((run) => {
+        const runServiceId = trimText(run.serviceId);
+        const matchedMember = teamRosterRows.find(
+          (row) => trimText(row.publishedServiceId) === runServiceId,
+        );
+        const detailsHref = matchedMember
+          ? buildTeamMemberPublishedRunsHref({
+              actorId: trimText(run.actorId) || undefined,
+              memberId: matchedMember.memberId,
+              runId: run.runId,
+              scopeId,
+              teamId: selectedTeamId,
+            })
+          : "";
+
+        return {
+          detailsHref,
+          outputPreview:
+            trimText(run.lastError) ||
+            trimText(run.lastOutput) ||
+            t("teams.detail.overview.history.noOutput", "No output snapshot captured yet."),
+          revisionLabel: trimText(run.revisionId)
+            ? t("teams.detail.overview.history.revision", "Revision · {revisionId}", {
+                revisionId: run.revisionId,
+              })
+            : t("teams.detail.overview.history.revisionUnknown", "Revision unknown"),
+          runId: run.runId,
+          serviceLabel: runServiceId
+            ? t("teams.detail.overview.history.service", "Service · {serviceId}", {
+                serviceId: runServiceId,
+              })
+            : t("teams.detail.overview.history.serviceUnknown", "Service unknown"),
+          statusLabel: formatFriendlyStatus(run.completionStatus, intl),
+          statusStyle: resolveStatusPillStyle(token, run.completionStatus),
+          updatedLabel: formatCompactTimestamp(run.lastUpdatedAt),
+          workflowLabel:
+            trimText(run.workflowName) ||
+            t("teams.detail.overview.history.workflowUnknown", "Workflow unknown"),
+        };
+      }),
+    [
+      intl,
+      runsQuery.data?.runs,
+      scopeId,
+      selectedTeamId,
+      teamRosterRows,
+      token,
+    ],
   );
   const tabOptions: TeamTabOption[] = [
     { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
@@ -1321,7 +1442,6 @@ const TeamDetailPage: React.FC = () => {
     teamSummaryQuery.data,
     intl,
   ]);
-  const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
   const archiveTeamActionLabel =
     teamSummaryQuery.data && !isTeamArchived
       ? intl.formatMessage({ id: "teams.detail.actions.archive" })
@@ -1698,6 +1818,7 @@ const TeamDetailPage: React.FC = () => {
         entryMemberId={entryMemberId || null}
         entryMemberLabel={entryMemberLabel}
         entryMemberUpdating={entryActionBusyMemberId === entryMemberClearingId}
+        latestRuns={overviewLatestRuns}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
         onClearEntryMember={
@@ -1705,7 +1826,11 @@ const TeamDetailPage: React.FC = () => {
             ? () => void handleClearEntry()
             : undefined
         }
+        onNavigate={(href) => history.push(href)}
+        onOpenTeamTest={openTeamTestModal}
         startupGuidance={teamStartupGuidance}
+        teamRunDisabled={!canRunTeamFromOverview}
+        teamRunDisabledReason={teamRunDisabledReason}
       />
     );
   };
