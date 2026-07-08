@@ -293,8 +293,34 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
         var callbackFiredAt = command.Manual ? (DateTimeOffset?)null : ResolveCallbackFiredAt(inboundEnvelope);
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
 
-        if (!command.Manual && !MatchesNextFireLease(inboundEnvelope))
+        if (HasTerminalFireRecord(idempotencyKey))
+        {
+            State.FireRecords.TryGetValue(idempotencyKey, out var priorRecord);
+            // A suppressed fire was previously an Information no-op, so #2366-style silent skips
+            // left no signal for ops post-mortems. Elevate to Warning with the full decision
+            // context: the stale-lease guard below only absorbs superseded occurrences, so a
+            // duplicate that reaches here is an unexpected same-occurrence collision worth seeing.
+            Logger.LogWarning(
+                "Scheduled dispatch {ActorId} suppressed duplicate fire scheduleId={ScheduleId} idempotencyKey={IdempotencyKey} scheduledFireAt={ScheduledFireAt} nextFireAt={NextFireAt} callbackFiredAt={CallbackFiredAt} leaseGeneration={LeaseGeneration} priorStatus={PriorStatus} manual={Manual}.",
+                Id,
+                ResolveScheduleId(),
+                idempotencyKey,
+                scheduledFireAt,
+                State.NextFireAt,
+                callbackFiredAt,
+                State.NextFireLease?.Generation,
+                priorRecord?.Status,
+                command.Manual);
+            if (!command.Manual)
+                await EnsureNextFireScheduledAsync(scheduledFireAt, ct);
+            return;
+        }
+
+        if (!command.Manual &&
+            !MatchesNextFireLease(inboundEnvelope) &&
+            !MatchesArmedOccurrence(inboundEnvelope, scheduledFireAt))
         {
             Logger.LogInformation(
                 "Scheduled dispatch {ActorId} ignored stale fire callback scheduleId={ScheduleId} scheduledFireAt={ScheduledFireAt} leaseGeneration={LeaseGeneration}.",
@@ -316,30 +342,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
             await RecordNextFireIntentAsync(scheduledFireAt, ct);
             await ActivateNextFireIntentAsync(scheduledFireAt, previousLease, ct);
-            return;
-        }
-
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
-        if (HasTerminalFireRecord(idempotencyKey))
-        {
-            State.FireRecords.TryGetValue(idempotencyKey, out var priorRecord);
-            // A suppressed fire was previously an Information no-op, so #2366-style silent skips
-            // left no signal for ops post-mortems. Elevate to Warning with the full decision
-            // context: the stale-lease guard above already absorbs superseded re-deliveries, so a
-            // duplicate that reaches here is an unexpected same-occurrence collision worth seeing.
-            Logger.LogWarning(
-                "Scheduled dispatch {ActorId} suppressed duplicate fire scheduleId={ScheduleId} idempotencyKey={IdempotencyKey} scheduledFireAt={ScheduledFireAt} nextFireAt={NextFireAt} callbackFiredAt={CallbackFiredAt} leaseGeneration={LeaseGeneration} priorStatus={PriorStatus} manual={Manual}.",
-                Id,
-                ResolveScheduleId(),
-                idempotencyKey,
-                scheduledFireAt,
-                State.NextFireAt,
-                callbackFiredAt,
-                State.NextFireLease?.Generation,
-                priorRecord?.Status,
-                command.Manual);
-            if (!command.Manual)
-                await EnsureNextFireScheduledAsync(scheduledFireAt, ct);
             return;
         }
 
@@ -733,6 +735,21 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
+    }
+
+    private bool MatchesArmedOccurrence(EventEnvelope? envelope, DateTimeOffset scheduledFireAt)
+    {
+        if (envelope == null || !RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState))
+            return false;
+
+        if (!string.Equals(callbackState.CallbackId, NextFireCallbackId, StringComparison.Ordinal))
+            return false;
+
+        var currentLease = State.NextFireLease;
+        if (currentLease == null || callbackState.Generation <= 0 || callbackState.Generation >= currentLease.Generation)
+            return false;
+
+        return State.NextFireAt == scheduledFireAt;
     }
 
     private async Task DetectOverdueArmedFireAsync(DateTimeOffset nowUtc, CancellationToken ct)

@@ -623,6 +623,52 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleEventAsync_WhenAdjacentArmedOccurrenceCarriesPreviousLease_ShouldDispatchDistinctOccurrence()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        var firstRequest = scheduler.TimeoutRequests.Single();
+        var firstFireCommand = firstRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        var firstScheduledFireAt = firstFireCommand.ScheduledFireAt.ToDateTimeOffset();
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: firstScheduledFireAt));
+        var secondRequest = scheduler.TimeoutRequests[1];
+        var secondFireCommand = secondRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        var secondScheduledFireAt = secondFireCommand.ScheduledFireAt.ToDateTimeOffset();
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            secondRequest,
+            generation: 1,
+            fireIndex: 2,
+            firedAt: secondScheduledFireAt));
+
+        var firstIdempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstScheduledFireAt);
+        var secondIdempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", secondScheduledFireAt);
+        dispatch.Dispatches.Should().HaveCount(2);
+        agent.State.FireRecords.Should().ContainKey(firstIdempotencyKey);
+        agent.State.FireRecords.Should().ContainKey(secondIdempotencyKey);
+        agent.State.FireRecords[secondIdempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
+        agent.State.FireCount.Should().Be(2);
+        scheduler.TimeoutRequests.Should().HaveCount(3);
+        scheduler.TimeoutRequests[^1]
+            .TriggerEnvelope
+            .Payload
+            .Unpack<ScheduledDispatchFireCommand>()
+            .ScheduledFireAt
+            .ToDateTimeOffset()
+            .Should()
+            .BeAfter(secondScheduledFireAt);
+    }
+
+    [Fact]
     public async Task HandleEventAsync_WhenBoundedCallbackArrivesEarly_ShouldRearmWithoutDispatching()
     {
         var eventStore = new TestEventStore();
@@ -1827,21 +1873,44 @@ public sealed class ScheduledDispatchGAgentTests
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
 
-        // The overdue occurrence already reached a terminal (dispatched) record via a manual fire,
-        // then gets armed as NextFireAt. Reactivation must not flag it as overdue: it did fire.
+        // The overdue occurrence already reached a terminal record and is still the armed
+        // NextFireAt in durable state. Reactivation must not flag it as overdue: it did fire.
         var occurrence = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(30);
-        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
-        {
-            ScheduledFireAt = Timestamp.FromDateTimeOffset(occurrence),
-            Manual = true,
-        });
-        var firstRequest = scheduler.TimeoutRequests[0];
-        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
-            firstRequest,
-            generation: 1,
-            fireIndex: 1,
-            firedAt: occurrence.AddSeconds(-1),
-            scheduledFireAt: occurrence));
+        eventStore.AppendSyntheticEvents(
+            ScheduleActorId,
+            new ScheduledDispatchFireStartedEvent
+            {
+                ScheduledFireAt = Timestamp.FromDateTimeOffset(occurrence),
+                StartedAt = Timestamp.FromDateTimeOffset(occurrence),
+                IdempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", occurrence),
+                Manual = false,
+            },
+            new ScheduledDispatchFireDispatchedEvent
+            {
+                ScheduledFireAt = Timestamp.FromDateTimeOffset(occurrence),
+                DispatchedAt = Timestamp.FromDateTimeOffset(occurrence.AddSeconds(1)),
+                IdempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", occurrence),
+                TargetActorId = "target-actor-1",
+                CommandId = "cmd-occurred",
+                CorrelationId = "corr-occurred",
+                Manual = false,
+            },
+            new ScheduledDispatchNextFireScheduledEvent
+            {
+                NextFireAt = Timestamp.FromDateTimeOffset(occurrence),
+                ScheduledAt = Timestamp.FromDateTimeOffset(occurrence.AddSeconds(2)),
+                Lease = new ScheduledDispatchRuntimeCallbackLeaseState
+                {
+                    ActorId = ScheduleActorId,
+                    CallbackId = NextFireCallbackId,
+                    Generation = 2,
+                    Backend = ScheduledDispatchRuntimeCallbackBackendState.Dedicated,
+                },
+            });
+
+        var restored = CreateAgent(eventStore, dispatch, scheduler);
+        await restored.ActivateAsync();
+        agent = restored;
         agent.State.NextFireAt.Should().Be(occurrence);
 
         var reactivated = CreateAgent(eventStore, dispatch, scheduler);
@@ -2215,6 +2284,23 @@ public sealed class ScheduledDispatchGAgentTests
                 return;
 
             stream.RemoveAll(x => string.Equals(x.EventType, eventType, StringComparison.Ordinal));
+        }
+
+        public void AppendSyntheticEvents(string agentId, params IMessage[] events)
+        {
+            var stream = _streams.GetValueOrDefault(agentId) ?? [];
+            var currentVersion = stream.Count == 0 ? 0 : stream[^1].Version;
+            var committed = events.Select((evt, index) => new StateEvent
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Version = currentVersion + index + 1,
+                EventType = evt.Descriptor.FullName,
+                EventData = Any.Pack(evt),
+                AgentId = agentId,
+            });
+            stream.AddRange(committed);
+            _streams[agentId] = stream;
         }
 
         public Task<EventStoreCommitResult> AppendAsync(
