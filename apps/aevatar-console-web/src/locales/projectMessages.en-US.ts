@@ -4710,7 +4710,6 @@ const projectMessages = {
   "pages.teams.detail.teamid": "teamId",
   "pages.teams.detail.workflow": "From workflow update time",
   "teams.detail.overview.composition.actions.bindService": "Bind service",
-  "teams.detail.overview.composition.actions.changeService": "Change service",
   "teams.detail.overview.composition.actions.run": "Run",
   "teams.detail.overview.composition.actions.workflow": "Workflow",
   "teams.detail.overview.composition.serviceBound": "Service · {serviceId}",

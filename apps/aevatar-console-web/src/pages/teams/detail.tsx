@@ -1223,14 +1223,15 @@ const TeamDetailPage: React.FC = () => {
             : !row.isServiceBound
               ? t("teams.members.actions.invokeRequiresBinding", "Bind this member to a published service before invoking it.")
               : "";
+          const configureLabel = row.isServiceBound
+            ? t("teams.detail.overview.composition.actions.workflow", "Workflow")
+            : t("teams.detail.overview.composition.actions.bindService", "Bind service");
 
           return {
-            bindHref: row.workflowSupported ? row.editStudioHref : "",
-            bindLabel: row.isServiceBound
-              ? t("teams.detail.overview.composition.actions.changeService", "Change service")
-              : t("teams.detail.overview.composition.actions.bindService", "Bind service"),
-            canBind: row.workflowSupported,
             canRun: row.canInvokeMember,
+            canConfigure: row.workflowSupported,
+            configureHref: row.workflowSupported ? row.studioHref : "",
+            configureLabel,
             entryLabel: row.isEntryMember
               ? intl.formatMessage({ id: "teams.members.entry" })
               : "",
@@ -1255,7 +1256,6 @@ const TeamDetailPage: React.FC = () => {
               (row.isServiceBound
                 ? t("teams.detail.overview.composition.memberReady", "Bound and ready to receive traffic.")
                 : t("teams.detail.overview.composition.memberDraft", "Not bound yet.")),
-            workflowHref: row.workflowSupported ? row.studioHref : "",
           };
         });
       }

@@ -3,7 +3,6 @@ import {
   EyeOutlined,
   HistoryOutlined,
   InfoCircleOutlined,
-  LinkOutlined,
   PlayCircleOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
@@ -18,10 +17,10 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type OverviewCompositionRow = {
-  readonly bindHref?: string;
-  readonly bindLabel?: string;
-  readonly canBind?: boolean;
+  readonly canConfigure?: boolean;
   readonly canRun?: boolean;
+  readonly configureHref?: string;
+  readonly configureLabel?: string;
   readonly entryLabel?: string;
   readonly key: string;
   readonly kindLabel: string;
@@ -34,7 +33,6 @@ type OverviewCompositionRow = {
   readonly statusLabel?: string;
   readonly statusStyle?: React.CSSProperties;
   readonly summary: string;
-  readonly workflowHref?: string;
 };
 
 type OverviewConfigurationRow = {
@@ -161,9 +159,6 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
     intl.formatMessage({ id: "teams.detail.overview.entry.unconfigured" });
   const runMemberLabel = intl.formatMessage({
     id: "teams.detail.overview.composition.actions.run",
-  });
-  const openWorkflowLabel = intl.formatMessage({
-    id: "teams.detail.overview.composition.actions.workflow",
   });
   const summaryItems = [
     {
@@ -424,26 +419,15 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                         type={row.canRun ? "primary" : "default"}
                       />
                     </Tooltip>
-                    {row.workflowHref ? (
-                      <Tooltip title={openWorkflowLabel}>
+                    {row.configureHref && row.configureLabel ? (
+                      <Tooltip title={row.configureLabel}>
                         <Button
-                          aria-label={openWorkflowLabel}
-                          href={row.workflowHref}
+                          aria-label={row.configureLabel}
+                          href={row.configureHref}
                           icon={<ToolOutlined />}
-                          onClick={handleNavigate(row.workflowHref)}
+                          onClick={handleNavigate(row.configureHref)}
                           size="small"
-                        />
-                      </Tooltip>
-                    ) : null}
-                    {row.bindHref && row.bindLabel ? (
-                      <Tooltip title={row.bindLabel}>
-                        <Button
-                          aria-label={row.bindLabel}
-                          href={row.bindHref}
-                          icon={<LinkOutlined />}
-                          onClick={handleNavigate(row.bindHref)}
-                          size="small"
-                          type={row.canBind ? "default" : "dashed"}
+                          type={row.canConfigure ? "default" : "dashed"}
                         />
                       </Tooltip>
                     ) : null}

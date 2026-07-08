@@ -1406,13 +1406,7 @@ describe("TeamDetailPage", () => {
           "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
         ),
       );
-    expect(screen.getByRole("link", { name: "更换服务" }))
-      .toHaveAttribute(
-        "href",
-        expect.stringContaining(
-          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
-        ),
-      );
+    expect(screen.queryByRole("link", { name: "更换服务" })).toBeNull();
     expect(screen.getAllByRole("link", { name: "查看详情" })[0])
       .toHaveAttribute(
         "href",

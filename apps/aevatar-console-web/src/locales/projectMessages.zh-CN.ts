@@ -4710,7 +4710,6 @@ const projectMessages = {
   "pages.teams.detail.teamid": "团队 ID",
   "pages.teams.detail.workflow": "来自 Workflow 更新时间",
   "teams.detail.overview.composition.actions.bindService": "绑定服务",
-  "teams.detail.overview.composition.actions.changeService": "更换服务",
   "teams.detail.overview.composition.actions.run": "运行",
   "teams.detail.overview.composition.actions.workflow": "Workflow",
   "teams.detail.overview.composition.serviceBound": "服务 · {serviceId}",
