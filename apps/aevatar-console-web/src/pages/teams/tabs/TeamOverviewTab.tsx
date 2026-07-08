@@ -1,6 +1,7 @@
 import {
   ClockCircleOutlined,
   HistoryOutlined,
+  LinkOutlined,
   PlayCircleOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
@@ -151,6 +152,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
     entryMemberLabel ||
     entryMemberId ||
     intl.formatMessage({ id: "teams.detail.overview.entry.unconfigured" });
+  const runMemberLabel = intl.formatMessage({
+    id: "teams.detail.overview.composition.actions.run",
+  });
+  const openWorkflowLabel = intl.formatMessage({
+    id: "teams.detail.overview.composition.actions.workflow",
+  });
   const summaryItems = [
     {
       caption: currentMemberCardCaption,
@@ -389,8 +396,15 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                     <FactLine rows={2} secondary text={row.summary} />
                   </div>
                   <Space.Compact>
-                    <Tooltip title={row.canRun ? undefined : row.runDisabledReason}>
+                    <Tooltip
+                      title={
+                        row.canRun
+                          ? runMemberLabel
+                          : row.runDisabledReason || runMemberLabel
+                      }
+                    >
                       <Button
+                        aria-label={runMemberLabel}
                         href={row.canRun ? row.runHref : undefined}
                         disabled={!row.canRun}
                         icon={<PlayCircleOutlined />}
@@ -401,22 +415,12 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                         }
                         size="small"
                         type={row.canRun ? "primary" : "default"}
-                      >
-                        {intl.formatMessage({
-                          id: "teams.detail.overview.composition.actions.run",
-                        })}
-                      </Button>
+                      />
                     </Tooltip>
                     {row.workflowHref ? (
-                      <Tooltip
-                        title={intl.formatMessage({
-                          id: "teams.detail.overview.composition.actions.workflow",
-                        })}
-                      >
+                      <Tooltip title={openWorkflowLabel}>
                         <Button
-                          aria-label={intl.formatMessage({
-                            id: "teams.detail.overview.composition.actions.workflow",
-                          })}
+                          aria-label={openWorkflowLabel}
                           href={row.workflowHref}
                           icon={<ToolOutlined />}
                           onClick={handleNavigate(row.workflowHref)}
@@ -425,14 +429,16 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                       </Tooltip>
                     ) : null}
                     {row.bindHref && row.bindLabel ? (
-                      <Button
-                        href={row.bindHref}
-                        onClick={handleNavigate(row.bindHref)}
-                        size="small"
-                        type={row.canBind ? "default" : "dashed"}
-                      >
-                        {row.bindLabel}
-                      </Button>
+                      <Tooltip title={row.bindLabel}>
+                        <Button
+                          aria-label={row.bindLabel}
+                          href={row.bindHref}
+                          icon={<LinkOutlined />}
+                          onClick={handleNavigate(row.bindHref)}
+                          size="small"
+                          type={row.canBind ? "default" : "dashed"}
+                        />
+                      </Tooltip>
                     ) : null}
                   </Space.Compact>
                 </div>
