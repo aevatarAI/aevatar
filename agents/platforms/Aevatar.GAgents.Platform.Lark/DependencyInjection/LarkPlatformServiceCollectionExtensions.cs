@@ -43,6 +43,7 @@ public static class LarkPlatformServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, LarkChannelNativeMessageSender>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageSender>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
+        services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
 
         return services;
     }

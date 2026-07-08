@@ -330,7 +330,7 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
-    public async Task CreateFailure_FallsBackToConversationTextChunk()
+    public async Task CreateFailure_ForwardsStatusTextOnce()
     {
         var runner = new RecordingCardRunner
         {
@@ -342,20 +342,23 @@ public sealed class AgentRunLarkCardDeliveryTests
         var publisher = new RecordingEventPublisher();
         var agent = CreateAgent(runner, publisher: publisher);
 
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("fallback text")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("partial llm text")));
         await DispatchPendingSelfEventsAsync(agent, publisher);
 
         agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
+        agent.State.LarkCardDelivery.TextFallbackPhase.Should()
+            .Be(AgentRunLarkCardTextFallbackPhase.StatusForwarded);
+
         var fallback = publisher.Sent.Select(e => e.Event).OfType<LlmReplyStreamChunkEvent>().Single();
         fallback.CorrelationId.Should().Be("corr-card");
-        fallback.AccumulatedText.Should().Be("fallback text");
+        fallback.AccumulatedText.Should().Be("Processing your request. Please wait...");
         publisher.Sent.Where(e => e.Event is LlmReplyStreamChunkEvent)
             .Select(e => e.TargetActorId)
             .Should().ContainSingle("conversation-1");
     }
 
     [Fact]
-    public async Task CreateFailure_TextFallback_CapsInterimEditsAtMaxInterimChunks()
+    public async Task CreateFailure_IgnoresInterimChunksAfterStatusForwarded()
     {
         var runner = new RecordingCardRunner
         {
@@ -376,33 +379,24 @@ public sealed class AgentRunLarkCardDeliveryTests
                 StreamingFlushIntervalMs = 0,
             });
 
-        // First chunk drives create -> create-fail -> the create-failure fallback dispatches
-        // interim #1 from the original create chunk.
         await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 1")));
         await DispatchPendingSelfEventsAsync(agent, publisher);
-        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
-
-        // Further interim chunks route straight to the text fallback. Only enough to fill the
-        // cap (#2, #3) are forwarded; the rest freeze on the last interim.
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 2")));
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 3")));
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 4")));
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 5")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 2 ignored")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 3 ignored")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 4 ignored")));
 
         var dispatched = publisher.Sent
             .Select(e => e.Event)
             .OfType<LlmReplyStreamChunkEvent>()
             .ToList();
-        dispatched.Should().HaveCount(3, "interim text-edit fallback is capped at StreamingMaxInterimChunks");
-        dispatched.Select(chunk => chunk.AccumulatedText)
-            .Should().Equal("interim 1", "interim 2", "interim 3");
-        publisher.Sent.Where(e => e.Event is LlmReplyStreamChunkEvent)
-            .Select(e => e.TargetActorId)
-            .Should().AllBe("conversation-1");
+        dispatched.Should().ContainSingle("only the fixed status text is forwarded before final");
+        dispatched[0].AccumulatedText.Should().Be("Processing your request. Please wait...");
+        agent.State.LarkCardDelivery.TextFallbackPhase.Should()
+            .Be(AgentRunLarkCardTextFallbackPhase.StatusForwarded);
     }
 
     [Fact]
-    public async Task CreateFailure_TextFallback_AlwaysForwardsFinalChunkPastCap()
+    public async Task CreateFailure_ForwardsFinalSnapshotOnceAfterIgnoringInterims()
     {
         var runner = new RecordingCardRunner
         {
@@ -419,20 +413,14 @@ public sealed class AgentRunLarkCardDeliveryTests
             {
                 StreamingCardKitEnabled = true,
                 StreamingRepliesEnabled = true,
-                StreamingMaxInterimChunks = 2,
+                StreamingMaxInterimChunks = 1,
                 StreamingFlushIntervalMs = 0,
             });
 
         await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 1")));
         await DispatchPendingSelfEventsAsync(agent, publisher);
-        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
-
-        // Exceed the interim cap so any further interim chunk would freeze.
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 2")));
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 3 frozen")));
-        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 4 frozen")));
-
-        // The terminal chunk carries the complete reply text and must bypass the cap.
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 2 ignored")));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim 3 ignored")));
         await agent.HandleEventAsync(Envelope(
             agent.Id,
             CreateCardChunk("the complete final reply", isFinal: true)));
@@ -442,9 +430,93 @@ public sealed class AgentRunLarkCardDeliveryTests
             .OfType<LlmReplyStreamChunkEvent>()
             .ToList();
         dispatched.Select(chunk => chunk.AccumulatedText)
-            .Should().Contain("the complete final reply", "the final chunk is never dropped by the interim cap");
-        dispatched.Last().AccumulatedText.Should().Be("the complete final reply");
-        dispatched.Should().HaveCount(3, "only the 2 capped interims plus the exempt final are forwarded");
+            .Should().Equal(
+                "Processing your request. Please wait...",
+                "the complete final reply");
+        agent.State.LarkCardDelivery.TextFallbackPhase.Should()
+            .Be(AgentRunLarkCardTextFallbackPhase.FinalForwarded);
+    }
+
+    [Fact]
+    public async Task CreateFailure_DoesNotForwardDuplicateFinalSnapshots()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.Failed(
+                "card_create_failed",
+                "create rejected",
+                isRateLimited: true),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("interim")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("final", isFinal: true)));
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("final duplicate", isFinal: true)));
+
+        var dispatched = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LlmReplyStreamChunkEvent>()
+            .ToList();
+        dispatched.Select(chunk => chunk.AccumulatedText)
+            .Should().Equal("Processing your request. Please wait...", "final");
+        agent.State.LarkCardDelivery.TextFallbackPhase.Should()
+            .Be(AgentRunLarkCardTextFallbackPhase.FinalForwarded);
+    }
+
+    [Fact]
+    public async Task ConversationTextFallbackStatusAndFinal_CompletionDoesNotEditAgain()
+    {
+        var store = new InMemoryEventStore();
+        var publisher = new SelfHandlingConversationPublisher();
+        var runner = new RecordingTurnRunner();
+        var conversation = await CreateConversationAgentAsync(
+            ConversationActorId,
+            store,
+            publisher,
+            runner: runner);
+
+        conversation.State.PendingLlmReplyRequests.Add(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-card",
+            RunId = "run-1",
+            TargetActorId = ConversationActorId,
+            RegistrationId = "reg-1",
+            Activity = CreateActivity("runtime-user-access-token"),
+            RequestedAtUnixMs = 10,
+        });
+
+        await conversation.HandleLlmReplyStreamChunkAsync(CreateTextStreamChunk("Processing your request. Please wait..."));
+        await conversation.HandleLlmReplyStreamChunkAsync(CreateTextStreamChunk("the complete final reply"));
+        await conversation.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-card",
+            RegistrationId = "reg-1",
+            RunId = "run-1",
+            Activity = CreateActivity("runtime-user-access-token"),
+            Outbound = new MessageContent { Text = "the complete final reply" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+
+        runner.StreamCalls.Select(call => call.Kind)
+            .Should().Equal(
+                NyxRelayTextOperationKind.Interim,
+                NyxRelayTextOperationKind.Interim);
+        runner.StreamCalls.Select(call => call.Text)
+            .Should().Equal(
+                "Processing your request. Please wait...",
+                "the complete final reply");
+        runner.StreamCalls[0].CurrentPlatformMessageId.Should().BeNull();
+        runner.StreamCalls[1].CurrentPlatformMessageId.Should().Be("om");
+
+        var completed = (await store.GetEventsAsync(ConversationActorId))
+            .Single(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor))
+            .EventData.Unpack<ConversationTurnCompletedEvent>();
+        completed.Outbound.Text.Should().Be("the complete final reply");
+        conversation.State.LastReplyDelivery.Delivered.Should().NotBeNull();
+        conversation.State.ActiveReplyLifecycles.Should().BeEmpty();
     }
 
     [Fact]
@@ -708,6 +780,7 @@ public sealed class AgentRunLarkCardDeliveryTests
                 OperationGeneration = 6,
                 PendingFinalizeText = "final",
                 PendingFinalizeCommandId = "llm:corr-card",
+                TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.FinalForwarded,
             },
             PendingCardDeliveryCompletion = BuildPendingCompletion(),
         };
@@ -731,6 +804,7 @@ public sealed class AgentRunLarkCardDeliveryTests
             FlushedText = "final",
             Sequence = 5,
             TerminalReason = "completed",
+            TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.FinalForwarded,
         };
 
         AgentRunGAgentState.Parser.ParseFrom(state.ToByteArray()).Should().Be(state);
@@ -863,13 +937,15 @@ public sealed class AgentRunLarkCardDeliveryTests
     private static async Task<ConversationGAgent> CreateConversationAgentAsync(
         string id,
         IEventStore store,
-        SelfHandlingConversationPublisher publisher)
+        SelfHandlingConversationPublisher publisher,
+        RecordingTurnRunner? runner = null)
     {
+        var dispatchPort = new SelfHandlingConversationDispatchPort();
         var services = new ServiceCollection()
             .AddSingleton(store)
-            .AddSingleton<IActorDispatchPort, NoopActorDispatchPort>()
+            .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
-            .AddSingleton<IConversationTurnRunner>(new RecordingTurnRunner())
+            .AddSingleton<IConversationTurnRunner>(runner ?? new RecordingTurnRunner())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
@@ -883,6 +959,7 @@ public sealed class AgentRunLarkCardDeliveryTests
         };
         SetId(agent, id);
         publisher.SelfTarget = agent;
+        dispatchPort.SelfTarget = agent;
         await agent.ActivateAsync();
         return agent;
     }
@@ -982,6 +1059,18 @@ public sealed class AgentRunLarkCardDeliveryTests
             ReplyToken = "runtime-reply-token",
             ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
             IsFinal = isFinal,
+        };
+
+    private static LlmReplyStreamChunkEvent CreateTextStreamChunk(string text) =>
+        new()
+        {
+            CorrelationId = "corr-card",
+            RegistrationId = "reg-1",
+            Activity = CreateActivity("runtime-user-access-token"),
+            AccumulatedText = text,
+            ChunkAtUnixMs = 42,
+            ReplyToken = "runtime-reply-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
 
     private static ChatActivity CreateActivity(string userAccessToken) =>
@@ -1230,8 +1319,29 @@ public sealed class AgentRunLarkCardDeliveryTests
                 : Task.CompletedTask;
     }
 
+    private sealed class SelfHandlingConversationDispatchPort : IActorDispatchPort
+    {
+        public ConversationGAgent? SelfTarget { get; set; }
+
+        public async Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            if (SelfTarget is not null &&
+                string.Equals(actorId, SelfTarget.Id, StringComparison.Ordinal))
+            {
+                await SelfTarget.HandleEventAsync(envelope, ct);
+            }
+
+            return DispatchAdmissionFactory.Create(actorId, envelope);
+        }
+    }
+
     private sealed class RecordingTurnRunner : IConversationTurnRunner
     {
+        public List<StreamCall> StreamCalls { get; } = [];
+
         public Task<ConversationTurnResult> RunInboundAsync(
             ChatActivity activity,
             ConversationTurnRuntimeContext runtimeContext,
@@ -1252,12 +1362,24 @@ public sealed class AgentRunLarkCardDeliveryTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId ?? "om"));
+            CancellationToken ct)
+        {
+            StreamCalls.Add(new StreamCall(
+                operation,
+                chunk.AccumulatedText,
+                currentPlatformMessageId));
+            return Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId ?? "om"));
+        }
 
         public Task OnReplyDeliveredAsync(ChatActivity activity, CancellationToken ct) => Task.CompletedTask;
     }
+
+    private sealed record StreamCall(
+        NyxRelayTextOperationKind Kind,
+        string Text,
+        string? CurrentPlatformMessageId);
 
     private sealed class NoopActorDispatchPort : IActorDispatchPort
     {

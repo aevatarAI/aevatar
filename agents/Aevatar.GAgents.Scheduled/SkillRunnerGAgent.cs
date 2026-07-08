@@ -1058,7 +1058,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ResolveLarkCardKitClient(client, State.OutboundConfig.NyxProviderSlug),
             ResolveLarkOutboundDispatcher(client),
             new LarkSendNewMessageRequest(
-                nyxApiKey,
+                NyxApiKey: nyxApiKey,
                 State.OutboundConfig.NyxProviderSlug,
                 MessageType: "interactive",
                 ContentJson: string.Empty,
@@ -1128,7 +1128,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return new SkillRunnerStreamingReplySink(
             ResolveLarkOutboundDispatcher(client),
             new LarkSendNewMessageRequest(
-                nyxApiKey,
+                NyxApiKey: nyxApiKey,
                 State.OutboundConfig.NyxProviderSlug,
                 MessageType: "text",
                 ContentJson: string.Empty,
@@ -1851,7 +1851,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         var outcome = await ResolveLarkOutboundDispatcher(client).SendNewMessageAsync(
             new LarkSendNewMessageRequest(
-                nyxApiKey,
+                NyxApiKey: nyxApiKey,
                 slug,
                 MessageType: "text",
                 ContentJson: JsonSerializer.Serialize(new { text = output }),
