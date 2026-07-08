@@ -1240,11 +1240,7 @@ const TeamDetailPage: React.FC = () => {
             serviceLabel,
             statusLabel: row.lifecycleLabel,
             statusStyle: row.lifecycleStyle,
-            summary:
-              row.description ||
-              (row.isServiceBound
-                ? t("teams.detail.overview.composition.memberReady", "Bound and ready to receive traffic.")
-                : t("teams.detail.overview.composition.memberDraft", "Not bound yet.")),
+            summary: row.description,
           };
         });
       }

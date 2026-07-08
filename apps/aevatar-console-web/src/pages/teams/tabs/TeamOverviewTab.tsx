@@ -4,10 +4,9 @@ import {
   HistoryOutlined,
   InfoCircleOutlined,
   PlayCircleOutlined,
-  SettingOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { Button, Popover, Space, Tooltip, Typography, theme } from "antd";
+import { Button, Space, Tooltip, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
@@ -311,39 +310,43 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               id: "teams.detail.overview.composition.title",
             })}
           </Typography.Title>
-          {configurationDetailRows.length > 0 ? (
-            <Popover
-              content={
-                <div style={{ display: "grid", gap: 10, minWidth: 260 }}>
-                  {configurationDetailRows.map((row) => (
-                    <div key={row.label} style={{ display: "grid", gap: 3 }}>
-                      <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                        {row.label}
-                      </Typography.Text>
-                      <Tooltip title={row.noteTooltip || row.note}>
-                        <Typography.Text strong>{row.value}</Typography.Text>
-                      </Tooltip>
-                    </div>
-                  ))}
-                </div>
-              }
-              placement="bottomRight"
-              title={intl.formatMessage({
-                id: "teams.detail.overview.configuration.title",
-              })}
-              trigger="click"
-            >
-              <Button
-                aria-label={intl.formatMessage({
-                  id: "teams.detail.overview.configuration.title",
-                })}
-                icon={<SettingOutlined />}
-                size="small"
-                type="text"
-              />
-            </Popover>
-          ) : null}
         </div>
+        {configurationDetailRows.length > 0 ? (
+          <div
+            style={{
+              background: token.colorFillQuaternary,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: 8,
+              display: "grid",
+              gap: 0,
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            }}
+          >
+            {configurationDetailRows.map((row, index) => (
+              <div
+                key={row.label}
+                style={{
+                  borderLeft:
+                    index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  minWidth: 0,
+                  padding: "10px 12px",
+                }}
+              >
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  {row.label}
+                </Typography.Text>
+                <Tooltip title={row.noteTooltip || row.note}>
+                  <Typography.Text strong ellipsis>
+                    {row.value}
+                  </Typography.Text>
+                </Tooltip>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div style={{ display: "grid", gap: 0 }}>
           {compositionRows.length > 0 ? (
             compositionRows.map((row, index) => (
@@ -386,9 +389,16 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                       />
                     ) : null}
                   </Space>
-                  <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                    {row.serviceLabel || row.summary}
-                  </Typography.Text>
+                  {row.serviceLabel ? (
+                    <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                      {row.serviceLabel}
+                    </Typography.Text>
+                  ) : null}
+                  {row.summary ? (
+                    <Typography.Text ellipsis style={{ fontSize: 12 }} type="secondary">
+                      {row.summary}
+                    </Typography.Text>
+                  ) : null}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                   <Space size={6} wrap>
