@@ -97,6 +97,14 @@ enum AgentRunLarkCardDeliveryPhase {
   AGENT_RUN_LARK_CARD_DELIVERY_PHASE_CREATION_FAILED = 7;
 }
 
+enum AgentRunLarkCardTextFallbackPhase {
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_UNSPECIFIED = 0;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_IDLE = 1;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_STATUS_FORWARDED = 2;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_FINAL_FORWARDED = 3;
+  AGENT_RUN_LARK_CARD_TEXT_FALLBACK_PHASE_FAILED = 4;
+}
+
 message AgentRunLarkCardDeliveryState {
   AgentRunLarkCardDeliveryPhase phase = 1;
   string card_id = 2;
@@ -113,6 +121,7 @@ message AgentRunLarkCardDeliveryState {
   string pending_finalize_text = 13;
   string pending_finalize_command_id = 14;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry pending_appended_history = 15;
+  AgentRunLarkCardTextFallbackPhase text_fallback_phase = 16;
 }
 
 message AgentRunLarkCardDeliveryChangedEvent {
@@ -135,6 +144,7 @@ message AgentRunLarkCardDeliveryChangedEvent {
   optional string finalize_text = 17;
   optional string finalize_command_id = 18;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 19;
+  optional AgentRunLarkCardTextFallbackPhase text_fallback_phase = 20;
 }
 
 message AgentRunLarkCardDeliveryCompletion {

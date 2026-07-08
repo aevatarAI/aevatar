@@ -93,6 +93,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
     private readonly ILarkBotIdentityResolver? _botIdentityResolver;
     private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
+    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -117,7 +118,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         ILarkBotIdentityResolver? botIdentityResolver = null,
-        INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null)
+        INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
+        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -142,6 +144,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _botIdentityResolver = botIdentityResolver;
         _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
+        _larkOutboundDispatcher = larkOutboundDispatcher;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -1231,6 +1234,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     public async Task<ConversationStreamChunkResult> RunStreamChunkAsync(
         LlmReplyStreamChunkEvent chunk,
         string? currentPlatformMessageId,
+        NyxRelayTextOperationKind operation,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
@@ -1263,6 +1267,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var conversation = chunk.Activity.Conversation;
         var platform = ResolveRelayPlatform(inbound, conversation);
         var content = new MessageContent { Text = NormalizeReplyText(chunk.AccumulatedText) };
+        var segments = operation == NyxRelayTextOperationKind.Final &&
+                       !string.IsNullOrWhiteSpace(currentPlatformMessageId)
+            ? LarkTextMessageSegmenter.Segment(content.Text)
+            : null;
+        var updateContent = segments is { Count: > 1 }
+            ? new MessageContent { Text = segments[0] }
+            : content;
 
         EmitResult emit;
         if (string.IsNullOrWhiteSpace(currentPlatformMessageId))
@@ -1280,7 +1291,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             emit = await _relayOutboundPort.UpdateAsync(
                 platform,
                 conversation?.Clone() ?? new ConversationReference(),
-                content,
+                updateContent,
                 relayDelivery,
                 currentPlatformMessageId,
                 relayToken,
@@ -1307,8 +1318,114 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var resolvedPlatformMessageId = string.IsNullOrWhiteSpace(emit.PlatformMessageId)
             ? currentPlatformMessageId
             : emit.PlatformMessageId;
+        if (segments is { Count: > 1 })
+        {
+            var tailResult = await SendTailLarkTextSegmentsAsync(
+                    chunk,
+                    inbound,
+                    runtimeContext,
+                    segments.Skip(1),
+                    ct)
+                .ConfigureAwait(false);
+            if (!tailResult.Success)
+                return tailResult;
+        }
+
         return ConversationStreamChunkResult.Succeeded(resolvedPlatformMessageId);
     }
+
+    private async Task<ConversationStreamChunkResult> SendTailLarkTextSegmentsAsync(
+        LlmReplyStreamChunkEvent chunk,
+        InboundMessage inbound,
+        ConversationTurnRuntimeContext runtimeContext,
+        IEnumerable<string> tailSegments,
+        CancellationToken ct)
+    {
+        if (!IsLarkPlatform(ResolveRelayPlatform(inbound, chunk.Activity?.Conversation)))
+        {
+            return ConversationStreamChunkResult.Failed(
+                "relay_tail_segment_platform_unsupported",
+                "Tail text segmentation is only supported for Lark relay deliveries.");
+        }
+
+        var providerSlug = NormalizeOptional(inbound.TransportExtras?.NyxProviderSlug);
+        if (providerSlug is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "lark_tail_segment_provider_missing",
+                "Lark outbound provider slug is missing for tail text segment delivery.");
+        }
+
+        var nyxProxyCredential = ResolveUserAccessToken(chunk.Activity!, runtimeContext);
+        if (nyxProxyCredential is null)
+        {
+            return ConversationStreamChunkResult.Failed(
+                "lark_tail_segment_credential_missing",
+                "NyxID user access token is missing for Lark tail text segment delivery.");
+        }
+
+        var target = LarkConversationTargets.BuildFromInboundWithFallback(
+            inbound.ChatType,
+            inbound.ConversationId,
+            inbound.SenderId,
+            inbound.TransportExtras?.NyxLarkUnionId,
+            inbound.TransportExtras?.NyxLarkChatId);
+        if (string.IsNullOrWhiteSpace(target.Primary.ReceiveId) ||
+            string.IsNullOrWhiteSpace(target.Primary.ReceiveIdType))
+        {
+            return ConversationStreamChunkResult.Failed(
+                "lark_tail_segment_target_missing",
+                "Lark receive target is missing for tail text segment delivery.");
+        }
+
+        var dispatcher = ResolveLarkOutboundDispatcher();
+        foreach (var segment in tailSegments)
+        {
+            var contentJson = JsonSerializer.Serialize(new { text = segment });
+            LarkSendNewMessageResult result;
+            try
+            {
+                result = await dispatcher.SendNewMessageAsync(
+                        new LarkSendNewMessageRequest(
+                            NyxApiKey: nyxProxyCredential,
+                            providerSlug,
+                            "text",
+                            contentJson,
+                            target.Primary,
+                            target.Fallback),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Lark tail text segment send threw. correlation={CorrelationId}",
+                    chunk.CorrelationId);
+                return ConversationStreamChunkResult.Failed(
+                    "relay_tail_segment_send_failed",
+                    ex.Message);
+            }
+
+            if (!result.Succeeded)
+            {
+                return ConversationStreamChunkResult.Failed(
+                    "relay_tail_segment_send_failed",
+                    string.IsNullOrWhiteSpace(result.Detail) ? "Lark tail text segment send failed." : result.Detail,
+                    failureKind: FailureKind.PermanentAdapterError,
+                    rawErrorCode: result.LarkCode ?? 0);
+            }
+        }
+
+        return ConversationStreamChunkResult.Succeeded(null);
+    }
+
+    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher() =>
+        _larkOutboundDispatcher ?? new LarkOutboundDispatcher(_nyxClient, _logger);
 
     private async Task<ConversationTurnResult?> TryHandleAgentBuilderAsync(
         ChatActivity activity,
