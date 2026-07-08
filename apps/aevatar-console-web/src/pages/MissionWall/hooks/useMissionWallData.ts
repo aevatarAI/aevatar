@@ -7,6 +7,7 @@ import {
 } from "@/shared/navigation/history";
 import { resolveStudioScopeContext } from "@/shared/scope/context";
 import { studioApi } from "@/shared/studio/api";
+import type { StudioWorkflowBoardSnapshot } from "@/shared/studio/models";
 import type {
   MissionWallLiveState,
   MissionWallSource,
@@ -24,6 +25,13 @@ type MissionWallRouteOptions = {
 
 export const MISSION_WALL_RUN_REFETCH_INTERVAL_MS = 5_000;
 export const MISSION_WALL_SNAPSHOT_TAKE = 100;
+export const MISSION_WALL_STALE_SNAPSHOT_FALLBACK_MS = 60_000;
+
+type MissionWallSnapshotCache = {
+  readonly cachedAtMs: number;
+  readonly key: string;
+  readonly snapshot: StudioWorkflowBoardSnapshot;
+};
 
 export interface MissionWallRuntimeData {
   readonly buildSource: () => MissionWallSource;
@@ -63,6 +71,21 @@ function missionWallRefetchInterval(intervalMs: number): number | false {
   const isTest =
     typeof process !== "undefined" && process.env.NODE_ENV === "test";
   return isTest ? false : intervalMs;
+}
+
+function workflowBoardSnapshotMemberCount(
+  snapshot: StudioWorkflowBoardSnapshot | undefined,
+): number {
+  return (
+    snapshot?.teams.reduce((count, team) => count + team.members.length, 0) ?? 0
+  );
+}
+
+function buildSnapshotCacheKey(input: {
+  readonly scopeId?: string;
+  readonly teamId?: string;
+}): string {
+  return `${input.scopeId ?? ""}:${input.teamId ?? ""}`;
 }
 
 function useNowMs(): number {
@@ -177,6 +200,8 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     [authSessionQuery.data],
   );
   const scopeId = routeOptions.scopeId ?? sessionScopeContext?.scopeId;
+  const snapshotCacheRef =
+    React.useRef<MissionWallSnapshotCache | undefined>(undefined);
   const snapshotQuery = useQuery({
     enabled: Boolean(scopeId),
     queryFn: () =>
@@ -196,34 +221,66 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     refetchIntervalInBackground: true,
     retry: false,
   });
+  const snapshotCacheKey = React.useMemo(
+    () =>
+      buildSnapshotCacheKey({
+        scopeId,
+        teamId: routeOptions.teamId,
+      }),
+    [routeOptions.teamId, scopeId],
+  );
+  const queriedSnapshot = snapshotQuery.data;
+  const queriedRunCount = workflowBoardSnapshotMemberCount(queriedSnapshot);
+  const hasCachedSnapshotForRoute =
+    snapshotCacheRef.current?.key === snapshotCacheKey;
+  const cachedSnapshot = hasCachedSnapshotForRoute
+    ? snapshotCacheRef.current?.snapshot
+    : undefined;
+  const shouldUseCachedSnapshot =
+    Boolean(cachedSnapshot) &&
+    snapshotCacheRef.current !== undefined &&
+    nowMs - snapshotCacheRef.current.cachedAtMs <=
+      MISSION_WALL_STALE_SNAPSHOT_FALLBACK_MS &&
+    ((snapshotQuery.isSuccess && queriedRunCount === 0) || snapshotQuery.isError);
+  const effectiveSnapshot = shouldUseCachedSnapshot
+    ? cachedSnapshot
+    : queriedSnapshot;
+  React.useEffect(() => {
+    if (!queriedSnapshot || queriedRunCount === 0) {
+      return;
+    }
+
+    snapshotCacheRef.current = {
+      cachedAtMs: nowMs,
+      key: snapshotCacheKey,
+      snapshot: queriedSnapshot,
+    };
+  }, [nowMs, queriedRunCount, queriedSnapshot, snapshotCacheKey]);
   const generatedAt = React.useMemo(
-    () => snapshotQuery.data?.generatedAt ?? new Date().toISOString(),
+    () => effectiveSnapshot?.generatedAt ?? new Date().toISOString(),
     [
       authSessionQuery.dataUpdatedAt,
-      snapshotQuery.data?.generatedAt,
+      effectiveSnapshot?.generatedAt,
       snapshotQuery.dataUpdatedAt,
       snapshotQuery.errorUpdatedAt,
       snapshotQuery.fetchStatus,
     ],
   );
   const latestObservedAt =
-    trimOptional(snapshotQuery.data?.lastNodeUpdatedAt) || undefined;
-  const runCount =
-    snapshotQuery.data?.teams.reduce(
-      (count, team) => count + team.members.length,
-      0,
-    ) ?? 0;
+    trimOptional(effectiveSnapshot?.lastNodeUpdatedAt) || undefined;
+  const runCount = workflowBoardSnapshotMemberCount(effectiveSnapshot);
   const hasCriticalError = authSessionQuery.isError;
+  const hasStaleSnapshotFallback = Boolean(shouldUseCachedSnapshot);
   const isLoading =
     authSessionQuery.isLoading ||
-    (Boolean(scopeId) && snapshotQuery.isLoading);
+    (Boolean(scopeId) && snapshotQuery.isLoading && !effectiveSnapshot);
   const live = React.useMemo(
     () =>
       buildLiveState({
         allRunsLoaded: snapshotQuery.isSuccess || snapshotQuery.isError,
         generatedAt,
         hasCriticalError,
-        hasPartialRunError: snapshotQuery.isError,
+        hasPartialRunError: snapshotQuery.isError || hasStaleSnapshotFallback,
         isLoading,
         latestObservedAt,
         nowMs,
@@ -233,6 +290,7 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
     [
       generatedAt,
       hasCriticalError,
+      hasStaleSnapshotFallback,
       isLoading,
       latestObservedAt,
       nowMs,
@@ -247,9 +305,9 @@ export function useMissionWallRuntimeData(): MissionWallRuntimeData {
       buildMissionWallSourceFromWorkflowBoardSnapshot({
         generatedAt,
         live,
-        snapshot: snapshotQuery.data,
+        snapshot: effectiveSnapshot,
       }),
-    [generatedAt, live, snapshotQuery.data],
+    [effectiveSnapshot, generatedAt, live],
   );
 
   return {

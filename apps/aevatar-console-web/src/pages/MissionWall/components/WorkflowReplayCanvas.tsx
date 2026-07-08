@@ -43,6 +43,7 @@ const FIT_VIEW_BASE_OPTIONS = {
   minZoom: 0.36,
   padding: 0.24,
 } as const;
+const FIT_VIEW_ATTEMPT_COUNT = 4;
 
 function focusWindowStepIds(
   graph: MissionWallWorkflowGraph | undefined,
@@ -256,27 +257,56 @@ export function WorkflowReplayCanvas({
       return undefined;
     }
 
+    const readyFlowInstance = flowInstance;
     lastFitKeyRef.current = fitViewKey;
 
     const focusNodes = focusNodeIds.length
       ? nodes.filter((node) => focusNodeIds.includes(node.id))
       : nodes;
     const fitNodes = focusNodes.length ? focusNodes : nodes;
+    const animationFrameIds: number[] = [];
+    const timeoutIds: number[] = [];
+    let cancelled = false;
+    let attemptCount = 0;
 
-    const fit = () => {
-      void flowInstance.fitView({
+    function scheduleFit() {
+      if (typeof window.requestAnimationFrame === "function") {
+        const frameId = window.requestAnimationFrame(fit);
+        animationFrameIds.push(frameId);
+        return;
+      }
+
+      const timeoutId = window.setTimeout(fit, 16);
+      timeoutIds.push(timeoutId);
+    }
+
+    function fit() {
+      if (cancelled) {
+        return;
+      }
+
+      void readyFlowInstance.fitView({
         ...FIT_VIEW_BASE_OPTIONS,
         nodes: fitNodes,
       });
-    };
+      attemptCount += 1;
 
-    if (typeof window.requestAnimationFrame === "function") {
-      const frame = window.requestAnimationFrame(fit);
-      return () => window.cancelAnimationFrame(frame);
+      if (attemptCount < FIT_VIEW_ATTEMPT_COUNT) {
+        scheduleFit();
+      }
     }
 
-    fit();
-    return undefined;
+    scheduleFit();
+
+    return () => {
+      cancelled = true;
+      animationFrameIds.forEach((frameId) => {
+        window.cancelAnimationFrame(frameId);
+      });
+      timeoutIds.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+    };
   }, [fitViewKey, flowInstance, focusNodeIds, nodes]);
 
   return (

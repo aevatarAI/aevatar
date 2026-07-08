@@ -567,6 +567,49 @@ describe("MissionWallPage", () => {
     expect(cards[0]).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("keeps the last visible workflow board when a refetch briefly returns an empty snapshot", async () => {
+    let returnEmptySnapshot = false;
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockImplementation(
+      async () =>
+        returnEmptySnapshot
+          ? workflowBoardSnapshot([], {
+              generatedAt: "2026-06-30T05:00:05.000Z",
+              lastNodeUpdatedAt: "2026-06-30T05:00:05.000Z",
+            })
+          : workflowBoardSnapshot([
+              workflowBoardMember({
+                actorId: "actor-risk-run",
+                completedSteps: 1,
+                currentNodeStatus: "waiting",
+                executionStatus: "running",
+                lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
+                member: riskMember,
+                runId: "run-risk",
+                totalSteps: 3,
+                workflowName: "Live Risk Workflow",
+              }),
+            ]),
+    );
+
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(MissionWallPage),
+    );
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findAllByText("risk_gate")).not.toHaveLength(0);
+
+    returnEmptySnapshot = true;
+    await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
+
+    expect(await screen.findByText("Live Risk Workflow")).toBeInTheDocument();
+    expect(await screen.findAllByText("risk_gate")).not.toHaveLength(0);
+    expect(screen.getByText("Live").closest(".mission-wall-metric"))
+      .toHaveTextContent("Degraded");
+    expect(screen.getByTestId("mission-wall-run-list"))
+      .toHaveTextContent("Live Risk Workflow");
+    expect(screen.queryByText("No focus run")).not.toBeInTheDocument();
+  });
+
   it("shows the selected member snapshot nodes in the right workflow graph", async () => {
     renderWithQueryClient(React.createElement(MissionWallPage));
 
