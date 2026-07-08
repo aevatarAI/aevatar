@@ -93,6 +93,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ILarkBotIdentityResolver? _botIdentityResolver;
     private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
     private readonly IChannelRelayTailTextSender? _relayTailTextSender;
+    private readonly IChannelRelayProxyResponseClassifier? _relayProxyResponseClassifier;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -118,7 +119,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
-        IChannelRelayTailTextSender? relayTailTextSender = null)
+        IChannelRelayTailTextSender? relayTailTextSender = null,
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -144,6 +146,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _botIdentityResolver = botIdentityResolver;
         _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
         _relayTailTextSender = relayTailTextSender;
+        _relayProxyResponseClassifier = relayProxyResponseClassifier;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -1986,7 +1989,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     ct)
                 .ConfigureAwait(false);
 
-            if (ChannelLarkProxyResponse.TryGetError(response, out _, out _))
+            if (ClassifyRelayProxyResponse(response).IsError)
                 return null;
 
             return TryParseLarkSubjectContactIds(response, out var contactIds) ? contactIds : null;
@@ -2791,9 +2794,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 null,
                 ct);
 
-            if (ChannelLarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
+            var classification = ClassifyRelayProxyResponse(response);
+            if (classification.IsError)
             {
-                if (larkCode == ChannelLarkProxyResponse.NoPermissionToReact)
+                if (classification.Kind == ChannelRelayProxyResponseKind.PermissionDenied)
                 {
                     // The bot is missing reaction permission on Lark — a
                     // tenant-level config issue that recurs on every inbound
@@ -2804,20 +2808,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                         "Immediate Lark typing reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
-                        detail);
+                        classification.Detail);
                 }
                 else
                 {
-                    // Anything else — a Nyx envelope error, an unexpected Lark
-                    // business code (rate limit, archived message, bot kicked,
-                    // etc.) — is a real signal that should stay at Warning so
-                    // we notice when Lark behavior changes.
+                    // Anything else is a real signal that should stay at Warning
+                    // so provider behavior changes remain visible.
                     _logger.LogWarning(
-                        "Immediate Lark typing reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
+                        "Immediate Lark typing reaction failed: provider={ProviderSlug}, message={MessageId}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
-                        larkCode,
-                        detail);
+                        classification.ProviderErrorCode,
+                        classification.Detail);
                 }
             }
         }
@@ -2910,15 +2912,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     extraHeaders: null,
                     ct);
 
-                if (ChannelLarkProxyResponse.TryGetError(listResponse, out var listCode, out var listDetail))
+                var listClassification = ClassifyRelayProxyResponse(listResponse);
+                if (listClassification.IsError)
                 {
                     _logger.LogDebug(
-                        "Lark typing reaction list failed; skipping clear: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
+                        "Lark typing reaction list failed; skipping clear: provider={ProviderSlug}, message={MessageId}, page={Page}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
                         page,
-                        listCode,
-                        listDetail);
+                        listClassification.ProviderErrorCode,
+                        listClassification.Detail);
                     return;
                 }
 
@@ -2945,15 +2948,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                         extraHeaders: null,
                         ct);
 
-                    if (ChannelLarkProxyResponse.TryGetError(deleteResponse, out var deleteCode, out var deleteDetail))
+                    var deleteClassification = ClassifyRelayProxyResponse(deleteResponse);
+                    if (deleteClassification.IsError)
                     {
                         _logger.LogDebug(
-                            "Lark typing reaction delete failed: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}, larkCode={LarkCode}, detail={Detail}",
+                            "Lark typing reaction delete failed: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
                             providerSlug,
                             platformMessageId,
                             reactionId,
-                            deleteCode,
-                            deleteDetail);
+                            deleteClassification.ProviderErrorCode,
+                            deleteClassification.Detail);
                     }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -3150,6 +3154,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             _ => ConversationTurnResult.TransientFailure(errorCode, errorMessage),
         };
     }
+
+    private ChannelRelayProxyResponseClassification ClassifyRelayProxyResponse(string? response) =>
+        _relayProxyResponseClassifier?.Classify(response) ??
+        ChannelRelayProxyResponseClassification.Success();
 
     private static ChannelId ResolveRelayChannel(InboundMessage inbound, ConversationReference? conversation) =>
         ChannelId.From(ResolveRelayPlatform(inbound, conversation));

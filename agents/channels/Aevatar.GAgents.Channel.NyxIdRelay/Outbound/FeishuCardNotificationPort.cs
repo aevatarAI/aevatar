@@ -11,17 +11,20 @@ public sealed class FeishuCardNotificationPort : IChannelInteractionNotification
     private readonly ChannelDeliveryTargetResolver _targetResolver;
     private readonly LarkMessageComposer _composer;
     private readonly LarkChannelNativeMessageSender _larkSender;
+    private readonly IChannelNativeDeliveryTargetAdapter _targetAdapter;
     private readonly ILogger<FeishuCardNotificationPort> _logger;
 
     public FeishuCardNotificationPort(
         ChannelDeliveryTargetResolver targetResolver,
         LarkMessageComposer composer,
         LarkChannelNativeMessageSender larkSender,
-        ILogger<FeishuCardNotificationPort> logger)
+        ILogger<FeishuCardNotificationPort> logger,
+        IChannelNativeDeliveryTargetAdapter? targetAdapter = null)
     {
         _targetResolver = targetResolver ?? throw new ArgumentNullException(nameof(targetResolver));
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _larkSender = larkSender ?? throw new ArgumentNullException(nameof(larkSender));
+        _targetAdapter = targetAdapter ?? new LarkChannelNativeDeliveryTargetAdapter();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -40,7 +43,7 @@ public sealed class FeishuCardNotificationPort : IChannelInteractionNotification
             throw new NotSupportedException($"Unsupported interaction notification platform: {target.Platform}");
 
         await _larkSender.SendAsync(
-                ChannelDeliveryTargetResolver.ToNativeDeliveryTarget(target),
+                _targetAdapter.Adapt(ChannelDeliveryTargetResolver.ToNativeDeliveryTarget(target)),
                 new ChannelNativeMessage(
                     Text: null,
                     CardPayload: LarkInteractionCardRenderer.BuildCardJson(request, _composer),

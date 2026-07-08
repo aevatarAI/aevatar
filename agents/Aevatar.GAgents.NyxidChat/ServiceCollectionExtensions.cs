@@ -54,6 +54,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
         services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
+        services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
         AddNyxIdLifecycleCommands(services);
 

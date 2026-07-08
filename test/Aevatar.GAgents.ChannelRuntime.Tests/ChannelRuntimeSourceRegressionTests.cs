@@ -72,10 +72,14 @@ public sealed class ChannelRuntimeSourceRegressionTests
                      "LarkSendNewMessageRequest",
                      "LarkConversationTargets",
                      "LarkTextMessageSegmenter",
+                     "ChannelLarkProxyResponse",
+                     "LarkProxyResponse",
+                     "LarkBotErrorCodes",
+                     "NoPermissionToReact",
                  })
         {
             source.Should().NotContain(token,
-                "the turn runner must delegate outbound Lark delivery to channel/platform delivery ports");
+                "the turn runner must delegate outbound Lark delivery and provider error semantics to channel/platform delivery ports");
         }
     }
 

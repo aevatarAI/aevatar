@@ -4322,7 +4322,8 @@ public sealed class ChannelConversationTurnRunnerTests
         HttpMessageHandler? nyxHandler = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null,
         ILarkBotIdentityResolver? botIdentityResolver = null,
-        IChannelRelayTailTextSender? relayTailTextSender = null)
+        IChannelRelayTailTextSender? relayTailTextSender = null,
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
     {
         services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
@@ -4378,7 +4379,8 @@ public sealed class ChannelConversationTurnRunnerTests
             nyxIdCurrentUserResolver: services.GetService<INyxIdCurrentUserResolver>(),
             relayTailTextSender: relayTailTextSender ?? new NyxIdRelayTailTextSender(
                 new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
-                NullLogger<NyxIdRelayTailTextSender>.Instance));
+                NullLogger<NyxIdRelayTailTextSender>.Instance),
+            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier());
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)

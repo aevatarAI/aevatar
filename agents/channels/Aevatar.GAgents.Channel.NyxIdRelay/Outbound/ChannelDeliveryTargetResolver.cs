@@ -55,14 +55,31 @@ public sealed class ChannelDeliveryTargetResolver
     }
 
     public static ChannelNativeDeliveryTarget ToNativeDeliveryTarget(UserAgentDeliveryTarget target) =>
-        new(
-            AgentId: target.AgentId,
-            Platform: target.Platform,
-            ConversationId: target.ConversationId,
-            NyxProviderSlug: target.NyxProviderSlug,
-            NyxApiKey: target.NyxApiKey,
-            LarkReceiveId: target.LarkReceiveId,
-            LarkReceiveIdType: target.LarkReceiveIdType,
-            LarkReceiveIdFallback: target.LarkReceiveIdFallback,
-            LarkReceiveIdTypeFallback: target.LarkReceiveIdTypeFallback);
+        new RoutedChannelNativeDeliveryTarget(
+            target.AgentId,
+            target.Platform,
+            target.ConversationId,
+            target.NyxProviderSlug,
+            target.NyxApiKey,
+            target.LarkReceiveId,
+            target.LarkReceiveIdType,
+            target.LarkReceiveIdFallback,
+            target.LarkReceiveIdTypeFallback);
+
+    private sealed record RoutedChannelNativeDeliveryTarget(
+        string AgentId,
+        string Platform,
+        string ConversationId,
+        string NyxProviderSlug,
+        string NyxApiKey,
+        string LarkReceiveId,
+        string LarkReceiveIdType,
+        string LarkReceiveIdFallback,
+        string LarkReceiveIdTypeFallback)
+        : ChannelNativeDeliveryTarget(
+            AgentId,
+            Platform,
+            ConversationId,
+            NyxProviderSlug,
+            NyxApiKey);
 }

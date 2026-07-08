@@ -10,12 +10,14 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
     private readonly ChannelDeliveryTargetResolver _targetResolver;
     private readonly IReadOnlyDictionary<string, IChannelNativeMessageProducer> _nativeProducers;
     private readonly IReadOnlyDictionary<string, IChannelNativeMessageSender> _nativeSenders;
+    private readonly IReadOnlyDictionary<string, IChannelNativeDeliveryTargetAdapter> _nativeTargetAdapters;
     private readonly ILogger<NyxIdRelayChannelInteractionNotificationPort> _logger;
 
     public NyxIdRelayChannelInteractionNotificationPort(
         ChannelDeliveryTargetResolver targetResolver,
         IEnumerable<IChannelNativeMessageProducer> nativeProducers,
         IEnumerable<IChannelNativeMessageSender> nativeSenders,
+        IEnumerable<IChannelNativeDeliveryTargetAdapter> nativeTargetAdapters,
         ILogger<NyxIdRelayChannelInteractionNotificationPort> logger)
     {
         _targetResolver = targetResolver ?? throw new ArgumentNullException(nameof(targetResolver));
@@ -50,6 +52,20 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
         }
 
         _nativeSenders = senders;
+
+        var adapters = new Dictionary<string, IChannelNativeDeliveryTargetAdapter>(StringComparer.OrdinalIgnoreCase);
+        foreach (var adapter in nativeTargetAdapters ?? [])
+        {
+            ArgumentNullException.ThrowIfNull(adapter);
+            var key = NormalizePlatform(adapter.Channel.Value);
+            if (!adapters.TryAdd(key, adapter))
+            {
+                throw new InvalidOperationException(
+                    $"Multiple native delivery target adapters are registered for platform '{key}'.");
+            }
+        }
+
+        _nativeTargetAdapters = adapters;
     }
 
     public async Task DeliverAsync(
@@ -71,7 +87,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
 
         var content = HumanInteractionMessageMapper.ToMessageContent(request);
         var nativeMessage = ProduceNativeMessage(producer, content, target);
-        await sender.SendAsync(ChannelDeliveryTargetResolver.ToNativeDeliveryTarget(target), nativeMessage, cancellationToken).ConfigureAwait(false);
+        var nativeTarget = ToNativeDeliveryTarget(target);
+        await sender.SendAsync(nativeTarget, nativeMessage, cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
             "Delivered channel interaction notification: target={DeliveryTargetId}, platform={Platform}, run={RunId}, step={StepId}, capability={Capability}",
@@ -109,6 +126,20 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
         }
 
         return nativeMessage;
+    }
+
+    private ChannelNativeDeliveryTarget ToNativeDeliveryTarget(UserAgentDeliveryTarget target)
+    {
+        var platform = NormalizePlatform(target.Platform);
+        if (_nativeTargetAdapters.TryGetValue(platform, out var adapter))
+            return adapter.Adapt(target);
+
+        return new ChannelNativeDeliveryTarget(
+            target.AgentId,
+            target.Platform,
+            target.ConversationId,
+            target.NyxProviderSlug,
+            target.NyxApiKey);
     }
 
     private static string NormalizePlatform(string? value) =>
