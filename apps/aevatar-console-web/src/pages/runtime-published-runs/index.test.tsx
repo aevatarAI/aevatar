@@ -285,6 +285,41 @@ describe("TeamMemberPublishedRunsPage", () => {
     expect(mockedScopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
   });
 
+  it("does not refetch audit for a runId-only route when the catalog has no matching run", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/team-1/members/m-alpha/runs?runId=run-missing",
+    );
+    mockedScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [],
+      scopeId: "scope-1",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "m-alpha",
+        { take: 200 },
+      );
+    });
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Refresh" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
+  });
+
   it("renders member published run history from the canonical Team member route", async () => {
     const backendRunId = "scope-workflow:scope-1:wf-alpha:dep-alpha";
     window.history.replaceState(

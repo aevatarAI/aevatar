@@ -1448,7 +1448,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
               loading={auditQuery.isFetching}
               onClick={() => {
                 runsQuery.refetch();
-                auditQuery.refetch();
+                if (auditCanLoad) {
+                  auditQuery.refetch();
+                }
               }}
             >
               {t("pages.runs.memberPublishedRuns.refresh", "Refresh")}
