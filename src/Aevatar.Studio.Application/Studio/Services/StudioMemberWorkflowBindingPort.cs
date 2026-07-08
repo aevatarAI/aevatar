@@ -3,16 +3,22 @@ using System.Text;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
 public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindingPort
 {
     private readonly IStudioMemberService _memberService;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
 
-    public StudioMemberWorkflowBindingPort(IStudioMemberService memberService)
+    public StudioMemberWorkflowBindingPort(
+        IStudioMemberService memberService,
+        IWorkflowDefinitionParser workflowDefinitionParser)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
+        _workflowDefinitionParser = workflowDefinitionParser
+            ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
     }
 
     public async Task<StudioMemberWorkflowBindingResult> BindAsync(
@@ -20,6 +26,13 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        var parseResult = await _workflowDefinitionParser.ParseWorkflowYamlAsync(request.WorkflowYaml, ct);
+        if (!parseResult.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"workflow_yaml is not a valid workflow definition: {parseResult.Error}");
+        }
 
         var receipt = await _memberService.BindAsync(
             request.ScopeId,

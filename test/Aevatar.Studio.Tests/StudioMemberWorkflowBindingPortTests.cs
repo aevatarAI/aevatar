@@ -2,6 +2,7 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -12,7 +13,8 @@ public sealed class StudioMemberWorkflowBindingPortTests
     public async Task BindAsync_WhenWorkflowIdMissing_ShouldDeriveStableWorkflowId()
     {
         var memberService = new RecordingMemberService();
-        var port = new StudioMemberWorkflowBindingPort(memberService);
+        var parser = new RecordingWorkflowDefinitionParser();
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser);
 
         await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -45,7 +47,8 @@ public sealed class StudioMemberWorkflowBindingPortTests
     public async Task BindAsync_WhenWorkflowIdProvided_ShouldUseTrimmedWorkflowId()
     {
         var memberService = new RecordingMemberService();
-        var port = new StudioMemberWorkflowBindingPort(memberService);
+        var parser = new RecordingWorkflowDefinitionParser();
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser);
 
         await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -60,10 +63,32 @@ public sealed class StudioMemberWorkflowBindingPortTests
         memberService.LastRequest.Workflow!.WorkflowId.Should().Be("workflow-explicit");
     }
 
+    [Fact]
+    public async Task BindAsync_WhenWorkflowYamlInvalid_ShouldRejectBeforeDispatchingBind()
+    {
+        var memberService = new RecordingMemberService();
+        var parser = new RecordingWorkflowDefinitionParser
+        {
+            Error = "missing workflow name",
+        };
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser);
+
+        var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
+            ScopeId: "scope-1",
+            MemberId: "member-1",
+            WorkflowYaml: "steps: []\n"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("workflow_yaml is not a valid workflow definition: missing workflow name");
+        parser.LastYaml.Should().Be("steps: []\n");
+        memberService.LastRequest.Should().BeNull();
+    }
+
     private static async Task<string> BindWithoutWorkflowIdAsync(string scopeId, string memberId)
     {
         var memberService = new RecordingMemberService();
-        var port = new StudioMemberWorkflowBindingPort(memberService);
+        var parser = new RecordingWorkflowDefinitionParser();
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser);
 
         await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             scopeId,
@@ -71,6 +96,22 @@ public sealed class StudioMemberWorkflowBindingPortTests
             "name: demo\nsteps: []\n"));
 
         return memberService.LastRequest!.Workflow!.WorkflowId;
+    }
+
+    private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public string? Error { get; init; }
+        public string? LastYaml { get; private set; }
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            LastYaml = workflowYaml;
+            return Task.FromResult(Error is null
+                ? WorkflowYamlParseResult.Success("demo")
+                : WorkflowYamlParseResult.Invalid(Error));
+        }
     }
 
     private sealed class RecordingMemberService : IStudioMemberService
