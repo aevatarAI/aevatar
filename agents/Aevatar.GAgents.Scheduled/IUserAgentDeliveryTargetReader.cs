@@ -1,5 +1,4 @@
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -44,5 +43,4 @@ public sealed record UserAgentDeliveryTarget(
         Platform,
         ConversationId,
         NyxProviderSlug,
-        NyxApiKey),
-        ILarkChannelNativeDeliveryRoute;
+        NyxApiKey);
