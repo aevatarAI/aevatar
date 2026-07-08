@@ -1,6 +1,7 @@
 import { Button, Card, Result } from 'antd';
 import React from 'react';
 import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
+import { history } from '@/shared/navigation/history';
 import { t } from "@/shared/i18n/messages";
 
 const NoFoundPage: React.FC = () => (
@@ -13,7 +14,7 @@ const NoFoundPage: React.FC = () => (
         <Button
           type="primary"
           onClick={() => {
-            window.location.href = CONSOLE_HOME_ROUTE;
+            history.push(CONSOLE_HOME_ROUTE);
           }}
         >
           {t("pages.404.return.to.projects", "Return to projects")}</Button>
