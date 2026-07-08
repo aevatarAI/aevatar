@@ -131,7 +131,8 @@ public static class ServiceCollectionExtensions
                 larkClient: sp.GetService<ILarkNyxClient>(),
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
-                overlayProvider: sp.GetService<ISystemSkillOverlayProvider>()));
+                overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
+                larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();

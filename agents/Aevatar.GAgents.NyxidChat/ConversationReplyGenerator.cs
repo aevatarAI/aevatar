@@ -70,6 +70,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILarkNyxClient? _larkClient;
+    private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
     private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
@@ -110,7 +111,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         ILarkNyxClient? larkClient = null,
         IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
-        ISystemSkillOverlayProvider? overlayProvider = null)
+        ISystemSkillOverlayProvider? overlayProvider = null,
+        ILarkOutboundClientFactory? larkOutboundClientFactory = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -124,6 +126,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _larkClient = larkClient;
+        _larkOutboundClientFactory = larkOutboundClientFactory;
         _overlayProvider = overlayProvider;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
@@ -515,7 +518,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     "the selected LLM route does not support image input"));
         }
 
-        if (_larkClient is null)
+        if (_larkClient is null && _larkOutboundClientFactory is null)
         {
             return new UserInputParts(
                 text,
@@ -553,6 +556,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 continue;
             }
 
+            var larkClient = ResolveLarkResourceDownloadClient(source.Activity, out var providerSlug);
+            if (larkClient is null)
+            {
+                _logger.LogWarning(
+                    "Lark resource download client is unavailable for chat LLM input: provider={ProviderSlug} messageId={MessageId}",
+                    providerSlug,
+                    messageId);
+                unseenCount += source.Attachments.Count;
+                continue;
+            }
+
             foreach (var attachment in source.Attachments)
             {
                 if (attachment.Kind != AttachmentKind.Image)
@@ -577,7 +591,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 LarkMessageResourceDownloadResult downloaded;
                 try
                 {
-                    downloaded = await _larkClient.DownloadMessageResourceAsync(
+                    downloaded = await larkClient.DownloadMessageResourceAsync(
                             token,
                             new LarkMessageResourceDownloadRequest(
                                 messageId,
@@ -594,7 +608,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 {
                     _logger.LogWarning(
                         ex,
-                        "Failed to download Lark image attachment for chat LLM input: messageId={MessageId} resourceKey={ResourceKey}",
+                        "Failed to download Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey}",
+                        providerSlug,
                         messageId,
                         resourceKey);
                     unseenCount++;
@@ -606,6 +621,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     downloaded.Content.Length > MaxInlineImageBytes ||
                     !IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
                 {
+                    _logger.LogWarning(
+                        "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} status={Status} detail={Detail}",
+                        providerSlug,
+                        messageId,
+                        resourceKey,
+                        downloaded.HttpStatus,
+                        downloaded.Detail);
                     unseenCount++;
                     continue;
                 }
@@ -624,6 +646,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             : null;
 
         return new UserInputParts(text, parts, instruction);
+    }
+
+    private ILarkNyxClient? ResolveLarkResourceDownloadClient(ChatActivity activity, out string? providerSlug)
+    {
+        providerSlug = NormalizeOptional(activity.TransportExtras?.NyxProviderSlug);
+        if (providerSlug is not null && _larkOutboundClientFactory is not null)
+            return _larkOutboundClientFactory.ResolveNyxClient(providerSlug);
+
+        return _larkClient;
     }
 
     private sealed record AttachmentActivity(ChatActivity Activity, IReadOnlyList<AttachmentRef> Attachments);
