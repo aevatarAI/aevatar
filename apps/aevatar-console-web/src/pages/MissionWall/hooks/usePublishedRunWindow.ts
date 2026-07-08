@@ -9,6 +9,7 @@ export interface PublishedRunWindowState {
 }
 
 interface PublishedRunWindowModel {
+  readonly manualSelection: boolean;
   readonly runs: readonly MissionWallRun[];
   readonly selectedRunId?: string;
 }
@@ -64,6 +65,7 @@ export function mergePublishedRunWindowRuns(
 export function reducePublishedRunWindowModel(
   previousModel: PublishedRunWindowModel,
   nextRuns: readonly MissionWallRun[],
+  preferredRunId?: string,
 ): PublishedRunWindowModel {
   const previousRunIds = new Set(previousModel.runs.map((run) => run.runId));
   const nextWindowRuns = mergePublishedRunWindowRuns(
@@ -79,11 +81,19 @@ export function reducePublishedRunWindowModel(
   const selectedRun = previousModel.selectedRunId
     ? nextWindowRuns.find((run) => run.runId === previousModel.selectedRunId)
     : undefined;
+  const preferredRun = preferredRunId
+    ? nextWindowRuns.find((run) => run.runId === preferredRunId)
+    : undefined;
   const firstLiveRun = nextWindowRuns.find(isLiveRun);
+  const manualSelection =
+    previousModel.manualSelection && Boolean(selectedRunStillVisible);
 
   const nextModel = {
+    manualSelection,
     runs: nextWindowRuns,
     selectedRunId:
+      (manualSelection ? previousModel.selectedRunId : undefined) ??
+      preferredRun?.runId ??
       (selectedRunStillVisible && isLiveRun(selectedRun)
         ? previousModel.selectedRunId
         : undefined) ??
@@ -94,6 +104,7 @@ export function reducePublishedRunWindowModel(
   };
 
   if (
+    previousModel.manualSelection === nextModel.manualSelection &&
     previousModel.selectedRunId === nextModel.selectedRunId &&
     sameWindowRuns(previousModel.runs, nextModel.runs)
   ) {
@@ -108,15 +119,16 @@ export function usePublishedRunWindow(
   initialSelectedRunId?: string,
 ): PublishedRunWindowState {
   const [model, setModel] = React.useState<PublishedRunWindowModel>(() => ({
+    manualSelection: false,
     runs,
     selectedRunId: initialSelectedRunId ?? runs[0]?.runId,
   }));
 
   React.useEffect(() => {
     setModel((previousModel) =>
-      reducePublishedRunWindowModel(previousModel, runs),
+      reducePublishedRunWindowModel(previousModel, runs, initialSelectedRunId),
     );
-  }, [runs]);
+  }, [initialSelectedRunId, runs]);
 
   const selectedRun =
     model.runs.find((run) => run.runId === model.selectedRunId) ??
@@ -127,6 +139,7 @@ export function usePublishedRunWindow(
     selectRun: (runId) => {
       setModel((previousModel) => ({
         ...previousModel,
+        manualSelection: true,
         selectedRunId: runId,
       }));
     },
