@@ -36,6 +36,7 @@ import {
   buildTeamDetailHref,
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
+  buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import type {
@@ -509,6 +510,26 @@ const memberPublishedRunsReplayCss = `
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function isStudioMemberNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const record = error as {
+    readonly code?: unknown;
+    readonly message?: unknown;
+    readonly status?: unknown;
+  };
+  const code = typeof record.code === "string" ? record.code.trim().toUpperCase() : "";
+  if (code === "STUDIO_MEMBER_NOT_FOUND") {
+    return true;
+  }
+
+  const status = typeof record.status === "number" ? record.status : 0;
+  const message = typeof record.message === "string" ? record.message.toUpperCase() : "";
+  return status === 404 && message.includes("STUDIO_MEMBER_NOT_FOUND");
 }
 
 function normalizeRunStatus(status: string | null | undefined): string {
@@ -1060,9 +1081,17 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
     queryKey: ["runtime-member-published-runs", "member", scopeId, memberId],
     retry: false,
   });
+  const memberNotFound = isStudioMemberNotFoundError(memberQuery.error);
+  const memberReady = Boolean(scopeId && memberId && memberQuery.isSuccess && !memberNotFound);
+
+  React.useEffect(() => {
+    if (memberNotFound) {
+      history.replace(buildTeamsHref());
+    }
+  }, [memberNotFound]);
 
   const runsQuery = useQuery({
-    enabled: Boolean(scopeId && memberId),
+    enabled: memberReady,
     queryFn: () => scopeRuntimeApi.listMemberRuns(scopeId, memberId, { take: 200 }),
     queryKey: ["runtime-member-published-runs", scopeId, memberId],
     retry: false,
@@ -1080,6 +1109,14 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunId = selectedCatalogRun?.runId ?? normalizedInitialRunId;
   const selectedRunActorId =
     selectedCatalogRun?.actorId || normalizedInitialActorId || "";
+  const selectedRunNeedsCatalogMatch = Boolean(
+    normalizedInitialRunId && !normalizedInitialActorId,
+  );
+  const auditCanLoad = Boolean(
+    memberReady &&
+      selectedRunId &&
+      (!selectedRunNeedsCatalogMatch || selectedCatalogRun),
+  );
 
   React.useEffect(() => {
     if (!selectedCatalogRun?.runId || normalizedInitialRunId) {
@@ -1098,7 +1135,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   }, [memberId, normalizedInitialRunId, normalizedTeamId, scopeId, selectedCatalogRun]);
 
   const auditQuery = useQuery({
-    enabled: Boolean(scopeId && memberId && selectedRunId),
+    enabled: auditCanLoad,
     queryFn: () =>
       scopeRuntimeApi.getMemberRunAudit(scopeId, memberId, selectedRunId, {
         actorId: selectedRunActorId || undefined,
@@ -1127,8 +1164,12 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const audit = auditQuery.data?.audit ?? null;
   const displayRuns =
     runs.length || !selectedRun ? runs : [selectedRun];
+  const runsLoadError = memberNotFound ? null : memberQuery.error || runsQuery.error;
   const showReplaySkeleton = Boolean(
-    runsQuery.isLoading || (selectedRun && auditQuery.isLoading),
+    memberQuery.isLoading ||
+      memberNotFound ||
+      runsQuery.isLoading ||
+      (selectedRun && auditQuery.isLoading),
   );
   const graph = React.useMemo(
     () => buildExecutionGraph(audit, selectedStepId),
@@ -1302,9 +1343,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
           </div>
         </div>
         <div className="member-published-runs-replay__list">
-          {runsQuery.isLoading ? (
+          {memberQuery.isLoading || memberNotFound || runsQuery.isLoading ? (
             renderRunListSkeleton()
-          ) : runsQuery.error ? (
+          ) : runsLoadError ? (
             <Alert
               showIcon
               type="error"
@@ -1313,9 +1354,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 "Published runs are unavailable.",
               )}
               description={
-                runsQuery.error instanceof Error
-                  ? runsQuery.error.message
-                  : String(runsQuery.error)
+                runsLoadError instanceof Error
+                  ? runsLoadError.message
+                  : String(runsLoadError)
               }
             />
           ) : displayRuns.length ? (
@@ -1407,7 +1448,9 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
               loading={auditQuery.isFetching}
               onClick={() => {
                 runsQuery.refetch();
-                auditQuery.refetch();
+                if (auditCanLoad) {
+                  auditQuery.refetch();
+                }
               }}
             >
               {t("pages.runs.memberPublishedRuns.refresh", "Refresh")}
