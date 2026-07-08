@@ -13,6 +13,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     private const string ScheduleToolName = "aevatar_provision_workflow_schedule";
     private const string CreateTeamToolName = "aevatar_create_team";
     private const string CreateMemberToolName = "aevatar_create_member";
+    private const string BindMemberWorkflowToolName = "aevatar_bind_member_workflow";
 
     [Fact]
     public async Task ToolSource_ShouldDiscoverProvisionWorkflowScheduleTool()
@@ -49,12 +50,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task AddStudioProvisioningTools_WhenPortsRegistered_ShouldExposeScheduleTeamAndMemberTools()
+    public async Task AddStudioProvisioningTools_WhenPortsRegistered_ShouldExposeScheduleTeamMemberAndBindingTools()
     {
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowScheduleProvisioningPort, RecordingProvisioningPort>();
         services.AddSingleton<IStudioTeamProvisioningPort, RecordingTeamProvisioningPort>();
         services.AddSingleton<IStudioMemberProvisioningPort, RecordingMemberProvisioningPort>();
+        services.AddSingleton<IStudioMemberWorkflowBindingPort, RecordingMemberWorkflowBindingPort>();
         services.AddStudioProvisioningTools();
 
         var provider = services.BuildServiceProvider();
@@ -69,6 +71,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         toolNames.Should().Contain(ScheduleToolName);
         toolNames.Should().Contain(CreateTeamToolName);
         toolNames.Should().Contain(CreateMemberToolName);
+        toolNames.Should().Contain(BindMemberWorkflowToolName);
     }
 
     [Fact]
@@ -85,6 +88,27 @@ public sealed class ProvisionWorkflowScheduleToolTests
     public async Task ToolSource_WhenMemberPortMissing_ShouldNotDiscoverCreateMemberTool()
     {
         var source = new CreateStudioMemberToolSource();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenBindingPortRegistered_ShouldDiscoverBindMemberWorkflowTool()
+    {
+        var source = new BindStudioMemberWorkflowToolSource(new RecordingMemberWorkflowBindingPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        tools[0].Name.Should().Be(BindMemberWorkflowToolName);
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenBindingPortMissing_ShouldNotDiscoverBindMemberWorkflowTool()
+    {
+        var source = new BindStudioMemberWorkflowToolSource();
 
         var tools = await source.DiscoverToolsAsync();
 
@@ -234,6 +258,79 @@ public sealed class ProvisionWorkflowScheduleToolTests
     public async Task CreateMember_ShouldUseSharedCreateScopedResourceApprovalPolicy()
     {
         var tool = await DiscoverCreateMemberToolAsync(new RecordingMemberProvisioningPort());
+
+        tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
+        tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_ShouldCallBindingPortWithCallerScope()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "workflow_yaml": "name: team_workflow\nsteps: []\n",
+              "workflow_id": "workflow-alpha"
+            }
+            """);
+
+        bindingPort.LastRequest.Should().NotBeNull();
+        bindingPort.LastRequest!.ScopeId.Should().Be("scope-current");
+        bindingPort.LastRequest.MemberId.Should().Be("member-alpha");
+        bindingPort.LastRequest.WorkflowYaml.Should().Contain("name: team_workflow");
+        bindingPort.LastRequest.WorkflowId.Should().Be("workflow-alpha");
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("member_id").GetString().Should().Be("member-alpha");
+        root.GetProperty("binding_run_id").GetString().Should().Be("binding-run-1");
+        root.GetProperty("member_workflow_url").GetString()
+            .Should().Be("/api/scopes/scope-current/members/member-alpha/binding");
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+
+        using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"member-alpha","workflow_yaml":"name: demo\n"}""");
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        bindingPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_WhenModelSuppliesScope_ShouldRejectUnknownArgumentAndNotCallPort()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+
+        using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "scope_id": "scope-model",
+              "member_id": "member-alpha",
+              "workflow_yaml": "name: demo\n"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("Unknown argument: scope_id");
+        bindingPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BindMemberWorkflow_ShouldUseSharedCreateScopedResourceApprovalPolicy()
+    {
+        var tool = await DiscoverBindMemberWorkflowToolAsync(new RecordingMemberWorkflowBindingPort());
 
         tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
         tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
@@ -424,6 +521,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return tools.Single(tool => tool.Name == CreateMemberToolName);
     }
 
+    private static async Task<IAgentTool> DiscoverBindMemberWorkflowToolAsync(IStudioMemberWorkflowBindingPort bindingPort)
+    {
+        var source = new BindStudioMemberWorkflowToolSource(bindingPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == BindMemberWorkflowToolName);
+    }
+
     private static AgentToolContextScope PushContext(string? scopeId, string? ownerSubject, string? accessToken)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
@@ -531,6 +635,26 @@ public sealed class ProvisionWorkflowScheduleToolTests
             {
                 TeamId = request.TeamId,
             });
+        }
+    }
+
+    private sealed class RecordingMemberWorkflowBindingPort : IStudioMemberWorkflowBindingPort
+    {
+        public StudioMemberWorkflowBindingRequest? LastRequest { get; private set; }
+
+        public Task<StudioMemberWorkflowBindingResult> BindAsync(
+            StudioMemberWorkflowBindingRequest request,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new StudioMemberWorkflowBindingResult(
+                Success: true,
+                ScopeId: request.ScopeId,
+                MemberId: request.MemberId,
+                BindingRunId: "binding-run-1",
+                Status: "accepted",
+                AckStage: "dispatch_accepted",
+                BindingRunRole: "candidate"));
         }
     }
 }

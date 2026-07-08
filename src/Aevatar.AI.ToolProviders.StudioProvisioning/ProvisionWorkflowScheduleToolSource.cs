@@ -71,3 +71,22 @@ public sealed class CreateStudioMemberToolSource : IAgentToolSource
                 : [new CreateStudioMemberTool(_memberProvisioningPort)]);
     }
 }
+
+public sealed class BindStudioMemberWorkflowToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberWorkflowBindingPort? _bindingPort;
+
+    public BindStudioMemberWorkflowToolSource(IStudioMemberWorkflowBindingPort? bindingPort = null)
+    {
+        _bindingPort = bindingPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _bindingPort is null
+                ? []
+                : [new BindStudioMemberWorkflowTool(_bindingPort)]);
+    }
+}

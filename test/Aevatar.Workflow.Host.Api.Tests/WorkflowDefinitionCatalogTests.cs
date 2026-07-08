@@ -202,6 +202,7 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("Studio agent");
         role.SystemPrompt.Should().Contain("aevatar_create_team");
         role.SystemPrompt.Should().Contain("aevatar_create_member");
+        role.SystemPrompt.Should().Contain("aevatar_bind_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
         role.SystemPrompt.Should().Contain("/workflow/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
@@ -228,6 +229,7 @@ public class WorkflowDefinitionCatalogTests
         var allowed = role.AgentToolScope!.AllowedToolNames;
         allowed.Should().Contain("aevatar_create_team");
         allowed.Should().Contain("aevatar_create_member");
+        allowed.Should().Contain("aevatar_bind_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
         allowed.Should().Contain("aevatar_observe_run");
         allowed.Should().Contain("aevatar_read_workflow_run_artifact");
