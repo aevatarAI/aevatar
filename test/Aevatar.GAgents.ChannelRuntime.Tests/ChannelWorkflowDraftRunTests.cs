@@ -281,6 +281,101 @@ public sealed class ChannelWorkflowDraftRunTests
     }
 
     [Fact]
+    public async Task InteractionPort_ShouldRouteLarkAttachmentDownloadsThroughInboundProviderSlug()
+    {
+        var defaultLark = Substitute.For<ILarkNyxClient>();
+        var inboundLark = Substitute.For<ILarkNyxClient>();
+        inboundLark.DownloadMessageResourceAsync(
+                "user-token-1",
+                Arg.Any<LarkMessageResourceDownloadRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new LarkMessageResourceDownloadResult(
+                true,
+                [1, 2, 3],
+                "image/png",
+                "receipt.png")));
+        var clientFactory = Substitute.For<ILarkOutboundClientFactory>();
+        clientFactory.ResolveNyxClient("api-lark-bot-4").Returns(inboundLark);
+
+        var ingress = new RecordingWorkflowFileIngressPort();
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(
+            dispatch,
+            workflow,
+            defaultLark,
+            ingress,
+            clientFactory);
+        var request = BuildWorkflowRequestWithLarkAttachments();
+        request.Activity.Content.Attachments.RemoveAt(1);
+        request.Activity.TransportExtras.NyxProviderSlug = " api-lark-bot-4 ";
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            request,
+            CancellationToken.None);
+
+        var workflowRequest = await workflow.WaitForRequestAsync();
+        workflowRequest.InputParts.Should().ContainSingle();
+        ingress.Requests.Should().ContainSingle();
+        clientFactory.Received(1).ResolveNyxClient("api-lark-bot-4");
+        await inboundLark.Received(1).DownloadMessageResourceAsync(
+            "user-token-1",
+            Arg.Is<LarkMessageResourceDownloadRequest>(x =>
+                x.MessageId == "om_123" &&
+                x.ResourceKey == "img_v3_1" &&
+                x.Kind == LarkMessageResourceKind.Image),
+            Arg.Any<CancellationToken>());
+        await defaultLark.DidNotReceiveWithAnyArgs().DownloadMessageResourceAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task InteractionPort_ShouldUseDefaultLarkClient_WhenInboundProviderSlugIsMissing()
+    {
+        var defaultLark = Substitute.For<ILarkNyxClient>();
+        defaultLark.DownloadMessageResourceAsync(
+                "user-token-1",
+                Arg.Any<LarkMessageResourceDownloadRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new LarkMessageResourceDownloadResult(
+                true,
+                [1, 2, 3],
+                "image/png",
+                "receipt.png")));
+        var clientFactory = Substitute.For<ILarkOutboundClientFactory>();
+
+        var ingress = new RecordingWorkflowFileIngressPort();
+        var workflow = new RecordingWorkflowChatRunInteractionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreateInteractionPort(
+            dispatch,
+            workflow,
+            defaultLark,
+            ingress,
+            clientFactory);
+        var request = BuildWorkflowRequestWithLarkAttachments();
+        request.Activity.Content.Attachments.RemoveAt(1);
+        request.Activity.TransportExtras.NyxProviderSlug = " ";
+
+        await port.StartWorkflowInteractionAsync(
+            "channel-workflow-draft-run:workflow-draft-run-1",
+            request,
+            CancellationToken.None);
+
+        var workflowRequest = await workflow.WaitForRequestAsync();
+        workflowRequest.InputParts.Should().ContainSingle();
+        ingress.Requests.Should().ContainSingle();
+        clientFactory.DidNotReceiveWithAnyArgs().ResolveNyxClient(default);
+        await defaultLark.Received(1).DownloadMessageResourceAsync(
+            "user-token-1",
+            Arg.Is<LarkMessageResourceDownloadRequest>(x =>
+                x.MessageId == "om_123" &&
+                x.ResourceKey == "img_v3_1" &&
+                x.Kind == LarkMessageResourceKind.Image),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task InteractionPort_ShouldFailClosed_WhenLarkAttachmentIngressPortIsMissing()
     {
         var lark = Substitute.For<ILarkNyxClient>();
@@ -909,7 +1004,8 @@ public sealed class ChannelWorkflowDraftRunTests
         RecordingActorDispatchPort dispatch,
         IWorkflowChatRunInteractionPort workflowInteractionPort,
         ILarkNyxClient? larkClient = null,
-        IWorkflowFileIngressPort? fileIngressPort = null) =>
+        IWorkflowFileIngressPort? fileIngressPort = null,
+        ILarkOutboundClientFactory? outboundClientFactory = null) =>
         new(
             new RecordingActorRuntime(),
             dispatch,
@@ -917,7 +1013,8 @@ public sealed class ChannelWorkflowDraftRunTests
             workflowInteractionPort,
             TimeProvider.System,
             larkClient,
-            fileIngressPort);
+            fileIngressPort,
+            outboundClientFactory);
 
     private static async Task<ChannelWorkflowDraftRunGAgent> CreateWorkflowDraftRunAgentAsync(
         IActorDispatchPort dispatchPort,
