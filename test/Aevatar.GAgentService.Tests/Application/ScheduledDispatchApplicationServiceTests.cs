@@ -213,7 +213,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task EnsureAsync_ShouldNormalizePrepareEnsureActorAndDispatchWithoutQuerying()
+    public async Task EnsureAsync_ShouldNormalizePrepareEnsureActorAndDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
         var queryPort = new RecordingScheduledDispatchQueryPort();
@@ -229,7 +229,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.Ensured.Should().ContainSingle();
         actorPort.Created.Should().BeEmpty();
         actorPort.Updated.Should().BeEmpty();
-        queryPort.GetScheduleIds.Should().BeEmpty();
+        // The single readmodel read is the delete-tombstone guard: the actor
+        // rejects reconfiguring a deleted schedule and the admission-only
+        // dispatch would swallow that rejection, so ensure must check first.
+        queryPort.GetScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-1");
         queryPort.ListRequests.Should().BeEmpty();
         queryPort.FilteredListRequests.Should().BeEmpty();
     }
@@ -806,6 +809,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var get = await service.GetAsync(" schedule-1 ");
         var update = () => service.UpdateAsync("schedule-1", CreateEnvelopeConfiguration("schedule-1"));
+        var ensure = () => service.EnsureAsync(CreateEnvelopeConfiguration("schedule-1"));
         var enable = () => service.EnableAsync("schedule-1", string.Empty);
         var disable = () => service.DisableAsync("schedule-1", string.Empty);
         var delete = () => service.DeleteAsync("schedule-1", string.Empty);
@@ -813,11 +817,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         get.Should().BeNull();
         await update.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await ensure.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await delete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
         actorPort.Updated.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
         actorPort.Enabled.Should().BeEmpty();
         actorPort.Disabled.Should().BeEmpty();
         actorPort.Deleted.Should().BeEmpty();

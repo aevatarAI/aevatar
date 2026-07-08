@@ -353,7 +353,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var port = new RecordingProvisioningPort
         {
-            Throw = new InvalidOperationException("WorkflowYaml is required."),
+            Throw = new InvalidOperationException(
+                "workflow_yaml is not a valid workflow definition: Property 'version' not found on type 'Raw'"),
         };
         var tool = await DiscoverToolAsync(port);
 
@@ -366,6 +367,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
             """);
 
         ErrorCode(output).Should().Be("invalid_arguments");
+        // The message is the load-bearing half of the repair loop: the tool
+        // description tells the model to fix the YAML "per the error message",
+        // so the parser text naming the rejected key must survive the mapping.
+        ErrorMessage(output).Should().Contain("Property 'version' not found on type 'Raw'");
     }
 
     [Fact]

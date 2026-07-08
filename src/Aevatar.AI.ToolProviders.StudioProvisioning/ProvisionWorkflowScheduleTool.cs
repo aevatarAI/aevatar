@@ -47,9 +47,17 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         "Schedule a runnable Aevatar workflow whose recurring runs appear in /workflow/observatory (never a chat/bot). " +
         "Supply the workflow body inline as workflow_yaml plus a display_name; the tool creates the member, binds the YAML, " +
         "and creates a workflow-kind scheduled dispatch under the caller's scope. " +
+        "The workflow_yaml is validated synchronously before anything is created: an invalid document returns a typed error " +
+        "describing the problem and provisions nothing — fix the YAML per the error message and call again. " +
+        "Provisioning is idempotent per display_name: calling again with the same display_name re-binds the same member and " +
+        "updates (and re-enables) its schedule instead of creating duplicates, so retries are safe. That also means an " +
+        "existing display_name is REPLACED by a re-provision — reuse a display_name only to retry or update the same " +
+        "automation, and pick a distinct display_name for a different automation. " +
         "Provide schedule_cron + schedule_timezone for a recurring monitor; omit them for a single near-future demo run (unless run_immediately is false). " +
         "This is the Observatory-delivered alternative to scheduled_agent_creator: use it for workflow automation instead of publishing a prose skill or scheduling a bot delivery. " +
-        "Returns the schedule id, member id, and the Observatory link; the scope and caller identity are taken from the session context, not from arguments.";
+        "Returns the schedule id, member id, and the Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
+        "A status of 'accepted' means the YAML was validated and the bind was dispatched — the bind and any run complete " +
+        "asynchronously, so verify the run in the Observatory before reporting the workflow as running.";
 
     public string ParametersSchema => """
         {
@@ -58,7 +66,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
           "properties": {
             "workflow_yaml": {
               "type": "string",
-              "description": "The workflow definition body as inline YAML. Required."
+              "description": "The workflow definition body as inline YAML. Required. Schema (snake_case keys): the only top-level keys are name (required), description, configuration, roles, steps. roles is a list of {id, name, system_prompt, ...}; steps is a list of {id, type, target_role, parameters, next, branches, ...}. Do NOT use top-level keys from other workflow dialects such as version, inputs, outputs, triggers, on, env, or jobs — the parser rejects unknown keys and the tool returns the parse error."
             },
             "display_name": {
               "type": "string",

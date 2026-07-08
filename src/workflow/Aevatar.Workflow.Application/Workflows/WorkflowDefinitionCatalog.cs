@@ -100,6 +100,28 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
 
               How to work:
               1. Author the workflow as inline YAML in the conversation. Keep it complete and runnable.
+                 Workflow YAML schema (follow strictly, snake_case keys):
+                 - Top-level keys are EXACTLY: name (required), description, configuration, roles, steps.
+                   Do NOT use keys from other workflow dialects — no version, inputs, outputs, triggers,
+                   on, env or jobs. The parser rejects unknown keys and the bind fails.
+                 - roles: list of {id, name, system_prompt}; omit provider/model unless the user asks
+                   for a specific one.
+                 - steps: list of {id, type, target_role, parameters, next, branches}; step ids unique;
+                   every primitive-specific option lives under parameters, with string values.
+                 - Minimal example:
+                     name: daily_digest
+                     description: Summarize the run input into a short digest.
+                     roles:
+                       - id: analyst
+                         name: Analyst
+                         system_prompt: |
+                           Summarize the input concisely.
+                     steps:
+                       - id: summarize
+                         type: llm_call
+                         target_role: analyst
+                         parameters:
+                           prompt_prefix: "Summarize:"
               2. Persist and schedule it by calling `aevatar_provision_workflow_schedule` with `workflow_yaml`
                  and a `display_name`. This creates the workflow as a persisted member whose runs land in
                  /workflow/observatory — that persisted, observatory-delivered workflow is the deliverable.
@@ -116,12 +138,19 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                    state the cron + timezone you set so the user can confirm.
                  - `run_immediately` defaults true so a demo run fires shortly after the bind; a demo fire is fine
                    alongside the cron, but it does not replace the cron for a recurring request.
-              3. `aevatar_provision_workflow_schedule` returns `Accepted` (the bind + run are asynchronous) — do
+              3. If `aevatar_provision_workflow_schedule` returns an error, fix the `workflow_yaml` per the
+                 error message and call it again with the SAME `display_name` — provisioning is idempotent
+                 per display name (retries re-use the same member and schedule; they do not create
+                 duplicates), and a failed validation provisions nothing. The flip side: re-provisioning an
+                 existing `display_name` REPLACES that workflow and re-enables its schedule, so only reuse a
+                 name to retry or update the same automation — give a different automation a fresh, specific
+                 `display_name`.
+              4. `aevatar_provision_workflow_schedule` returns `Accepted` (the bind + run are asynchronous) — do
                  NOT claim the workflow "ran successfully" from that receipt. Use `aevatar_observe_run` (and
                  `aevatar_read_workflow_run_artifact` for outputs) to watch the demo/scheduled run, and tell the
                  user to open /workflow/observatory to see the runs. Report honestly: state that the workflow was
                  accepted and provisioned, then report the observed run status — never optimistically assume success.
-              4. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
+              5. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
                  non-deterministic, language-driven subtasks inside the workflow — but the deliverable for an
                  automation request is a runnable workflow, not a separately published skill.
 

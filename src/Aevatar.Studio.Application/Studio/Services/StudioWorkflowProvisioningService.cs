@@ -1,9 +1,12 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Application.Studio.Services;
@@ -37,6 +40,27 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// a fresh token on every fire, past session-token expiry. The scope id and the
 /// caller credential are always input parameters — the service holds no
 /// HttpContext and no infrastructure dependency, only application ports.
+///
+/// Two invariants keep the non-blocking flow from leaking resources:
+/// <list type="bullet">
+///   <item><b>Validate before provisioning.</b> The workflow YAML is parsed
+///   synchronously with the same <see cref="IWorkflowDefinitionParser"/> the bind
+///   pipeline uses. Invalid YAML throws with the parser's error message and
+///   provisions NOTHING — no member, no schedule — so an authoring agent can
+///   repair the YAML and retry without leaving garbage behind.</item>
+///   <item><b>Retries converge.</b> One (scope, display name) pair owns exactly
+///   one member, one workflow id, and one schedule: the member id is derived
+///   deterministically from that pair (an existing member is reused, never
+///   re-created), and the schedule uses a deterministic id via
+///   <see cref="IScheduledDispatchApplicationService.EnsureAsync"/> (idempotent
+///   upsert). Re-provisioning the same display name re-binds and re-schedules the
+///   same resources instead of accumulating a new member + enabled schedule per
+///   attempt. That reuse is also the documented ownership rule: a display name
+///   identifies ONE automation, and re-provisioning it replaces that member's
+///   workflow. When the pair's schedule was explicitly deleted, the schedule id
+///   advances to the next generation instead of resurrecting the tombstone (see
+///   <see cref="EnsureProvisionScheduleAsync"/>).</item>
+/// </list>
 /// </summary>
 public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvisioningService
 {
@@ -48,15 +72,19 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
     private readonly IStudioMemberService _memberService;
     private readonly IScheduledDispatchApplicationService _scheduleService;
+    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly TimeProvider _timeProvider;
 
     public StudioWorkflowProvisioningService(
         IStudioMemberService memberService,
         IScheduledDispatchApplicationService scheduleService,
+        IWorkflowDefinitionParser workflowDefinitionParser,
         TimeProvider? timeProvider = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
+        _workflowDefinitionParser = workflowDefinitionParser
+            ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -71,31 +99,44 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
+
+        // 0. Validate the YAML with the same parser the bind pipeline runs, BEFORE
+        //    any resource exists. Invalid YAML must provision nothing; the parser's
+        //    error message goes back to the caller so it can repair and retry.
+        var parseResult = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
+        if (!parseResult.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"workflow_yaml is not a valid workflow definition: {parseResult.Error}");
+        }
+
         var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
 
-        // 1. Create the member (kind = workflow). The actor stamps the rename-safe
-        //    published service id at creation, so we read it straight back — no
-        //    poll, no recompute of the convention.
-        var member = await _memberService.CreateAsync(
-            normalizedScopeId,
-            new CreateStudioMemberRequest(
-                DisplayName: displayName,
-                ImplementationKind: MemberImplementationKindNames.Workflow),
-            ct);
+        // Provision identity: one (scope, display name) pair owns exactly one
+        // member + workflow id + schedule, so retries converge on the same
+        // resources instead of leaving an orphan pair per attempt.
+        var provisionKey = BuildProvisionKey(normalizedScopeId, displayName);
 
-        var memberId = member.MemberId;
-        var publishedServiceId = NormalizeRequired(
-            member.PublishedServiceId, nameof(member.PublishedServiceId));
+        // 1. Resolve the member: reuse the existing one for this (scope, display
+        //    name), else create it. The deterministic id is the member's identity;
+        //    its display name is a mutable label — re-creating after a rename
+        //    would hard-conflict at the actor, so an already-provisioned member is
+        //    read from the readmodel and never re-created. The actor stamps the
+        //    rename-safe published service id at creation, so both paths read it
+        //    straight back — no poll, no recompute of the convention.
+        var (memberId, publishedServiceId, teamId) = await ResolveProvisionedMemberAsync(
+            normalizedScopeId, displayName, $"wf-{provisionKey}", ct);
 
         // 2. Bind the inline workflow YAML. WorkflowId is a stable identifier the
-        //    bind contract requires; we mint one so the caller only supplies YAML.
+        //    bind contract requires; deriving it from the provision key keeps one
+        //    logical workflow identity across re-binds of the same member.
         //    The bind is asynchronous — we do NOT poll it to completion.
         var bindReceipt = await _memberService.BindAsync(
             normalizedScopeId,
             memberId,
             new UpdateStudioMemberBindingRequest(
                 Workflow: new StudioMemberWorkflowBindingSpec(
-                    WorkflowId: GenerateWorkflowId(),
+                    WorkflowId: $"workflow-{provisionKey}",
                     WorkflowYamls: [workflowYaml])),
             ct);
 
@@ -108,21 +149,23 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    The schedule carries EXACTLY ONE credential source (the validator admits
         //    no more), a re-mintable subject reference. Raw bearer tokens are never
         //    persisted in schedule state.
+        //
+        //    The schedule id is deterministic (provision-{publishedServiceId}) and
+        //    the write goes through EnsureAsync, so a re-provision updates the one
+        //    existing schedule instead of stacking a new enabled schedule per retry.
         string? scheduleId = null;
         if (ShouldSchedule(request))
         {
             var cronExpression = ResolveCron(request, out var timezone);
             var auth = BuildScheduleAuth(subjectRef);
-            var schedule = await _scheduleService.CreateAsync(
-                BuildScheduleConfiguration(
-                    normalizedScopeId,
-                    publishedServiceId,
-                    request.Prompt ?? string.Empty,
-                    auth,
-                    cronExpression,
-                    timezone),
+            scheduleId = await EnsureProvisionScheduleAsync(
+                normalizedScopeId,
+                publishedServiceId,
+                request.Prompt ?? string.Empty,
+                auth,
+                cronExpression,
+                timezone,
                 ct);
-            scheduleId = NormalizeOptional(schedule.ScheduleId);
         }
 
         return new ProvisionWorkflowResponse(
@@ -135,8 +178,88 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             ScheduleId = scheduleId,
             // The editable Studio page is team-scoped; a freshly provisioned
             // member has no team yet, so the link is only built once one exists.
-            StudioUrl = BuildStudioUrl(normalizedScopeId, member.TeamId, memberId),
+            StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
         };
+    }
+
+    /// <summary>
+    /// Resolves the provisioned member for one (scope, display name) pair:
+    /// reuse it when it already exists, create it otherwise. The deterministic
+    /// member id is the identity; the display name is a mutable label, so an
+    /// existing member is read from the readmodel and never re-created — a
+    /// re-create after a rename would hard-conflict at the actor. A member
+    /// created moments ago may not be materialized yet; that create falls
+    /// through to the actor's idempotent no-op for identical identity fields.
+    /// </summary>
+    private async Task<(string MemberId, string PublishedServiceId, string? TeamId)> ResolveProvisionedMemberAsync(
+        string scopeId,
+        string displayName,
+        string memberId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var existing = await _memberService.GetAsync(scopeId, memberId, ct);
+            return (
+                existing.Summary.MemberId,
+                NormalizeRequired(existing.Summary.PublishedServiceId, nameof(existing.Summary.PublishedServiceId)),
+                existing.Summary.TeamId);
+        }
+        catch (StudioMemberNotFoundException)
+        {
+            var created = await _memberService.CreateAsync(
+                scopeId,
+                new CreateStudioMemberRequest(
+                    DisplayName: displayName,
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    MemberId: memberId),
+                ct);
+            return (
+                created.MemberId,
+                NormalizeRequired(created.PublishedServiceId, nameof(created.PublishedServiceId)),
+                created.TeamId);
+        }
+    }
+
+    /// <summary>
+    /// Converges the provision schedule onto a deterministic id. A deleted
+    /// schedule is a permanent tombstone (the platform rejects reconfiguring it
+    /// as typed not-found), so an explicit user delete advances the id to the
+    /// next generation (<c>provision-{serviceId}</c>, <c>provision-{serviceId}.2</c>, …):
+    /// retries still converge on the first live generation, and a deleted pair
+    /// can be re-provisioned without resurrecting the deleted schedule.
+    /// </summary>
+    private async Task<string?> EnsureProvisionScheduleAsync(
+        string scopeId,
+        string publishedServiceId,
+        string prompt,
+        ScheduledServiceInvocationAuth auth,
+        string cronExpression,
+        string timezone,
+        CancellationToken ct)
+    {
+        const int maxGenerations = 50;
+        for (var generation = 1; generation <= maxGenerations; generation++)
+        {
+            var scheduleId = generation == 1
+                ? $"provision-{publishedServiceId}"
+                : $"provision-{publishedServiceId}.{generation}";
+            try
+            {
+                var schedule = await _scheduleService.EnsureAsync(
+                    BuildScheduleConfiguration(
+                        scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone),
+                    ct);
+                return NormalizeOptional(schedule.ScheduleId);
+            }
+            catch (ScheduledDispatchNotFoundException)
+            {
+                // Tombstoned by an explicit delete — advance to the next generation.
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Provisioning for service '{publishedServiceId}' exhausted {maxGenerations} deleted schedule generations.");
     }
 
     /// <summary>
@@ -146,6 +269,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// dispatch projects onto the run.
     /// </summary>
     private static ScheduledDispatchConfiguration BuildScheduleConfiguration(
+        string scheduleId,
         string scopeId,
         string publishedServiceId,
         string prompt,
@@ -153,7 +277,9 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string cronExpression,
         string timezone) =>
         new(
-            ScheduleId: string.Empty, // minted by the schedule service
+            // Deterministic id: EnsureAsync converges retries onto one schedule.
+            // '.'/'-' stay inside the scheduled-dispatch id charset ([A-Za-z0-9._-]).
+            ScheduleId: scheduleId,
             DisplayName: $"provision-{publishedServiceId}",
             Target: new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
@@ -250,7 +376,18 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         return $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(normalizedTeamId)}/members/{Uri.EscapeDataString(memberId)}/workflow";
     }
 
-    private static string GenerateWorkflowId() => $"workflow-{Guid.NewGuid():N}";
+    /// <summary>
+    /// Deterministic provision identity for one (scope, display name) pair:
+    /// 32 hex chars of SHA-256, so the derived member id (<c>wf-{key}</c>, 35
+    /// chars) satisfies the member-id slug pattern and length cap while retries
+    /// with the same display name land on the same member/workflow/schedule.
+    /// </summary>
+    private static string BuildProvisionKey(string scopeId, string displayName)
+    {
+        var identity = Encoding.UTF8.GetBytes($"{scopeId}\n{displayName}");
+        var hash = SHA256.HashData(identity);
+        return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
+    }
 
     private static string NormalizeRequired(string? value, string fieldName)
     {

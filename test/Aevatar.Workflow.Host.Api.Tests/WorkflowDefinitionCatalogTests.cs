@@ -205,6 +205,17 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("Do NOT");
         // Honesty: the receipt is Accepted (async), not a success claim.
         role.SystemPrompt.Should().Contain("Accepted");
+        // Schema teaching: without it the model falls back to foreign workflow
+        // dialects (GitHub-Actions-style version:/inputs:) that the strict parser
+        // rejects. Pin the load-bearing pieces: the closed top-level key list,
+        // the foreign-dialect counter-examples, and a runnable example.
+        role.SystemPrompt.Should().Contain("Top-level keys are EXACTLY");
+        role.SystemPrompt.Should().Contain("no version, inputs, outputs, triggers");
+        role.SystemPrompt.Should().Contain("name: daily_digest");
+        // Retry semantics: same display_name converges on the same resources;
+        // reusing it for a different automation replaces the previous one.
+        role.SystemPrompt.Should().Contain("SAME `display_name`");
+        role.SystemPrompt.Should().Contain("REPLACES");
         // The loose-definition tools that hang on by-name resolution are no longer steered to.
         role.SystemPrompt.Should().NotContain("workflow_create_def");
         role.SystemPrompt.Should().NotContain("aevatar_start_workflow");

@@ -45,6 +45,12 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var normalized = NormalizeConfiguration(configuration, requireScheduleId: true);
         ValidateSchedule(normalized);
+        // A deleted schedule is a permanent tombstone: the actor rejects any
+        // reconfigure, and the admission-only dispatch would swallow that
+        // rejection — an unguarded ensure would return an accepted receipt for
+        // a schedule that never materializes. Surface the tombstone as the same
+        // typed not-found the mutators throw, so callers can pick a fresh id.
+        await EnsureMutableAsync(normalized.ScheduleId, ct);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
