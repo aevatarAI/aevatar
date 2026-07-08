@@ -163,6 +163,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IChannelInteractionNotificationPort>()
             .Should()
             .BeOfType<NyxIdRelayChannelInteractionNotificationPort>();
+        app.Services.GetRequiredService<IRemoteToolApprovalNotificationPort>()
+            .Should()
+            .BeOfType<NyxIdRelayRemoteToolApprovalNotificationPort>();
         // Yield capability follows the actor, never the container (#2004): a DI-global
         // yielding handler hands "I will resume you" to surfaces with no pending-approval
         // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;

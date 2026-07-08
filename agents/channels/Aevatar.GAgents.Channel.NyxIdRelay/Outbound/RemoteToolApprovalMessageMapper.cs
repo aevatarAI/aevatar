@@ -1,11 +1,11 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 
-namespace Aevatar.GAgents.Platform.Lark;
+namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 
-public static class LarkRemoteToolApprovalCardContent
+public static class RemoteToolApprovalMessageMapper
 {
-    public static MessageContent BuildIntent(RemoteToolApprovalNotification notification)
+    public static MessageContent ToMessageContent(RemoteToolApprovalNotification notification)
     {
         ArgumentNullException.ThrowIfNull(notification);
 
@@ -67,5 +67,4 @@ public static class LarkRemoteToolApprovalCardContent
 
         return string.Join('\n', lines);
     }
-
 }

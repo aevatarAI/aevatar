@@ -63,6 +63,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         // Mainnet workflow/human interaction delivery must go through the channel-neutral
         // relay path; platform packages keep only native rendering/transport adapters.
         services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, NyxIdRelayChannelInteractionNotificationPort>());
+        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, NyxIdRelayRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
 
         return services;

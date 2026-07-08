@@ -2,12 +2,10 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
-using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -95,18 +93,6 @@ public static class ScheduledServiceCollectionExtensions
         services.AddHostedService<UserAgentCatalogStartupService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITombstoneCompactionTarget, UserAgentCatalogTombstoneCompactionTarget>());
-
-        return services;
-    }
-
-    public static IServiceCollection AddLarkScheduledDelivery(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-
-        services.TryAddSingleton<FeishuCardNotificationPort>();
-        services.TryAddSingleton<LarkRemoteToolApprovalNotificationPort>();
-        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort>(
-            sp => sp.GetRequiredService<LarkRemoteToolApprovalNotificationPort>()));
 
         return services;
     }
