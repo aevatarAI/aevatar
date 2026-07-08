@@ -4712,6 +4712,7 @@ const projectMessages = {
   "teams.detail.overview.composition.actions.bindService": "Bind service",
   "teams.detail.overview.composition.actions.run": "Run",
   "teams.detail.overview.composition.actions.workflow": "Workflow",
+  "teams.detail.overview.composition.actions.workflowResolving": "Resolving the published workflow link.",
   "teams.detail.overview.composition.serviceBound": "Service · {serviceId}",
   "teams.detail.overview.composition.serviceUnbound": "Service not bound",
   "teams.detail.overview.history.actions.view": "View details",

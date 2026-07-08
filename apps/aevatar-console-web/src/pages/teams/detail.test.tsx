@@ -1399,13 +1399,20 @@ describe("TeamDetailPage", () => {
           "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/invoke",
         ),
       );
-    expect(screen.getByRole("link", { name: "Workflow" }))
+    const overviewWorkflowLink = await screen.findByRole("link", { name: "Workflow" });
+    expect(overviewWorkflowLink)
       .toHaveAttribute(
         "href",
         expect.stringContaining(
           "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
         ),
       );
+    const overviewWorkflowUrl = new URL(
+      overviewWorkflowLink.getAttribute("href") || "",
+      "https://console.local",
+    );
+    expect(overviewWorkflowUrl.searchParams.get("workflowId")).toBe("workflow-1");
+    expect(overviewWorkflowUrl.searchParams.get("workflowSource")).toBe("published");
     expect(screen.queryByRole("link", { name: "更换服务" })).toBeNull();
     expect(screen.getAllByRole("link", { name: "查看详情" })[0])
       .toHaveAttribute(

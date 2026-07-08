@@ -625,12 +625,13 @@ const TeamDetailPage: React.FC = () => {
   });
   const hasBoundWorkflowMembersForStudioLinks = React.useMemo(
     () =>
-      activeTab === "members" &&
       (teamMembersQuery.data?.members ?? []).some(isBoundWorkflowRosterMember),
-    [activeTab, teamMembersQuery.data?.members],
+    [teamMembersQuery.data?.members],
   );
   const shouldLoadMemberStudioLinkCatalog =
-    hasTeamIdentity && hasBoundWorkflowMembersForStudioLinks;
+    hasTeamIdentity &&
+    activeTab === "members" &&
+    hasBoundWorkflowMembersForStudioLinks;
   const memberStudioLinkWorkflowsQuery = useQuery({
     enabled: shouldLoadMemberStudioLinkCatalog,
     queryFn: () => scopesApi.listWorkflows(scopeId),
@@ -653,9 +654,14 @@ const TeamDetailPage: React.FC = () => {
         emptyWorkflowSummaries
       : workflowsQuery.data ?? emptyWorkflowSummaries;
   const isResolvingMemberStudioLinks =
-    shouldLoadMemberStudioLinkCatalog &&
-    (memberStudioLinkWorkflowsQuery.isLoading ||
-      memberStudioLinkServicesQuery.isLoading);
+    hasBoundWorkflowMembersForStudioLinks &&
+    ((activeTab === "members" &&
+      shouldLoadMemberStudioLinkCatalog &&
+      (memberStudioLinkWorkflowsQuery.isLoading ||
+        memberStudioLinkServicesQuery.isLoading)) ||
+      (activeTab === "overview" &&
+        shouldLoadTeamRuntimeLens &&
+        (workflowsQuery.isLoading || servicesQuery.isLoading)));
   const automationServiceRuntimeByServiceId = React.useMemo(() => {
     const services =
       activeTab === "automations"
@@ -906,6 +912,9 @@ const TeamDetailPage: React.FC = () => {
           member,
           workflows: workflowSummariesForMemberLinks,
         });
+        const canOpenWorkflowStudio =
+          isWorkflowMember &&
+          (!isBoundMember || memberDraftWorkflowId.length > 0);
         const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
@@ -934,13 +943,13 @@ const TeamDetailPage: React.FC = () => {
         });
 
         return {
-          buildStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          buildStudioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
           description: trimText(member.description),
           canInvokeAsEntry: isBoundMember,
           canInvokeMember: isWorkflowMember && isBoundMember,
           canOpenPublishedRuns: isWorkflowMember && isBoundMember,
           canSetAsEntry: Boolean(trimText(member.memberId)),
-          editStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          editStudioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
           automationsHref: memberAutomationsHref,
           implementationKind: formatCompositionKind(member.implementationKind),
           implementationKindRaw: trimText(member.implementationKind),
@@ -967,7 +976,11 @@ const TeamDetailPage: React.FC = () => {
           serviceRevisionId:
             trimText(automationServiceRuntime?.activeServingRevisionId) ||
             trimText(automationServiceRuntime?.defaultServingRevisionId),
-          studioHref: isWorkflowMember ? workflowStudioHref : "",
+          studioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
+          studioHrefDisabledReason:
+            isWorkflowMember && isBoundMember && !memberDraftWorkflowId
+              ? t("teams.detail.overview.composition.actions.workflowResolving", "Resolving the published workflow link.")
+              : "",
           canAutomateMember: isWorkflowMember && isBoundMember,
           automationDisabledReason: !isWorkflowMember
             ? t("teams.automations.member.workflowOnly", "Only workflow members can have recurring work.")
@@ -1229,7 +1242,8 @@ const TeamDetailPage: React.FC = () => {
 
           return {
             canRun: row.canInvokeMember,
-            canConfigure: row.workflowSupported,
+            canConfigure: row.workflowSupported && Boolean(row.studioHref),
+            configureDisabledReason: row.studioHrefDisabledReason,
             configureHref: row.workflowSupported ? row.studioHref : "",
             configureLabel,
             entryLabel: row.isEntryMember

@@ -4712,6 +4712,7 @@ const projectMessages = {
   "teams.detail.overview.composition.actions.bindService": "绑定服务",
   "teams.detail.overview.composition.actions.run": "运行",
   "teams.detail.overview.composition.actions.workflow": "Workflow",
+  "teams.detail.overview.composition.actions.workflowResolving": "正在解析已发布 Workflow 链接。",
   "teams.detail.overview.composition.serviceBound": "服务 · {serviceId}",
   "teams.detail.overview.composition.serviceUnbound": "服务未绑定",
   "teams.detail.overview.history.actions.view": "查看详情",

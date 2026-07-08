@@ -19,6 +19,7 @@ import { t } from "@/shared/i18n/messages";
 type OverviewCompositionRow = {
   readonly canConfigure?: boolean;
   readonly canRun?: boolean;
+  readonly configureDisabledReason?: string;
   readonly configureHref?: string;
   readonly configureLabel?: string;
   readonly entryLabel?: string;
@@ -419,13 +420,24 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                         type={row.canRun ? "primary" : "default"}
                       />
                     </Tooltip>
-                    {row.configureHref && row.configureLabel ? (
-                      <Tooltip title={row.configureLabel}>
+                    {row.configureLabel ? (
+                      <Tooltip
+                        title={
+                          row.canConfigure
+                            ? row.configureLabel
+                            : row.configureDisabledReason || row.configureLabel
+                        }
+                      >
                         <Button
                           aria-label={row.configureLabel}
-                          href={row.configureHref}
+                          disabled={!row.canConfigure}
+                          href={row.canConfigure ? row.configureHref : undefined}
                           icon={<ToolOutlined />}
-                          onClick={handleNavigate(row.configureHref)}
+                          onClick={
+                            row.canConfigure
+                              ? handleNavigate(row.configureHref)
+                              : undefined
+                          }
                           size="small"
                           type={row.canConfigure ? "default" : "dashed"}
                         />
