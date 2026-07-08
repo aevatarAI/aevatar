@@ -277,6 +277,7 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
         workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
+        workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);

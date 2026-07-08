@@ -24,6 +24,8 @@ public static class ServiceCollectionExtensions
             ServiceDescriptor.Singleton<IAgentToolSource, CreateStudioMemberToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, BindStudioMemberWorkflowToolSource>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, ScheduleStudioMemberWorkflowToolSource>());
         return services;
     }
 }
