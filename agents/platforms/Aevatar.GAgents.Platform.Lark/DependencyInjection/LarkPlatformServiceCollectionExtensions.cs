@@ -35,6 +35,7 @@ public static class LarkPlatformServiceCollectionExtensions
         services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
+        services.TryAddSingleton<LarkChannelNativeDeliveryTargetAdapter>();
         services.TryAddSingleton<LarkChannelNativeMessageSender>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
             sp => sp.GetRequiredService<LarkMessageComposer>()));
@@ -42,6 +43,8 @@ public static class LarkPlatformServiceCollectionExtensions
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, LarkChannelNativeMessageSender>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageSender>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeDeliveryTargetAdapter, LarkChannelNativeDeliveryTargetAdapter>(
+            sp => sp.GetRequiredService<LarkChannelNativeDeliveryTargetAdapter>()));
         services.TryAddSingleton<LarkPayloadRedactor>();
         services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
 
