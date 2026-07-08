@@ -74,7 +74,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
                 sp.GetService<TimeProvider>(),
                 sp.GetService<ILarkNyxClient>(),
-                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>()));
+                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>(),
+                sp.GetService<ILarkOutboundClientFactory>()));
         // ─── Conversation turn-runner override + reply generator ───
         // Lets the turn runner resolve the bot's own Lark open_id on demand so its group-chat
         // admission gate can tell whether an inbound @-mention addressed the bot.

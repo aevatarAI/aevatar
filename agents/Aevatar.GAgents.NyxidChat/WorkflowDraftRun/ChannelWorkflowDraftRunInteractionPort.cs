@@ -19,6 +19,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
     private readonly ILogger<ChannelWorkflowDraftRunInteractionPort> _logger;
     private readonly ILarkNyxClient? _larkClient;
     private readonly IWorkflowFileIngressPort? _fileIngressPort;
+    private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
 
     public ChannelWorkflowDraftRunInteractionPort(
         IActorRuntime actorRuntime,
@@ -27,7 +28,8 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         IWorkflowChatRunInteractionPort? workflowInteractionPort = null,
         TimeProvider? timeProvider = null,
         ILarkNyxClient? larkClient = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IWorkflowFileIngressPort? fileIngressPort = null,
+        ILarkOutboundClientFactory? larkOutboundClientFactory = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
@@ -36,6 +38,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         _timeProvider = timeProvider ?? TimeProvider.System;
         _larkClient = larkClient;
         _fileIngressPort = fileIngressPort;
+        _larkOutboundClientFactory = larkOutboundClientFactory;
     }
 
     public async Task DispatchAsync(NeedsWorkflowDraftRunEvent request, CancellationToken ct)
@@ -245,6 +248,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         if (_fileIngressPort is null)
             throw new WorkflowAttachmentIngressException("file_ingress_port_unavailable");
 
+        var larkClient = ResolveLarkResourceDownloadClient(request);
         var token = NormalizeOptional(request.NyxUserAccessToken) ??
                     NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
         if (token is null)
@@ -264,7 +268,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             LarkMessageResourceDownloadResult download;
             try
             {
-                download = await _larkClient.DownloadMessageResourceAsync(
+                download = await larkClient.DownloadMessageResourceAsync(
                         token,
                         new LarkMessageResourceDownloadRequest(
                             messageId,
@@ -317,6 +321,15 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         }
 
         return inputParts;
+    }
+
+    private ILarkNyxClient ResolveLarkResourceDownloadClient(NeedsWorkflowDraftRunEvent request)
+    {
+        var providerSlug = NormalizeOptional(request.Activity?.TransportExtras?.NyxProviderSlug);
+        if (providerSlug is null || _larkOutboundClientFactory is null)
+            return _larkClient!;
+
+        return _larkOutboundClientFactory.ResolveNyxClient(providerSlug);
     }
 
     private static WorkflowChatRunRequest BuildCommand(
