@@ -1117,29 +1117,21 @@ const TeamDetailPage: React.FC = () => {
   const configurationDetailRows = React.useMemo(
     () => [
       {
-        label: t("pages.teams.detail.copy.34", "team process"),
+        label: t("teams.detail.overview.configuration.workflow", "Team workflow"),
         note: activeWorkflowId
           ? t("teams.detail.overview.configuration.workflowLinked", "Workflow draft is linked.")
           : t("teams.detail.overview.configuration.workflowPending", "Workflow draft is not linked yet."),
         value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
       },
       {
-        label: t("pages.teams.detail.copy.35", "Binding method"),
-        note:
-          currentServiceFriendly !== "--"
-            ? t("pages.teams.detail.copy.36", "Currently routes to {value1}", { value1: currentServiceFriendly })
-            : t("pages.teams.detail.copy.37", "Currently, the main service entrance has not been matched."),
-        value: formatCompositionKind(lens.activeRevision?.implementationKind),
-      },
-      {
-        label: t("pages.teams.detail.copy.38", "Main service entrance"),
+        label: t("teams.detail.overview.configuration.primaryService", "Primary service entry"),
         note: runtimeServiceId || currentServiceKey !== "--"
           ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
           : t("pages.teams.detail.copy.37", "Currently, the main service entrance has not been matched."),
         value: currentServiceFriendly,
       },
       {
-        label: t("pages.teams.detail.copy.39", "Version ID"),
+        label: t("teams.detail.overview.configuration.versionStatus", "Version status"),
         note:
           currentRevisionId !== "--"
             ? t("teams.detail.overview.configuration.versionAvailable", "Current serving version is available.")
@@ -1153,7 +1145,6 @@ const TeamDetailPage: React.FC = () => {
       currentServiceFriendly,
       currentServiceKey,
       currentVersionFriendly,
-      lens.activeRevision?.implementationKind,
       runtimeServiceId,
       teamTitle,
       workflowNameValue,

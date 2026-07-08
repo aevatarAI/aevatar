@@ -4,9 +4,10 @@ import {
   HistoryOutlined,
   InfoCircleOutlined,
   PlayCircleOutlined,
+  SettingOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { Button, Space, Tooltip, Typography, theme } from "antd";
+import { Button, Popover, Space, Tooltip, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
@@ -297,175 +298,164 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
       </section>
 
       <section style={surfaceStyle(token)}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
           <Typography.Title level={3} style={{ margin: 0 }}>
             {intl.formatMessage({
               id: "teams.detail.overview.composition.title",
             })}
           </Typography.Title>
           {configurationDetailRows.length > 0 ? (
-            <Typography.Text style={{ fontSize: 12 }} type="secondary">
-              {intl.formatMessage({
+            <Popover
+              content={
+                <div style={{ display: "grid", gap: 10, minWidth: 260 }}>
+                  {configurationDetailRows.map((row) => (
+                    <div key={row.label} style={{ display: "grid", gap: 3 }}>
+                      <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                        {row.label}
+                      </Typography.Text>
+                      <Tooltip title={row.noteTooltip || row.note}>
+                        <Typography.Text strong>{row.value}</Typography.Text>
+                      </Tooltip>
+                    </div>
+                  ))}
+                </div>
+              }
+              placement="bottomRight"
+              title={intl.formatMessage({
                 id: "teams.detail.overview.configuration.title",
               })}
-            </Typography.Text>
+              trigger="click"
+            >
+              <Button
+                aria-label={intl.formatMessage({
+                  id: "teams.detail.overview.configuration.title",
+                })}
+                icon={<SettingOutlined />}
+                size="small"
+                type="text"
+              />
+            </Popover>
           ) : null}
         </div>
-        <div
-          style={{
-            display: "grid",
-            gap: 18,
-            gridTemplateColumns:
-              configurationDetailRows.length > 0
-                ? "repeat(auto-fit, minmax(min(100%, 320px), 1fr))"
-                : "minmax(0, 1fr)",
-          }}
-        >
-          <div style={{ display: "grid", gap: 0 }}>
-            {compositionRows.length > 0 ? (
-              compositionRows.map((row, index) => (
-                <div
-                  key={row.key}
-                  style={{
-                    alignItems: "center",
-                    borderTop:
-                      index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                    display: "grid",
-                    gap: 12,
-                    gridTemplateColumns:
-                      "minmax(120px, 0.65fr) minmax(0, 1fr) max-content",
-                    padding: index === 0 ? "0 0 12px" : "12px 0",
-                  }}
-                >
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                    <Space size={6} wrap>
-                      <Typography.Text strong>{row.name}</Typography.Text>
-                      {row.entryLabel ? (
-                        <DetailPill
-                          compact
-                          style={{
-                            background: token.colorSuccessBg,
-                            border: `1px solid ${token.colorSuccessBorder}`,
-                            color: token.colorSuccess,
-                          }}
-                          text={row.entryLabel}
-                        />
-                      ) : null}
-                      {row.selectedLabel ? (
-                        <DetailPill
-                          compact
-                          style={{
-                            background: token.colorInfoBg,
-                            border: `1px solid ${token.colorInfoBorder}`,
-                            color: token.colorInfo,
-                          }}
-                          text={row.selectedLabel}
-                        />
-                      ) : null}
-                    </Space>
-                    <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                      {row.serviceLabel || row.summary}
-                    </Typography.Text>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                    <Space size={6} wrap>
-                      <DetailPill compact style={row.kindStyle} text={row.kindLabel} />
-                      {row.statusLabel && row.statusStyle ? (
-                        <DetailPill compact style={row.statusStyle} text={row.statusLabel} />
-                      ) : null}
-                    </Space>
-                  </div>
-                  <Space.Compact>
+        <div style={{ display: "grid", gap: 0 }}>
+          {compositionRows.length > 0 ? (
+            compositionRows.map((row, index) => (
+              <div
+                key={row.key}
+                style={{
+                  alignItems: "center",
+                  borderTop:
+                    index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns:
+                    "minmax(120px, 0.65fr) minmax(0, 1fr) max-content",
+                  padding: index === 0 ? "0 0 12px" : "12px 0",
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                  <Space size={6} wrap>
+                    <Typography.Text strong>{row.name}</Typography.Text>
+                    {row.entryLabel ? (
+                      <DetailPill
+                        compact
+                        style={{
+                          background: token.colorSuccessBg,
+                          border: `1px solid ${token.colorSuccessBorder}`,
+                          color: token.colorSuccess,
+                        }}
+                        text={row.entryLabel}
+                      />
+                    ) : null}
+                    {row.selectedLabel ? (
+                      <DetailPill
+                        compact
+                        style={{
+                          background: token.colorInfoBg,
+                          border: `1px solid ${token.colorInfoBorder}`,
+                          color: token.colorInfo,
+                        }}
+                        text={row.selectedLabel}
+                      />
+                    ) : null}
+                  </Space>
+                  <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                    {row.serviceLabel || row.summary}
+                  </Typography.Text>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                  <Space size={6} wrap>
+                    <DetailPill compact style={row.kindStyle} text={row.kindLabel} />
+                    {row.statusLabel && row.statusStyle ? (
+                      <DetailPill compact style={row.statusStyle} text={row.statusLabel} />
+                    ) : null}
+                  </Space>
+                </div>
+                <Space.Compact>
+                  <Tooltip
+                    title={
+                      row.canRun
+                        ? runMemberLabel
+                        : row.runDisabledReason || runMemberLabel
+                    }
+                  >
+                    <Button
+                      aria-label={runMemberLabel}
+                      href={row.canRun ? row.runHref : undefined}
+                      disabled={!row.canRun}
+                      icon={<PlayCircleOutlined />}
+                      onClick={
+                        row.canRun
+                          ? handleNavigate(row.runHref)
+                          : undefined
+                      }
+                      size="small"
+                      type={row.canRun ? "primary" : "default"}
+                    />
+                  </Tooltip>
+                  {row.configureLabel ? (
                     <Tooltip
                       title={
-                        row.canRun
-                          ? runMemberLabel
-                          : row.runDisabledReason || runMemberLabel
+                        row.canConfigure
+                          ? row.configureLabel
+                          : row.configureDisabledReason || row.configureLabel
                       }
                     >
                       <Button
-                        aria-label={runMemberLabel}
-                        href={row.canRun ? row.runHref : undefined}
-                        disabled={!row.canRun}
-                        icon={<PlayCircleOutlined />}
+                        aria-label={row.configureLabel}
+                        disabled={!row.canConfigure}
+                        href={row.canConfigure ? row.configureHref : undefined}
+                        icon={<ToolOutlined />}
                         onClick={
-                          row.canRun
-                            ? handleNavigate(row.runHref)
+                          row.canConfigure
+                            ? handleNavigate(row.configureHref)
                             : undefined
                         }
                         size="small"
-                        type={row.canRun ? "primary" : "default"}
+                        type={row.canConfigure ? "default" : "dashed"}
                       />
                     </Tooltip>
-                    {row.configureLabel ? (
-                      <Tooltip
-                        title={
-                          row.canConfigure
-                            ? row.configureLabel
-                            : row.configureDisabledReason || row.configureLabel
-                        }
-                      >
-                        <Button
-                          aria-label={row.configureLabel}
-                          disabled={!row.canConfigure}
-                          href={row.canConfigure ? row.configureHref : undefined}
-                          icon={<ToolOutlined />}
-                          onClick={
-                            row.canConfigure
-                              ? handleNavigate(row.configureHref)
-                              : undefined
-                          }
-                          size="small"
-                          type={row.canConfigure ? "default" : "dashed"}
-                        />
-                      </Tooltip>
-                    ) : null}
-                  </Space.Compact>
-                </div>
-              ))
-            ) : (
-              <AevatarInspectorEmpty
-                title={intl.formatMessage({
-                  id: "teams.detail.overview.composition.empty.title",
-                })}
-                description={intl.formatMessage({
-                  id: "teams.detail.overview.composition.empty.description",
-                })}
-              />
-            )}
-          </div>
-
-          {configurationDetailRows.length > 0 ? (
-            <div
-              style={{
-                background: token.colorFillQuaternary,
-                border: `1px solid ${token.colorBorderSecondary}`,
-                borderRadius: 8,
-                display: "grid",
-                gap: 0,
-              }}
-            >
-              {configurationDetailRows.map((row, index) => (
-                <div
-                  key={row.label}
-                  style={{
-                    borderTop:
-                      index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
-                    display: "grid",
-                    gap: 6,
-                    padding: "10px 12px",
-                  }}
-                >
-                  <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                    {row.label}
-                  </Typography.Text>
-                  <Tooltip title={row.noteTooltip || row.note}>
-                    <Typography.Text strong>{row.value}</Typography.Text>
-                  </Tooltip>
-                </div>
-              ))}
-            </div>
-          ) : null}
+                  ) : null}
+                </Space.Compact>
+              </div>
+            ))
+          ) : (
+            <AevatarInspectorEmpty
+              title={intl.formatMessage({
+                id: "teams.detail.overview.composition.empty.title",
+              })}
+              description={intl.formatMessage({
+                id: "teams.detail.overview.composition.empty.description",
+              })}
+            />
+          )}
         </div>
       </section>
 
