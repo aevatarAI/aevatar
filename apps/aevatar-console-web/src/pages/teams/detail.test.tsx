@@ -1161,7 +1161,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
-    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect((await screen.findAllByText("已完成")).length).toBeGreaterThan(0);
     expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
     expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
@@ -1365,6 +1365,142 @@ describe("TeamDetailPage", () => {
     expect(screen.getAllByText("版本标识").length).toBeGreaterThan(0);
     expect(screen.queryByText("连接器引用")).toBeNull();
     expect(screen.queryByText("服务能力")).toBeNull();
+  });
+
+  it("exposes run actions and recent execution history on the overview", async () => {
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
+      async () => ({
+        ...mockCreateRunsCatalog(),
+        serviceId: "alpha-service",
+        serviceKey: "scope-1:alpha-service",
+        runs: mockCreateRunsCatalog().runs.map((run) => ({
+          ...run,
+          serviceId: "alpha-service",
+        })),
+      }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "运行团队" })).toBeEnabled();
+    });
+    expect((await screen.findAllByText("Team Alpha Operator")).length)
+      .toBeGreaterThan(0);
+    expect(screen.getByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.getByText("Waiting on approval")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.getAllByText("服务 · alpha-service")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "运行" }))
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/invoke",
+        ),
+      );
+    const overviewWorkflowLink = await screen.findByRole("link", { name: "Workflow" });
+    expect(overviewWorkflowLink)
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+        ),
+      );
+    const overviewWorkflowUrl = new URL(
+      overviewWorkflowLink.getAttribute("href") || "",
+      "https://console.local",
+    );
+    expect(overviewWorkflowUrl.searchParams.get("workflowId")).toBe("workflow-1");
+    expect(overviewWorkflowUrl.searchParams.get("workflowSource")).toBe("published");
+    expect(screen.queryByRole("link", { name: "更换服务" })).toBeNull();
+    expect(screen.getAllByRole("link", { name: "查看详情" })[0])
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/runs?runId=run-current",
+        ),
+      );
+
+    fireEvent.click(screen.getByRole("button", { name: "运行团队" }));
+    expect(await screen.findByTestId("team-test-modal-body")).toBeTruthy();
+  });
+
+  it("omits overview run details links when a run service is not bound to a roster member", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    expect(await screen.findByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
+  });
+
+  it("omits overview run details links for non-workflow entry member runs", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: "member-agent-alpha",
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-agent-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Agent Alpha",
+          description: "Agent member",
+          implementationKind: "gagent",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "agent-service",
+          lastBoundRevisionId: "rev-agent",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-1:default:default:agent-service",
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "agent-service",
+        displayName: "Agent Runtime",
+        defaultServingRevisionId: "rev-agent",
+        activeServingRevisionId: "rev-agent",
+        deploymentId: "dep-agent",
+        primaryActorId: "actor-agent",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ]);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateRunsCatalog(),
+      serviceId: "agent-service",
+      serviceKey: "scope-1:agent-service",
+      runs: mockCreateRunsCatalog().runs.map((run) => ({
+        ...run,
+        serviceId: "agent-service",
+      })),
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    expect((await screen.findAllByText("Agent Alpha")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "agent-service",
+        expect.objectContaining({ take: 12 }),
+      );
+    });
   });
 
   it("shows a readable team members view", async () => {
