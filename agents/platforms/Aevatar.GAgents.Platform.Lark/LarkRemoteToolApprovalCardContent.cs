@@ -1,7 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public static class LarkRemoteToolApprovalCardContent
 {

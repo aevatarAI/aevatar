@@ -238,6 +238,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
         builder.Services.AddLarkPlatform();
+        builder.Services.AddLarkScheduledDelivery();
         builder.Services.AddTelegramPlatform();
         builder.Services.AddChannelInteractiveReplyTools();
         builder.Services.AddChannelAdminTools();

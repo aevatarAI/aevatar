@@ -1,24 +1,23 @@
-using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Scheduled;
 
-public sealed class FeishuCardNotificationPort : IChannelInteractionNotificationPort
+public sealed class LarkRemoteToolApprovalNotificationPort : IRemoteToolApprovalNotificationPort
 {
     private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
     private readonly LarkMessageComposer _composer;
     private readonly LarkChannelNativeMessageSender _larkSender;
     private readonly IChannelNativeDeliveryTargetAdapter _targetAdapter;
-    private readonly ILogger<FeishuCardNotificationPort> _logger;
+    private readonly ILogger<LarkRemoteToolApprovalNotificationPort> _logger;
 
-    public FeishuCardNotificationPort(
+    public LarkRemoteToolApprovalNotificationPort(
         IUserAgentDeliveryTargetReader deliveryTargetReader,
         LarkMessageComposer composer,
         LarkChannelNativeMessageSender larkSender,
-        ILogger<FeishuCardNotificationPort> logger,
+        ILogger<LarkRemoteToolApprovalNotificationPort> logger,
         IChannelNativeDeliveryTargetAdapter? targetAdapter = null)
     {
         _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
@@ -28,53 +27,43 @@ public sealed class FeishuCardNotificationPort : IChannelInteractionNotification
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task DeliverAsync(
-        ChannelInteractionNotificationRequest request,
-        CancellationToken cancellationToken = default)
+    public async Task NotifyAsync(RemoteToolApprovalNotification notification, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(notification);
 
-        var target = await ResolveAsync(
-                request.DeliveryTargetId,
-                "interaction notification",
-                cancellationToken)
-            .ConfigureAwait(false);
+        var deliveryTargetId = Normalize(notification.ToolContext.Channel.DeliveryTargetId);
+        if (deliveryTargetId is null)
+            throw new InvalidOperationException("Remote approval notification requires an explicit delivery target id.");
+
+        var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, ct).ConfigureAwait(false);
+        if (target is null)
+            throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
         if (!string.Equals(target.Platform, "lark", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException($"Unsupported interaction notification platform: {target.Platform}");
+            throw new NotSupportedException($"Unsupported remote tool approval notification platform: {target.Platform}");
+
+        var payload = _composer.Compose(
+            LarkRemoteToolApprovalCardContent.BuildIntent(notification),
+            BuildComposeContext());
+        if (!payload.IsInteractive)
+            throw new InvalidOperationException("Remote approval notification must render as an interactive Lark card.");
 
         await _larkSender.SendAsync(
                 _targetAdapter.Adapt(ToNativeDeliveryTarget(target)),
-                new ChannelNativeMessage(
-                    Text: null,
-                    CardPayload: LarkInteractionCardRenderer.BuildCardJson(request, _composer),
-                    MessageType: "interactive",
-                    Capability: ComposeCapability.Exact),
-                cancellationToken)
+                new ChannelNativeMessage(null, payload.ContentJson, "interactive", ComposeCapability.Exact),
+                ct)
             .ConfigureAwait(false);
 
         _logger.LogInformation(
-            "Delivered interaction notification card: target={DeliveryTargetId}, run={RunId}, step={StepId}",
-            request.DeliveryTargetId,
-            request.RunId,
-            request.StepId);
+            "Delivered remote tool approval card: target={DeliveryTargetId}, request={RequestId}, remote={RemoteApprovalId}",
+            deliveryTargetId,
+            notification.Request.RequestId,
+            notification.Submission.RemoteApprovalId);
     }
 
-    private async Task<UserAgentDeliveryTarget> ResolveAsync(
-        string deliveryTargetId,
-        string platformSubject,
-        CancellationToken cancellationToken)
+    private static ComposeContext BuildComposeContext() => new()
     {
-        if (string.IsNullOrWhiteSpace(deliveryTargetId))
-            throw new InvalidOperationException($"{platformSubject} delivery target id is required.");
-
-        var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, cancellationToken).ConfigureAwait(false);
-        if (target is null)
-            throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
-        if (string.IsNullOrWhiteSpace(target.Platform))
-            throw new InvalidOperationException($"Agent delivery target platform is missing: {deliveryTargetId}");
-
-        return target;
-    }
+        Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
+    };
 
     private static ChannelNativeDeliveryTarget ToNativeDeliveryTarget(UserAgentDeliveryTarget target) =>
         new RoutedChannelNativeDeliveryTarget(
@@ -87,6 +76,12 @@ public sealed class FeishuCardNotificationPort : IChannelInteractionNotification
             target.LarkReceiveIdType,
             target.LarkReceiveIdFallback,
             target.LarkReceiveIdTypeFallback);
+
+    private static string? Normalize(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
 
     private sealed record RoutedChannelNativeDeliveryTarget(
         string AgentId,

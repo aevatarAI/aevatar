@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,7 +34,6 @@ public static class AuthoringServiceCollectionExtensions
         services.TryAddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
         if (!services.Any(IsAgentBuilderToolSourceRegistration))
             services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), AgentToolSourceFactory));
-        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, LarkRemoteToolApprovalNotificationPort>());
 
         return services;
     }

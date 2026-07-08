@@ -2,9 +2,8 @@ using System.Text.Json;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Platform.Lark;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public static class LarkInteractionCardRenderer
 {
