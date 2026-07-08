@@ -246,6 +246,14 @@ describe("TeamMemberPublishedRunsPage", () => {
     expect(screen.getByTestId("member-published-runs-details-skeleton")).toBeTruthy();
     expect(screen.queryByText("No published runs yet.")).toBeNull();
 
+    await waitFor(() => {
+      expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "m-alpha",
+        { take: 200 },
+      );
+    });
+
     memberRuns.resolve({
       displayName: "Alpha Workflow",
       memberId: "m-alpha",
@@ -254,6 +262,62 @@ describe("TeamMemberPublishedRunsPage", () => {
       runs: [],
       scopeId: "scope-1",
     });
+    expect(await screen.findByText("No published runs yet.")).toBeTruthy();
+  });
+
+  it("redirects to the console home when the routed member does not exist", async () => {
+    const missingMemberError = Object.assign(
+      new Error("member 'm-missing' not found in scope 'scope-1'."),
+      {
+        code: "STUDIO_MEMBER_NOT_FOUND",
+        status: 404,
+      },
+    );
+    mockedStudioApi.getMember.mockRejectedValueOnce(missingMemberError);
+
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/scopes");
+    });
+    expect(window.location.search).toBe("");
+    expect(mockedScopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
+  });
+
+  it("does not refetch audit for a runId-only route when the catalog has no matching run", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/team-1/members/m-alpha/runs?runId=run-missing",
+    );
+    mockedScopeRuntimeApi.listMemberRuns.mockResolvedValueOnce({
+      displayName: "Alpha Workflow",
+      memberId: "m-alpha",
+      publishedServiceId: "svc-alpha",
+      publishedServiceKey: "scope-1:default:default:svc-alpha",
+      runs: [],
+      scopeId: "scope-1",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberPublishedRunsPage));
+
+    expect(await screen.findByTestId("member-published-runs-replay")).toBeTruthy();
+    await waitFor(() => {
+      expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "m-alpha",
+        { take: 200 },
+      );
+    });
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Refresh" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(mockedScopeRuntimeApi.listMemberRuns).toHaveBeenCalledTimes(2);
+    });
+    expect(mockedScopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
   });
 
   it("renders member published run history from the canonical Team member route", async () => {

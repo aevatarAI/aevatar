@@ -34,8 +34,63 @@ resolve_diff_target() {
   printf 'HEAD\n'
 }
 
+resolve_pr_number() {
+  if [[ -n "${PR_NUMBER:-}" ]]; then
+    printf '%s\n' "${PR_NUMBER}"
+    return 0
+  fi
+
+  local event_path="${GITHUB_EVENT_PATH:-}"
+  if [[ -n "${event_path}" && -f "${event_path}" ]]; then
+    python3 - <<'PY' "${event_path}"
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text())
+number = (
+    (payload.get("pull_request") or {}).get("number")
+    or (payload.get("issue") or {}).get("number")
+)
+if number:
+    print(number)
+PY
+  fi
+}
+
+resolve_diff_target_from_pr() {
+  local pr_number="$1"
+  [[ -n "${pr_number}" ]] || return 1
+  [[ -n "${GITHUB_REPOSITORY:-}" ]] || return 1
+
+  local pr_json
+  pr_json="$(gh pr view "${pr_number}" --repo "${GITHUB_REPOSITORY}" --json baseRefName,baseRefOid,headRefOid 2>/dev/null)" \
+    || return 1
+
+  local base_ref base_sha head_sha
+  base_ref="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("baseRefName") or "")' <<< "${pr_json}")"
+  base_sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("baseRefOid") or "")' <<< "${pr_json}")"
+  head_sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("headRefOid") or "")' <<< "${pr_json}")"
+
+  [[ -n "${base_sha}" && -n "${head_sha}" ]] || return 1
+
+  git fetch --no-tags origin \
+    "${base_sha}" \
+    "${head_sha}" \
+    "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" \
+    2>/dev/null || true
+
+  resolve_diff_target_from_shas "${base_sha}" "${head_sha}"
+}
+
+RESOLVED_PR_NUMBER="$(resolve_pr_number || true)"
+export RESOLVED_PR_NUMBER
+
 if [[ -n "${GITHUB_BASE_SHA:-}" && -n "${GITHUB_HEAD_SHA:-}" ]]; then
   DIFF_TARGET="$(resolve_diff_target_from_shas "${GITHUB_BASE_SHA}" "${GITHUB_HEAD_SHA}")" \
+    || DIFF_TARGET="$(resolve_diff_target "${GITHUB_BASE_REF:-dev}")"
+elif [[ -n "${RESOLVED_PR_NUMBER}" ]]; then
+  DIFF_TARGET="$(resolve_diff_target_from_pr "${RESOLVED_PR_NUMBER}")" \
     || DIFF_TARGET="$(resolve_diff_target "${GITHUB_BASE_REF:-dev}")"
 elif [[ -n "${GITHUB_BASE_REF:-}" ]]; then
   DIFF_TARGET="$(resolve_diff_target "${GITHUB_BASE_REF}")"
@@ -48,29 +103,49 @@ fi
 echo "FKST host policy guard: comparing ${DIFF_TARGET}"
 
 CHANGED_PATHS="$(git diff --name-only "${DIFF_TARGET}" 2>/dev/null || true)"
-PRODUCT_PATHS=""
-while IFS= read -r changed_path; do
-  [[ -n "${changed_path}" ]] || continue
+BACKEND_IMPACT_PATHS=""
+
+is_backend_impact_path() {
+  local changed_path="$1"
+
   case "${changed_path}" in
-    LICENSE|CHANGELOG|README.md|.fkst/*|.github/*|docs/*|test/*|tests/*|tools/*|workflows/*|*.md|*.txt|*.yml|*.yaml|*.json|*.toml)
-      continue
+    src/*|agents/*|test/*|demos/*|scripts/*|tools/ci/*)
+      return 0
+      ;;
+    .github/workflows/ci.yml)
+      return 0
+      ;;
+    aevatar.slnx|aevatar.*.slnf|Directory.Build.props|Directory.Packages.props|global.json|buf.work.yaml)
+      return 0
+      ;;
+    docker-compose.yml|docker-compose.*.yml)
+      return 0
       ;;
   esac
-  PRODUCT_PATHS="${PRODUCT_PATHS}${changed_path}"$'\n'
-done <<< "${CHANGED_PATHS}"
-PRODUCT_PATHS="${PRODUCT_PATHS%$'\n'}"
 
-# Informational only: this classification is printed for reviewers; the guard itself
-# enforces nothing based on it. The only enforced gate below is the unresolved P1/P2
-# review-comment scan.
-if [[ -n "${PRODUCT_PATHS}" ]]; then
-  echo "Product/runtime-impact paths changed (informational):"
-  printf '%s\n' "${PRODUCT_PATHS}"
+  return 1
+}
+
+while IFS= read -r changed_path; do
+  [[ -n "${changed_path}" ]] || continue
+  if is_backend_impact_path "${changed_path}"; then
+    BACKEND_IMPACT_PATHS="${BACKEND_IMPACT_PATHS}${changed_path}"$'\n'
+  fi
+done <<< "${CHANGED_PATHS}"
+BACKEND_IMPACT_PATHS="${BACKEND_IMPACT_PATHS%$'\n'}"
+
+# The unresolved P1/P2 review-comment policy is a backend-host merge gate. Frontend-only
+# PRs still get their own console-web validation, but should not be blocked by backend
+# review policy threads.
+if [[ -n "${BACKEND_IMPACT_PATHS}" ]]; then
+  echo "Backend-impact paths changed:"
+  printf '%s\n' "${BACKEND_IMPACT_PATHS}"
 else
-  echo "No product/runtime-impact paths changed (informational)."
+  echo "No backend-impact paths changed; skipped unresolved P1/P2 review-comment gate."
+  exit 0
 fi
 
-if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" && -z "${PR_NUMBER:-}" ]]; then
+if [[ "${GITHUB_EVENT_NAME:-}" != "pull_request" && -z "${RESOLVED_PR_NUMBER}" ]]; then
   echo "Not a pull_request context; skipped GitHub review/comment gates."
   exit 0
 fi
@@ -89,7 +164,7 @@ if "/" not in repo:
     raise SystemExit(1)
 owner, name = repo.split("/", 1)
 
-pr_number = os.environ.get("PR_NUMBER")
+pr_number = os.environ.get("RESOLVED_PR_NUMBER") or os.environ.get("PR_NUMBER")
 if not pr_number:
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     if event_path and Path(event_path).is_file():
