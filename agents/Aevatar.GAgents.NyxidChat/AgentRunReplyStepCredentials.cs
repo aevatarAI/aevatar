@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+
 namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
@@ -8,9 +10,9 @@ namespace Aevatar.GAgents.NyxidChat;
 /// from the retained binding id at execution time, so the persisted state keeps only identity facts
 /// (binding id, subject, scope, routing), never bearer tokens.
 ///
-/// Only the token <em>strings</em> are cleared; the credential sub-messages themselves are left in
-/// place so structural checks (for example <c>AgentRunReplyGenerationExecutor.TryBuildOwnerFallbackCommand</c>,
-/// which gates on whether the owner-fallback sub-messages exist) keep working.
+/// The credential sub-messages themselves are left in place so structural checks (for example
+/// <c>AgentRunReplyGenerationExecutor.TryBuildOwnerFallbackCommand</c>, which gates on whether the
+/// owner-fallback sub-messages exist) keep working.
 /// </summary>
 internal static class AgentRunReplyStepCredentials
 {
@@ -20,8 +22,9 @@ internal static class AgentRunReplyStepCredentials
         var stripped = stepState.Clone();
         ClearControlTokens(stripped.LlmControl);
         ClearControlTokens(stripped.OwnerFallbackLlmControl);
-        ClearCredentialTokens(stripped.ToolContext?.Credentials);
-        ClearCredentialTokens(stripped.OwnerFallbackToolContext?.Credentials);
+        ScrubToolContext(stripped.ToolContext);
+        ScrubToolContext(stripped.OwnerFallbackToolContext);
+        ScrubExternalMetadata(stripped.ExternalMetadata);
         return stripped;
     }
 
@@ -33,11 +36,30 @@ internal static class AgentRunReplyStepCredentials
         control.SenderNyxIdAccessToken = string.Empty;
     }
 
+    private static void ScrubToolContext(Aevatar.AI.Abstractions.AgentToolExecutionContextPayload? context)
+    {
+        if (context is null) return;
+        ClearCredentialTokens(context.Credentials);
+        ScrubExternalMetadata(context.ExternalMetadata);
+    }
+
     private static void ClearCredentialTokens(Aevatar.AI.Abstractions.AgentToolCredentialsPayload? credentials)
     {
         if (credentials is null) return;
         credentials.NyxIdAccessToken = string.Empty;
         credentials.NyxIdOrgToken = string.Empty;
         credentials.SenderNyxIdAccessToken = string.Empty;
+    }
+
+    private static void ScrubExternalMetadata(IDictionary<string, string>? externalMetadata)
+    {
+        if (externalMetadata is null || externalMetadata.Count == 0)
+            return;
+
+        var scrubbed = AgentToolExecutionContextMapper.StripOwnedControlKeys(
+            new Dictionary<string, string>(externalMetadata, StringComparer.Ordinal));
+        externalMetadata.Clear();
+        foreach (var pair in scrubbed)
+            externalMetadata[pair.Key] = pair.Value;
     }
 }

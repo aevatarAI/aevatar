@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Xunit;
@@ -82,6 +83,31 @@ public sealed class AgentRunReplyStepCredentialsTests
         stripped.ToolContext.Caller.OwnerSubject.Should().Be("owner-subj");
         stripped.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         stripped.ToolContext.Routing.ModelOverride.Should().Be("gpt-x");
+    }
+
+    [Fact]
+    public void StripRuntimeCredentials_ScrubsOwnedCredentialMetadataFromPersistedStepState()
+    {
+        var original = BuildStateWithTokens();
+        original.ExternalMetadata[LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-user-token";
+        original.ExternalMetadata[LLMRequestMetadataKeys.NyxIdOrgToken] = "metadata-org-token";
+        original.ExternalMetadata[LLMRequestMetadataKeys.SenderNyxIdAccessToken] = "metadata-sender-token";
+        original.ExternalMetadata["trace-id"] = "trace-1";
+        original.ToolContext.ExternalMetadata[LLMRequestMetadataKeys.NyxIdAccessToken] = "tool-user-token";
+        original.ToolContext.ExternalMetadata["tool-trace"] = "tool-trace-1";
+        original.OwnerFallbackToolContext.ExternalMetadata[LLMRequestMetadataKeys.NyxIdOrgToken] = "owner-org-token";
+        original.OwnerFallbackToolContext.ExternalMetadata["fallback-trace"] = "fallback-trace-1";
+
+        var stripped = AgentRunReplyStepCredentials.StripRuntimeCredentials(original);
+
+        stripped.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
+        stripped.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        stripped.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
+        stripped.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        stripped.ToolContext.ExternalMetadata.Should().ContainKey("tool-trace").WhoseValue.Should().Be("tool-trace-1");
+        stripped.ToolContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        stripped.OwnerFallbackToolContext.ExternalMetadata.Should().ContainKey("fallback-trace").WhoseValue.Should().Be("fallback-trace-1");
+        stripped.OwnerFallbackToolContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdOrgToken);
     }
 
     [Fact]
