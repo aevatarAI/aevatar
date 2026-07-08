@@ -1309,7 +1309,7 @@ const TeamDetailPage: React.FC = () => {
         const matchedMember = teamRosterRows.find(
           (row) => trimText(row.publishedServiceId) === runServiceId,
         );
-        const detailsHref = matchedMember
+        const detailsHref = matchedMember?.canOpenPublishedRuns
           ? buildTeamMemberPublishedRunsHref({
               actorId: trimText(run.actorId) || undefined,
               memberId: matchedMember.memberId,

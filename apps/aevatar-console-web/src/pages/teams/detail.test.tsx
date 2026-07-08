@@ -1435,6 +1435,74 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
   });
 
+  it("omits overview run details links for non-workflow entry member runs", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: "member-agent-alpha",
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-agent-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Agent Alpha",
+          description: "Agent member",
+          implementationKind: "gagent",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "agent-service",
+          lastBoundRevisionId: "rev-agent",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-1:default:default:agent-service",
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "agent-service",
+        displayName: "Agent Runtime",
+        defaultServingRevisionId: "rev-agent",
+        activeServingRevisionId: "rev-agent",
+        deploymentId: "dep-agent",
+        primaryActorId: "actor-agent",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ]);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateRunsCatalog(),
+      serviceId: "agent-service",
+      serviceKey: "scope-1:agent-service",
+      runs: mockCreateRunsCatalog().runs.map((run) => ({
+        ...run,
+        serviceId: "agent-service",
+      })),
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    expect((await screen.findAllByText("Agent Alpha")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "agent-service",
+        expect.objectContaining({ take: 12 }),
+      );
+    });
+  });
+
   it("shows a readable team members view", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
