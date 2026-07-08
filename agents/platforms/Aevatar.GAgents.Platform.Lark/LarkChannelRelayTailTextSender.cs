@@ -1,19 +1,18 @@
-using Aevatar.GAgents.Channel.Abstractions;
 using System.Text.Json;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Platform.Lark;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
+namespace Aevatar.GAgents.Platform.Lark;
 
-public sealed class NyxIdRelayTailTextSender : IChannelRelayTailTextSender
+public sealed class LarkChannelRelayTailTextSender : IChannelRelayTailTextSender
 {
     private readonly ILarkOutboundDispatcher _larkOutboundDispatcher;
-    private readonly ILogger<NyxIdRelayTailTextSender> _logger;
+    private readonly ILogger<LarkChannelRelayTailTextSender> _logger;
 
-    public NyxIdRelayTailTextSender(
+    public LarkChannelRelayTailTextSender(
         ILarkOutboundDispatcher larkOutboundDispatcher,
-        ILogger<NyxIdRelayTailTextSender> logger)
+        ILogger<LarkChannelRelayTailTextSender> logger)
     {
         _larkOutboundDispatcher = larkOutboundDispatcher ?? throw new ArgumentNullException(nameof(larkOutboundDispatcher));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));

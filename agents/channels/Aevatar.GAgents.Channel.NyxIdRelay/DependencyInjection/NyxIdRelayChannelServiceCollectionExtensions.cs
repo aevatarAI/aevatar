@@ -60,17 +60,10 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
 
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
-        services.TryAddSingleton<NyxIdRelayTailTextSender>();
-        services.Replace(ServiceDescriptor.Singleton<IChannelRelayTailTextSender>(
-            sp => sp.GetRequiredService<NyxIdRelayTailTextSender>()));
-        services.TryAddSingleton<LarkRelayProxyResponseClassifier>();
-        services.Replace(ServiceDescriptor.Singleton<IChannelRelayProxyResponseClassifier>(
-            sp => sp.GetRequiredService<LarkRelayProxyResponseClassifier>()));
         // Mainnet workflow/human interaction delivery must go through the channel-neutral
         // relay path; platform packages keep only native rendering/transport adapters.
         services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, NyxIdRelayChannelInteractionNotificationPort>());
         services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
-        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, NyxIdRelayRemoteToolApprovalNotificationPort>());
 
         return services;
     }

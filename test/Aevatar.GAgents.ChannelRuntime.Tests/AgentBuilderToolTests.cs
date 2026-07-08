@@ -20,7 +20,6 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.Platform.Lark;
-using RelayFeishuCardNotificationPort = Aevatar.GAgents.Channel.NyxIdRelay.Outbound.FeishuCardNotificationPort;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -1391,7 +1390,7 @@ public sealed class AgentBuilderToolTests
         var existingNotificationPort = Substitute.For<IChannelInteractionNotificationPort>();
         services.AddSingleton(existingNotificationPort);
         services.AddSingleton<LarkMessageComposer>();
-        services.TryAddSingleton<ILogger<RelayFeishuCardNotificationPort>>(NullLogger<RelayFeishuCardNotificationPort>.Instance);
+        services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
         services.AddSingleton(callerScopeResolver);
 
         services.AddLarkAgentAuthoring();

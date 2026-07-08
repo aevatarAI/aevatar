@@ -274,7 +274,7 @@ public sealed class ServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IChannelRelayTailTextSender>()
             .Should()
-            .BeOfType<NyxIdRelayTailTextSender>();
+            .BeOfType<LarkChannelRelayTailTextSender>();
     }
 
     private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)

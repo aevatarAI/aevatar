@@ -1,9 +1,8 @@
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Platform.Lark;
 
-namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
+namespace Aevatar.GAgents.Platform.Lark;
 
-internal sealed class LarkRelayProxyResponseClassifier : IChannelRelayProxyResponseClassifier
+public sealed class LarkRelayProxyResponseClassifier : IChannelRelayProxyResponseClassifier
 {
     public ChannelRelayProxyResponseClassification Classify(string? response)
     {

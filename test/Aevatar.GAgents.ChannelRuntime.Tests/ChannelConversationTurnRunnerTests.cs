@@ -10,7 +10,6 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
-using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 using Aevatar.GAgents.Platform.Lark;
@@ -4377,9 +4376,9 @@ public sealed class ChannelConversationTurnRunnerTests
             remoteToolApprovalPort: remoteToolApprovalPort,
             botIdentityResolver: botIdentityResolver,
             nyxIdCurrentUserResolver: services.GetService<INyxIdCurrentUserResolver>(),
-            relayTailTextSender: relayTailTextSender ?? new NyxIdRelayTailTextSender(
+            relayTailTextSender: relayTailTextSender ?? new LarkChannelRelayTailTextSender(
                 new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
-                NullLogger<NyxIdRelayTailTextSender>.Instance),
+                NullLogger<LarkChannelRelayTailTextSender>.Instance),
             relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier());
     }
 

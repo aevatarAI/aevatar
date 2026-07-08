@@ -1,88 +1,107 @@
-using System.Text.Json;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Scheduled;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
 
-public static class LarkInteractionCardRenderer
+public sealed class FeishuCardNotificationPort : IChannelInteractionNotificationPort
 {
-    public static string BuildCardJson(ChannelInteractionNotificationRequest request) =>
-        BuildCardJson(request, new LarkMessageComposer());
+    private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
+    private readonly LarkMessageComposer _composer;
+    private readonly LarkChannelNativeMessageSender _larkSender;
+    private readonly IChannelNativeDeliveryTargetAdapter _targetAdapter;
+    private readonly ILogger<FeishuCardNotificationPort> _logger;
 
-    public static string BuildCardJson(
+    public FeishuCardNotificationPort(
+        IUserAgentDeliveryTargetReader deliveryTargetReader,
+        LarkMessageComposer composer,
+        LarkChannelNativeMessageSender larkSender,
+        ILogger<FeishuCardNotificationPort> logger,
+        IChannelNativeDeliveryTargetAdapter? targetAdapter = null)
+    {
+        _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
+        _composer = composer ?? throw new ArgumentNullException(nameof(composer));
+        _larkSender = larkSender ?? throw new ArgumentNullException(nameof(larkSender));
+        _targetAdapter = targetAdapter ?? new LarkChannelNativeDeliveryTargetAdapter();
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    public async Task DeliverAsync(
         ChannelInteractionNotificationRequest request,
-        LarkMessageComposer composer)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(composer);
 
-        ValidatePayload(request);
+        var target = await ResolveAsync(
+                request.DeliveryTargetId,
+                "interaction notification",
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (!string.Equals(target.Platform, "lark", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException($"Unsupported interaction notification platform: {target.Platform}");
 
-        if (request.InteractionSpec is { } interactionSpec)
-            return BuildInteractionCardJson(interactionSpec, composer, BuildWorkflowResumePayload(request));
+        await _larkSender.SendAsync(
+                _targetAdapter.Adapt(ToNativeDeliveryTarget(target)),
+                new ChannelNativeMessage(
+                    Text: null,
+                    CardPayload: LarkInteractionCardRenderer.BuildCardJson(request, _composer),
+                    MessageType: "interactive",
+                    Capability: ComposeCapability.Exact),
+                cancellationToken)
+            .ConfigureAwait(false);
 
-        if (request.InteractionTemplateSpec is { } templateSpec)
-            return BuildTemplateCardJson(templateSpec);
-
-        throw new InvalidOperationException("Interaction notification payload is required.");
+        _logger.LogInformation(
+            "Delivered interaction notification card: target={DeliveryTargetId}, run={RunId}, step={StepId}",
+            request.DeliveryTargetId,
+            request.RunId,
+            request.StepId);
     }
 
-    private static string BuildInteractionCardJson(
-        InteractionSpec interactionSpec,
-        LarkMessageComposer composer,
-        WorkflowResumeActionPayload workflowResume)
+    private async Task<UserAgentDeliveryTarget> ResolveAsync(
+        string deliveryTargetId,
+        string platformSubject,
+        CancellationToken cancellationToken)
     {
-        var content = InteractionSpecMapper.ToMessageContent(interactionSpec, workflowResume);
-        var payload = composer.Compose(content, BuildComposeContext());
-        if (!payload.IsInteractive)
-            throw new InvalidOperationException("Interaction notification must render as an interactive Lark card.");
+        if (string.IsNullOrWhiteSpace(deliveryTargetId))
+            throw new InvalidOperationException($"{platformSubject} delivery target id is required.");
 
-        return payload.ContentJson;
+        var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, cancellationToken).ConfigureAwait(false);
+        if (target is null)
+            throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
+        if (string.IsNullOrWhiteSpace(target.Platform))
+            throw new InvalidOperationException($"Agent delivery target platform is missing: {deliveryTargetId}");
+
+        return target;
     }
 
-    private static WorkflowResumeActionPayload BuildWorkflowResumePayload(ChannelInteractionNotificationRequest request) =>
-        new()
-        {
-            ActorId = request.ActorId,
-            RunId = request.RunId,
-            StepId = request.StepId,
-        };
+    private static ChannelNativeDeliveryTarget ToNativeDeliveryTarget(UserAgentDeliveryTarget target) =>
+        new RoutedChannelNativeDeliveryTarget(
+            target.AgentId,
+            target.Platform,
+            target.ConversationId,
+            target.NyxProviderSlug,
+            target.NyxApiKey,
+            target.LarkReceiveId,
+            target.LarkReceiveIdType,
+            target.LarkReceiveIdFallback,
+            target.LarkReceiveIdTypeFallback);
 
-    private static string BuildTemplateCardJson(InteractionTemplateSpec templateSpec)
-    {
-        if (string.IsNullOrWhiteSpace(templateSpec.TemplateId))
-            throw new InvalidOperationException("Interaction template notification requires template_id.");
-
-        return JsonSerializer.Serialize(new
-        {
-            type = "template",
-            data = new
-            {
-                template_id = templateSpec.TemplateId,
-                template_variable = templateSpec.TemplateVariable.ToDictionary(
-                    pair => pair.Key,
-                    pair => pair.Value,
-                    StringComparer.Ordinal),
-            },
-        });
-    }
-
-    private static ComposeContext BuildComposeContext() => new()
-    {
-        Capabilities = LarkMessageComposer.DefaultCapabilities.Clone(),
-    };
-
-    private static void ValidatePayload(ChannelInteractionNotificationRequest request)
-    {
-        var payloadCount = 0;
-        if (request.InteractionSpec is not null)
-            payloadCount++;
-        if (request.InteractionTemplateSpec is not null)
-            payloadCount++;
-
-        if (payloadCount != 1)
-            throw new InvalidOperationException("Interaction notification requires exactly one typed payload.");
-    }
+    private sealed record RoutedChannelNativeDeliveryTarget(
+        string AgentId,
+        string Platform,
+        string ConversationId,
+        string NyxProviderSlug,
+        string NyxApiKey,
+        string LarkReceiveId,
+        string LarkReceiveIdType,
+        string LarkReceiveIdFallback,
+        string LarkReceiveIdTypeFallback)
+        : ChannelNativeDeliveryTarget(
+            AgentId,
+            Platform,
+            ConversationId,
+            NyxProviderSlug,
+            NyxApiKey);
 }
