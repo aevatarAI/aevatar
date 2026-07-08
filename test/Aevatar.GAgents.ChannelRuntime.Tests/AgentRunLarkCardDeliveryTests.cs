@@ -358,6 +358,41 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task CreateFailure_ForwardsPendingFinalTextWhenLlmCompletesDuringCreate()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.Failed(
+                "card_create_failed",
+                "create rejected",
+                isRateLimited: true),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("partial llm text")));
+        await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("the complete final reply"));
+
+        agent.State.LarkCardDelivery.PendingFinalizeText.Should().Be("the complete final reply");
+
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        var dispatched = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LlmReplyStreamChunkEvent>()
+            .ToList();
+        dispatched.Select(chunk => chunk.AccumulatedText)
+            .Should().Equal(
+                "Processing your request. Please wait...",
+                "the complete final reply");
+        dispatched.Select(chunk => chunk.ReplyToken)
+            .Should().Equal("runtime-reply-token", "runtime-reply-token");
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
+        agent.State.LarkCardDelivery.TextFallbackPhase.Should()
+            .Be(AgentRunLarkCardTextFallbackPhase.FinalForwarded);
+    }
+
+    [Fact]
     public async Task CreateFailure_IgnoresInterimChunksAfterStatusForwarded()
     {
         var runner = new RecordingCardRunner
