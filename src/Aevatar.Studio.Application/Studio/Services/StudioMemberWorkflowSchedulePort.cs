@@ -15,6 +15,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 {
     private const string WorkflowInvokeEndpointId = "chat";
     private const string ObservatoryPath = "/workflow/observatory";
+    private const int MaxScheduleGenerations = 50;
 
     private readonly IStudioMemberService _memberService;
     private readonly IScheduledDispatchApplicationService _scheduleService;
@@ -48,47 +49,108 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 $"member_id '{memberId}' is not a workflow member and cannot be scheduled as a workflow.");
         }
 
-        if (member.LastBinding is null)
-        {
-            throw new InvalidOperationException(
-                $"member_id '{memberId}' has no bound workflow. Bind workflow YAML before scheduling the member.");
-        }
-
         var publishedServiceId = NormalizeRequired(
             member.Summary.PublishedServiceId,
             nameof(member.Summary.PublishedServiceId));
-        var boundPublishedServiceId = NormalizeRequired(
-            member.LastBinding.PublishedServiceId,
-            nameof(member.LastBinding.PublishedServiceId));
-        if (!string.Equals(publishedServiceId, boundPublishedServiceId, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"member_id '{memberId}' binding service id does not match the published service id.");
-        }
+        EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
 
-        var scheduleId = BuildScheduleId(scopeId, memberId);
-        var schedule = await _scheduleService.EnsureAsync(
-            BuildScheduleConfiguration(
-                scheduleId,
-                request.DisplayName,
-                scopeId,
-                memberId,
-                publishedServiceId,
-                NormalizeOptional(request.Prompt) ?? string.Empty,
-                BuildScheduleAuth(request, callerSubjectExternalUserId),
-                scheduleCron,
-                scheduleTimezone),
+        var schedule = await EnsureScheduleAsync(
+            BuildScheduleId(scopeId, memberId),
+            request.DisplayName,
+            scopeId,
+            memberId,
+            publishedServiceId,
+            NormalizeOptional(request.Prompt) ?? string.Empty,
+            BuildScheduleAuth(request, callerSubjectExternalUserId),
+            scheduleCron,
+            scheduleTimezone,
             ct);
 
         return new StudioMemberWorkflowScheduleResult(
             Success: schedule.Accepted,
             ScopeId: scopeId,
             MemberId: memberId,
-            ScheduleId: NormalizeOptional(schedule.ScheduleId) ?? scheduleId,
+            ScheduleId: NormalizeRequired(schedule.ScheduleId, nameof(schedule.ScheduleId)),
             PublishedServiceId: publishedServiceId,
             ObservatoryUrl: ObservatoryPath,
             Status: schedule.Accepted ? "accepted" : "rejected");
     }
+
+    private async Task<ScheduledDispatchMutationReceipt> EnsureScheduleAsync(
+        string baseScheduleId,
+        string? displayName,
+        string scopeId,
+        string memberId,
+        string publishedServiceId,
+        string prompt,
+        ScheduledServiceInvocationAuth auth,
+        string cronExpression,
+        string timezone,
+        CancellationToken ct)
+    {
+        for (var generation = 1; generation <= MaxScheduleGenerations; generation++)
+        {
+            var scheduleId = generation == 1 ? baseScheduleId : $"{baseScheduleId}.{generation}";
+            try
+            {
+                return await _scheduleService.EnsureAsync(
+                    BuildScheduleConfiguration(
+                        scheduleId,
+                        displayName,
+                        scopeId,
+                        memberId,
+                        publishedServiceId,
+                        prompt,
+                        auth,
+                        cronExpression,
+                        timezone),
+                    ct);
+            }
+            catch (ScheduledDispatchNotFoundException)
+            {
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Studio member workflow schedule for member '{memberId}' exhausted {MaxScheduleGenerations} deleted schedule generations.");
+    }
+
+    private static void EnsureWorkflowBindingCanBeScheduled(
+        StudioMemberDetailResponse member,
+        string memberId,
+        string publishedServiceId)
+    {
+        if (member.LastBinding is not null)
+        {
+            var boundPublishedServiceId = NormalizeRequired(
+                member.LastBinding.PublishedServiceId,
+                nameof(member.LastBinding.PublishedServiceId));
+            if (!string.Equals(publishedServiceId, boundPublishedServiceId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"member_id '{memberId}' binding service id does not match the published service id.");
+            }
+
+            return;
+        }
+
+        if (member.CurrentBindingRun is null || !IsSchedulableCurrentBindingRun(member.CurrentBindingRun.Status))
+        {
+            throw new InvalidOperationException(
+                $"member_id '{memberId}' has no bound workflow. Bind workflow YAML before scheduling the member.");
+        }
+    }
+
+    private static bool IsSchedulableCurrentBindingRun(string? status) => status switch
+    {
+        StudioMemberBindingRunStatusNames.Accepted => true,
+        StudioMemberBindingRunStatusNames.AdmissionPending => true,
+        StudioMemberBindingRunStatusNames.Admitted => true,
+        StudioMemberBindingRunStatusNames.PlatformBindingPending => true,
+        StudioMemberBindingRunStatusNames.MemberNotificationPending => true,
+        StudioMemberBindingRunStatusNames.Succeeded => true,
+        _ => false,
+    };
 
     private static ScheduledDispatchConfiguration BuildScheduleConfiguration(
         string scheduleId,

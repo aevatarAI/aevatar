@@ -5,7 +5,7 @@ using Aevatar.Studio.Application.Provisioning;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
+internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -61,6 +61,10 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
         """;
 
     public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
+
+    public IReadOnlyCollection<string> Capabilities { get; } =
+        [AgentToolCapabilities.ExcludeFromDirectChannelChat];
+
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.member.workflow.schedule";

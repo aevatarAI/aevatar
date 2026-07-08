@@ -463,7 +463,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(new RecordingMemberWorkflowSchedulePort());
 
         tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
-        tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
+        var descriptor = tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>().Subject;
+        descriptor.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
     }
 
     [Fact]

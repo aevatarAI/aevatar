@@ -36,7 +36,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         result.Status.Should().Be("accepted");
         result.ScopeId.Should().Be("scope-1");
         result.MemberId.Should().Be("member-1");
-        result.ScheduleId.Should().Be("schedule-accepted");
+        result.ScheduleId.Should().Be(scheduleService.Configuration!.ScheduleId);
         result.PublishedServiceId.Should().Be("published-member-1");
         result.ObservatoryUrl.Should().Be("/workflow/observatory");
 
@@ -94,6 +94,56 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task EnsureAsync_WhenJustAcceptedBindingRun_ShouldScheduleBeforeLastBindingMaterializes()
+    {
+        var scheduleService = new RecordingScheduleService();
+        var sut = new StudioMemberWorkflowSchedulePort(
+            new RecordingMemberService
+            {
+                Detail = CreateWorkflowMemberDetail(
+                    hasBinding: false,
+                    currentBindingRunStatus: StudioMemberBindingRunStatusNames.Accepted),
+            },
+            scheduleService);
+
+        var result = await sut.EnsureAsync(new StudioMemberWorkflowScheduleRequest(
+            ScopeId: "scope-1",
+            MemberId: "member-1",
+            ScheduleCron: "0 9 * * *",
+            ScheduleTimezone: "Asia/Shanghai",
+            CallerSubjectExternalUserId: "owner-1"));
+
+        result.Success.Should().BeTrue();
+        scheduleService.EnsureCallCount.Should().Be(1);
+        scheduleService.Configuration!.Target.ServiceInvocation!.Identity.ServiceId.Should().Be("published-member-1");
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenBindingRunFailedAndNoLastBinding_ShouldRejectBeforeScheduling()
+    {
+        var scheduleService = new RecordingScheduleService();
+        var sut = new StudioMemberWorkflowSchedulePort(
+            new RecordingMemberService
+            {
+                Detail = CreateWorkflowMemberDetail(
+                    hasBinding: false,
+                    currentBindingRunStatus: StudioMemberBindingRunStatusNames.Failed),
+            },
+            scheduleService);
+
+        var action = () => sut.EnsureAsync(new StudioMemberWorkflowScheduleRequest(
+            ScopeId: "scope-1",
+            MemberId: "member-1",
+            ScheduleCron: "0 9 * * *",
+            ScheduleTimezone: "Asia/Shanghai",
+            CallerSubjectExternalUserId: "owner-1"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("member_id 'member-1' has no bound workflow*");
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task EnsureAsync_WhenWorkflowMemberUnbound_ShouldRejectBeforeScheduling()
     {
         var scheduleService = new RecordingScheduleService();
@@ -134,6 +184,19 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task EnsureAsync_WhenBaseScheduleIdTombstoned_ShouldUseNextGeneration()
+    {
+        var scheduleService = new RecordingScheduleService { TombstonedAttempts = 1 };
+
+        var result = await NewPort(scheduleService).EnsureAsync(Request("scope-1", "member-1"));
+
+        scheduleService.EnsureCallCount.Should().Be(2);
+        var attemptedScheduleIds = scheduleService.Configurations.Select(static configuration => configuration.ScheduleId).ToArray();
+        attemptedScheduleIds[1].Should().Be($"{attemptedScheduleIds[0]}.2");
+        result.ScheduleId.Should().Be(attemptedScheduleIds[1]);
+    }
+
+    [Fact]
     public async Task EnsureAsync_ShouldUseDeterministicScheduleIdPerScopeAndMember()
     {
         var first = new RecordingScheduleService();
@@ -167,7 +230,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
     private static StudioMemberDetailResponse CreateWorkflowMemberDetail(
         string implementationKind = MemberImplementationKindNames.Workflow,
-        bool hasBinding = true) =>
+        bool hasBinding = true,
+        string? currentBindingRunStatus = null) =>
         new(
             Summary: new StudioMemberSummaryResponse(
                 MemberId: "member-1",
@@ -177,7 +241,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 ImplementationKind: implementationKind,
                 LifecycleStage: MemberLifecycleStageNames.BindReady,
                 PublishedServiceId: "published-member-1",
-                LastBoundRevisionId: "rev-1",
+                LastBoundRevisionId: hasBinding ? "rev-1" : null,
                 CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
                 UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
             ImplementationRef: null,
@@ -187,7 +251,18 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     RevisionId: "rev-1",
                     ImplementationKind: MemberImplementationKindNames.Workflow,
                     BoundAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"))
-                : null);
+                : null)
+        {
+            CurrentBindingRun = currentBindingRunStatus is null
+                ? null
+                : new StudioMemberBindingRunStatusResponse(
+                    BindingRunId: "bind-1",
+                    ScopeId: "scope-1",
+                    MemberId: "member-1",
+                    Status: currentBindingRunStatus,
+                    StateVersion: 1,
+                    UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
+        };
 
     private sealed class RecordingMemberService : IStudioMemberService
     {
@@ -251,16 +326,22 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     private sealed class RecordingScheduleService : IScheduledDispatchApplicationService
     {
         public int EnsureCallCount { get; private set; }
+        public int TombstonedAttempts { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
+        public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
             ScheduledDispatchConfiguration configuration, CancellationToken ct = default)
         {
             EnsureCallCount++;
             Configuration = configuration;
+            Configurations.Add(configuration);
+            if (EnsureCallCount <= TombstonedAttempts)
+                throw new ScheduledDispatchNotFoundException(configuration.ScheduleId);
+
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
-                "schedule-accepted",
-                "scheduled-dispatch:schedule-accepted",
+                configuration.ScheduleId,
+                $"scheduled-dispatch:{configuration.ScheduleId}",
                 Accepted: true,
                 CommandId: "cmd-1",
                 CorrelationId: "corr-1",
