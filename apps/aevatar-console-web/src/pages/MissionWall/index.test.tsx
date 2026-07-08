@@ -552,9 +552,9 @@ describe("MissionWallPage", () => {
     expect(cards[0]).toHaveTextContent("Fresh Workflow");
     expect(cards[0]).toHaveTextContent("0 / 15 steps");
     expect(
-      await screen.findByText(/Live Risk Workflow · Step Flow/),
+      await screen.findByText(/Fresh Workflow · Step Flow/),
     ).toBeInTheDocument();
-    expect(cards[0]).toHaveAttribute("aria-pressed", "false");
+    expect(cards[0]).toHaveAttribute("aria-pressed", "true");
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.getMemberRunAudit).not.toHaveBeenCalled();
 
@@ -608,6 +608,130 @@ describe("MissionWallPage", () => {
     expect(screen.getByTestId("mission-wall-run-list"))
       .toHaveTextContent("Live Risk Workflow");
     expect(screen.queryByText("No focus run")).not.toBeInTheDocument();
+  });
+
+  it("auto-focuses a newly observed workflow run so its topology appears without a page reload", async () => {
+    const freshMember = workflowMember({
+      displayName: "Fresh workflow member",
+      memberId: "m-fresh",
+      publishedServiceId: "svc-fresh",
+      teamId: "team-alpha",
+      workflowId: "wf-fresh-draft",
+    });
+    let includeFreshMember = false;
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockImplementation(
+      async () =>
+        workflowBoardSnapshot([
+          workflowBoardMember({
+            actorId: "actor-risk-run",
+            completedSteps: 1,
+            currentNodeStatus: "waiting",
+            executionStatus: "running",
+            lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
+            member: riskMember,
+            runId: "run-risk",
+            totalSteps: 3,
+            workflowName: "Live Risk Workflow",
+          }),
+          ...(includeFreshMember
+            ? [
+                workflowBoardMember({
+                  actorId: "actor-fresh-run",
+                  completedSteps: 0,
+                  currentNodeStatus: "running",
+                  executionStatus: "running",
+                  lastNodeUpdatedAt: "2026-06-30T04:59:58.000Z",
+                  member: freshMember,
+                  runId: "run-fresh",
+                  totalSteps: 4,
+                  workflowName: "Fresh Workflow",
+                }),
+              ]
+            : []),
+        ]),
+    );
+
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(MissionWallPage),
+    );
+
+    expect(
+      await screen.findByText(/Live Risk Workflow · Step Flow/),
+    ).toBeInTheDocument();
+
+    includeFreshMember = true;
+    await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
+
+    expect(
+      await screen.findByText(/Fresh Workflow · Step Flow/),
+    ).toBeInTheDocument();
+
+    const list = screen.getByTestId("mission-wall-run-list");
+    const cards = within(list).getAllByRole("button");
+    expect(cards[0]).toHaveTextContent("Fresh Workflow");
+    expect(cards[0]).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findAllByText("Current")).not.toHaveLength(0);
+  });
+
+  it("keeps a manually selected run focused when another workflow run appears", async () => {
+    const freshMember = workflowMember({
+      displayName: "Fresh workflow member",
+      memberId: "m-fresh",
+      publishedServiceId: "svc-fresh",
+      teamId: "team-alpha",
+      workflowId: "wf-fresh-draft",
+    });
+    let includeFreshMember = false;
+    (studioApi.getWorkflowBoardSnapshot as jest.Mock).mockImplementation(
+      async () =>
+        workflowBoardSnapshot([
+          workflowBoardMember({
+            actorId: "actor-risk-run",
+            completedSteps: 1,
+            currentNodeStatus: "waiting",
+            executionStatus: "running",
+            lastNodeUpdatedAt: "2026-06-30T04:59:20.000Z",
+            member: riskMember,
+            runId: "run-risk",
+            totalSteps: 3,
+            workflowName: "Live Risk Workflow",
+          }),
+          ...(includeFreshMember
+            ? [
+                workflowBoardMember({
+                  actorId: "actor-fresh-run",
+                  completedSteps: 0,
+                  currentNodeStatus: "running",
+                  executionStatus: "running",
+                  lastNodeUpdatedAt: "2026-06-30T04:59:58.000Z",
+                  member: freshMember,
+                  runId: "run-fresh",
+                  totalSteps: 4,
+                  workflowName: "Fresh Workflow",
+                }),
+              ]
+            : []),
+        ]),
+    );
+
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(MissionWallPage),
+    );
+
+    const riskCard = (await screen.findByText("Live Risk Workflow")).closest(
+      "button",
+    );
+    expect(riskCard).toBeTruthy();
+    fireEvent.click(riskCard as HTMLButtonElement);
+
+    includeFreshMember = true;
+    await queryClient.invalidateQueries({ queryKey: ["mission-wall"] });
+
+    expect(await screen.findByText("Fresh Workflow")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Live Risk Workflow · Step Flow/),
+    ).toBeInTheDocument();
+    expect(riskCard).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows the selected member snapshot nodes in the right workflow graph", async () => {

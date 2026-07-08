@@ -43,6 +43,7 @@ describe("Published Run Window state", () => {
 
     const model = reducePublishedRunWindowModel(
       {
+        manualSelection: false,
         runs: [first, second],
         selectedRunId: "run-second",
       },
@@ -63,6 +64,7 @@ describe("Published Run Window state", () => {
 
     const model = reducePublishedRunWindowModel(
       {
+        manualSelection: true,
         runs: [first, second],
         selectedRunId: "run-second",
       },
@@ -77,6 +79,29 @@ describe("Published Run Window state", () => {
     expect(model.selectedRunId).toBe("run-second");
   });
 
+  it("moves automatic focus to the preferred run when a new live run appears", () => {
+    const first = run("run-first");
+    const second = run("run-second");
+    const third = run("run-third");
+
+    const model = reducePublishedRunWindowModel(
+      {
+        manualSelection: false,
+        runs: [first, second],
+        selectedRunId: "run-second",
+      },
+      [third, first, second],
+      "run-third",
+    );
+
+    expect(model.runs.map((item) => item.runId)).toEqual([
+      "run-third",
+      "run-first",
+      "run-second",
+    ]);
+    expect(model.selectedRunId).toBe("run-third");
+  });
+
   it("selects a newly observed run after the current selection is done", () => {
     const first = run("run-first");
     const second = run("run-second", {
@@ -87,6 +112,7 @@ describe("Published Run Window state", () => {
 
     const model = reducePublishedRunWindowModel(
       {
+        manualSelection: false,
         runs: [first, second],
         selectedRunId: "run-second",
       },
@@ -115,6 +141,7 @@ describe("Published Run Window state", () => {
 
     const model = reducePublishedRunWindowModel(
       {
+        manualSelection: false,
         runs: [first, second],
         selectedRunId: "run-second",
       },

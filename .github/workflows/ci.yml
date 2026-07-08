@@ -145,20 +145,17 @@ jobs:
     if: |
       github.event_name == 'pull_request' ||
       (
-        vars.FKST_GITHUB_BOT_LOGIN != '' &&
         github.event_name == 'pull_request_review' &&
-        github.actor != vars.FKST_GITHUB_BOT_LOGIN
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
       ) ||
       (
-        vars.FKST_GITHUB_BOT_LOGIN != '' &&
         github.event_name == 'pull_request_review_comment' &&
-        github.actor != vars.FKST_GITHUB_BOT_LOGIN
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
       ) ||
       (
-        vars.FKST_GITHUB_BOT_LOGIN != '' &&
         github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
-        github.actor != vars.FKST_GITHUB_BOT_LOGIN
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
