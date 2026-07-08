@@ -7,6 +7,8 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
+using RelayFeishuCardNotificationPort = Aevatar.GAgents.Channel.NyxIdRelay.Outbound.FeishuCardNotificationPort;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Workflow.Integration.AI;
@@ -37,7 +39,7 @@ public sealed class FeishuCardNotificationPortTests
     {
         var notification = BuildRemoteApprovalNotification("agent-1");
 
-        var intent = LarkRemoteToolApprovalNotificationPort.BuildIntent(notification);
+        var intent = LarkRemoteToolApprovalCardContent.BuildIntent(notification);
 
         intent.Cards.Should().ContainSingle();
         var card = intent.Cards[0];
@@ -80,11 +82,11 @@ public sealed class FeishuCardNotificationPortTests
         var registry = BuildRegistry("agent-1");
         var handler = new RecordingHandler("""{"data":{"message_id":"om_1"}}""");
         var nyxClient = CreateNyxClient(handler);
-        var port = new FeishuCardNotificationPort(
-            registry,
-            nyxClient,
+        var port = new RelayFeishuCardNotificationPort(
+            CreateResolver(registry),
             new LarkMessageComposer(),
-            NullLogger<FeishuCardNotificationPort>.Instance);
+            new LarkChannelNativeMessageSender(new LarkOutboundDispatcher(nyxClient, NullLogger.Instance)),
+            NullLogger<RelayFeishuCardNotificationPort>.Instance);
 
         await port.DeliverAsync(
             new ChannelInteractionNotificationRequest
@@ -128,11 +130,11 @@ public sealed class FeishuCardNotificationPortTests
     {
         var registry = BuildRegistry("agent-approval-1");
         var handler = new RecordingHandler("""{"data":{"message_id":"om_approval_1"}}""");
-        var feishuPort = new FeishuCardNotificationPort(
-            registry,
-            CreateNyxClient(handler),
+        var feishuPort = new RelayFeishuCardNotificationPort(
+            CreateResolver(registry),
             new LarkMessageComposer(),
-            NullLogger<FeishuCardNotificationPort>.Instance);
+            new LarkChannelNativeMessageSender(new LarkOutboundDispatcher(CreateNyxClient(handler), NullLogger.Instance)),
+            NullLogger<RelayFeishuCardNotificationPort>.Instance);
         var port = new SkillBackedHumanInteractionPort(
         [
             new HumanInteractionChannelToolSource(
@@ -178,7 +180,7 @@ public sealed class FeishuCardNotificationPortTests
     [Fact]
     public void BuildCardJson_WhenApprovalInteractionSpecPresent_ShouldIncludeWorkflowResumeIdentity()
     {
-        var cardJson = FeishuCardNotificationPort.BuildCardJson(
+        var cardJson = LarkInteractionCardRenderer.BuildCardJson(
             new ChannelInteractionNotificationRequest
             {
                 ActorId = "workflow-actor-1",
@@ -218,7 +220,7 @@ public sealed class FeishuCardNotificationPortTests
         template.TemplateVariable["title"] = "Deploy";
         template.TemplateVariable["run"] = "run-1";
 
-        var cardJson = FeishuCardNotificationPort.BuildCardJson(
+        var cardJson = LarkInteractionCardRenderer.BuildCardJson(
             new ChannelInteractionNotificationRequest
             {
                 ActorId = "workflow-actor-1",
@@ -243,11 +245,11 @@ public sealed class FeishuCardNotificationPortTests
         var handler = new SequencedRecordingHandler(
             """{"error": true, "status": 400, "body": "{\"code\":230002,\"msg\":\"Bot is not in the chat\"}"}""",
             """{"data":{"message_id":"om_fb"}}""");
-        var port = new FeishuCardNotificationPort(
-            registry,
-            CreateNyxClient(handler),
+        var port = new RelayFeishuCardNotificationPort(
+            CreateResolver(registry),
             new LarkMessageComposer(),
-            NullLogger<FeishuCardNotificationPort>.Instance);
+            new LarkChannelNativeMessageSender(new LarkOutboundDispatcher(CreateNyxClient(handler), NullLogger.Instance)),
+            NullLogger<RelayFeishuCardNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildTemplateRequest("agent-fb"), CancellationToken.None);
 
@@ -310,11 +312,11 @@ public sealed class FeishuCardNotificationPortTests
             InteractionTemplateSpec = new InteractionTemplateSpec { TemplateId = "tpl-1" },
         };
 
-        Action emptyAct = () => FeishuCardNotificationPort.BuildCardJson(empty);
+        Action emptyAct = () => LarkInteractionCardRenderer.BuildCardJson(empty);
         Func<Task> bothAct = () => CreatePort(BuildRegistry("agent-1")).DeliverAsync(both, CancellationToken.None);
 
         emptyAct.Should().Throw<InvalidOperationException>()
-            .WithMessage("*payload is required*");
+            .WithMessage("*exactly one typed payload*");
         await bothAct.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*exactly one typed payload*");
     }
@@ -361,23 +363,32 @@ public sealed class FeishuCardNotificationPortTests
         }
     }
 
-    private static FeishuCardNotificationPort CreatePort(IUserAgentDeliveryTargetReader registry) =>
+    private static RelayFeishuCardNotificationPort CreatePort(IUserAgentDeliveryTargetReader registry) =>
         new(
-            registry,
-            new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
+            CreateResolver(registry),
             new LarkMessageComposer(),
-            NullLogger<FeishuCardNotificationPort>.Instance);
+            new LarkChannelNativeMessageSender(new LarkOutboundDispatcher(
+                new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }),
+                NullLogger.Instance)),
+            NullLogger<RelayFeishuCardNotificationPort>.Instance);
 
-    private static LarkRemoteToolApprovalNotificationPort CreateRemoteApprovalPort(
+    private static NyxIdRelayRemoteToolApprovalNotificationPort CreateRemoteApprovalPort(
         IUserAgentDeliveryTargetReader registry,
-        HttpMessageHandler? handler = null) =>
+        HttpMessageHandler? handler = null)
+    {
+        var nyxClient = handler is null
+            ? new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" })
+            : CreateNyxClient(handler);
+        return
         new(
-            registry,
-            handler is null
-                ? new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" })
-                : CreateNyxClient(handler),
+            CreateResolver(registry),
             new LarkMessageComposer(),
-            NullLogger<LarkRemoteToolApprovalNotificationPort>.Instance);
+            new LarkChannelNativeMessageSender(new LarkOutboundDispatcher(nyxClient, NullLogger.Instance)),
+            NullLogger<NyxIdRelayRemoteToolApprovalNotificationPort>.Instance);
+    }
+
+    private static ChannelDeliveryTargetResolver CreateResolver(IUserAgentDeliveryTargetReader registry) =>
+        new(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance);
 
     private static RemoteToolApprovalNotification BuildRemoteApprovalNotification(string? deliveryTargetId) =>
         new(

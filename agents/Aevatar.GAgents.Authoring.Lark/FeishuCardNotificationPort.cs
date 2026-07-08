@@ -1,73 +1,24 @@
 using System.Text.Json;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Scheduled;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
 
-public sealed class FeishuCardNotificationPort : IChannelInteractionNotificationPort
+public static class LarkInteractionCardRenderer
 {
-    private readonly FeishuCardOutboundMessageSender _sender;
-    private readonly LarkMessageComposer _composer;
-    private readonly ILogger<FeishuCardNotificationPort> _logger;
-
-    public FeishuCardNotificationPort(
-        IUserAgentDeliveryTargetReader deliveryTargetReader,
-        NyxIdApiClient nyxIdApiClient,
-        LarkMessageComposer composer,
-        ILogger<FeishuCardNotificationPort> logger,
-        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
-    {
-        ArgumentNullException.ThrowIfNull(deliveryTargetReader);
-        ArgumentNullException.ThrowIfNull(nyxIdApiClient);
-        _composer = composer ?? throw new ArgumentNullException(nameof(composer));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _sender = new FeishuCardOutboundMessageSender(
-            deliveryTargetReader,
-            nyxIdApiClient,
-            logger,
-            larkOutboundDispatcher);
-    }
-
-    public async Task DeliverAsync(
-        ChannelInteractionNotificationRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        ValidatePayload(request);
-        var target = await _sender.ResolveTargetAsync(
-            request.DeliveryTargetId,
-            "interaction notification",
-            cancellationToken);
-
-        await _sender.SendInteractiveCardMessageAsync(
-            target,
-            BuildCardJson(request, _composer),
-            "Feishu interaction notification delivery returned empty response.",
-            "Feishu interaction notification delivery failed",
-            cancellationToken);
-
-        _logger.LogInformation(
-            "Delivered interaction notification card: target={DeliveryTargetId}, run={RunId}, step={StepId}",
-            request.DeliveryTargetId,
-            request.RunId,
-            request.StepId);
-    }
-
-    internal static string BuildCardJson(ChannelInteractionNotificationRequest request) =>
+    public static string BuildCardJson(ChannelInteractionNotificationRequest request) =>
         BuildCardJson(request, new LarkMessageComposer());
 
-    internal static string BuildCardJson(
+    public static string BuildCardJson(
         ChannelInteractionNotificationRequest request,
         LarkMessageComposer composer)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(composer);
+
+        ValidatePayload(request);
 
         if (request.InteractionSpec is { } interactionSpec)
             return BuildInteractionCardJson(interactionSpec, composer, BuildWorkflowResumePayload(request));

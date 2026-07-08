@@ -23,7 +23,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-lark-1", "lark", "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
@@ -49,7 +49,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
         var handler = new RecordingHandler("""{"ok":true,"result":{"message_id":7}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
@@ -75,7 +75,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
         var handler = new RecordingHandler("""{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
@@ -92,7 +92,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-lark-template-1", "lark", "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
@@ -126,7 +126,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     {
         var registry = BuildRegistry(BuildTarget("agent-discord-1", "discord", "channel-1"));
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [],
             [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
@@ -142,7 +142,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     {
         var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);

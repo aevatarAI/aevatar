@@ -57,7 +57,12 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
     }
 
     private static string SerializeNativePayload(object payload) =>
-        payload is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(payload);
+        payload switch
+        {
+            JsonElement element => element.GetRawText(),
+            string rawJson => rawJson,
+            _ => JsonSerializer.Serialize(payload),
+        };
 
     private static NativeLarkReceiveTarget ResolvePrimaryTarget(ChannelNativeDeliveryTarget target)
     {

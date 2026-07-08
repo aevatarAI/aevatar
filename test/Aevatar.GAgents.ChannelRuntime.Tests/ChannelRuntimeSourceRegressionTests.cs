@@ -49,7 +49,6 @@ public sealed class ChannelRuntimeSourceRegressionTests
         var repositoryRoot = GetRepositoryRoot();
         var bypasses = Directory.EnumerateFiles(Path.Combine(repositoryRoot, "agents"), "*.cs", SearchOption.AllDirectories)
             .Where(static file => !file.EndsWith("LarkOutboundDispatcher.cs", StringComparison.Ordinal))
-            .Where(static file => !file.EndsWith("FeishuCardOutboundMessageSender.cs", StringComparison.Ordinal))
             .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: StripComments(File.ReadAllText(file, Encoding.UTF8))))
             .Where(static item =>
                 item.Source.Contains("open-apis/im/v1/messages?receive_id_type=", StringComparison.Ordinal) ||
@@ -59,6 +58,43 @@ public sealed class ChannelRuntimeSourceRegressionTests
 
         bypasses.Should().BeEmpty(
             "new Lark message POST, message_id parsing, and 230002 fallback belong to LarkOutboundDispatcher");
+    }
+
+    [Fact]
+    public void Channel_conversation_turn_runner_must_not_depend_on_lark_outbound_transport()
+    {
+        var source = ReadRepositoryFile("agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs");
+        foreach (var token in new[]
+                 {
+                     "Aevatar.GAgents.Platform.Lark",
+                     "ILarkOutboundDispatcher",
+                     "LarkOutboundDispatcher",
+                     "LarkSendNewMessageRequest",
+                     "LarkConversationTargets",
+                     "LarkTextMessageSegmenter",
+                 })
+        {
+            source.Should().NotContain(token,
+                "the turn runner must delegate outbound Lark delivery to channel/platform delivery ports");
+        }
+    }
+
+    [Fact]
+    public void Authoring_lark_must_not_own_outbound_delivery_orchestration()
+    {
+        var source = ReadRepositorySources("agents/Aevatar.GAgents.Authoring.Lark");
+        foreach (var token in new[]
+                 {
+                     "FeishuCardOutboundMessageSender",
+                     "ILarkOutboundDispatcher",
+                     "LarkOutboundDispatcher",
+                     "LarkSendNewMessageRequest",
+                     "IUserAgentDeliveryTargetReader",
+                 })
+        {
+            source.Should().NotContain(token,
+                "Authoring.Lark owns card/content authoring only; delivery orchestration belongs to channel/platform adapters");
+        }
     }
 
     [Fact]

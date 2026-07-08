@@ -256,6 +256,27 @@ public sealed class ServiceCollectionExtensionsTests
             .Be(typeof(NyxIdRelayChannelInteractionNotificationPort));
     }
 
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldReplaceNyxIdChatTailTextFallback()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(IChannelRelayTailTextSender))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationFactory
+            .Should()
+            .NotBeNull();
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IChannelRelayTailTextSender>()
+            .Should()
+            .BeOfType<NyxIdRelayTailTextSender>();
+    }
+
     private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)
     {
         services.Any(descriptor =>

@@ -7,18 +7,18 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 
 public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInteractionNotificationPort
 {
-    private readonly IUserAgentDeliveryTargetReader _deliveryTargetReader;
+    private readonly ChannelDeliveryTargetResolver _targetResolver;
     private readonly IReadOnlyDictionary<string, IChannelNativeMessageProducer> _nativeProducers;
     private readonly IReadOnlyDictionary<string, IChannelNativeMessageSender> _nativeSenders;
     private readonly ILogger<NyxIdRelayChannelInteractionNotificationPort> _logger;
 
     public NyxIdRelayChannelInteractionNotificationPort(
-        IUserAgentDeliveryTargetReader deliveryTargetReader,
+        ChannelDeliveryTargetResolver targetResolver,
         IEnumerable<IChannelNativeMessageProducer> nativeProducers,
         IEnumerable<IChannelNativeMessageSender> nativeSenders,
         ILogger<NyxIdRelayChannelInteractionNotificationPort> logger)
     {
-        _deliveryTargetReader = deliveryTargetReader ?? throw new ArgumentNullException(nameof(deliveryTargetReader));
+        _targetResolver = targetResolver ?? throw new ArgumentNullException(nameof(targetResolver));
         ArgumentNullException.ThrowIfNull(nativeProducers);
         ArgumentNullException.ThrowIfNull(nativeSenders);
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -58,7 +58,11 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var target = await ResolveTargetAsync(request.DeliveryTargetId, cancellationToken).ConfigureAwait(false);
+        var target = await _targetResolver.ResolveAsync(
+                request.DeliveryTargetId,
+                "interaction notification",
+                cancellationToken)
+            .ConfigureAwait(false);
         var platform = NormalizePlatform(target.Platform);
         if (!_nativeProducers.TryGetValue(platform, out var producer))
             throw new NotSupportedException($"No channel message producer is registered for platform: {target.Platform}");
@@ -67,7 +71,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
 
         var content = HumanInteractionMessageMapper.ToMessageContent(request);
         var nativeMessage = ProduceNativeMessage(producer, content, target);
-        await sender.SendAsync(ToNativeDeliveryTarget(target), nativeMessage, cancellationToken).ConfigureAwait(false);
+        await sender.SendAsync(ChannelDeliveryTargetResolver.ToNativeDeliveryTarget(target), nativeMessage, cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
             "Delivered channel interaction notification: target={DeliveryTargetId}, platform={Platform}, run={RunId}, step={StepId}, capability={Capability}",
@@ -76,23 +80,6 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
             request.RunId,
             request.StepId,
             nativeMessage.Capability);
-    }
-
-    private async Task<UserAgentDeliveryTarget> ResolveTargetAsync(
-        string deliveryTargetId,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(deliveryTargetId))
-            throw new InvalidOperationException("Interaction notification delivery target id is required.");
-
-        var target = await _deliveryTargetReader.GetAsync(deliveryTargetId, cancellationToken).ConfigureAwait(false);
-        if (target is null)
-            throw new InvalidOperationException($"Agent delivery target not found: {deliveryTargetId}");
-
-        if (string.IsNullOrWhiteSpace(target.Platform))
-            throw new InvalidOperationException($"Agent delivery target platform is missing: {deliveryTargetId}");
-
-        return target;
     }
 
     private static ChannelNativeMessage ProduceNativeMessage(
@@ -123,18 +110,6 @@ public sealed class NyxIdRelayChannelInteractionNotificationPort : IChannelInter
 
         return nativeMessage;
     }
-
-    private static ChannelNativeDeliveryTarget ToNativeDeliveryTarget(UserAgentDeliveryTarget target) =>
-        new(
-            AgentId: target.AgentId,
-            Platform: target.Platform,
-            ConversationId: target.ConversationId,
-            NyxProviderSlug: target.NyxProviderSlug,
-            NyxApiKey: target.NyxApiKey,
-            LarkReceiveId: target.LarkReceiveId,
-            LarkReceiveIdType: target.LarkReceiveIdType,
-            LarkReceiveIdFallback: target.LarkReceiveIdFallback,
-            LarkReceiveIdTypeFallback: target.LarkReceiveIdTypeFallback);
 
     private static string NormalizePlatform(string? value) =>
         string.IsNullOrWhiteSpace(value)
