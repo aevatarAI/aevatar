@@ -351,27 +351,25 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             await CancelRetryBackoffAsync(state, evt.StepId, ctx, CancellationToken.None);
         }
 
-        var outputPreview = (evt.Output ?? string.Empty).Length > 200
-            ? evt.Output![..200] + "..."
-            : evt.Output ?? string.Empty;
+        // Do NOT log step output content: tool results routinely carry secrets
+        // (NyxID access tokens, refresh tokens, connector credentials). Logging a
+        // preview leaked partial credentials into stdout -> Elasticsearch. Length only.
         if (evt.Success)
         {
             ctx.Logger.LogInformation(
-                "workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
+                "workflow_loop: step={StepId} completed success={Success} output=({Len} chars)",
                 evt.StepId,
                 evt.Success,
-                (evt.Output ?? string.Empty).Length,
-                outputPreview);
+                (evt.Output ?? string.Empty).Length);
         }
         else
         {
             ctx.Logger.LogError(
-                "workflow_loop: step={StepId} failed run={RunId} error={Error} output=({Len} chars) {Preview}",
+                "workflow_loop: step={StepId} failed run={RunId} error={Error} output=({Len} chars)",
                 evt.StepId,
                 runId,
                 string.IsNullOrWhiteSpace(evt.Error) ? "(none)" : evt.Error,
-                (evt.Output ?? string.Empty).Length,
-                outputPreview);
+                (evt.Output ?? string.Empty).Length);
         }
 
         if (!string.IsNullOrWhiteSpace(evt.AssignedVariable))
@@ -1726,14 +1724,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     {
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
         var effectiveTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(_workflow, step);
-        var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
+        // Do NOT log step input content: tool-call arguments routinely carry secrets
+        // (e.g. {"token":"<NyxID JWT>"}). A preview leaked partial credentials into
+        // stdout -> Elasticsearch. Length only.
         ctx.Logger.LogInformation(
-            "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
+            "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars)",
             step.Id,
             canonicalStepType,
             string.IsNullOrWhiteSpace(effectiveTargetRole) ? "(none)" : effectiveTargetRole,
-            input.Length,
-            inputPreview);
+            input.Length);
 
         var request = new StepRequestEvent
         {

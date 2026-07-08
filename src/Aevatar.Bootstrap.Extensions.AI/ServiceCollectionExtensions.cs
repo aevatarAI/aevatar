@@ -70,6 +70,29 @@ public sealed class AevatarAIFeatureOptions
     /// NyxID catalog uses a different slug (e.g. organisations that re-registered the service).
     /// </summary>
     public string? OrnnNyxIdSlug { get; set; }
+    /// <summary>
+    /// Enables the host-bound system skill overlay scaffold. Mainnet-style hosts bind this from
+    /// <c>Aevatar:SystemSkills:Enabled</c>.
+    /// </summary>
+    public bool EnableSystemSkillOverlay { get; set; }
+    /// <summary>
+    /// Non-secret name of the public, org-owned Ornn skillset that sources the overlay (issue #2498).
+    /// Bound from <c>Aevatar:SystemSkills:SetName</c>. No organization service token is needed: set
+    /// ownership is the trust anchor and the set is read publicly through the existing ornn-api proxy.
+    /// </summary>
+    public string? SystemSkillOverlaySetName { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:RefreshTtl</c>.
+    /// </summary>
+    public TimeSpan SystemSkillOverlayRefreshTtl { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:MaxSkills</c>.
+    /// </summary>
+    public int SystemSkillOverlayMaxSkills { get; set; }
+    /// <summary>
+    /// Bound from <c>Aevatar:SystemSkills:MaxBytes</c>.
+    /// </summary>
+    public int SystemSkillOverlayMaxBytes { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
@@ -145,6 +168,9 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableOrnnSkills)
             RegisterOrnnSkills(services, options);
+
+        if (options.EnableSystemSkillOverlay)
+            RegisterSystemSkillOverlay(services, options);
 
         if (options.EnableServiceInvokeTools)
             RegisterServiceInvokeTools(services, options);
@@ -1165,6 +1191,29 @@ public static class ServiceCollectionExtensions
         });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, WorkflowOrnnSkillPublishAssetValidator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, ScriptOrnnSkillPublishAssetValidator>());
+    }
+
+    private static void RegisterSystemSkillOverlay(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        if (!options.EnableSystemSkillOverlay || string.IsNullOrWhiteSpace(options.SystemSkillOverlaySetName))
+            return;
+
+        // Ensure the Ornn skill client (with the configured slug) is registered even when a host enables
+        // the overlay without the Ornn skill tools; the overlay reads the set through this client.
+        services.AddOrnnSkillClient(o =>
+        {
+            if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
+                o.NyxIdSlug = options.OrnnNyxIdSlug;
+        });
+
+        services.AddSystemSkillOverlay(o =>
+        {
+            o.Enabled = options.EnableSystemSkillOverlay;
+            o.SetName = options.SystemSkillOverlaySetName ?? string.Empty;
+            o.RefreshTtl = options.SystemSkillOverlayRefreshTtl;
+            o.MaxSkills = options.SystemSkillOverlayMaxSkills;
+            o.MaxBytes = options.SystemSkillOverlayMaxBytes;
+        });
     }
 
     private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)

@@ -5,8 +5,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID approval requests, grants, and settings.</summary>
-public sealed class NyxIdApprovalsTool : IAgentTool
+public sealed class NyxIdApprovalsTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdApprovalsTool(NyxIdApiClient client) => _client = client;

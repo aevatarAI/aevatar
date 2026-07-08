@@ -10,6 +10,8 @@ internal static class NyxIdChatSystemPrompt
 
     private static string Load()
     {
+        // Kernel source lock: direct chat and NyxIdConversationReplyGenerator.LoadBaseSystemPrompt
+        // both read this package's embedded system-prompt.md; each path appends runtime facts later.
         var assembly = typeof(NyxIdChatSystemPrompt).Assembly;
         var resourceName = assembly.GetManifestResourceNames()
             .FirstOrDefault(n => n.EndsWith("system-prompt.md", StringComparison.OrdinalIgnoreCase));

@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Microsoft.AspNetCore.Builder;
@@ -70,88 +72,46 @@ internal static class WorkflowBoardSnapshotEndpoints
             return false;
         }
 
-        if (request.TeamSelections == null || request.TeamSelections.Count == 0)
+        try
         {
-            errorMessage = "teamSelections is required.";
+            if (request.ExtensionData is { Count: > 0 })
+                throw new WorkflowBoardSnapshotRequestException("request contains unsupported fields.");
+
+            appRequest = new WorkflowBoardSnapshotRequest(
+                scopeId,
+                request.TeamId,
+                request.MemberId,
+                request.Take);
+            Validate(appRequest);
+            return true;
+        }
+        catch (WorkflowBoardSnapshotRequestException ex)
+        {
+            errorMessage = ex.Message;
             return false;
         }
+    }
 
-        if (request.TeamSelections.Count > WorkflowBoardSnapshotRequestLimits.MaxSelectedTeams)
-        {
-            errorMessage = $"At most {WorkflowBoardSnapshotRequestLimits.MaxSelectedTeams} teams can be selected.";
-            return false;
-        }
+    private static void Validate(WorkflowBoardSnapshotRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ScopeId))
+            throw new WorkflowBoardSnapshotRequestException("scopeId is required.");
 
-        if (request.PreviousWatermark != null)
-        {
-            if (string.IsNullOrWhiteSpace(request.PreviousWatermark))
-            {
-                errorMessage = "previousWatermark must not be blank when present.";
-                return false;
-            }
+        if (request.TeamId != null && string.IsNullOrWhiteSpace(request.TeamId))
+            throw new WorkflowBoardSnapshotRequestException("teamId must not be blank.");
 
-            if (request.PreviousWatermark.Length > WorkflowBoardSnapshotRequestLimits.MaxPreviousWatermarkLength)
-            {
-                errorMessage =
-                    $"previousWatermark must be at most {WorkflowBoardSnapshotRequestLimits.MaxPreviousWatermarkLength} characters.";
-                return false;
-            }
-        }
+        if (request.MemberId != null && string.IsNullOrWhiteSpace(request.MemberId))
+            throw new WorkflowBoardSnapshotRequestException("memberId must not be blank.");
 
-        var selections = new List<WorkflowBoardTeamSelection>();
-        var selectedMemberCount = 0;
-        var seenRows = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var selection in request.TeamSelections)
-        {
-            if (string.IsNullOrWhiteSpace(selection.TeamId))
-            {
-                errorMessage = "teamId is required.";
-                return false;
-            }
+        if (request.MemberId != null && request.TeamId == null)
+            throw new WorkflowBoardSnapshotRequestException("memberId requires teamId.");
 
-            if (selection.MemberIds == null || selection.MemberIds.Count == 0)
-            {
-                errorMessage = "memberIds is required.";
-                return false;
-            }
+        if (request.Take <= 0)
+            throw new WorkflowBoardSnapshotRequestException("take must be greater than zero.");
 
-            if (selection.MemberIds.Any(static memberId => string.IsNullOrWhiteSpace(memberId)))
-            {
-                errorMessage = "memberIds must not contain blank values.";
-                return false;
-            }
-
-            var teamId = selection.TeamId.Trim();
-            var memberIds = new List<string>();
-            foreach (var rawMemberId in selection.MemberIds)
-            {
-                var memberId = rawMemberId.Trim();
-                if (!seenRows.Add($"{teamId}\u001f{memberId}"))
-                    continue;
-
-                memberIds.Add(memberId);
-                selectedMemberCount++;
-            }
-
-            if (memberIds.Count > 0)
-                selections.Add(new WorkflowBoardTeamSelection(teamId, memberIds));
-        }
-
-        if (selectedMemberCount == 0)
-        {
-            errorMessage = "memberIds is required.";
-            return false;
-        }
-
-        if (selectedMemberCount > WorkflowBoardSnapshotRequestLimits.MaxSelectedMembers)
-        {
-            errorMessage =
-                $"At most {WorkflowBoardSnapshotRequestLimits.MaxSelectedMembers} members can be selected.";
-            return false;
-        }
-
-        appRequest = new WorkflowBoardSnapshotRequest(scopeId, selections, request.PreviousWatermark);
-        return true;
+        if (request.Take > WorkflowBoardSnapshotRequestLimits.MaxMemberRows)
+            throw new WorkflowBoardSnapshotRequestException(
+                $"take must be at most {WorkflowBoardSnapshotRequestLimits.MaxMemberRows}.");
     }
 
     private static WorkflowBoardSnapshotHttpResponse MapSnapshot(WorkflowBoardSnapshot snapshot) =>
@@ -159,24 +119,23 @@ internal static class WorkflowBoardSnapshotEndpoints
             snapshot.ScopeId,
             snapshot.GeneratedAt,
             snapshot.Watermark,
-            MapTotals(snapshot.Totals),
+            MapCounts(snapshot.Counts),
             snapshot.Teams.Select(MapTeam).ToArray(),
-            snapshot.InvalidSelections.Select(MapInvalidSelection).ToArray(),
             snapshot.LastNodeUpdatedAt);
 
-    private static WorkflowBoardTotalsHttpResponse MapTotals(WorkflowBoardTotals totals) =>
+    private static WorkflowBoardSnapshotCountsHttpResponse MapCounts(WorkflowBoardSnapshotCounts counts) =>
         new(
-            totals.CompletedSteps,
-            totals.RunningNodes,
-            totals.WaitingOrPendingNodes,
-            totals.FailedNodes);
+            counts.Running,
+            counts.Waiting,
+            counts.Failed,
+            counts.Retrying,
+            counts.Completed);
 
     private static WorkflowBoardTeamSnapshotHttpResponse MapTeam(WorkflowBoardTeamSnapshot team) =>
         new(
             team.TeamId,
             team.TeamName,
             team.TotalMemberCount,
-            team.SelectedMemberCount,
             team.Members.Select(MapMember).ToArray());
 
     private static WorkflowBoardMemberSnapshotHttpResponse MapMember(WorkflowBoardMemberSnapshot member) =>
@@ -184,6 +143,8 @@ internal static class WorkflowBoardSnapshotEndpoints
             member.MemberId,
             member.DisplayName,
             MapExecutionAvailability(member.ExecutionAvailability),
+            MapExecutionStatus(member.ExecutionStatus),
+            member.Progress == null ? null : MapProgress(member.Progress),
             member.CompletedNodes.Select(MapCompletedNode).ToArray(),
             member.PendingNodes.Select(MapPendingNode).ToArray(),
             member.FailedNodes.Select(MapFailedNode).ToArray(),
@@ -195,6 +156,9 @@ internal static class WorkflowBoardSnapshotEndpoints
             member.CurrentExecutionId,
             member.CurrentNode == null ? null : MapCurrentNode(member.CurrentNode),
             member.LastNodeUpdatedAt);
+
+    private static WorkflowBoardMemberProgressHttpResponse MapProgress(WorkflowBoardMemberProgress progress) =>
+        new(progress.CompletedSteps, progress.TotalSteps);
 
     private static WorkflowBoardCurrentNodeHttpResponse MapCurrentNode(WorkflowBoardCurrentNode node) =>
         new(
@@ -214,20 +178,24 @@ internal static class WorkflowBoardSnapshotEndpoints
     private static WorkflowBoardFailedNodeHttpResponse MapFailedNode(WorkflowBoardFailedNode node) =>
         new(node.NodeId, node.Name, node.FailedAt);
 
-    private static WorkflowBoardInvalidSelectionHttpResponse MapInvalidSelection(
-        WorkflowBoardInvalidSelection invalidSelection) =>
-        new(
-            invalidSelection.TeamId,
-            invalidSelection.MemberId,
-            MapInvalidSelectionReason(invalidSelection.Reason),
-            invalidSelection.Message);
-
     private static string MapExecutionAvailability(WorkflowBoardExecutionAvailability availability) =>
         availability switch
         {
             WorkflowBoardExecutionAvailability.Available => "available",
             WorkflowBoardExecutionAvailability.Unavailable => "unavailable",
             WorkflowBoardExecutionAvailability.PendingBackendContract => "pending_backend_contract",
+            _ => "unknown",
+        };
+
+    private static string MapExecutionStatus(WorkflowBoardMemberExecutionStatus status) =>
+        status switch
+        {
+            WorkflowBoardMemberExecutionStatus.Running => "running",
+            WorkflowBoardMemberExecutionStatus.Waiting => "waiting",
+            WorkflowBoardMemberExecutionStatus.Failed => "failed",
+            WorkflowBoardMemberExecutionStatus.Retrying => "retrying",
+            WorkflowBoardMemberExecutionStatus.Completed => "completed",
+            WorkflowBoardMemberExecutionStatus.Stopped => "stopped",
             _ => "unknown",
         };
 
@@ -251,17 +219,6 @@ internal static class WorkflowBoardSnapshotEndpoints
             _ => "unknown",
         };
 
-    private static string MapInvalidSelectionReason(WorkflowBoardInvalidSelectionReason reason) =>
-        reason switch
-        {
-            WorkflowBoardInvalidSelectionReason.TeamNotFound => "team_not_found",
-            WorkflowBoardInvalidSelectionReason.MemberNotFound => "member_not_found",
-            WorkflowBoardInvalidSelectionReason.MemberNotInTeam => "member_not_in_team",
-            WorkflowBoardInvalidSelectionReason.Unauthorized => "unauthorized",
-            WorkflowBoardInvalidSelectionReason.Archived => "archived",
-            _ => "unknown",
-        };
-
     private static IResult BadRequest(string message) =>
         Results.BadRequest(new
         {
@@ -271,39 +228,41 @@ internal static class WorkflowBoardSnapshotEndpoints
 }
 
 public sealed record WorkflowBoardSnapshotHttpRequest(
-    IReadOnlyList<WorkflowBoardTeamSelectionHttpRequest>? TeamSelections = null,
-    string? PreviousWatermark = null);
-
-public sealed record WorkflowBoardTeamSelectionHttpRequest(
     string? TeamId = null,
-    IReadOnlyList<string>? MemberIds = null);
+    string? MemberId = null,
+    int? Take = null)
+{
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? ExtensionData { get; init; }
+}
 
 public sealed record WorkflowBoardSnapshotHttpResponse(
     string ScopeId,
     DateTimeOffset GeneratedAt,
     string Watermark,
-    WorkflowBoardTotalsHttpResponse Totals,
+    WorkflowBoardSnapshotCountsHttpResponse Counts,
     IReadOnlyList<WorkflowBoardTeamSnapshotHttpResponse> Teams,
-    IReadOnlyList<WorkflowBoardInvalidSelectionHttpResponse> InvalidSelections,
     DateTimeOffset? LastNodeUpdatedAt = null);
 
-public sealed record WorkflowBoardTotalsHttpResponse(
-    int? CompletedSteps,
-    int? RunningNodes,
-    int? WaitingOrPendingNodes,
-    int? FailedNodes);
+public sealed record WorkflowBoardSnapshotCountsHttpResponse(
+    int Running,
+    int Waiting,
+    int Failed,
+    int Retrying,
+    int Completed);
 
 public sealed record WorkflowBoardTeamSnapshotHttpResponse(
     string TeamId,
     string TeamName,
     int? TotalMemberCount,
-    int SelectedMemberCount,
     IReadOnlyList<WorkflowBoardMemberSnapshotHttpResponse> Members);
 
 public sealed record WorkflowBoardMemberSnapshotHttpResponse(
     string MemberId,
     string DisplayName,
     string ExecutionAvailability,
+    string ExecutionStatus,
+    WorkflowBoardMemberProgressHttpResponse? Progress,
     IReadOnlyList<WorkflowBoardCompletedNodeHttpResponse> CompletedNodes,
     IReadOnlyList<WorkflowBoardPendingNodeHttpResponse> PendingNodes,
     IReadOnlyList<WorkflowBoardFailedNodeHttpResponse> FailedNodes,
@@ -315,6 +274,10 @@ public sealed record WorkflowBoardMemberSnapshotHttpResponse(
     string? CurrentExecutionId = null,
     WorkflowBoardCurrentNodeHttpResponse? CurrentNode = null,
     DateTimeOffset? LastNodeUpdatedAt = null);
+
+public sealed record WorkflowBoardMemberProgressHttpResponse(
+    int CompletedSteps,
+    int TotalSteps);
 
 public sealed record WorkflowBoardCurrentNodeHttpResponse(
     string NodeId,
@@ -340,9 +303,3 @@ public sealed record WorkflowBoardFailedNodeHttpResponse(
     string NodeId,
     string Name,
     DateTimeOffset? FailedAt = null);
-
-public sealed record WorkflowBoardInvalidSelectionHttpResponse(
-    string TeamId,
-    string? MemberId,
-    string Reason,
-    string Message);

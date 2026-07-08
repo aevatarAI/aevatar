@@ -19,4 +19,15 @@ public static class AgentToolCapabilities
     /// can still select it); only direct-channel discovery filters it out.
     /// </summary>
     public const string ExcludeFromDirectChannelChat = "surface.exclude_from_direct_channel_chat";
+
+    /// <summary>
+    /// Surface signal: a tool carrying this capability targets a broker surface that only accepts a
+    /// human-session credential. In a channel-relay turn the effective credential is a bot-class
+    /// relay/API-key token, which the broker rejects (403) on those surfaces — so the tool can only
+    /// fail if offered. Direct-channel discovery filters it out of channel-relay turns (it is never
+    /// offered to the model and never registered, so it cannot be invoked); console/studio
+    /// human-session turns keep the full set, and the tool stays in the global catalog for other
+    /// surfaces. Eligibility is a property of the tool, so the channel path stays name-agnostic.
+    /// </summary>
+    public const string RequiresHumanSession = "surface.requires_human_session";
 }

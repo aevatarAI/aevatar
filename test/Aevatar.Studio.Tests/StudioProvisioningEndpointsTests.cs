@@ -79,43 +79,6 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
-    public async Task HandleProvisionWorkflowAsync_ShouldExtractBearerToken_AndThreadIntoService()
-    {
-        var service = new RecordingProvisioningService { Response = NewResponse() };
-        var context = CreateAuthenticatedContext(ScopeId);
-        context.Request.Headers.Authorization = "Bearer forwarded-caller-token";
-
-        await InvokeHandle<IResult>(
-            context,
-            ScopeId,
-            new ProvisionWorkflowRequest(
-                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller),
-            service,
-            CancellationToken.None);
-
-        // The forwarded caller bearer token (Authorization header) is extracted at
-        // the endpoint and threaded into the service so the run's durable credential
-        // can be resolved; the service holds no HttpContext.
-        service.ProvisionCallerBearerToken.Should().Be("forwarded-caller-token");
-    }
-
-    [Fact]
-    public async Task HandleProvisionWorkflowAsync_ShouldThreadNullBearerToken_WhenAuthorizationMissing()
-    {
-        var service = new RecordingProvisioningService { Response = NewResponse() };
-
-        await InvokeHandle<IResult>(
-            CreateAuthenticatedContext(ScopeId),
-            ScopeId,
-            new ProvisionWorkflowRequest(
-                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller),
-            service,
-            CancellationToken.None);
-
-        service.ProvisionCallerBearerToken.Should().BeNull();
-    }
-
-    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldDefaultScope_WhenCallerScopeOmitted()
     {
         var service = new RecordingProvisioningService { Response = NewResponse() };
@@ -278,20 +241,17 @@ public sealed class StudioProvisioningEndpointsTests
         public string? ProvisionScopeId { get; private set; }
         public ProvisionWorkflowCallerCredential? ProvisionCaller { get; private set; }
         public ProvisionWorkflowRequest? ProvisionRequest { get; private set; }
-        public string? ProvisionCallerBearerToken { get; private set; }
 
         public Task<ProvisionWorkflowResponse> ProvisionAsync(
             string scopeId,
             ProvisionWorkflowCallerCredential callerCredential,
             ProvisionWorkflowRequest request,
-            string? callerBearerToken = null,
             CancellationToken ct = default)
         {
             ProvisionInvoked = true;
             ProvisionScopeId = scopeId;
             ProvisionCaller = callerCredential;
             ProvisionRequest = request;
-            ProvisionCallerBearerToken = callerBearerToken;
             if (ProvisionException != null) throw ProvisionException;
             return Task.FromResult(Response!);
         }

@@ -84,6 +84,35 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_WhenNonManualCallbackDeliveredPastGrace_ShouldStillDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "*/15 * * * *", enabled: true));
+
+        var request = scheduler.TimeoutRequests.Single();
+        var scheduledFireAt = agent.State.NextFireAt!.Value;
+
+        // The callback reaches the handler 20 minutes after its scheduled time (late delivery while
+        // the grain stayed active). A late fire must still dispatch, not be suppressed, and is not
+        // counted as an OnActivate overdue detection (that is a separate, reactivation-time signal).
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            request,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: scheduledFireAt.AddMinutes(20),
+            scheduledFireAt: scheduledFireAt));
+
+        dispatch.Dispatches.Should().ContainSingle();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
+        agent.State.OverdueFireDetectedCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleConfigureAsync_WhenEnabled_ShouldRegisterDurableNextFireCallback()
     {
         var eventStore = new TestEventStore();
@@ -1208,7 +1237,7 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleFireAsync_ForDurableBearerTokenAuth_ShouldCarryDurableTokenToRuntimeAuth()
+    public async Task HandleFireAsync_ForLegacyDurableBearerTokenAuth_ShouldFailClosed()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
@@ -1229,14 +1258,16 @@ public sealed class ScheduledDispatchGAgentTests
                     Identity = new ServiceIdentity { ServiceId = "configured-service" },
                     EndpointId = "chat",
                     Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
-                    // A C1-provisioned run carries a durable credential (minted agent
-                    // key or forwarded caller token) instead of a re-mintable subject.
                     Auth = new ScheduledServiceInvocationAuthState
                     {
                         DurableSenderBearerToken = "durable-run-key",
                     },
                 },
             }));
+
+        var stateAuth = agent.State.Target.ServiceInvocation!.Auth!;
+        stateAuth.DurableSenderBearerToken.Should().BeEmpty();
+        stateAuth.LegacyDurableSenderBearerBlocked.Should().BeTrue();
 
         var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
@@ -1245,15 +1276,11 @@ public sealed class ScheduledDispatchGAgentTests
             Manual = true,
         });
 
-        // The durable token survives the proto state round-trip and reaches the
-        // dispatch runtime auth (which projects it directly, no subject exchange).
-        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
-        auth.Should().NotBeNull();
-        auth!.DurableSenderBearerToken.Should().Be("durable-run-key");
-        auth.SenderNyxId.Should().BeNull();
-        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        serviceInvocationDispatch.Auths.Should().BeEmpty();
+        serviceInvocationDispatch.Requests.Should().BeEmpty();
         agent.State.FireCount.Should().Be(1);
-        agent.State.FailureCount.Should().Be(0);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Contain("legacy durable bearer auth");
     }
 
     [Fact]
@@ -1727,6 +1754,127 @@ public sealed class ScheduledDispatchGAgentTests
         var reactivationRequest = scheduler.TimeoutRequests[^1];
         var reactivationFire = reactivationRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
         reactivationFire.ScheduledFireAt.ToDateTimeOffset().Should().BeAfter(DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenArmedFireOverduePastGrace_ShouldRecordOverdueDetection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var armedFireAt = await ArmOverdueFireAsync(eventStore, dispatch, scheduler, overdueBy: TimeSpan.FromMinutes(30));
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // The armed occurrence came due while the actor was dormant and is overdue well past
+        // the grace window with no terminal record, so reactivation records exactly one overdue
+        // detection and remembers which occurrence it was.
+        reactivated.State.OverdueFireDetectedCount.Should().Be(1);
+        reactivated.State.LastOverdueFireAt.Should().Be(armedFireAt);
+        reactivated.State.NextFireAt.Should().Be(armedFireAt);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireOverdueDetectedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenArmedFireWithinGrace_ShouldNotRecordOverdueDetection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        await ArmOverdueFireAsync(eventStore, dispatch, scheduler, overdueBy: TimeSpan.FromMinutes(1));
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // A near-boundary catch-up (armed fire only seconds/minutes late, e.g. routine pod churn)
+        // is not an overdue detection: it stays within the grace window.
+        reactivated.State.OverdueFireDetectedCount.Should().Be(0);
+        reactivated.State.LastOverdueFireAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenOverdueAlreadyRecordedForSameOccurrence_ShouldNotDoubleCount()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var armedFireAt = await ArmOverdueFireAsync(eventStore, dispatch, scheduler, overdueBy: TimeSpan.FromMinutes(30));
+
+        var firstReactivation = CreateAgent(eventStore, dispatch, scheduler);
+        await firstReactivation.ActivateAsync();
+        firstReactivation.State.OverdueFireDetectedCount.Should().Be(1);
+
+        var secondReactivation = CreateAgent(eventStore, dispatch, scheduler);
+        await secondReactivation.ActivateAsync();
+
+        // Repeated reactivations against the same still-overdue armed occurrence must not
+        // inflate the counter: detection is once-per-occurrence via persisted LastOverdueFireAt.
+        secondReactivation.State.OverdueFireDetectedCount.Should().Be(1);
+        secondReactivation.State.LastOverdueFireAt.Should().Be(armedFireAt);
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenOverdueArmedFireAlreadyHasTerminalRecord_ShouldNotRecordOverdueDetection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        // The overdue occurrence already reached a terminal (dispatched) record via a manual fire,
+        // then gets armed as NextFireAt. Reactivation must not flag it as overdue: it did fire.
+        var occurrence = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(30);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(occurrence),
+            Manual = true,
+        });
+        var firstRequest = scheduler.TimeoutRequests[0];
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: occurrence.AddSeconds(-1),
+            scheduledFireAt: occurrence));
+        agent.State.NextFireAt.Should().Be(occurrence);
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        reactivated.State.OverdueFireDetectedCount.Should().Be(0);
+        reactivated.State.LastOverdueFireAt.Should().BeNull();
+    }
+
+    private static async Task<DateTimeOffset> ArmOverdueFireAsync(
+        TestEventStore eventStore,
+        RecordingActorDispatchPort dispatch,
+        RecordingRuntimeCallbackScheduler scheduler,
+        TimeSpan overdueBy)
+    {
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        // Arm NextFireAt for a fire time in the past via the early-callback re-arm path, exactly
+        // like steady state after a normal arm (NextFireAt set, PendingNextFireAt cleared).
+        var armedFireAt = DateTimeOffset.UtcNow - overdueBy;
+        var firstRequest = scheduler.TimeoutRequests.Single();
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: armedFireAt.AddSeconds(-1),
+            scheduledFireAt: armedFireAt));
+        agent.State.NextFireAt.Should().Be(armedFireAt);
+        agent.State.PendingNextFireAt.Should().BeNull();
+        agent.State.OverdueFireDetectedCount.Should().Be(0);
+        return armedFireAt;
     }
 
     [Fact]

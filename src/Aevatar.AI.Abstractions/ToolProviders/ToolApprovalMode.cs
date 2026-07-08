@@ -15,3 +15,14 @@ public enum ToolApprovalMode
     /// <summary>Let middleware decide whether approval is needed.</summary>
     Auto = 2,
 }
+
+public static class ToolApprovalPolicies
+{
+    public static ToolApprovalMode CreateScopedResource => ToolApprovalMode.NeverRequire;
+
+    public static ToolApprovalMode UpdateExistingResource => ToolApprovalMode.AlwaysRequire;
+
+    public static ToolApprovalMode DestructiveMutation => ToolApprovalMode.AlwaysRequire;
+
+    public static ToolApprovalMode ExternalInvocation => ToolApprovalMode.AlwaysRequire;
+}

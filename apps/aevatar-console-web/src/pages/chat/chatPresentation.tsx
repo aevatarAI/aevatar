@@ -1254,13 +1254,13 @@ export function ChatMessageBubble({
         <div
           style={{
             background: "#2563eb",
-            borderRadius: 18,
-            borderBottomRightRadius: 8,
+            borderRadius: 10,
+            borderBottomRightRadius: 4,
             color: "#ffffff",
             fontSize: 14,
-            lineHeight: 1.7,
-            maxWidth: "80%",
-            padding: "12px 16px",
+            lineHeight: 1.6,
+            maxWidth: "72%",
+            padding: "9px 12px",
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
           }}
@@ -1272,27 +1272,27 @@ export function ChatMessageBubble({
   }
 
   return (
-    <div style={{ display: "flex", gap: 12 }}>
+    <div style={{ display: "flex", gap: 10 }}>
       <div
         style={{
           alignItems: "center",
-          background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
+          background: "#eef2ff",
+          border: "1px solid #dbe4ff",
           borderRadius: 999,
-          boxShadow: "0 10px 25px rgba(99, 102, 241, 0.18)",
-          color: "#ffffff",
+          color: "#2563eb",
           display: "flex",
           flexShrink: 0,
-          height: 28,
+          height: 24,
           justifyContent: "center",
-          marginTop: 4,
-          width: 28,
+          marginTop: 3,
+          width: 24,
         }}
       >
         <svg
           fill="none"
           stroke="currentColor"
           strokeWidth={2}
-          style={{ height: 14, width: 14 }}
+          style={{ height: 12, width: 12 }}
           viewBox="0 0 24 24"
         >
           <path
@@ -1303,7 +1303,7 @@ export function ChatMessageBubble({
         </svg>
       </div>
 
-      <div style={{ flex: 1, maxWidth: "85%", minWidth: 0 }}>
+      <div style={{ flex: 1, maxWidth: "82%", minWidth: 0 }}>
         {message.thinking ? (
           <ThinkingBlock
             isStreaming={message.status === "streaming"}
@@ -1419,7 +1419,7 @@ export function ChatMessageBubble({
           style={{
             color: "#1f2937",
             fontSize: 14,
-            lineHeight: 1.75,
+            lineHeight: 1.65,
           }}
         >
           <div style={{ wordBreak: "break-word" }}>
@@ -2166,9 +2166,9 @@ export function ChatInput({
       <div
         style={{
           background: "#ffffff",
-          border: "1px solid #e7e5e4",
-          borderRadius: 18,
-          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.06)",
+          border: "1px solid #d8dee8",
+          borderRadius: 10,
+          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -2201,9 +2201,9 @@ export function ChatInput({
               color: "#111827",
               flex: 1,
               fontSize: 14,
-              minHeight: 62,
+              minHeight: 48,
               outline: "none",
-              padding: "12px 16px 8px",
+              padding: "11px 14px 8px",
               resize: "none",
             }}
             value={value}
@@ -2218,13 +2218,13 @@ export function ChatInput({
                   alignItems: "center",
                   background: "#ef4444",
                   border: "none",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   color: "#ffffff",
                   cursor: "pointer",
                   display: "flex",
-                  height: 34,
+                  height: 32,
                   justifyContent: "center",
-                  width: 34,
+                  width: 32,
                 }}
                 type="button"
               >
@@ -2242,15 +2242,15 @@ export function ChatInput({
                   alignItems: "center",
                   background: "#18181b",
                   border: "none",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   color: "#ffffff",
                   cursor:
                     !value.trim() || disabled ? "not-allowed" : "pointer",
                   display: "flex",
-                  height: 34,
+                  height: 32,
                   justifyContent: "center",
                   opacity: !value.trim() || disabled ? 0.28 : 1,
-                  width: 34,
+                  width: 32,
                 }}
                 type="button"
               >

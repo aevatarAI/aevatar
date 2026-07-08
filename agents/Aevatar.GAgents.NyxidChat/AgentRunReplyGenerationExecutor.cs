@@ -222,6 +222,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 planToolContext = UseServerDefaultRouting(planToolContext, stepControl);
             }
         }
+        (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
+            .ConfigureAwait(false);
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
                 stepMetadata,
@@ -337,11 +339,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
         var generator = RequireStepGenerator();
+        var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
+        var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
+        (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
+            .ConfigureAwait(false);
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
                 AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
-                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
-                AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                stepControl,
+                planToolContext,
                 priorHistory: null,
                 attachmentContext: null,
                 forceDisableTools: false,
@@ -590,15 +596,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
         var ownerFallbackToolContext = ClearSenderBinding(toolContext);
 
-        var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
-        if (!string.IsNullOrWhiteSpace(userAccessToken))
-        {
-            control = control with
-            {
-                NyxIdAccessToken = userAccessToken,
-                NyxIdOrgToken = userAccessToken,
-            };
-        }
+        control = OverlayActivityUserToken(request, control);
 
         return new ReplyGenerationContext(
             metadata,
@@ -683,6 +681,51 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 subject.ExternalUserId);
             return control;
         }
+    }
+
+    // Re-supplies runtime credentials onto the token-less per-step control/tool-context read from the
+    // persisted (stripped) step-state. Reproduces BuildGenerationContextAsync's derivation from the
+    // transient request: owner token from the Activity user token, sender token re-minted from the
+    // retained binding identity (choice A — re-mint per step keeps the persisted waterline free of
+    // bearer tokens and hands each step a fresh short-lived sender token). On the owner-fallback step
+    // the run actor has cleared the Activity token and the sender binding, so the owner token comes
+    // from request.LlmControl (the bot-owner token it re-supplied) and no sender token is minted.
+    private async Task<(LLMControlContext Control, AgentToolExecutionContext ToolContext)> ReSupplyRuntimeCredentialsAsync(
+        NeedsLlmReplyEvent request,
+        LLMControlContext stepControl,
+        AgentToolExecutionContext planToolContext,
+        CancellationToken ct)
+    {
+        var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
+        requestControl = OverlayActivityUserToken(request, requestControl);
+
+        var control = stepControl with
+        {
+            NyxIdAccessToken = requestControl.NyxIdAccessToken,
+            NyxIdOrgToken = requestControl.NyxIdOrgToken,
+            SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
+        };
+        var toolContext = planToolContext with
+        {
+            Credentials = new AgentToolCredentials(
+                requestControl.NyxIdAccessToken,
+                requestControl.NyxIdOrgToken,
+                requestControl.SenderNyxIdAccessToken),
+        };
+        return (control, toolContext);
+    }
+
+    private static LLMControlContext OverlayActivityUserToken(NeedsLlmReplyEvent request, LLMControlContext control)
+    {
+        var userAccessToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        if (userAccessToken is null)
+            return control;
+        return control with
+        {
+            NyxIdAccessToken = userAccessToken,
+            NyxIdOrgToken = userAccessToken,
+        };
     }
 
     private static bool TryRebuildSenderSubject(

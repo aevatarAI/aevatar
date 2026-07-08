@@ -75,6 +75,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             LastError = state.LastError ?? string.Empty,
             FireCount = state.FireCount,
             FailureCount = state.FailureCount,
+            OverdueFireDetectedCount = state.OverdueFireDetectedCount,
             ServiceKey = BuildServiceKey(serviceIdentity),
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
@@ -90,6 +91,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         document.NextFireAt = state.NextFireAt;
         document.LastFireAt = state.LastFireAt;
+        document.LastOverdueFireAt = state.LastOverdueFireAt;
         document.DeletedAt = state.DeletedAt;
         document.Headers = state.Headers
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);

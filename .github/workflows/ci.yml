@@ -2,6 +2,12 @@ name: ci
 
 on:
   pull_request:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited, deleted]
   push:
     branches:
       - main
@@ -11,7 +17,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -26,11 +32,13 @@ env:
 
 jobs:
   changes:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.docs_only_route.outputs.docs_only }}
       all_changed: ${{ steps.filter.outputs.all_changed }}
       core_code: ${{ steps.filter.outputs.core_code }}
+      product_runtime: ${{ steps.filter.outputs.product_runtime }}
       host_composition: ${{ steps.filter.outputs.host_composition }}
       projection_provider: ${{ steps.filter.outputs.projection_provider }}
       kafka_runtime: ${{ steps.filter.outputs.kafka_runtime }}
@@ -65,6 +73,18 @@ jobs:
               - 'Directory.Packages.props'
               - 'global.json'
               - 'tools/ci/**'
+              - '.github/workflows/ci.yml'
+            product_runtime:
+              - 'src/**'
+              - 'agents/**'
+              - 'aevatar.slnx'
+              - 'aevatar.*.slnf'
+              - '.editorconfig'
+              - 'Directory.Build.props'
+              - 'Directory.Packages.props'
+              - 'global.json'
+              - 'scripts/run.sh'
+              - 'tools/ci/main_flow_runtime_smoke.sh'
               - '.github/workflows/ci.yml'
             host_composition:
               - 'src/**'
@@ -120,6 +140,56 @@ jobs:
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
+
+  fkst-host-policy:
+    if: |
+      github.event_name == 'pull_request' ||
+      (
+        github.event_name == 'pull_request_review' &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: FKST Host Policy Guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: bash tools/ci/fkst_host_policy_guard.sh
+
+  runtime-main-flow-smoke:
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.product_runtime == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+
+      - name: Main Flow Runtime Smoke
+        run: bash scripts/run.sh main-flow-smoke
 
   fast-gates:
     # Refactor (iter16/cluster-ci-systemic-refactor):

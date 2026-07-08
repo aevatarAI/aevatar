@@ -656,8 +656,14 @@ public sealed record ScheduledServiceInvocationAuthHttpRequest
         var durableToken = DurableSenderBearerToken?.Trim() ?? string.Empty;
         var hasDurableSenderBearerToken = durableToken.Length > 0;
         var hasScopeOwnerNyxId = ScopeOwnerNyxId != null;
+        if (hasDurableSenderBearerToken)
+        {
+            throw new ArgumentException(
+                "durableSenderBearerToken is no longer accepted for schedule auth; use senderNyxId or scopeOwnerNyxId.",
+                nameof(DurableSenderBearerToken));
+        }
+
         if (Convert.ToInt32(hasSenderNyxId) +
-            Convert.ToInt32(hasDurableSenderBearerToken) +
             Convert.ToInt32(hasScopeOwnerNyxId) != 1)
         {
             throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(SenderNyxId));
@@ -665,9 +671,6 @@ public sealed record ScheduledServiceInvocationAuthHttpRequest
 
         if (hasScopeOwnerNyxId)
             return new ScheduledServiceInvocationAuth(ScopeOwnerNyxId: ScopeOwnerNyxId!.ToSource(authenticatedOwnerSubject));
-
-        if (hasDurableSenderBearerToken)
-            return new ScheduledServiceInvocationAuth(DurableSenderBearerToken: durableToken);
 
         return new ScheduledServiceInvocationAuth(SenderNyxId: SenderNyxId!.ToSource());
     }

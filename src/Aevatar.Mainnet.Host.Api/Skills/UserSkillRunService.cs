@@ -88,7 +88,6 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             ScheduleTimezone = string.IsNullOrWhiteSpace(timezone) ? null : timezone,
             RunImmediately = false,
             CallerSubjectExternalUserId = string.IsNullOrWhiteSpace(ownerSubjectExternalUserId) ? null : ownerSubjectExternalUserId,
-            CallerBearerToken = accessToken,
         };
 
         try

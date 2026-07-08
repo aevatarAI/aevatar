@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
+using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -24,6 +25,27 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<OrnnOptions>? configure = null)
     {
+        services.AddOrnnSkillClient(configure);
+        services.TryAddSingleton<OrnnSkillPublishValidationPipeline>();
+        services.TryAddSingleton<OrnnSkillPackageBuilder>();
+        services.TryAddSingleton<OrnnSkillPackageFormatValidator>();
+        services.TryAddSingleton<OrnnPublishSkillTool>();
+        services.TryAddSingleton<OrnnUpdateSkillTool>();
+        services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
+        services.TryAddSingleton<OrnnAgentToolSource>();
+        services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the minimal Ornn skill client (options + NyxID proxy client + <see cref="OrnnSkillClient"/>)
+    /// without the model-facing skill tools, so the system skill overlay can read Ornn even when a host
+    /// does not enable the Ornn skill tools. Idempotent via TryAdd.
+    /// </summary>
+    public static IServiceCollection AddOrnnSkillClient(
+        this IServiceCollection services,
+        Action<OrnnOptions>? configure = null)
+    {
         var options = new OrnnOptions();
         configure?.Invoke(options);
         services.TryAddSingleton(options);
@@ -34,21 +56,42 @@ public static class ServiceCollectionExtensions
         {
             var nyxIdApiClient = sp.GetService<NyxIdApiClient>()
                                  ?? throw new InvalidOperationException(
-                                     "AddOrnnSkills requires NyxIdApiClient. Call AddNyxIdTools before building the provider, or register NyxIdApiClient explicitly.");
+                                     "AddOrnnSkillClient requires NyxIdApiClient. Call AddNyxIdTools before building the client, or register NyxIdApiClient explicitly.");
             return new OrnnSkillClient(
                 sp.GetRequiredService<OrnnOptions>(),
                 nyxIdApiClient,
                 sp.GetRequiredService<OrnnOptions>().PerCallTimeout,
                 sp.GetService<ILogger<OrnnSkillClient>>());
         });
-        services.TryAddSingleton<OrnnSkillPublishValidationPipeline>();
-        services.TryAddSingleton<OrnnSkillPackageBuilder>();
-        services.TryAddSingleton<OrnnSkillPackageFormatValidator>();
-        services.TryAddSingleton<OrnnPublishSkillTool>();
-        services.TryAddSingleton<OrnnUpdateSkillTool>();
-        services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
-        services.TryAddSingleton<OrnnAgentToolSource>();
-        services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the host-level, context-aware system skill overlay provider sourced from a public,
+    /// org-owned Ornn skillset (issue #2498). It wins over the built-in default provider and degrades
+    /// to it (<see cref="Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayFallback"/>) when the
+    /// set is unreachable or empty.
+    /// </summary>
+    public static IServiceCollection AddSystemSkillOverlay(
+        this IServiceCollection services,
+        Action<Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions>? configure = null)
+    {
+        var options = new Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions();
+        configure?.Invoke(options);
+        if (!options.Enabled || string.IsNullOrWhiteSpace(options.SetName))
+            return services;
+
+        services.AddOrnnSkillClient();
+        services.TryAddSingleton(options);
+
+        // AddSingleton (not TryAdd) so the Ornn provider wins over the built-in default provider that
+        // NyxidChat registers via TryAddSingleton, regardless of module registration order.
+        services.AddSingleton<Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayProvider>(sp =>
+            new OrnnSystemSkillOverlayProvider(
+                sp.GetRequiredService<Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions>(),
+                sp.GetRequiredService<OrnnSkillClient>(),
+                sp.GetService<Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayFallback>(),
+                sp.GetService<ILogger<OrnnSystemSkillOverlayProvider>>()));
         return services;
     }
 

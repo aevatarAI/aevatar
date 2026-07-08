@@ -167,6 +167,39 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.LastEventId.Should().Be("evt-historical");
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldMirrorOverdueFireDetection()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-02T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-overdue", identity);
+        var lastOverdueFireAt = DateTimeOffset.Parse("2026-07-01T09:00:00+00:00");
+        state.OverdueFireDetectedCount = 3;
+        state.LastOverdueFireAt = lastOverdueFireAt;
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-overdue"),
+            WrapCommitted(
+                state,
+                version: 12,
+                eventId: "evt-overdue",
+                observedAt: DateTimeOffset.Parse("2026-07-02T01:00:00+00:00")));
+
+        var document = await store.GetAsync("schedule-overdue");
+        document.Should().NotBeNull();
+        document!.OverdueFireDetectedCount.Should().Be(3);
+        document.LastOverdueFireAt.Should().Be(lastOverdueFireAt);
+    }
+
     private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>
         new()
         {
