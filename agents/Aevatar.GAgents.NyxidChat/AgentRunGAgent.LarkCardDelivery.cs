@@ -413,6 +413,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 evt.CorrelationId,
                 result.ErrorCode,
                 TrimLogValue(result.ErrorSummary, 512));
+            var pendingFinalText = NormalizeOptional(state.PendingFinalizeText);
             await TransitionLarkCardDeliveryPhaseAsync(
                 correlationId,
                 state,
@@ -420,7 +421,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 terminalReason: $"create_failed:{result.ErrorCode}",
                 fieldUpdate: s => s with { InFlight = null });
             if (evt.Chunk is not null)
-                await ForwardLarkCardTextFallbackSnapshotAsync(evt.Chunk, correlationId);
+                await ForwardLarkCardTextFallbackSnapshotAsync(evt.Chunk, correlationId, pendingFinalText);
             return;
         }
 
@@ -818,7 +819,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
 
     private async Task ForwardLarkCardTextFallbackSnapshotAsync(
         LlmReplyCardStreamChunkEvent chunk,
-        string correlationId)
+        string correlationId,
+        string? pendingFinalText = null)
     {
         var state = GetOrInitLarkCardDeliveryState();
         if (state.Phase is not AgentRunLarkCardDeliveryPhase.CreationFailed)
@@ -838,16 +840,19 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 });
         }
 
-        if (!chunk.IsFinal)
-            return;
-
         if (NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase)
             is AgentRunLarkCardTextFallbackPhase.FinalForwarded)
         {
             return;
         }
 
-        await DispatchTextFallbackChunkAsync(ToTextStreamChunk(chunk, chunk.AccumulatedText));
+        var finalText = NormalizeOptional(pendingFinalText)
+                        ?? NormalizeOptional(state.PendingFinalizeText)
+                        ?? (chunk.IsFinal ? NormalizeOptional(chunk.AccumulatedText) : null);
+        if (finalText is null)
+            return;
+
+        await DispatchTextFallbackChunkAsync(ToTextStreamChunk(chunk, finalText));
         await TransitionLarkCardDeliveryPhaseAsync(
             correlationId,
             state,

@@ -12,6 +12,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Tests.Identity;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -4319,7 +4320,9 @@ public sealed class ChannelConversationTurnRunnerTests
         RecordingJsonHandler? relayHandler = null,
         HttpMessageHandler? nyxHandler = null,
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null,
-        ILarkBotIdentityResolver? botIdentityResolver = null)
+        ILarkBotIdentityResolver? botIdentityResolver = null,
+        IChannelRelayTailTextSender? relayTailTextSender = null,
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
     {
         services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
@@ -4372,7 +4375,11 @@ public sealed class ChannelConversationTurnRunnerTests
             workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>(),
             remoteToolApprovalPort: remoteToolApprovalPort,
             botIdentityResolver: botIdentityResolver,
-            nyxIdCurrentUserResolver: services.GetService<INyxIdCurrentUserResolver>());
+            nyxIdCurrentUserResolver: services.GetService<INyxIdCurrentUserResolver>(),
+            relayTailTextSender: relayTailTextSender ?? new LarkChannelRelayTailTextSender(
+                new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
+                NullLogger<LarkChannelRelayTailTextSender>.Instance),
+            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier());
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)

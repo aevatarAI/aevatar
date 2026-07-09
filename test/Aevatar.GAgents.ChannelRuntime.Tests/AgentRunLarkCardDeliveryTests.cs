@@ -146,6 +146,42 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task FinalizeAfterVisibleCard_PreservesRunStateToolReceipts()
+    {
+        var runner = new RecordingCardRunner();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+        agent.State.GenerationStep.ToolReceipts.Add(new Aevatar.AI.Abstractions.AgentToolReceipt
+        {
+            CallId = "call-1",
+            ToolName = "ornn_publish_skill",
+            Status = Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success,
+            SideEffectKind = "ornn.publish.skill",
+            SubjectKind = "ornn.skill",
+            SubjectId = "skill-1",
+            SubjectHash = "hash-1",
+        });
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("partial")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("final"));
+
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        agent.State.ToolReceipts.Should().ContainSingle(receipt => receipt.CallId == "call-1");
+
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Completed);
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        agent.State.ToolReceipts.Should().ContainSingle(
+            receipt => receipt.CallId == "call-1" &&
+                       receipt.Status == Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success &&
+                       receipt.SubjectId == "skill-1",
+            "the card-completion AgentRunReplyProducedEvent must carry the committed tool receipts forward instead of wiping them");
+    }
+
+    [Fact]
     public async Task CompletionSendFailure_PersistsOutbox_AndRetryDeliversConversationFactWithoutReplyToken()
     {
         var runner = new RecordingCardRunner();
@@ -358,6 +394,41 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task CreateFailure_ForwardsPendingFinalTextWhenLlmCompletesDuringCreate()
+    {
+        var runner = new RecordingCardRunner
+        {
+            CreateResult = ConversationCardCreateResult.Failed(
+                "card_create_failed",
+                "create rejected",
+                isRateLimited: true),
+        };
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("partial llm text")));
+        await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("the complete final reply"));
+
+        agent.State.LarkCardDelivery.PendingFinalizeText.Should().Be("the complete final reply");
+
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        var dispatched = publisher.Sent
+            .Select(e => e.Event)
+            .OfType<LlmReplyStreamChunkEvent>()
+            .ToList();
+        dispatched.Select(chunk => chunk.AccumulatedText)
+            .Should().Equal(
+                "Processing your request. Please wait...",
+                "the complete final reply");
+        dispatched.Select(chunk => chunk.ReplyToken)
+            .Should().Equal("runtime-reply-token", "runtime-reply-token");
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.CreationFailed);
+        agent.State.LarkCardDelivery.TextFallbackPhase.Should()
+            .Be(AgentRunLarkCardTextFallbackPhase.FinalForwarded);
+    }
+
+    [Fact]
     public async Task CreateFailure_IgnoresInterimChunksAfterStatusForwarded()
     {
         var runner = new RecordingCardRunner
@@ -517,6 +588,53 @@ public sealed class AgentRunLarkCardDeliveryTests
         completed.Outbound.Text.Should().Be("the complete final reply");
         conversation.State.LastReplyDelivery.Delivered.Should().NotBeNull();
         conversation.State.ActiveReplyLifecycles.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ConversationTextFallbackStatusThenReady_FinalFlushCarriesReplyToken()
+    {
+        var store = new InMemoryEventStore();
+        var publisher = new SelfHandlingConversationPublisher();
+        var runner = new RecordingTurnRunner();
+        var conversation = await CreateConversationAgentAsync(
+            ConversationActorId,
+            store,
+            publisher,
+            runner: runner);
+
+        conversation.State.PendingLlmReplyRequests.Add(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-card",
+            RunId = "run-1",
+            TargetActorId = ConversationActorId,
+            RegistrationId = "reg-1",
+            Activity = CreateActivity("runtime-user-access-token"),
+            ReplyToken = "runtime-ready-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            RequestedAtUnixMs = 10,
+        });
+
+        await conversation.HandleLlmReplyStreamChunkAsync(CreateTextStreamChunk("Processing your request. Please wait..."));
+        await conversation.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = "corr-card",
+            RegistrationId = "reg-1",
+            RunId = "run-1",
+            Activity = CreateActivity("runtime-user-access-token"),
+            ReplyToken = "runtime-ready-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            Outbound = new MessageContent { Text = "the complete final reply" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReadyAtUnixMs = 100,
+        });
+
+        runner.StreamCalls.Select(call => call.Kind)
+            .Should().Equal(
+                NyxRelayTextOperationKind.Interim,
+                NyxRelayTextOperationKind.Final);
+        runner.StreamCalls[1].Text.Should().Be("the complete final reply");
+        runner.StreamCalls[1].CurrentPlatformMessageId.Should().Be("om");
+        runner.StreamCalls[1].ReplyToken.Should().Be("runtime-ready-token");
     }
 
     [Fact]
@@ -1369,7 +1487,8 @@ public sealed class AgentRunLarkCardDeliveryTests
             StreamCalls.Add(new StreamCall(
                 operation,
                 chunk.AccumulatedText,
-                currentPlatformMessageId));
+                currentPlatformMessageId,
+                runtimeContext.NyxRelayReplyToken?.ReplyToken));
             return Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId ?? "om"));
         }
 
@@ -1379,7 +1498,8 @@ public sealed class AgentRunLarkCardDeliveryTests
     private sealed record StreamCall(
         NyxRelayTextOperationKind Kind,
         string Text,
-        string? CurrentPlatformMessageId);
+        string? CurrentPlatformMessageId,
+        string? ReplyToken);
 
     private sealed class NoopActorDispatchPort : IActorDispatchPort
     {

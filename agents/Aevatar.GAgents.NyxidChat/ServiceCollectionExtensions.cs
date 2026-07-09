@@ -53,6 +53,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
         services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
+        services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
+        services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
         AddNyxIdLifecycleCommands(services);
 
@@ -133,7 +135,8 @@ public static class ServiceCollectionExtensions
                 fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactReadPort>(),
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
-                overlayProvider: sp.GetService<ISystemSkillOverlayProvider>()));
+                overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
+                larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();

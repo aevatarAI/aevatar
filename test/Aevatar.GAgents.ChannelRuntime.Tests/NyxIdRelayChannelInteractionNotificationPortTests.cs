@@ -1,9 +1,11 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Interactions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
@@ -18,14 +20,108 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class NyxIdRelayChannelInteractionNotificationPortTests
 {
     [Fact]
+    public async Task RemoteApprovalNotifyAsync_ShouldRequireExplicitDeliveryTargetBeforeLookup()
+    {
+        var registry = Substitute.For<IUserAgentDeliveryTargetReader>();
+        var port = new NyxIdRelayRemoteToolApprovalNotificationPort(
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
+            [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
+            [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(new RecordingHandler("""{"code":0,"data":{"message_id":"om_unused"}}""")))],
+            [new LarkChannelNativeDeliveryTargetAdapter()],
+            NullLogger<NyxIdRelayRemoteToolApprovalNotificationPort>.Instance);
+
+        Func<Task> act = () => port.NotifyAsync(BuildRemoteApprovalNotification(null), CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*explicit delivery target id*");
+        await registry.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RemoteApprovalNotifyAsync_WhenLarkTarget_ShouldSendInteractiveCardThroughNyxProxy()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-remote-1", "lark", "oc_chat_1"));
+        var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_remote_1"}}""");
+        var port = new NyxIdRelayRemoteToolApprovalNotificationPort(
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
+            [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
+            [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
+            [new LarkChannelNativeDeliveryTargetAdapter()],
+            NullLogger<NyxIdRelayRemoteToolApprovalNotificationPort>.Instance);
+
+        await port.NotifyAsync(BuildRemoteApprovalNotification("agent-remote-1"), CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=chat_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("oc_chat_1");
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+        using var content = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        var elements = content.RootElement.GetProperty("body").GetProperty("elements");
+        var approveValue = elements[1].GetProperty("behaviors")[0].GetProperty("value");
+        approveValue.GetProperty("nyxid_approval_request_id").GetString().Should().Be("nyx-remote-1");
+        approveValue.GetProperty("nyxid_approval_approved").GetBoolean().Should().BeTrue();
+        var rejectValue = elements[2].GetProperty("behaviors")[0].GetProperty("value");
+        rejectValue.GetProperty("nyxid_approval_request_id").GetString().Should().Be("nyx-remote-1");
+        rejectValue.GetProperty("nyxid_approval_approved").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RemoteApprovalNotifyAsync_WhenTelegramTarget_ShouldFailClosedBeforeNativeCompositionOrDispatch()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
+        var producer = new CountingNativeMessageProducer("telegram");
+        var sender = new CountingNativeMessageSender("telegram");
+        var port = new NyxIdRelayRemoteToolApprovalNotificationPort(
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
+            [producer],
+            [sender],
+            [],
+            NullLogger<NyxIdRelayRemoteToolApprovalNotificationPort>.Instance);
+
+        Func<Task> act = () => port.NotifyAsync(BuildRemoteApprovalNotification("agent-telegram-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<NotSupportedException>()
+            .WithMessage("*supported only for Lark delivery targets*telegram*");
+        producer.EvaluateCallCount.Should().Be(0);
+        producer.ProduceCallCount.Should().Be(0);
+        sender.SendCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RemoteApprovalNotifyAsync_WhenNonLarkTarget_ShouldFailClosedBeforeNativeCompositionOrDispatch()
+    {
+        var registry = BuildRegistry(BuildTarget("agent-discord-1", "discord", "channel-1"));
+        var producer = new CountingNativeMessageProducer("discord");
+        var sender = new CountingNativeMessageSender("discord");
+        var port = new NyxIdRelayRemoteToolApprovalNotificationPort(
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
+            [producer],
+            [sender],
+            [],
+            NullLogger<NyxIdRelayRemoteToolApprovalNotificationPort>.Instance);
+
+        Func<Task> act = () => port.NotifyAsync(BuildRemoteApprovalNotification("agent-discord-1"), CancellationToken.None);
+
+        await act.Should().ThrowAsync<NotSupportedException>()
+            .WithMessage("*supported only for Lark delivery targets*discord*");
+        producer.EvaluateCallCount.Should().Be(0);
+        producer.ProduceCallCount.Should().Be(0);
+        sender.SendCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DeliverAsync_WhenLarkTarget_ShouldSendComposedInteractiveCardThroughNyxProxy()
     {
         var registry = BuildRegistry(BuildTarget("agent-lark-1", "lark", "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
+            [new LarkChannelNativeDeliveryTargetAdapter()],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-lark-1"), CancellationToken.None);
@@ -49,9 +145,10 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
         var handler = new RecordingHandler("""{"ok":true,"result":{"message_id":7}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
+            [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         await port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
@@ -75,9 +172,10 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
         var handler = new RecordingHandler("""{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
             [new TelegramChannelNativeMessageSender(CreateNyxClient(handler))],
+            [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
         Func<Task> act = () => port.DeliverAsync(BuildApprovalRequest("agent-telegram-1"), CancellationToken.None);
@@ -92,9 +190,10 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         var registry = BuildRegistry(BuildTarget("agent-lark-template-1", "lark", "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new LarkChannelNativeMessageProducer(new LarkMessageComposer())],
             [new LarkChannelNativeMessageSender(CreateLarkOutboundDispatcher(handler))],
+            [new LarkChannelNativeDeliveryTargetAdapter()],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
         var template = new InteractionTemplateSpec { TemplateId = "tpl-1" };
         template.TemplateVariable["run"] = "run-1";
@@ -126,7 +225,8 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     {
         var registry = BuildRegistry(BuildTarget("agent-discord-1", "discord", "channel-1"));
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
+            [],
             [],
             [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
@@ -142,8 +242,9 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     {
         var registry = BuildRegistry(BuildTarget("agent-telegram-1", "telegram", "12345"));
         var port = new NyxIdRelayChannelInteractionNotificationPort(
-            registry,
+            new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
             [new TelegramChannelNativeMessageProducer(new TelegramMessageComposer())],
+            [],
             [],
             NullLogger<NyxIdRelayChannelInteractionNotificationPort>.Instance);
 
@@ -151,6 +252,15 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
 
         await act.Should().ThrowAsync<NotSupportedException>()
             .WithMessage("*No channel message sender is registered for platform: telegram*");
+    }
+
+    [Fact]
+    public void ScheduledDeliveryTarget_ShouldNotImplementLarkRouteContract()
+    {
+        typeof(ILarkChannelNativeDeliveryRoute)
+            .IsAssignableFrom(typeof(UserAgentDeliveryTarget))
+            .Should()
+            .BeFalse("platform route contracts must be adapted inside the Lark boundary");
     }
 
     private static ChannelInteractionNotificationRequest BuildApprovalRequest(string deliveryTargetId) =>
@@ -183,6 +293,29 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
                 },
             },
         };
+
+    private static RemoteToolApprovalNotification BuildRemoteApprovalNotification(string? deliveryTargetId) =>
+        new(
+            new RemoteToolApprovalRequest(
+                "local-req-1",
+                "dangerous_tool",
+                "call-1",
+                """{"path":"/prod"}""",
+                ToolApprovalMode.Auto,
+                IsDestructive: true),
+            new RemoteToolApprovalSubmission(
+                "nyx-remote-1",
+                DateTimeOffset.Parse("2026-06-11T10:00:00Z")),
+            AgentToolExecutionContext.Empty with
+            {
+                Channel = new AgentToolChannelContext(
+                    "lark",
+                    "sender-1",
+                    "scope-1",
+                    "msg-1",
+                    "om_1",
+                    deliveryTargetId),
+            });
 
     private static IUserAgentDeliveryTargetReader BuildRegistry(UserAgentDeliveryTarget target)
     {
@@ -235,6 +368,44 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             };
+        }
+    }
+
+    private sealed class CountingNativeMessageProducer(string platform) : IChannelNativeMessageProducer
+    {
+        public ChannelId Channel { get; } = ChannelId.From(platform);
+        public int EvaluateCallCount { get; private set; }
+        public int ProduceCallCount { get; private set; }
+
+        public ComposeCapability Evaluate(MessageContent intent, ComposeContext context)
+        {
+            EvaluateCallCount++;
+            return ComposeCapability.Exact;
+        }
+
+        public ChannelNativeMessage Produce(MessageContent intent, ComposeContext context)
+        {
+            ProduceCallCount++;
+            return new ChannelNativeMessage(
+                Text: null,
+                CardPayload: new { type = "interactive" },
+                MessageType: "interactive",
+                ComposeCapability.Exact);
+        }
+    }
+
+    private sealed class CountingNativeMessageSender(string platform) : IChannelNativeMessageSender
+    {
+        public ChannelId Channel { get; } = ChannelId.From(platform);
+        public int SendCallCount { get; private set; }
+
+        public Task SendAsync(
+            ChannelNativeDeliveryTarget target,
+            ChannelNativeMessage message,
+            CancellationToken cancellationToken)
+        {
+            SendCallCount++;
+            return Task.CompletedTask;
         }
     }
 }

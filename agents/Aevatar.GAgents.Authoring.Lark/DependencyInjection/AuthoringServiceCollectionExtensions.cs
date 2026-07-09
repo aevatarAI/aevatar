@@ -1,6 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,13 +22,12 @@ public static class AuthoringServiceCollectionExtensions
     private static readonly Func<IServiceProvider, object> AgentToolSourceFactory = CreateAgentBuilderToolSource;
 
     /// <summary>
-    /// Registers the Lark-specific authoring, notification, and remote approval tools.
+    /// Registers the Lark-specific authoring tools.
     /// </summary>
     public static IServiceCollection AddLarkAgentAuthoring(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, LarkRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<ScheduledAgentCreatorOptions>();
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();

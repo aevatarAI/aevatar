@@ -1390,7 +1390,6 @@ public sealed class AgentBuilderToolTests
         var existingNotificationPort = Substitute.For<IChannelInteractionNotificationPort>();
         services.AddSingleton(existingNotificationPort);
         services.AddSingleton<LarkMessageComposer>();
-        services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
         services.AddSingleton(callerScopeResolver);
 
         services.AddLarkAgentAuthoring();

@@ -15,6 +15,11 @@ public interface IRemoteToolApprovalPort
 
 public interface IRemoteToolApprovalNotificationPort
 {
+    Task<RemoteToolApprovalNotificationSupport> CheckSupportAsync(
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct) =>
+        Task.FromResult(RemoteToolApprovalNotificationSupport.SupportedResult);
+
     Task NotifyAsync(RemoteToolApprovalNotification notification, CancellationToken ct);
 }
 
@@ -34,6 +39,16 @@ public sealed record RemoteToolApprovalNotification(
     RemoteToolApprovalRequest Request,
     RemoteToolApprovalSubmission Submission,
     AgentToolExecutionContext ToolContext);
+
+public sealed record RemoteToolApprovalNotificationSupport(
+    bool Supported,
+    string? Reason = null)
+{
+    public static RemoteToolApprovalNotificationSupport SupportedResult { get; } = new(true);
+
+    public static RemoteToolApprovalNotificationSupport Unsupported(string reason) =>
+        new(false, reason);
+}
 
 public sealed record RemoteToolApprovalStatusQuery(
     string RequestId,

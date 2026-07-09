@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Commands;
@@ -51,6 +52,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<INyxChannelBotDeprovisioningService, NyxChannelBotDeprovisioningService>();
         services.TryAddSingleton<INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
         services.TryAddSingleton<IChannelRelayActivityRecorder, ChannelRelayActivityRecorder>();
+        services.TryAddSingleton<ChannelDeliveryTargetResolver>();
 
         // Provisioning service set — both Lark + Telegram are concrete provisioning sources.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
@@ -61,6 +63,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         // Mainnet workflow/human interaction delivery must go through the channel-neutral
         // relay path; platform packages keep only native rendering/transport adapters.
         services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, NyxIdRelayChannelInteractionNotificationPort>());
+        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, NyxIdRelayRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
 
         return services;

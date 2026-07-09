@@ -336,6 +336,57 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithCurrentLarkImageAttachment_ShouldUseInboundProviderSlugClient()
+    {
+        var imageBytes = new byte[] { 5, 6, 7, 8 };
+        var defaultLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(false, [], Detail: "wrong-client"));
+        var inboundLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/png", "photo.png"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var outboundFactory = Substitute.For<ILarkOutboundClientFactory>();
+        outboundFactory.ResolveNyxClient("api-lark-bot-4").Returns(inboundLark);
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: defaultLark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts,
+            larkOutboundClientFactory: outboundFactory);
+        var activity = CreateLarkImageActivity(
+            "msg-image-current-inbound-provider",
+            "describe it",
+            "om_current",
+            "img_current",
+            token: "user-token");
+        activity.TransportExtras!.NyxProviderSlug = " api-lark-bot-4 ";
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        var imagePart = userMessage.ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.FileRef.Should().BeNull();
+        outboundFactory.Received(1).ResolveNyxClient("api-lark-bot-4");
+        inboundLark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_current",
+            "img_current",
+            LarkMessageResourceKind.Image));
+        defaultLark.Downloads.Should().BeEmpty();
+        fileArtifacts.IngressRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_PersistsFileRefWithoutDataBase64()
     {
         var imageBytes = new byte[] { 9, 8, 7 };
@@ -411,6 +462,83 @@ public sealed class ConversationReplyGeneratorTests
                        request.SourceResourceKey == "img_recent" &&
                        request.FileName == "recent.jpg" &&
                        request.MediaType == "image/jpeg");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_ShouldUseAttachmentActivityProviderSlugClient()
+    {
+        var imageBytes = new byte[] { 3, 4, 5 };
+        var defaultLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(false, [], Detail: "wrong-client"));
+        var inboundLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "recent.jpg"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var outboundFactory = Substitute.For<ILarkOutboundClientFactory>();
+        outboundFactory.ResolveNyxClient("api-lark-bot-4").Returns(inboundLark);
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: defaultLark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts,
+            larkOutboundClientFactory: outboundFactory);
+        var recentActivity = CreateLarkImageActivity(
+            "msg-image-recent-provider",
+            "earlier image",
+            "om_recent",
+            "img_recent",
+            token: null);
+        recentActivity.TransportExtras!.NyxProviderSlug = " api-lark-bot-4 ";
+        var currentActivity = new ChatActivity
+        {
+            Id = "msg-follow-up-provider",
+            ChannelId = ChannelId.From("lark"),
+            Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+            Content = new MessageContent { Text = "/invoice-approval" },
+        };
+        var attachmentContext = new ChatAttachmentInputContext(
+            [
+                new RecentConversationAttachmentActivity
+                {
+                    ActivityId = recentActivity.Id,
+                    AcceptedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Activity = recentActivity.Clone(),
+                },
+            ],
+            "recent-token");
+
+        var plan = await generator.BuildStepPlanAsync(
+            currentActivity,
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: null,
+            attachmentContext,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var userMessage = plan.InitialMessages.Last(message => message.Role == "user");
+        var imagePart = userMessage.ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().BeNull();
+        imagePart.FileRef.Should().NotBeNull();
+        imagePart.FileRef!.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        imagePart.FileRef.SourceMessageId.Should().Be("om_recent");
+        imagePart.FileRef.SourceResourceKey.Should().Be("img_recent");
+        outboundFactory.Received(1).ResolveNyxClient("api-lark-bot-4");
+        inboundLark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "recent-token",
+            "om_recent",
+            "img_recent",
+            LarkMessageResourceKind.Image));
+        defaultLark.Downloads.Should().BeEmpty();
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<WorkflowFileIngressRequest>(
+            request => request.Content.ToArray().SequenceEqual(imageBytes) &&
+                       request.SourceMessageId == "om_recent" &&
+                       request.SourceResourceKey == "img_recent");
     }
 
     [Fact]

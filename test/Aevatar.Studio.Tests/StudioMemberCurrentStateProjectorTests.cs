@@ -189,6 +189,41 @@ public sealed class StudioMemberCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldDeleteDocument_WhenMemberStateIsDeleted()
+    {
+        var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
+        var projector = new StudioMemberCurrentStateProjector(
+            dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var deletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-09T06:40:00Z"));
+        var state = new StudioMemberState
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Deleted Member",
+            PublishedServiceId = "member-m-1",
+            Deleted = true,
+            DeletedAtUtc = deletedAt,
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioMemberDeletedEvent
+                {
+                    MemberId = "m-1",
+                    ScopeId = "scope-1",
+                    PublishedServiceId = "member-m-1",
+                    DeletedAtUtc = deletedAt,
+                },
+                state,
+                6,
+                "evt-deleted"));
+
+        dispatcher.Upserts.Should().BeEmpty();
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(RootActorId);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldNoOp_WhenPayloadIsNotCommittedStateEvent()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
@@ -274,6 +309,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         where TReadModel : class, IProjectionReadModel
     {
         public List<TReadModel> Upserts { get; } = [];
+        public List<string> Deletes { get; } = [];
 
         public Task<ProjectionWriteResult> UpsertAsync(TReadModel readModel, CancellationToken ct = default)
         {
@@ -285,6 +321,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

@@ -163,6 +163,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IChannelInteractionNotificationPort>()
             .Should()
             .BeOfType<NyxIdRelayChannelInteractionNotificationPort>();
+        app.Services.GetRequiredService<IRemoteToolApprovalNotificationPort>()
+            .Should()
+            .BeOfType<NyxIdRelayRemoteToolApprovalNotificationPort>();
         // Yield capability follows the actor, never the container (#2004): a DI-global
         // yielding handler hands "I will resume you" to surfaces with no pending-approval
         // continuation, stranding dead-letter approvals. RoleGAgent wires its own handler;
@@ -276,6 +279,8 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is ProvisionWorkflowScheduleToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
+        workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
+        workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);

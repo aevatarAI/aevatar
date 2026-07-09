@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity;
 
@@ -21,14 +22,17 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     public const string ForceDcrOnStartupEnvVar = "AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP";
 
     private readonly ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _provisioningDispatch;
+    private readonly IOptions<AevatarOAuthClientDefaultServiceOptions>? _defaultServiceOptions;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
 
     public AevatarOAuthClientBootstrapService(
         ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> provisioningDispatch,
-        ILogger<AevatarOAuthClientBootstrapService> logger)
+        ILogger<AevatarOAuthClientBootstrapService> logger,
+        IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions = null)
     {
         _provisioningDispatch = provisioningDispatch ?? throw new ArgumentNullException(nameof(provisioningDispatch));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _defaultServiceOptions = defaultServiceOptions;
     }
 
     public Task StartAsync(CancellationToken cancellationToken) =>
@@ -56,6 +60,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // authorize / token time — both call sites use NyxIdRedirectUriResolver.
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(_logger);
+        var defaultServiceSlugs = AevatarOAuthClientDefaultServices.Resolve(_defaultServiceOptions, _logger);
         var forceReprovision = string.Equals(
             Environment.GetEnvironmentVariable(ForceDcrOnStartupEnvVar),
             "true",
@@ -76,6 +81,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             ForceReprovision = forceReprovision,
         };
         command.RedirectUris.AddRange(redirectUris);
+        command.DefaultServiceSlugs.AddRange(defaultServiceSlugs);
 
         var accepted = await _provisioningDispatch
             .DispatchAsync(command, ct)

@@ -1459,6 +1459,11 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (outbound is not null)
             produced.Outbound = outbound.Clone();
         produced.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
+        // Card delivery completion re-persists the produced payload after the initial
+        // AgentRunReplyProducedEvent (which carried the typed tool receipts) has already
+        // been committed. ApplyReplyProduced overwrites State.ToolReceipts from the event,
+        // so carry the committed receipts forward or this second event wipes them.
+        produced.ToolReceipts.AddRange(State.ToolReceipts.Select(receipt => receipt.Clone()));
 
         var deliveryProduced = BuildDeliveryProducedEvent(
             DeliveryKind.StreamingCard,

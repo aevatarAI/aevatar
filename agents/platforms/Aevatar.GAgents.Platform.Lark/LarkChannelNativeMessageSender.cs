@@ -57,24 +57,33 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
     }
 
     private static string SerializeNativePayload(object payload) =>
-        payload is JsonElement element ? element.GetRawText() : JsonSerializer.Serialize(payload);
+        payload switch
+        {
+            JsonElement element => element.GetRawText(),
+            string rawJson => rawJson,
+            _ => JsonSerializer.Serialize(payload),
+        };
 
     private static NativeLarkReceiveTarget ResolvePrimaryTarget(ChannelNativeDeliveryTarget target)
     {
-        var receiveId = FirstNonWhiteSpace(target.LarkReceiveId, target.ConversationId);
+        var route = target as ILarkChannelNativeDeliveryRoute;
+        var receiveId = FirstNonWhiteSpace(route?.LarkReceiveId, target.ConversationId);
         if (string.IsNullOrWhiteSpace(receiveId))
             throw new InvalidOperationException($"Lark delivery target receive_id is missing: {target.AgentId}");
 
-        var receiveIdType = string.IsNullOrWhiteSpace(target.LarkReceiveIdType)
+        var receiveIdType = string.IsNullOrWhiteSpace(route?.LarkReceiveIdType)
             ? InferReceiveIdType(receiveId)
-            : target.LarkReceiveIdType.Trim();
+            : route.LarkReceiveIdType.Trim();
         return new NativeLarkReceiveTarget(receiveId.Trim(), receiveIdType);
     }
 
     private static NativeLarkReceiveTarget? ResolveFallbackTarget(ChannelNativeDeliveryTarget target)
     {
-        var fallbackId = target.LarkReceiveIdFallback?.Trim();
-        var fallbackType = target.LarkReceiveIdTypeFallback?.Trim();
+        if (target is not ILarkChannelNativeDeliveryRoute route)
+            return null;
+
+        var fallbackId = route.LarkReceiveIdFallback?.Trim();
+        var fallbackType = route.LarkReceiveIdTypeFallback?.Trim();
         return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
             ? null
             : new NativeLarkReceiveTarget(fallbackId, fallbackType);
