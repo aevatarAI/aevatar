@@ -56,6 +56,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // authorize / token time — both call sites use NyxIdRedirectUriResolver.
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(_logger);
+        ValidateStartupProvisioningBoundary(authority, redirectUri);
         var forceReprovision = string.Equals(
             Environment.GetEnvironmentVariable(ForceDcrOnStartupEnvVar),
             "true",
@@ -90,4 +91,55 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             authority,
             accepted.Receipt.CommandId);
     }
+
+    private void ValidateStartupProvisioningBoundary(string authority, string redirectUri)
+    {
+        var environmentName = ResolveEnvironmentName();
+        if (!RequiresExplicitNyxIdProvisioningConfiguration(environmentName))
+            return;
+
+        var authorityOverride = Environment.GetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar);
+        var redirectBaseUrlOverride = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar);
+        var authorityCameFromProductionDefault =
+            string.IsNullOrWhiteSpace(authorityOverride)
+            && string.Equals(
+                authority,
+                NyxIdAuthorityResolver.DefaultAuthority.TrimEnd('/'),
+                StringComparison.Ordinal);
+        var redirectCameFromProductionDefault =
+            !NyxIdRedirectUriResolver.TryResolveExplicitBaseUrl(redirectBaseUrlOverride, out _)
+            && string.Equals(
+                redirectUri,
+                $"{NyxIdRedirectUriResolver.DefaultPublicBaseUrl}{NyxIdRedirectUriResolver.CallbackPath}",
+                StringComparison.Ordinal);
+
+        if (!authorityCameFromProductionDefault && !redirectCameFromProductionDefault)
+            return;
+
+        var missing = new List<string>(capacity: 2);
+        if (authorityCameFromProductionDefault)
+            missing.Add(NyxIdAuthorityResolver.OverrideEnvVar);
+        if (redirectCameFromProductionDefault)
+            missing.Add(NyxIdRedirectUriResolver.OverrideEnvVar);
+
+        var message =
+            "Aevatar OAuth client bootstrap blocked: environment '" + environmentName + "' requires explicit " +
+            string.Join(" and ", missing) +
+            " before Dynamic Client Registration can run. This prevents local or non-production startup from silently registering a NyxID OAuth client against production defaults.";
+        _logger.LogError(
+            "Aevatar OAuth client bootstrap blocked in environment {Environment}: explicit {MissingEnvVars} required before Dynamic Client Registration can run.",
+            environmentName,
+            string.Join(",", missing));
+        throw new InvalidOperationException(message);
+    }
+
+    private static string ResolveEnvironmentName() =>
+        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+        ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+        ?? string.Empty;
+
+    private static bool RequiresExplicitNyxIdProvisioningConfiguration(string environmentName) =>
+        !string.IsNullOrWhiteSpace(environmentName)
+        && (!string.Equals(environmentName, "Production", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(environmentName, "Distributed", StringComparison.OrdinalIgnoreCase));
 }
