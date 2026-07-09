@@ -32,7 +32,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private const int MaxRecentPriorHistoryMessages = 10;
     // Working-set ceiling for the ChatHistory during a turn (prior ≤10 + the live turn's growth).
     private const int MaxWorkingSetMessages = 200;
-    private const int MaxInlineImageBytes = 10 * 1024 * 1024;
+    private const int MaxAttachmentMaterializationBytes = 10 * 1024 * 1024;
+    internal const string AttachmentPolicyErrorCode = "attachment_policy_rejected";
 
     // Appended to the system prompt when the unbound-sender gate detaches the tool
     // surface for a channel turn. The kernel prompt documents the deployment's tools
@@ -218,6 +219,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     ct)
                 .ConfigureAwait(false);
         }
+        catch (AttachmentPolicyException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Chat attachment rejected before LLM generation: activity={ActivityId} reason={Reason}",
+                activity.Id,
+                ex.Reason);
+            return await BuildControlledAttachmentFailureAsync(ex, streamingSink, ct).ConfigureAwait(false);
+        }
         catch (OperationCanceledException)
         {
             throw;
@@ -316,6 +326,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 attachmentContext,
                 ct)
             .ConfigureAwait(false);
+        if (input.AttachmentPolicyFailure is { } policyFailure)
+            return BuildTerminalAttachmentFailureStepPlan(
+                policyFailure,
+                externalMetadata,
+                replyPlan.PrimaryControl,
+                effectiveToolContext,
+                ResolveMaxToolRounds(replyPlan.PrimaryControl),
+                disableTools,
+                replyPlan.OwnerFallbackControl,
+                replyPlan.OwnerFallbackToolContext);
+
         var runtime = BuildRuntime(
             activity,
             replyPlan.PrimaryControl,
@@ -399,6 +420,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 attachmentContext: null,
                 ct)
             .ConfigureAwait(false);
+        if (input.AttachmentPolicyFailure is { } policyFailure)
+            return await BuildControlledAttachmentFailureAsync(policyFailure, streamingSink, ct).ConfigureAwait(false);
         input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -505,7 +528,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private sealed record UserInputParts(
         string Text,
         IReadOnlyList<ContentPart> Parts,
-        string? AttachmentVisibilityInstruction = null);
+        string? AttachmentVisibilityInstruction = null,
+        AttachmentPolicyException? AttachmentPolicyFailure = null);
 
     private async Task<UserInputParts> BuildUserInputPartsAsync(
         ChatActivity activity,
@@ -586,10 +610,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                if (attachment.SizeBytes > MaxInlineImageBytes)
+                if (attachment.SizeBytes > MaxAttachmentMaterializationBytes)
                 {
-                    unseenCount++;
-                    continue;
+                    return new UserInputParts(
+                        text,
+                        parts,
+                        AttachmentPolicyFailure: AttachmentPolicyException.TooLarge(attachment.Name, attachment.SizeBytes));
                 }
 
                 var resourceKey = NormalizeOptional(attachment.AttachmentId);
@@ -628,9 +654,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 }
 
                 if (!downloaded.Succeeded ||
-                    downloaded.Content.Length == 0 ||
-                    downloaded.Content.Length > MaxInlineImageBytes ||
-                    !IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
+                    downloaded.Content.Length == 0)
                 {
                     _logger.LogWarning(
                         "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} status={Status} detail={Detail}",
@@ -641,6 +665,26 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                         downloaded.Detail);
                     unseenCount++;
                     continue;
+                }
+
+                if (downloaded.Content.Length > MaxAttachmentMaterializationBytes)
+                {
+                    return new UserInputParts(
+                        text,
+                        parts,
+                        AttachmentPolicyFailure: AttachmentPolicyException.TooLarge(
+                            NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name),
+                            downloaded.Content.Length));
+                }
+
+                if (!IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
+                {
+                    return new UserInputParts(
+                        text,
+                        parts,
+                        AttachmentPolicyFailure: AttachmentPolicyException.Unsupported(
+                            NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name),
+                            downloaded.ContentType ?? attachment.ContentType));
                 }
 
                 if (_fileIngressPort is null)
@@ -669,6 +713,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 {
                     throw;
                 }
+                catch (WorkflowFileIngressPolicyException ex)
+                {
+                    return new UserInputParts(
+                        text,
+                        parts,
+                        AttachmentPolicyFailure: ToAttachmentPolicyException(
+                            ex,
+                            fileName,
+                            mediaType,
+                            downloaded.Content.Length));
+                }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(
@@ -695,6 +750,24 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         return new UserInputParts(text, parts, instruction);
     }
+
+    private static AttachmentPolicyException ToAttachmentPolicyException(
+        WorkflowFileIngressPolicyException source,
+        string? fallbackFileName,
+        string? fallbackMediaType,
+        long fallbackSizeBytes) =>
+        source.Kind switch
+        {
+            WorkflowFileIngressPolicyRejectionKind.TooLarge => AttachmentPolicyException.TooLarge(
+                source.FileName ?? fallbackFileName,
+                source.SizeBytes ?? fallbackSizeBytes),
+            WorkflowFileIngressPolicyRejectionKind.UnsupportedMediaType => AttachmentPolicyException.Unsupported(
+                source.FileName ?? fallbackFileName,
+                source.MediaType ?? fallbackMediaType),
+            _ => AttachmentPolicyException.Unsupported(
+                source.FileName ?? fallbackFileName,
+                source.MediaType ?? fallbackMediaType),
+        };
 
     private async Task<UserInputParts> MaterializeUserInputPartsAsync(UserInputParts input, CancellationToken ct)
     {
@@ -729,21 +802,26 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             var artifact = await fileArtifactReadPort.OpenReadAsync(ToWorkflowFileRef(part.FileRef), ct)
                 .ConfigureAwait(false);
             await using var content = artifact.Content;
-            using var buffer = new MemoryStream();
-            await content.CopyToAsync(buffer, ct).ConfigureAwait(false);
             var descriptor = artifact.FileRef;
+            ValidateMaterializedPartDescriptor(part, descriptor);
+            var bytes = await ReadBoundedAsync(
+                    content,
+                    MaxAttachmentMaterializationBytes,
+                    NormalizeOptional(descriptor.FileName) ?? part.Name,
+                    ct)
+                .ConfigureAwait(false);
             materialized.Add(part.Kind switch
             {
                 ContentPartKind.Image => ContentPart.ImagePart(
-                    Convert.ToBase64String(buffer.ToArray()),
+                    Convert.ToBase64String(bytes),
                     NormalizeImageMediaType(descriptor.MediaType ?? part.MediaType),
                     NormalizeOptional(descriptor.FileName) ?? part.Name),
                 ContentPartKind.Audio => ContentPart.AudioPart(
-                    Convert.ToBase64String(buffer.ToArray()),
+                    Convert.ToBase64String(bytes),
                     NormalizeOptional(descriptor.MediaType) ?? part.MediaType ?? "audio/wav",
                     NormalizeOptional(descriptor.FileName) ?? part.Name),
                 ContentPartKind.Video => ContentPart.VideoPart(
-                    Convert.ToBase64String(buffer.ToArray()),
+                    Convert.ToBase64String(bytes),
                     NormalizeOptional(descriptor.MediaType) ?? part.MediaType ?? "video/mp4",
                     NormalizeOptional(descriptor.FileName) ?? part.Name),
                 _ => part,
@@ -751,6 +829,34 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         return materialized;
+    }
+
+    private static async Task<byte[]> ReadBoundedAsync(
+        Stream content,
+        int maxBytes,
+        string? fileName,
+        CancellationToken ct)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        while (true)
+        {
+            var read = await content.ReadAsync(chunk.AsMemory(0, chunk.Length), ct).ConfigureAwait(false);
+            if (read == 0)
+                return buffer.ToArray();
+
+            if (buffer.Length + read > maxBytes)
+                throw AttachmentPolicyException.TooLarge(fileName, buffer.Length + read);
+
+            buffer.Write(chunk, 0, read);
+        }
+    }
+
+    private static void ValidateMaterializedPartDescriptor(ContentPart part, WorkflowFileRef descriptor)
+    {
+        var mediaType = descriptor.MediaType ?? part.MediaType;
+        if (part.Kind == ContentPartKind.Image && !IsSupportedImageMediaType(mediaType))
+            throw AttachmentPolicyException.Unsupported(NormalizeOptional(descriptor.FileName) ?? part.Name, mediaType);
     }
 
     private static LlmChatFileRef ToChatFileRef(WorkflowFileRef source) =>
@@ -818,6 +924,66 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return _larkOutboundClientFactory.ResolveNyxClient(providerSlug);
 
         return _larkClient;
+    }
+
+    internal static string BuildControlledAttachmentFailureText(string reason)
+    {
+        var detail = NormalizeOptional(reason) ?? "the attachment cannot be processed";
+        return $"I cannot process this attachment because {detail}. Please upload a supported image under 10 MB and try again.";
+    }
+
+    private static async Task<ConversationReplyResult> BuildControlledAttachmentFailureAsync(
+        AttachmentPolicyException failure,
+        IStreamingReplySink? streamingSink,
+        CancellationToken ct)
+    {
+        var text = BuildControlledAttachmentFailureText(failure.UserVisibleReason);
+        if (streamingSink is not null)
+            await streamingSink.OnDeltaAsync(text, ct).ConfigureAwait(false);
+        return new ConversationReplyResult(
+            Text: text,
+            Usage: null,
+            FinishReason: AttachmentPolicyErrorCode,
+            AppendedHistory: [new ConversationHistoryEntry { Role = "assistant", Content = text }]);
+    }
+
+    private static AgentRunReplyStepPlan BuildTerminalAttachmentFailureStepPlan(
+        AttachmentPolicyException failure,
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext toolContext,
+        int maxToolRounds,
+        bool disableTools,
+        LLMControlContext? ownerFallbackLlmControl,
+        AgentToolExecutionContext? ownerFallbackToolContext)
+    {
+        var text = BuildControlledAttachmentFailureText(failure.UserVisibleReason);
+        var runtime = new ChatRuntime(
+            providerFactory: () => new FixedReplyProvider(text, AttachmentPolicyErrorCode),
+            history: new global::Aevatar.AI.Core.Chat.ChatHistory(),
+            toolLoop: new ToolCallLoop(new ToolManager()),
+            hooks: null,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = [ChatMessage.System("Attachment rejected before provider dispatch.")],
+                Metadata = metadata,
+                ToolContext = toolContext,
+                LlmControl = llmControl,
+                RoutingContext = llmControl.ToRoutingContext(),
+                Tools = null,
+            },
+            agentMiddlewares: [],
+            llmMiddlewares: []);
+        return new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(),
+            metadata,
+            llmControl,
+            toolContext,
+            InitialMessages: [],
+            maxToolRounds,
+            disableTools,
+            ownerFallbackLlmControl,
+            ownerFallbackToolContext);
     }
 
     private sealed record AttachmentActivity(ChatActivity Activity, IReadOnlyList<AttachmentRef> Attachments);
@@ -1374,6 +1540,60 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return overlayMarkdown.Trim();
 
         return $"{prompt.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
+    }
+
+    internal sealed class AttachmentPolicyException : Exception
+    {
+        private AttachmentPolicyException(string reason, string userVisibleReason)
+            : base(userVisibleReason)
+        {
+            Reason = reason;
+            UserVisibleReason = userVisibleReason;
+        }
+
+        public string Reason { get; }
+
+        public string UserVisibleReason { get; }
+
+        public static AttachmentPolicyException TooLarge(string? fileName, long sizeBytes) =>
+            new(
+                "too_large",
+                $"{FormatFileName(fileName)}attachment is too large ({sizeBytes} bytes)");
+
+        public static AttachmentPolicyException Unsupported(string? fileName, string? mediaType) =>
+            new(
+                "unsupported",
+                $"{FormatFileName(fileName)}attachment format is not supported ({NormalizeOptional(mediaType) ?? "unknown media type"})");
+
+        private static string FormatFileName(string? fileName)
+        {
+            var normalized = NormalizeOptional(fileName);
+            return normalized is null ? string.Empty : $"'{normalized}' ";
+        }
+    }
+
+    private sealed class FixedReplyProvider(string text, string finishReason) : ILLMProvider
+    {
+        public string Name => "controlled-attachment-failure";
+
+        public LLMProviderCapabilities Capabilities => LLMProviderCapabilities.TextOnly;
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = text,
+            };
+            await Task.CompletedTask.ConfigureAwait(false);
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                FinishReason = finishReason,
+            };
+        }
     }
 
     private static string LoadBaseSystemPrompt()

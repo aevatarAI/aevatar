@@ -115,6 +115,45 @@ public sealed class AgentRunReplyGenerationExecutorTests
             .FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
     }
 
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenFileRefMaterializationExceedsLimit_ShouldReturnControlledAttachmentFailure()
+    {
+        var provider = new RecordingProvider();
+        var oversized = new byte[10 * 1024 * 1024 + 1];
+        var artifactPort = new RecordingFileArtifactReadPort(
+            new ApplicationWorkflowFileRef
+            {
+                FileId = "wf-file-large",
+                ArtifactId = "workflow-file://wf-file-large",
+                SourceKind = WorkflowFileSourceKind.ChatInput,
+                FileName = "large.png",
+                MediaType = "image/png",
+                SizeBytes = oversized.LongLength,
+            },
+            oversized);
+        var executor = CreateExecutor(provider, fileArtifactReadPort: artifactPort);
+        var workItem = BuildFinalNoToolsWorkItem();
+        workItem.StepState.Messages.Clear();
+        workItem.StepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User([
+            ContentPart.ImageFileRefPart(
+                new LlmChatFileRef
+                {
+                    FileId = "wf-file-large",
+                    ArtifactId = "workflow-file://wf-file-large",
+                    SourceKind = LlmChatFileSourceKind.ChatInput,
+                    FileName = "large.png",
+                    MediaType = "image/png",
+                    SizeBytes = oversized.LongLength,
+                }),
+        ])));
+
+        var act = async () => await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+
+        var failure = await act.Should().ThrowAsync<NyxIdConversationReplyGenerator.AttachmentPolicyException>();
+        failure.Which.Message.Should().Contain("attachment is too large");
+        provider.Requests.Should().BeEmpty();
+    }
+
     private static AgentRunReplyGenerationExecutor CreateExecutor(
         RecordingProvider provider,
         IWorkflowFileArtifactReadPort? fileArtifactReadPort = null)

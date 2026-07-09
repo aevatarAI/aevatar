@@ -522,7 +522,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             RunId = workItem.RunId,
             CorrelationId = workItem.Request.CorrelationId,
             TargetActorId = workItem.Request.TargetActorId,
-            ErrorCode = "llm_reply_failed",
+            ErrorCode = ex is NyxIdConversationReplyGenerator.AttachmentPolicyException
+                ? NyxIdConversationReplyGenerator.AttachmentPolicyErrorCode
+                : "llm_reply_failed",
             ErrorSummary = ex.Message,
             FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             Attempt = workItem.Attempt,

@@ -387,6 +387,140 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithOversizedLarkImageAttachment_ReturnsControlledVisibleError()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "large.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: new RecordingWorkflowFileArtifactPort(),
+            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
+        var activity = CreateLarkImageActivity(
+            "msg-image-large",
+            "describe it",
+            "om_large",
+            "img_large",
+            token: "user-token");
+        activity.Content.Attachments[0].SizeBytes = 10 * 1024 * 1024 + 1;
+        var streamingSink = new RecordingStreamingSink();
+
+        var reply = await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink,
+            CancellationToken.None);
+
+        reply.Text.Should().Contain("attachment is too large");
+        reply.Text.Should().Contain("cannot process");
+        streamingSink.Emissions.Should().ContainSingle().Which.Should().Be(reply.Text);
+        providerFactory.Requests.Should().BeEmpty();
+        lark.Downloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithUnsupportedLarkImageDownload_ReturnsControlledVisibleError()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/tiff", "scan.tiff"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: new RecordingWorkflowFileArtifactPort(),
+            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
+
+        var reply = await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-unsupported",
+                "describe it",
+                "om_unsupported",
+                "img_unsupported",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Contain("attachment format is not supported");
+        reply.Text.Should().Contain("cannot process");
+        providerFactory.Requests.Should().BeEmpty();
+        lark.Downloads.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenFileIngressRejectsOversizedAttachment_ReturnsControlledVisibleError()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/png", "large.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: new RejectingWorkflowFileIngressPort(
+                WorkflowFileIngressPolicyException.TooLarge("large.png", 10 * 1024 * 1024 + 1)),
+            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
+
+        var reply = await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-ingress-large",
+                "describe it",
+                "om_ingress_large",
+                "img_ingress_large",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Contain("cannot process");
+        reply.Text.Should().Contain("attachment is too large");
+        providerFactory.Requests.Should().BeEmpty();
+        lark.Downloads.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenFileIngressRejectsUnsupportedAttachment_ReturnsControlledVisibleError()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/png", "scan.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: new RejectingWorkflowFileIngressPort(
+                WorkflowFileIngressPolicyException.Unsupported("scan.png", "image/x-private")),
+            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
+
+        var reply = await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-ingress-unsupported",
+                "describe it",
+                "om_ingress_unsupported",
+                "img_ingress_unsupported",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Contain("cannot process");
+        reply.Text.Should().Contain("attachment format is not supported");
+        providerFactory.Requests.Should().BeEmpty();
+        lark.Downloads.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_PersistsFileRefWithoutDataBase64()
     {
         var imageBytes = new byte[] { 9, 8, 7 };
@@ -2759,6 +2893,14 @@ public sealed class ConversationReplyGeneratorTests
                 throw new FileNotFoundException("Test workflow file artifact was not found.", key);
             return stored;
         }
+    }
+
+    private sealed class RejectingWorkflowFileIngressPort(Exception exception) : IWorkflowFileIngressPort
+    {
+        public ValueTask<WorkflowFileIngressResult> IngestAsync(
+            WorkflowFileIngressRequest request,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<WorkflowFileIngressResult>(exception);
     }
 
     private sealed class SequentialResponseProviderFactory(params string[] responses) : ILLMProviderFactory, ILLMProvider
