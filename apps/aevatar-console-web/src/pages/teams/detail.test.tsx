@@ -1093,23 +1093,28 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("button", { name: "返回团队列表" })).toBeTruthy();
     expect(screen.queryByText("工作区 ID")).toBeNull();
     expect(screen.queryByText("scope-1")).toBeNull();
-    const currentPostureHeading = screen.getByText("启动状态");
+    const currentPostureHeading = screen.getByText("当前态势");
     const compositionHeading = screen.getByText("团队构成");
-    const configurationHeading = screen.getByText("配置明细");
+    const workflowConfigurationLabel = await screen.findByText("团队 Workflow");
     expect(screen.getByRole("button", { name: "测试团队" })).toBeTruthy();
     expect(currentPostureHeading).toBeTruthy();
+    expect(screen.queryByText("启动状态")).toBeNull();
     expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
     expect(await screen.findByText("运行 · 等待处理")).toBeTruthy();
     expect(compositionHeading).toBeTruthy();
-    expect(configurationHeading).toBeTruthy();
+    expect(workflowConfigurationLabel).toBeTruthy();
+    expect(screen.getByText("主服务入口")).toBeTruthy();
+    expect(screen.getByText("版本状态")).toBeTruthy();
+    expect(screen.getByText("负责处理升级工单")).toBeTruthy();
+    expect(screen.queryByText("已绑定，可接收流量。")).toBeNull();
     expect(screen.queryByLabelText("Team test prompt")).toBeNull();
     expect(
       currentPostureHeading.compareDocumentPosition(compositionHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      compositionHeading.compareDocumentPosition(configurationHeading) &
+      compositionHeading.compareDocumentPosition(workflowConfigurationLabel) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.queryByText("Team authority")).toBeNull();
@@ -1141,9 +1146,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
-    expect(screen.getByText("配置明细")).toBeTruthy();
+    expect(screen.getByText("团队 Workflow")).toBeTruthy();
     expect(screen.queryByText("信任态势")).toBeNull();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
     expect(screen.queryByText("等待基线")).toBeNull();
@@ -1278,9 +1283,8 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("配置明细");
-
-    expect(await screen.findByText("服务路由已配置。")).toBeTruthy();
+    expect(await screen.findByText("版本状态")).toBeTruthy();
+    expect(screen.queryByText("服务路由已配置。")).toBeNull();
     expect(screen.queryByText("revisionId: rev-20260414…716964f3")).toBeNull();
     expect(screen.queryByText(`revisionId: ${longRevisionId}`)).toBeNull();
   });
@@ -1335,7 +1339,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(screen.queryByText("当前任务事件流")).toBeNull();
 
     await waitFor(() => {
@@ -1358,11 +1362,11 @@ describe("TeamDetailPage", () => {
   it("shows configuration details in the overview", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("配置明细")).toBeTruthy();
-    expect(screen.getAllByText("团队 Workflow").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("绑定方式").length).toBeGreaterThan(0);
+    expect(await screen.findByText("团队 Workflow")).toBeTruthy();
     expect(screen.getAllByText("主服务入口").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("版本标识").length).toBeGreaterThan(0);
+    expect(screen.getByText("版本状态")).toBeTruthy();
+    expect(screen.queryByText("绑定方式")).toBeNull();
+    expect(screen.queryByText("版本标识")).toBeNull();
     expect(screen.queryByText("连接器引用")).toBeNull();
     expect(screen.queryByText("服务能力")).toBeNull();
   });
@@ -1584,7 +1588,7 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByText("当前成员")).toBeTruthy();
     expect((await screen.findAllByText("Team Alpha Operator")).length).toBeGreaterThan(0);
-    expect(screen.getByText("当前从团队成员中选中。")).toBeTruthy();
+    expect(screen.queryByText("当前从团队成员中选中。")).toBeNull();
     expect(screen.queryByText("member-team-alpha")).toBeNull();
     expect(screen.queryByText("memberId · member-team-alpha")).toBeNull();
   });
@@ -1602,13 +1606,13 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(screen.getAllByText("等待首次测试").length).toBeGreaterThan(0);
     expect(screen.getByText("下一步 · 测试团队")).toBeTruthy();
     expect(
-      screen.getByText("团队入口已就绪，但还没有可见运行。点击“测试团队”生成第一条运行。"),
-    ).toBeTruthy();
-    expect(screen.getByText("测试团队后会在这里显示最新运行。")).toBeTruthy();
+      screen.queryByText("团队入口已就绪，但还没有可见运行。点击“测试团队”生成第一条运行。"),
+    ).toBeNull();
+    expect(screen.queryByText("测试团队后会在这里显示最新运行。")).toBeNull();
     expect(screen.queryByText("暂无可见运行")).toBeNull();
     expect(screen.queryByText("暂无近期可见运行")).toBeNull();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
@@ -1737,7 +1741,7 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText("调用这支团队时会先路由到这个成员。")).toBeTruthy();
+    expect(screen.queryByText("调用这支团队时会先路由到这个成员。")).toBeNull();
     expect(screen.getByRole("button", { name: "清除入口成员" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
@@ -3068,7 +3072,7 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(await screen.findByText("暂无团队构成")).toBeTruthy();
     expect(screen.getByText("服务待配置")).toBeTruthy();
-    expect(screen.getAllByText("当前还没有匹配到主服务入口").length).toBeGreaterThan(0);
+    expect(screen.queryByText("当前还没有匹配到主服务入口")).toBeNull();
     expect(screen.queryByText("gagent-1")).toBeNull();
     expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
@@ -3112,10 +3116,10 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("已启用")).toBeTruthy();
     expect((await screen.findAllByText("Team summary")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("来自团队更新时间").length).toBeGreaterThan(0);
-    expect(screen.getByText("启动状态")).toBeTruthy();
+    expect(screen.queryByText("来自团队更新时间")).toBeNull();
+    expect(screen.getByText("当前态势")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
-    expect(screen.getByText("配置明细")).toBeTruthy();
+    expect(screen.getByText("团队 Workflow")).toBeTruthy();
     expect(screen.queryByText("团队更新时间")).toBeNull();
     expect(screen.queryByText("生命周期")).toBeNull();
 
@@ -3297,9 +3301,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(await screen.findByText("团队构成")).toBeTruthy();
-    expect(await screen.findByText("配置明细")).toBeTruthy();
+    expect(await screen.findByText("团队 Workflow")).toBeTruthy();
     expect(screen.queryByText("Team summary 暂不可用")).toBeNull();
     expect(
       screen.queryByText("当前仍会显示运行时视图；Team summary 暂时无法读取。"),

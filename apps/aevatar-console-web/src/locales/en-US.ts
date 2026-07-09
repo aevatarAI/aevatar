@@ -361,6 +361,7 @@ const enUSMessages = {
   'teams.detail.overview.configuration.primaryService': 'Primary service entry',
   'teams.detail.overview.configuration.title': 'Configuration details',
   'teams.detail.overview.configuration.versionIdentity': 'Version identity',
+  'teams.detail.overview.configuration.versionStatus': 'Version status',
   'teams.detail.overview.configuration.workflow': 'Team workflow',
   'teams.detail.overview.entry.configuredCaption':
     'Calls to this team route to this member first.',

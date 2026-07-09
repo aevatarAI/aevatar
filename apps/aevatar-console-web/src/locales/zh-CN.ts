@@ -347,6 +347,7 @@ const zhCNMessages = {
   'teams.detail.overview.configuration.primaryService': '主服务入口',
   'teams.detail.overview.configuration.title': '配置明细',
   'teams.detail.overview.configuration.versionIdentity': '版本标识',
+  'teams.detail.overview.configuration.versionStatus': '版本状态',
   'teams.detail.overview.configuration.workflow': '团队 Workflow',
   'teams.detail.overview.entry.configuredCaption':
     '调用这支团队时会先路由到这个成员。',
