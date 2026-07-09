@@ -35,6 +35,61 @@ public sealed class AgentRunGAgentTests
             : Task.CompletedTask;
 
     [Fact]
+    public void StripInlineMediaPayloads_ShouldRemoveMediaDataBase64FromDurableStepState()
+    {
+        var stepState = new AgentRunReplyStepState
+        {
+            RunId = "run-media",
+        };
+        stepState.Messages.Add(new AgentRunChatMessage
+        {
+            Role = "user",
+            ContentParts =
+            {
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Text,
+                    Text = "describe",
+                },
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Image,
+                    DataBase64 = "large-image-base64",
+                    FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                    {
+                        ArtifactId = "workflow-file://wf-file-1",
+                    },
+                },
+            },
+        });
+        stepState.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "user",
+            ContentParts =
+            {
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Audio,
+                    DataBase64 = "large-audio-base64",
+                },
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Unspecified,
+                    DataBase64 = "large-attachment-base64",
+                },
+            },
+        });
+
+        var sanitized = AgentRunGAgent.StripInlineMediaPayloads(stepState);
+
+        sanitized.Messages.Single().ContentParts[0].Text.Should().Be("describe");
+        sanitized.Messages.Single().ContentParts[1].DataBase64.Should().BeEmpty();
+        sanitized.Messages.Single().ContentParts[1].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        sanitized.AppendedHistory.Single().ContentParts.Should().OnlyContain(part => part.DataBase64.Length == 0);
+        stepState.Messages.Single().ContentParts[1].DataBase64.Should().Be("large-image-base64");
+    }
+
+    [Fact]
     public async Task HandleNextToolStepAsync_MergesToolStepOutboundIntentIntoStepState()
     {
         // Regression for the relay interactive-reply scope gap: reply_with_interaction

@@ -499,7 +499,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         // re-supplies them from the transient self-message request at execution time, so a
         // committed AgentRunReplyStepStateUpdatedEvent — and State.GenerationStep rebuilt from
         // it — keeps only identity/routing facts.
-        var persisted = AgentRunReplyStepCredentials.StripRuntimeCredentials(stepState);
+        var persisted = StripInlineMediaPayloads(
+            AgentRunReplyStepCredentials.StripRuntimeCredentials(stepState));
         await PersistDomainEventAsync(new AgentRunReplyStepStateUpdatedEvent
         {
             RunId = persisted.RunId,
@@ -508,6 +509,40 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             Attempt = persisted.Attempt,
             StepState = persisted,
         });
+    }
+
+    internal static AgentRunReplyStepState StripInlineMediaPayloads(AgentRunReplyStepState stepState)
+    {
+        var sanitized = stepState.Clone();
+        StripInlineMediaPayloads(sanitized.Messages);
+        StripInlineMediaPayloads(sanitized.PendingHistoryMessages);
+        StripInlineMediaPayloads(sanitized.AppendedHistory);
+        return sanitized;
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<AgentRunChatMessage> messages)
+    {
+        foreach (var message in messages)
+            StripInlineMediaPayloads(message.ContentParts);
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<ConversationHistoryEntry> messages)
+    {
+        foreach (var message in messages)
+            StripInlineMediaPayloads(message.ContentParts);
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<Aevatar.AI.Abstractions.ChatContentPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            if (part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text)
+            {
+                continue;
+            }
+
+            part.DataBase64 = string.Empty;
+        }
     }
 
     private Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)

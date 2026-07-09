@@ -19,6 +19,10 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
+using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -287,11 +291,16 @@ public sealed class ConversationReplyGeneratorTests
         var imageBytes = new byte[] { 1, 2, 3, 4 };
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, imageBytes, "image/png", "photo.png"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
         var providerFactory = new RecordingProviderFactory
         {
             Capabilities = MultimodalCapabilities,
         };
-        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
 
         await generator.GenerateReplyAsync(
             CreateLarkImageActivity(
@@ -314,6 +323,7 @@ public sealed class ConversationReplyGeneratorTests
         imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
         imagePart.MediaType.Should().Be("image/png");
         imagePart.Name.Should().Be("photo.png");
+        imagePart.FileRef.Should().BeNull();
         userMessage.ContentParts!.Should().NotContain(part =>
             part.Text != null &&
             part.Text.Contains("Attachment visibility warning", StringComparison.Ordinal));
@@ -322,21 +332,25 @@ public sealed class ConversationReplyGeneratorTests
             "om_current",
             "img_current",
             LarkMessageResourceKind.Image));
+        fileArtifacts.IngressRequests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_BuildsImageContentPart()
+    public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_PersistsFileRefWithoutDataBase64()
     {
         var imageBytes = new byte[] { 9, 8, 7 };
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "recent.jpg"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
         var providerFactory = new RecordingProviderFactory
         {
             Capabilities = MultimodalCapabilities,
         };
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            larkClient: lark);
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
         var recentActivity = CreateLarkImageActivity(
             "msg-image-recent",
             "earlier image",
@@ -374,7 +388,12 @@ public sealed class ConversationReplyGeneratorTests
         var userMessage = plan.InitialMessages.Last(message => message.Role == "user");
         var imagePart = userMessage.ContentParts.Should().NotBeNull().And.Subject
             .Single(part => part.Kind == ContentPartKind.Image);
-        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.DataBase64.Should().BeNull();
+        imagePart.FileRef.Should().NotBeNull();
+        imagePart.FileRef!.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        imagePart.FileRef.SourceKind.Should().Be(LlmChatFileSourceKind.ChatInput);
+        imagePart.FileRef.SourceMessageId.Should().Be("om_recent");
+        imagePart.FileRef.SourceResourceKey.Should().Be("img_recent");
         imagePart.MediaType.Should().Be("image/jpeg");
         imagePart.Name.Should().Be("recent.jpg");
         userMessage.ContentParts!.Should().NotContain(part =>
@@ -385,6 +404,13 @@ public sealed class ConversationReplyGeneratorTests
             "om_recent",
             "img_recent",
             LarkMessageResourceKind.Image));
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<WorkflowFileIngressRequest>(
+            request => request.Content.ToArray().SequenceEqual(imageBytes) &&
+                       request.SourceKind == WorkflowFileSourceKind.ChatInput &&
+                       request.SourceMessageId == "om_recent" &&
+                       request.SourceResourceKey == "img_recent" &&
+                       request.FileName == "recent.jpg" &&
+                       request.MediaType == "image/jpeg");
     }
 
     [Fact]
@@ -2544,6 +2570,67 @@ public sealed class ConversationReplyGeneratorTests
 
         public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingWorkflowFileArtifactPort : IWorkflowFileIngressPort, IWorkflowFileArtifactReadPort
+    {
+        private readonly Dictionary<string, (ApplicationWorkflowFileRef FileRef, byte[] Content)> _files = new(StringComparer.Ordinal);
+        private int _nextId;
+
+        public List<WorkflowFileIngressRequest> IngressRequests { get; } = [];
+
+        public ValueTask<WorkflowFileIngressResult> IngestAsync(
+            WorkflowFileIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            IngressRequests.Add(request);
+            var content = request.Content.ToArray();
+            var fileId = $"wf-file-{++_nextId}";
+            var fileRef = new ApplicationWorkflowFileRef
+            {
+                FileId = fileId,
+                ArtifactId = $"workflow-file://{fileId}",
+                SourceKind = request.SourceKind,
+                SourceMessageId = request.SourceMessageId,
+                SourceResourceKey = request.SourceResourceKey,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = content.LongLength,
+                Sha256 = $"sha-{fileId}",
+                CreatedAtUnixMs = 1_000 + _nextId,
+                ExpiresAtUnixMs = 2_000 + _nextId,
+                OwnerRunId = request.OwnerRunId,
+                OwnerScopeId = request.OwnerScopeId,
+            };
+            _files[fileRef.ArtifactId!] = (fileRef, content);
+            return ValueTask.FromResult(new WorkflowFileIngressResult(fileRef));
+        }
+
+        public ValueTask<ApplicationWorkflowFileRef> DescribeAsync(
+            ApplicationWorkflowFileRef fileRef,
+            CancellationToken cancellationToken = default)
+        {
+            var stored = Resolve(fileRef);
+            return ValueTask.FromResult(stored.FileRef);
+        }
+
+        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
+            ApplicationWorkflowFileRef fileRef,
+            CancellationToken cancellationToken = default)
+        {
+            var stored = Resolve(fileRef);
+            return ValueTask.FromResult(new WorkflowFileArtifactContent(
+                stored.FileRef,
+                new MemoryStream(stored.Content, writable: false)));
+        }
+
+        private (ApplicationWorkflowFileRef FileRef, byte[] Content) Resolve(ApplicationWorkflowFileRef fileRef)
+        {
+            var key = fileRef.ArtifactId ?? $"workflow-file://{fileRef.FileId}";
+            if (!_files.TryGetValue(key, out var stored))
+                throw new FileNotFoundException("Test workflow file artifact was not found.", key);
+            return stored;
+        }
     }
 
     private sealed class SequentialResponseProviderFactory(params string[] responses) : ILLMProviderFactory, ILLMProvider

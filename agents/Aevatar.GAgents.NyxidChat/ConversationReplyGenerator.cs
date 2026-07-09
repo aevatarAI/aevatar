@@ -10,8 +10,12 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
+using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
+using WorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -70,6 +74,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILarkNyxClient? _larkClient;
+    private readonly IWorkflowFileIngressPort? _fileIngressPort;
+    private readonly IWorkflowFileArtifactReadPort? _fileArtifactReadPort;
     private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
@@ -108,6 +114,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         INyxIdUserLlmPreferencesStore? preferencesStore = null,
         IUserMemoryStore? userMemoryStore = null,
         ILarkNyxClient? larkClient = null,
+        IWorkflowFileIngressPort? fileIngressPort = null,
+        IWorkflowFileArtifactReadPort? fileArtifactReadPort = null,
         IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null)
@@ -124,6 +132,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _larkClient = larkClient;
+        _fileIngressPort = fileIngressPort;
+        _fileArtifactReadPort = fileArtifactReadPort;
         _overlayProvider = overlayProvider;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
@@ -386,6 +396,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 attachmentContext: null,
                 ct)
             .ConfigureAwait(false);
+        input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -610,10 +621,47 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                parts.Add(ContentPart.ImagePart(
-                    Convert.ToBase64String(downloaded.Content),
-                    NormalizeImageMediaType(downloaded.ContentType ?? attachment.ContentType),
-                    NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name)));
+                if (_fileIngressPort is null)
+                {
+                    unseenCount++;
+                    continue;
+                }
+
+                var mediaType = NormalizeImageMediaType(downloaded.ContentType ?? attachment.ContentType);
+                var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name);
+                WorkflowFileIngressResult ingressResult;
+                try
+                {
+                    ingressResult = await _fileIngressPort.IngestAsync(
+                            new WorkflowFileIngressRequest(
+                                downloaded.Content,
+                                WorkflowFileSourceKind.ChatInput,
+                                SourceMessageId: messageId,
+                                SourceResourceKey: resourceKey,
+                                FileName: fileName,
+                                MediaType: mediaType),
+                            ct)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to ingest Lark image attachment for chat LLM input: messageId={MessageId} resourceKey={ResourceKey}",
+                        messageId,
+                        resourceKey);
+                    unseenCount++;
+                    continue;
+                }
+
+                parts.Add(ContentPart.ImageFileRefPart(
+                    ToChatFileRef(ingressResult.FileRef),
+                    mediaType,
+                    fileName));
             }
         }
 
@@ -625,6 +673,121 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         return new UserInputParts(text, parts, instruction);
     }
+
+    private async Task<UserInputParts> MaterializeUserInputPartsAsync(UserInputParts input, CancellationToken ct)
+    {
+        if (!input.Parts.Any(static part => part.FileRef is not null))
+            return input;
+
+        var materialized = await MaterializeFileRefPartsAsync(input.Parts, _fileArtifactReadPort, ct)
+            .ConfigureAwait(false);
+        return input with { Parts = materialized };
+    }
+
+    internal static async Task<IReadOnlyList<ContentPart>> MaterializeFileRefPartsAsync(
+        IReadOnlyList<ContentPart> parts,
+        IWorkflowFileArtifactReadPort? fileArtifactReadPort,
+        CancellationToken ct)
+    {
+        if (parts.Count == 0 || parts.All(static part => part.FileRef is null))
+            return parts;
+
+        if (fileArtifactReadPort is null)
+            throw new InvalidOperationException("File artifact read port is required to materialize referenced chat media.");
+
+        var materialized = new List<ContentPart>(parts.Count);
+        foreach (var part in parts)
+        {
+            if (part.FileRef is null)
+            {
+                materialized.Add(part);
+                continue;
+            }
+
+            var artifact = await fileArtifactReadPort.OpenReadAsync(ToWorkflowFileRef(part.FileRef), ct)
+                .ConfigureAwait(false);
+            await using var content = artifact.Content;
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, ct).ConfigureAwait(false);
+            var descriptor = artifact.FileRef;
+            materialized.Add(part.Kind switch
+            {
+                ContentPartKind.Image => ContentPart.ImagePart(
+                    Convert.ToBase64String(buffer.ToArray()),
+                    NormalizeImageMediaType(descriptor.MediaType ?? part.MediaType),
+                    NormalizeOptional(descriptor.FileName) ?? part.Name),
+                ContentPartKind.Audio => ContentPart.AudioPart(
+                    Convert.ToBase64String(buffer.ToArray()),
+                    NormalizeOptional(descriptor.MediaType) ?? part.MediaType ?? "audio/wav",
+                    NormalizeOptional(descriptor.FileName) ?? part.Name),
+                ContentPartKind.Video => ContentPart.VideoPart(
+                    Convert.ToBase64String(buffer.ToArray()),
+                    NormalizeOptional(descriptor.MediaType) ?? part.MediaType ?? "video/mp4",
+                    NormalizeOptional(descriptor.FileName) ?? part.Name),
+                _ => part,
+            });
+        }
+
+        return materialized;
+    }
+
+    private static LlmChatFileRef ToChatFileRef(WorkflowFileRef source) =>
+        new()
+        {
+            FileId = NormalizeOptional(source.FileId),
+            ArtifactId = NormalizeOptional(source.ArtifactId),
+            SourceKind = ToChatFileSourceKind(source.SourceKind),
+            SourceMessageId = NormalizeOptional(source.SourceMessageId),
+            SourceResourceKey = NormalizeOptional(source.SourceResourceKey),
+            FileName = NormalizeOptional(source.FileName),
+            MediaType = NormalizeOptional(source.MediaType),
+            SizeBytes = source.SizeBytes,
+            Sha256 = NormalizeOptional(source.Sha256),
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = NormalizeOptional(source.OwnerRunId),
+            OwnerScopeId = NormalizeOptional(source.OwnerScopeId),
+        };
+
+    private static WorkflowFileRef ToWorkflowFileRef(LlmChatFileRef source) =>
+        new()
+        {
+            FileId = NormalizeOptional(source.FileId),
+            ArtifactId = NormalizeOptional(source.ArtifactId),
+            SourceKind = ToWorkflowFileSourceKind(source.SourceKind),
+            SourceMessageId = NormalizeOptional(source.SourceMessageId),
+            SourceResourceKey = NormalizeOptional(source.SourceResourceKey),
+            FileName = NormalizeOptional(source.FileName),
+            MediaType = NormalizeOptional(source.MediaType),
+            SizeBytes = source.SizeBytes,
+            Sha256 = NormalizeOptional(source.Sha256),
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = NormalizeOptional(source.OwnerRunId),
+            OwnerScopeId = NormalizeOptional(source.OwnerScopeId),
+        };
+
+    private static LlmChatFileSourceKind ToChatFileSourceKind(WorkflowFileSourceKind kind) =>
+        kind switch
+        {
+            WorkflowFileSourceKind.ChatInput => LlmChatFileSourceKind.ChatInput,
+            WorkflowFileSourceKind.FormUpload => LlmChatFileSourceKind.FormUpload,
+            WorkflowFileSourceKind.ConnectedServiceResource => LlmChatFileSourceKind.ConnectedServiceResource,
+            WorkflowFileSourceKind.ExternalResource => LlmChatFileSourceKind.ExternalResource,
+            WorkflowFileSourceKind.Generated => LlmChatFileSourceKind.Generated,
+            _ => LlmChatFileSourceKind.Unspecified,
+        };
+
+    private static WorkflowFileSourceKind ToWorkflowFileSourceKind(LlmChatFileSourceKind kind) =>
+        kind switch
+        {
+            LlmChatFileSourceKind.ChatInput => WorkflowFileSourceKind.ChatInput,
+            LlmChatFileSourceKind.FormUpload => WorkflowFileSourceKind.FormUpload,
+            LlmChatFileSourceKind.ConnectedServiceResource => WorkflowFileSourceKind.ConnectedServiceResource,
+            LlmChatFileSourceKind.ExternalResource => WorkflowFileSourceKind.ExternalResource,
+            LlmChatFileSourceKind.Generated => WorkflowFileSourceKind.Generated,
+            _ => WorkflowFileSourceKind.Unspecified,
+        };
 
     private sealed record AttachmentActivity(ChatActivity Activity, IReadOnlyList<AttachmentRef> Attachments);
 
