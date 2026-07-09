@@ -49,7 +49,6 @@ public sealed class ChannelRuntimeSourceRegressionTests
         var repositoryRoot = GetRepositoryRoot();
         var bypasses = Directory.EnumerateFiles(Path.Combine(repositoryRoot, "agents"), "*.cs", SearchOption.AllDirectories)
             .Where(static file => !file.EndsWith("LarkOutboundDispatcher.cs", StringComparison.Ordinal))
-            .Where(static file => !file.EndsWith("FeishuCardOutboundMessageSender.cs", StringComparison.Ordinal))
             .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: StripComments(File.ReadAllText(file, Encoding.UTF8))))
             .Where(static item =>
                 item.Source.Contains("open-apis/im/v1/messages?receive_id_type=", StringComparison.Ordinal) ||
@@ -59,6 +58,47 @@ public sealed class ChannelRuntimeSourceRegressionTests
 
         bypasses.Should().BeEmpty(
             "new Lark message POST, message_id parsing, and 230002 fallback belong to LarkOutboundDispatcher");
+    }
+
+    [Fact]
+    public void Channel_conversation_turn_runner_must_not_depend_on_lark_outbound_transport()
+    {
+        var source = ReadRepositoryFile("agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs");
+        foreach (var token in new[]
+                 {
+                     "Aevatar.GAgents.Platform.Lark",
+                     "ILarkOutboundDispatcher",
+                     "LarkOutboundDispatcher",
+                     "LarkSendNewMessageRequest",
+                     "LarkConversationTargets",
+                     "LarkTextMessageSegmenter",
+                     "ChannelLarkProxyResponse",
+                     "LarkProxyResponse",
+                     "LarkBotErrorCodes",
+                     "NoPermissionToReact",
+                 })
+        {
+            source.Should().NotContain(token,
+                "the turn runner must delegate outbound Lark delivery and provider error semantics to channel/platform delivery ports");
+        }
+    }
+
+    [Fact]
+    public void Authoring_lark_must_not_own_outbound_delivery_orchestration()
+    {
+        var source = ReadRepositorySources("agents/Aevatar.GAgents.Authoring.Lark");
+        foreach (var token in new[]
+                 {
+                     "FeishuCardOutboundMessageSender",
+                     "ILarkOutboundDispatcher",
+                     "LarkOutboundDispatcher",
+                     "LarkSendNewMessageRequest",
+                     "IUserAgentDeliveryTargetReader",
+                 })
+        {
+            source.Should().NotContain(token,
+                "Authoring.Lark owns card/content authoring only; delivery orchestration belongs to channel/platform adapters");
+        }
     }
 
     [Fact]
@@ -93,6 +133,37 @@ public sealed class ChannelRuntimeSourceRegressionTests
 
         hits.Should().BeEmpty(
             "workflow/AI human-interaction delivery must depend on channel-neutral notification ports and intents, not Lark sender APIs");
+    }
+
+    [Fact]
+    public void Scheduled_package_must_not_own_lark_notification_delivery()
+    {
+        var repositoryRoot = GetRepositoryRoot();
+        var scheduledRoot = Path.Combine(repositoryRoot, "agents/Aevatar.GAgents.Scheduled");
+        var forbiddenTokens = new[]
+        {
+            "FeishuCardNotificationPort",
+            "LarkRemoteToolApprovalNotificationPort",
+            "AddLarkScheduledDelivery",
+            "IRemoteToolApprovalNotificationPort",
+            "IChannelInteractionNotificationPort",
+            "LarkInteractionCardRenderer",
+            "LarkRemoteToolApprovalCardContent",
+        };
+        var hits = Directory.EnumerateFiles(scheduledRoot, "*.*", SearchOption.AllDirectories)
+            .Where(static file =>
+                (file.EndsWith(".cs", StringComparison.Ordinal) ||
+                 file.EndsWith(".csproj", StringComparison.Ordinal)) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: ReadPolicySurface(file)))
+            .SelectMany(item => forbiddenTokens
+                .Where(token => item.Source.Contains(token, StringComparison.Ordinal))
+                .Select(token => $"{item.File}: {token}"))
+            .ToArray();
+
+        hits.Should().BeEmpty(
+            "Scheduled owns schedule/catalog/runner facts, while channel/host boundaries own notification delivery composition");
     }
 
     [Fact]

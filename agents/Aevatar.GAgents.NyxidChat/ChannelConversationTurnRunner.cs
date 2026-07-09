@@ -15,7 +15,6 @@ using Aevatar.GAgents.Channel.Identity.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.Scheduled;
@@ -93,7 +92,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
     private readonly ILarkBotIdentityResolver? _botIdentityResolver;
     private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
-    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
+    private readonly IChannelRelayTailTextSender? _relayTailTextSender;
+    private readonly IChannelRelayProxyResponseClassifier? _relayProxyResponseClassifier;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -119,7 +119,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
-        ILarkOutboundDispatcher? larkOutboundDispatcher = null)
+        IChannelRelayTailTextSender? relayTailTextSender = null,
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -144,7 +145,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _botIdentityResolver = botIdentityResolver;
         _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
-        _larkOutboundDispatcher = larkOutboundDispatcher;
+        _relayTailTextSender = relayTailTextSender;
+        _relayProxyResponseClassifier = relayProxyResponseClassifier;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -1269,7 +1271,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var content = new MessageContent { Text = NormalizeReplyText(chunk.AccumulatedText) };
         var segments = operation == NyxRelayTextOperationKind.Final &&
                        !string.IsNullOrWhiteSpace(currentPlatformMessageId)
-            ? LarkTextMessageSegmenter.Segment(content.Text)
+            ? ChannelTextMessageSegmenter.Segment(content.Text)
             : null;
         var updateContent = segments is { Count: > 1 }
             ? new MessageContent { Text = segments[0] }
@@ -1320,9 +1322,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             : emit.PlatformMessageId;
         if (segments is { Count: > 1 })
         {
-            var tailResult = await SendTailLarkTextSegmentsAsync(
+            var tailResult = await SendTailTextSegmentsAsync(
                     chunk,
                     inbound,
+                    platform,
                     runtimeContext,
                     segments.Skip(1),
                     ct)
@@ -1334,98 +1337,40 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         return ConversationStreamChunkResult.Succeeded(resolvedPlatformMessageId);
     }
 
-    private async Task<ConversationStreamChunkResult> SendTailLarkTextSegmentsAsync(
+    private async Task<ConversationStreamChunkResult> SendTailTextSegmentsAsync(
         LlmReplyStreamChunkEvent chunk,
         InboundMessage inbound,
+        string platform,
         ConversationTurnRuntimeContext runtimeContext,
         IEnumerable<string> tailSegments,
         CancellationToken ct)
     {
-        if (!IsLarkPlatform(ResolveRelayPlatform(inbound, chunk.Activity?.Conversation)))
-        {
-            return ConversationStreamChunkResult.Failed(
-                "relay_tail_segment_platform_unsupported",
-                "Tail text segmentation is only supported for Lark relay deliveries.");
-        }
-
-        var providerSlug = NormalizeOptional(inbound.TransportExtras?.NyxProviderSlug);
-        if (providerSlug is null)
-        {
-            return ConversationStreamChunkResult.Failed(
-                "lark_tail_segment_provider_missing",
-                "Lark outbound provider slug is missing for tail text segment delivery.");
-        }
-
         var nyxProxyCredential = ResolveUserAccessToken(chunk.Activity!, runtimeContext);
-        if (nyxProxyCredential is null)
-        {
-            return ConversationStreamChunkResult.Failed(
-                "lark_tail_segment_credential_missing",
-                "NyxID user access token is missing for Lark tail text segment delivery.");
-        }
+        var sender = _relayTailTextSender;
+        if (sender is null)
+            return ConversationStreamChunkResult.Failed("relay_tail_segment_sender_missing", "Relay tail text sender is not registered.");
 
-        var target = LarkConversationTargets.BuildFromInboundWithFallback(
-            inbound.ChatType,
-            inbound.ConversationId,
-            inbound.SenderId,
-            inbound.TransportExtras?.NyxLarkUnionId,
-            inbound.TransportExtras?.NyxLarkChatId);
-        if (string.IsNullOrWhiteSpace(target.Primary.ReceiveId) ||
-            string.IsNullOrWhiteSpace(target.Primary.ReceiveIdType))
-        {
-            return ConversationStreamChunkResult.Failed(
-                "lark_tail_segment_target_missing",
-                "Lark receive target is missing for tail text segment delivery.");
-        }
+        var result = await sender.SendTailSegmentsAsync(
+                new ChannelRelayTailTextSendRequest(
+                    platform,
+                    inbound.ChatType ?? string.Empty,
+                    inbound.ConversationId ?? string.Empty,
+                    inbound.SenderId ?? string.Empty,
+                    inbound.TransportExtras,
+                    nyxProxyCredential ?? string.Empty,
+                    tailSegments.ToArray(),
+                    chunk.CorrelationId),
+                ct)
+            .ConfigureAwait(false);
 
-        var dispatcher = ResolveLarkOutboundDispatcher();
-        foreach (var segment in tailSegments)
-        {
-            var contentJson = JsonSerializer.Serialize(new { text = segment });
-            LarkSendNewMessageResult result;
-            try
-            {
-                result = await dispatcher.SendNewMessageAsync(
-                        new LarkSendNewMessageRequest(
-                            NyxApiKey: nyxProxyCredential,
-                            providerSlug,
-                            "text",
-                            contentJson,
-                            target.Primary,
-                            target.Fallback),
-                        ct)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "Lark tail text segment send threw. correlation={CorrelationId}",
-                    chunk.CorrelationId);
-                return ConversationStreamChunkResult.Failed(
-                    "relay_tail_segment_send_failed",
-                    ex.Message);
-            }
-
-            if (!result.Succeeded)
-            {
-                return ConversationStreamChunkResult.Failed(
-                    "relay_tail_segment_send_failed",
-                    string.IsNullOrWhiteSpace(result.Detail) ? "Lark tail text segment send failed." : result.Detail,
-                    failureKind: FailureKind.PermanentAdapterError,
-                    rawErrorCode: result.LarkCode ?? 0);
-            }
-        }
-
-        return ConversationStreamChunkResult.Succeeded(null);
+        return result.Succeeded
+            ? ConversationStreamChunkResult.Succeeded(null)
+            : ConversationStreamChunkResult.Failed(
+                result.ErrorCode,
+                result.Detail,
+                failureKind: result.FailureKind,
+                rawErrorCode: result.RawErrorCode);
     }
-
-    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher() =>
-        _larkOutboundDispatcher ?? new LarkOutboundDispatcher(_nyxClient, _logger);
 
     private async Task<ConversationTurnResult?> TryHandleAgentBuilderAsync(
         ChatActivity activity,
@@ -2044,7 +1989,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     ct)
                 .ConfigureAwait(false);
 
-            if (LarkProxyResponse.TryGetError(response, out _, out _))
+            if (ClassifyRelayProxyResponse(response).IsError)
                 return null;
 
             return TryParseLarkSubjectContactIds(response, out var contactIds) ? contactIds : null;
@@ -2849,9 +2794,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 null,
                 ct);
 
-            if (LarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
+            var classification = ClassifyRelayProxyResponse(response);
+            if (classification.IsError)
             {
-                if (larkCode == LarkBotErrorCodes.NoPermissionToReact)
+                if (classification.Kind == ChannelRelayProxyResponseKind.PermissionDenied)
                 {
                     // The bot is missing reaction permission on Lark — a
                     // tenant-level config issue that recurs on every inbound
@@ -2862,20 +2808,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                         "Immediate Lark typing reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
-                        detail);
+                        classification.Detail);
                 }
                 else
                 {
-                    // Anything else — a Nyx envelope error, an unexpected Lark
-                    // business code (rate limit, archived message, bot kicked,
-                    // etc.) — is a real signal that should stay at Warning so
-                    // we notice when Lark behavior changes.
+                    // Anything else is a real signal that should stay at Warning
+                    // so provider behavior changes remain visible.
                     _logger.LogWarning(
-                        "Immediate Lark typing reaction failed: provider={ProviderSlug}, message={MessageId}, larkCode={LarkCode}, detail={Detail}",
+                        "Immediate Lark typing reaction failed: provider={ProviderSlug}, message={MessageId}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
-                        larkCode,
-                        detail);
+                        classification.ProviderErrorCode,
+                        classification.Detail);
                 }
             }
         }
@@ -2968,15 +2912,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     extraHeaders: null,
                     ct);
 
-                if (LarkProxyResponse.TryGetError(listResponse, out var listCode, out var listDetail))
+                var listClassification = ClassifyRelayProxyResponse(listResponse);
+                if (listClassification.IsError)
                 {
                     _logger.LogDebug(
-                        "Lark typing reaction list failed; skipping clear: provider={ProviderSlug}, message={MessageId}, page={Page}, larkCode={LarkCode}, detail={Detail}",
+                        "Lark typing reaction list failed; skipping clear: provider={ProviderSlug}, message={MessageId}, page={Page}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
                         providerSlug,
                         platformMessageId,
                         page,
-                        listCode,
-                        listDetail);
+                        listClassification.ProviderErrorCode,
+                        listClassification.Detail);
                     return;
                 }
 
@@ -3003,15 +2948,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                         extraHeaders: null,
                         ct);
 
-                    if (LarkProxyResponse.TryGetError(deleteResponse, out var deleteCode, out var deleteDetail))
+                    var deleteClassification = ClassifyRelayProxyResponse(deleteResponse);
+                    if (deleteClassification.IsError)
                     {
                         _logger.LogDebug(
-                            "Lark typing reaction delete failed: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}, larkCode={LarkCode}, detail={Detail}",
+                            "Lark typing reaction delete failed: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
                             providerSlug,
                             platformMessageId,
                             reactionId,
-                            deleteCode,
-                            deleteDetail);
+                            deleteClassification.ProviderErrorCode,
+                            deleteClassification.Detail);
                     }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -3208,6 +3154,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             _ => ConversationTurnResult.TransientFailure(errorCode, errorMessage),
         };
     }
+
+    private ChannelRelayProxyResponseClassification ClassifyRelayProxyResponse(string? response) =>
+        _relayProxyResponseClassifier?.Classify(response) ??
+        ChannelRelayProxyResponseClassification.Success();
 
     private static ChannelId ResolveRelayChannel(InboundMessage inbound, ConversationReference? conversation) =>
         ChannelId.From(ResolveRelayPlatform(inbound, conversation));

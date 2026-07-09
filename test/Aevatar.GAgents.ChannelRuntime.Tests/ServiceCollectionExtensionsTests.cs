@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
@@ -21,6 +22,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using NSubstitute;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -244,7 +246,8 @@ public sealed class ServiceCollectionExtensionsTests
     public void AddNyxIdRelayChannel_ShouldReplaceInteractionNotificationPortWithChannelNeutralRelay()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IChannelInteractionNotificationPort, FeishuCardNotificationPort>();
+        var existingNotificationPort = Substitute.For<IChannelInteractionNotificationPort>();
+        services.AddSingleton(existingNotificationPort);
 
         services.AddNyxIdRelayChannel();
 
@@ -254,6 +257,44 @@ public sealed class ServiceCollectionExtensionsTests
             .Which.ImplementationType
             .Should()
             .Be(typeof(NyxIdRelayChannelInteractionNotificationPort));
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldReplaceRemoteApprovalNotificationPortWithChannelRelay()
+    {
+        var services = new ServiceCollection();
+        var existingNotificationPort = Substitute.For<IRemoteToolApprovalNotificationPort>();
+        services.AddSingleton(existingNotificationPort);
+
+        services.AddNyxIdRelayChannel();
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(IRemoteToolApprovalNotificationPort))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationType
+            .Should()
+            .Be(typeof(NyxIdRelayRemoteToolApprovalNotificationPort));
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldReplaceNyxIdChatTailTextFallback()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(IChannelRelayTailTextSender))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationFactory
+            .Should()
+            .NotBeNull();
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IChannelRelayTailTextSender>()
+            .Should()
+            .BeOfType<LarkChannelRelayTailTextSender>();
     }
 
     private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)

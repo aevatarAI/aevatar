@@ -293,6 +293,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         try
         {
             var pendingToolContext = ResolvePendingToolContext(pending);
+            var notificationSupport = await CheckRemoteApprovalNotificationSupportAsync(pendingToolContext);
+            if (!notificationSupport.Supported)
+            {
+                await PersistApprovalTerminalFailureThenClearPendingAsync(
+                    pending,
+                    "approval_unsupported_channel",
+                    notificationSupport.Reason ?? "Remote approval notification is not supported for this delivery target.");
+                return;
+            }
+
             var request = new RemoteToolApprovalRequest(
                 pending.RequestId,
                 pending.ToolName,
@@ -328,6 +338,18 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 "approval_timeout",
                 $"Remote approval submit failed: {ex.Message}");
         }
+    }
+
+    private async Task<RemoteToolApprovalNotificationSupport> CheckRemoteApprovalNotificationSupportAsync(
+        AgentToolExecutionContext toolContext)
+    {
+        var notificationPort = RemoteToolApprovalNotificationPort;
+        if (notificationPort is null)
+        {
+            return RemoteToolApprovalNotificationSupport.SupportedResult;
+        }
+
+        return await notificationPort.CheckSupportAsync(toolContext, CancellationToken.None);
     }
 
     private async Task TryNotifyRemoteApprovalSubmittedAsync(
