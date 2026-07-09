@@ -640,6 +640,43 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleDeleteRequested_ShouldFailActiveBindingRunBeforeDeletedEvent()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-delete", now.AddSeconds(1));
+        var eventSourcing = new RecordingEventSourcing(pending);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(pending, eventSourcing, publisher);
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(4));
+
+        await agent.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = deletedAt,
+        });
+
+        eventSourcing.RaisedEvents.Should().HaveCount(2);
+        var failed = eventSourcing.RaisedEvents[0]
+            .Should().BeOfType<StudioMemberBindingFailedEvent>().Subject;
+        failed.BindingRunId.Should().Be("bind-delete");
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+        failed.Failure.FailedAtUtc.Should().Be(deletedAt);
+
+        var deleted = eventSourcing.RaisedEvents[1]
+            .Should().BeOfType<StudioMemberDeletedEvent>().Subject;
+        deleted.MemberId.Should().Be("m-1");
+        deleted.ScopeId.Should().Be("scope-1");
+        deleted.DeletedAtUtc.Should().Be(deletedAt);
+
+        var sent = publisher.SentMessages.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be(StudioMemberConventions.BuildBindingRunActorId("bind-delete"));
+        var ack = sent.Event.Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
+        ack.BindingRunId.Should().Be("bind-delete");
+        ack.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+    }
+
+    [Fact]
     public void DeletedEvent_ShouldTombstoneStateAndClearTeamId()
     {
         var now = DateTimeOffset.UtcNow;

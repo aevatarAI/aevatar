@@ -423,6 +423,13 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (State.HasTeamId)
             deleted.PreviousTeamId = State.TeamId;
 
+        if (TryBuildDeleteBindingFailure(State, deletedAt, out var bindingFailed))
+        {
+            await PersistDomainEventsAsync([bindingFailed, deleted]);
+            await SendTerminalAcknowledgementAsync(bindingFailed.BindingRunId, StudioMemberBindingRunStatus.Failed);
+            return;
+        }
+
         await PersistDomainEventAsync(deleted);
     }
 
@@ -711,6 +718,33 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         };
         next.UpdatedAtUtc = failedAt;
         return next;
+    }
+
+    private static bool TryBuildDeleteBindingFailure(
+        StudioMemberState state,
+        Timestamp deletedAt,
+        out StudioMemberBindingFailedEvent bindingFailed)
+    {
+        bindingFailed = new StudioMemberBindingFailedEvent();
+        var binding = state.Binding;
+        if (binding == null
+            || string.IsNullOrEmpty(binding.CurrentBindingRunId)
+            || IsTerminalBindingStatus(binding.CurrentStatus))
+        {
+            return false;
+        }
+
+        bindingFailed = new StudioMemberBindingFailedEvent
+        {
+            BindingRunId = binding.CurrentBindingRunId,
+            Failure = new StudioMemberBindingFailure
+            {
+                Code = "STUDIO_MEMBER_DELETED",
+                Message = "member was deleted before binding completed.",
+                FailedAtUtc = deletedAt,
+            },
+        };
+        return true;
     }
 
     private static bool CanAcceptBindingRunProgress(StudioMemberState state, string bindingRunId)
