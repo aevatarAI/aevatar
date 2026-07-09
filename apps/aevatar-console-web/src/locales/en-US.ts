@@ -101,6 +101,8 @@ const enUSMessages = {
     'Some published service runs could not be loaded.',
   'pages.missionwall.liveState.scopeUnavailable':
     'Mission wall could not load the authenticated scope.',
+  'pages.missionwall.liveState.snapshotUnavailable':
+    'Mission wall snapshot could not be loaded.',
   'pages.missionwall.liveStatus.degraded': 'Degraded',
   'pages.missionwall.liveStatus.disconnected': 'Disconnected',
   'pages.missionwall.liveStatus.idle': 'Idle',
