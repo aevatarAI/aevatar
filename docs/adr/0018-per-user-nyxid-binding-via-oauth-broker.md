@@ -6,6 +6,19 @@ owner: eanzhao
 
 # ADR-0018: Per-User NyxID Binding via OAuth Broker
 
+## Update 2026-07-09 — NyxID service-access defaults
+
+NyxID 授权页新增 service access 选择后,aevatar 的 OAuth public client 必须在 Developer App / DCR 层声明默认 service access,否则用户完成 `/init` 登录后得到的 broker credential 没有必要的 service proxy 授权。
+
+产品语义收敛为:
+
+- aevatar DCR 请求发送 typed `default_services` 字段,当前内置默认只包含 `aevatar`;这是 OAuth client 的授权配置事实,不是登录会话里的临时用户选择
+- 默认列表可通过 `Aevatar:OAuthClient:DefaultServiceSlugs` 或 `AEVATAR_OAUTH_DEFAULT_SERVICE_SLUGS` 覆盖;覆盖仍应只放必要 service,避免把所有 NyxID services 默认授给 aevatar
+- `AevatarOAuthClientGAgent` 持有 actor-owned `default_service_slugs` 与 retry copy,并把它投影到 `AevatarOAuthClientDocument`;缺失或不一致会触发一次 DCR drift repair
+- `/api/oauth/aevatar-client/status` 暴露 `default_service_slugs_registered/resolved/drifted`,旧 client 没有该字段时必须显示 `default_services_drifted`,不能在 read model 查询侧静默回填成 ready
+
+这保持了"先只选择必要的"边界:当前只预选 aevatar 自身 service;后续如需 `scope-service` 等额外 service,必须作为显式配置/contract 变更加入默认列表,并由 actor 重新 DCR。
+
 ## Update 2026-04-30 — NyxID#576 / PR #578 contract alignment
 
 ADR 第一版 (#549 时代) 假设 aevatar 持有一个**集群级 OAuth `client_secret`**,token-exchange / DELETE binding 走 confidential-client + Basic auth。implementation PR #521 自审过程中发现这条假设违反 aevatar "无 NyxID 颁发 secret 落地" 的不变量(`client_secret` 一旦泄漏,fleet-wide blast radius 覆盖所有用户),据此提了 [ChronoAIProject/NyxID#576](https://github.com/ChronoAIProject/NyxID/issues/576),要求 NyxID broker 接口接受**公共客户端 + PKCE**。
