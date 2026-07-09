@@ -489,11 +489,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
             ScopeId: "scope-1",
-            BindingStatus: "accepted",
+            BindingStatus: "pending",
             ObservatoryUrl: "/workflow/observatory")
         {
             ScheduleId = "schedule-1",
             BindingRunId = "bind-run-1",
+            BindingRunStatus = "platform_binding_pending",
         });
         var tool = await DiscoverToolAsync(port);
 
@@ -524,7 +525,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         // Result surfaces the schedule + Observatory link.
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
-        root.GetProperty("status").GetString().Should().Be("accepted");
+        root.GetProperty("status").GetString().Should().Be("pending");
+        root.GetProperty("binding_run_status").GetString().Should().Be("platform_binding_pending");
         root.GetProperty("member_id").GetString().Should().Be("member-1");
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-1");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
@@ -614,7 +616,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
             ScopeId: "scope-1",
-            BindingStatus: "accepted",
+            BindingStatus: "pending",
             ObservatoryUrl: "/workflow/observatory")
         {
             ScheduleId = "schedule-1",
@@ -715,7 +717,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             _result = result ?? new WorkflowScheduleProvisioningResult(
                 MemberId: "member-default",
                 ScopeId: "scope-default",
-                BindingStatus: "accepted",
+                BindingStatus: "pending",
                 ObservatoryUrl: "/workflow/observatory");
         }
 

@@ -50,14 +50,14 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         "The workflow_yaml is validated synchronously before anything is created: an invalid document returns a typed error " +
         "describing the problem and provisions nothing — fix the YAML per the error message and call again. " +
         "Provisioning is idempotent per display_name: calling again with the same display_name re-binds the same member and " +
-        "updates (and re-enables) its schedule instead of creating duplicates, so retries are safe. That also means an " +
+        "updates its single schedule instead of creating duplicates, so retries are safe. Non-terminal binds leave that " +
+        "schedule disabled; failed or rejected binds report failure details and disable any existing provision schedule. That also means an " +
         "existing display_name is REPLACED by a re-provision — reuse a display_name only to retry or update the same " +
         "automation, and pick a distinct display_name for a different automation. " +
         "Provide schedule_cron + schedule_timezone for a recurring monitor; omit them for a single near-future demo run (unless run_immediately is false). " +
         "This is the Observatory-delivered alternative to scheduled_agent_creator: use it for workflow automation instead of publishing a prose skill or scheduling a bot delivery. " +
-        "Returns the schedule id, member id, and the Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
-        "A status of 'accepted' means the YAML was validated and the bind was dispatched — the bind and any run complete " +
-        "asynchronously, so verify the run in the Observatory before reporting the workflow as running.";
+        "Returns the schedule id, member id, binding run status, any binding failure, and the Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
+        "A status of 'pending' means the YAML was validated and the bind was dispatched, but the workflow is not usable yet; only 'bound' means the workflow binding is usable.";
 
     public string ParametersSchema => """
         {
@@ -155,6 +155,8 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
                 ScopeId: result.ScopeId,
                 ScheduleId: result.ScheduleId,
                 BindingRunId: result.BindingRunId,
+                BindingRunStatus: result.BindingRunStatus,
+                BindingFailure: result.BindingFailure,
                 ObservatoryUrl: result.ObservatoryUrl),
                 s_jsonOptions);
         }
@@ -189,6 +191,8 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         string ScopeId,
         string? ScheduleId,
         string? BindingRunId,
+        string? BindingRunStatus,
+        WorkflowScheduleProvisioningFailure? BindingFailure,
         string ObservatoryUrl);
 
     private sealed record ProvisionWorkflowScheduleErrorJson(ProvisionWorkflowScheduleErrorBody Error);

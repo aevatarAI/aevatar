@@ -74,4 +74,13 @@ public sealed record WorkflowScheduleProvisioningResult(
     public string? ScheduleId { get; init; }
 
     public string? BindingRunId { get; init; }
+
+    public string? BindingRunStatus { get; init; }
+
+    public WorkflowScheduleProvisioningFailure? BindingFailure { get; init; }
 }
+
+public sealed record WorkflowScheduleProvisioningFailure(
+    string Code,
+    string Message,
+    DateTimeOffset FailedAt);

@@ -49,7 +49,7 @@ public sealed class StudioProvisioningEndpointsTests
 
         var accepted = result.Should().BeOfType<Accepted<ProvisionWorkflowResponse>>().Subject;
         accepted.Value.Should().BeSameAs(response);
-        accepted.Value!.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
+        accepted.Value!.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Pending);
         accepted.Location.Should().Be($"/api/schedules/{ScheduleId}");
         service.ProvisionInvoked.Should().BeTrue();
         service.ProvisionScopeId.Should().Be(ScopeId);
@@ -170,7 +170,7 @@ public sealed class StudioProvisioningEndpointsTests
     private static ProvisionWorkflowResponse NewResponse() => new(
         MemberId: "member-1",
         ScopeId: ScopeId,
-        BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
+        BindingStatus: ProvisionWorkflowBindingStatusNames.Pending,
         ObservatoryUrl: "/workflow/observatory")
     {
         BindingRunId = "bind-run-1",

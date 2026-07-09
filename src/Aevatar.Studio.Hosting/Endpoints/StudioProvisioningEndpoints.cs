@@ -19,11 +19,11 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// The flow is NON-BLOCKING: binding a workflow member is a multi-minute async
 /// pipeline, so the handler never polls the bind to completion (that would
 /// exhaust the gateway timeout). It creates the member, accepts the bind, and
-/// creates a Workflow-kind scheduled-dispatch that produces the run — the
-/// scheduled path is also the only one that projects the caller's re-minted NyxID
-/// token onto the run so its LLM calls authenticate. The endpoint therefore
-/// always returns 202 Accepted; runs appear in the Observatory as the schedule
-/// fires.
+/// reconciles a Workflow-kind scheduled-dispatch based on the binding run read
+/// model. The scheduled path is also the only one that projects the caller's
+/// re-minted NyxID token onto the run so its LLM calls authenticate. The endpoint
+/// returns 202 Accepted for the non-blocking request; a <c>pending</c> response
+/// means any returned schedule is disabled until the binding becomes usable.
 ///
 /// The endpoint depends only on <see cref="IStudioWorkflowProvisioningService"/>;
 /// it never reaches for the platform invocation or schedule ports directly. It
@@ -38,7 +38,7 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 /// is an explicit body field rather than derived from an ambient claim.
 ///
 /// Response status:
-///   - accepted (member created, bind accepted, schedule created) → 202 + links
+///   - pending / bound / failed / rejected binding observation → 202 + links
 ///   - validation / missing caller subject ref → 400
 ///   - cross-scope / unauthenticated → 403 / 401 (via the guard)
 ///
@@ -79,10 +79,10 @@ internal static class StudioProvisioningEndpoints
             var response = await provisioningService.ProvisionAsync(
                 scopeId, callerCredential, request, ct);
 
-            // The bind and the run are both asynchronous, so provisioning always
-            // ACKs with 202 Accepted: the member + bind + schedule were accepted
-            // and the run is produced by the schedule. The Location points at the
-            // schedule so the caller can poll/manage it.
+            // The bind and the run are both asynchronous, so provisioning ACKs
+            // with 202 Accepted. BindingStatus carries the observed bind state;
+            // pending schedules are disabled and failed binds disable prior
+            // provision schedules.
             return Results.Accepted(
                 BuildScheduleLocation(response.ScheduleId),
                 response);

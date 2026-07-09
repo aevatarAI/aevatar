@@ -3,15 +3,18 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 /// <summary>
 /// Stable wire status values returned in
 /// <see cref="ProvisionWorkflowResponse.BindingStatus"/>. The provision flow is
-/// non-blocking: it composes the existing member create + bind services and then
-/// hands the run off to a scheduled-dispatch rather than blocking the request on
-/// the (multi-minute, asynchronous) bind. The status therefore describes the
-/// provisioning hand-off, not the bind terminal state:
+/// non-blocking: it composes the existing member create + bind services and
+/// observes the binding run read model once before deciding whether a schedule
+/// may fire. The status therefore describes the binding usability observed at
+/// response time:
 /// <list type="bullet">
-///   <item><c>accepted</c> — the member was created, the inline workflow YAML bind
-///   was accepted, and a scheduled-dispatch was created to produce the run once
-///   the member is bound. Runs appear in the Observatory as the schedule fires;
-///   the caller watches the Observatory, there is no synchronous run id.</item>
+///   <item><c>pending</c> — the bind was accepted but has not reached a usable
+///   terminal state; any created schedule is disabled.</item>
+///   <item><c>bound</c> — the bind read model reports success and the schedule,
+///   when requested, may be enabled.</item>
+///   <item><c>failed</c> / <c>rejected</c> — the bind read model reports a
+///   terminal unusable result; provision schedules for this ownership key are
+///   disabled.</item>
 /// </list>
 /// A validation failure (missing YAML / caller credential) is surfaced as an
 /// exception, not a status value, so the endpoint maps it to a 4xx.
@@ -19,10 +22,22 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 public static class ProvisionWorkflowBindingStatusNames
 {
     /// <summary>
-    /// The member + bind + schedule were accepted; the run is produced
-    /// asynchronously by the scheduled-dispatch (HTTP 202).
+    /// Legacy value retained for wire compatibility with older callers. New
+    /// provisioning responses use <see cref="Pending"/> for non-terminal binds.
     /// </summary>
     public const string Accepted = "accepted";
+
+    /// <summary>The bind was accepted but is not yet usable.</summary>
+    public const string Pending = "pending";
+
+    /// <summary>The binding run succeeded and the member is usable.</summary>
+    public const string Bound = "bound";
+
+    /// <summary>The binding run failed.</summary>
+    public const string Failed = "failed";
+
+    /// <summary>The binding run was rejected.</summary>
+    public const string Rejected = "rejected";
 }
 
 /// <summary>
@@ -77,20 +92,29 @@ public sealed record ProvisionWorkflowRequest(
 {
     /// <summary>
     /// Delay ahead of "now" for the synthesized one-shot fire when no recurring
-    /// <see cref="Cron"/> is supplied. Short enough to feel immediate, long enough
-    /// to let the bind publish the deterministic member service before the fire
-    /// (an early fire simply retries on the dispatch's recurrence).
+    /// <see cref="Cron"/> is supplied. Short enough to feel immediate after a
+    /// successful bind, while pending binds keep the synthesized schedule disabled.
     /// </summary>
     public const int DefaultOneShotDelaySeconds = 30;
 }
 
 /// <summary>
+/// Binding failure observed while provisioning.
+/// </summary>
+public sealed record ProvisionWorkflowBindingFailureResponse(
+    string Code,
+    string Message,
+    DateTimeOffset FailedAt);
+
+/// <summary>
 /// Result of a single-call provision. The bind and the run are both asynchronous,
 /// so no run id is returned at provision time; the run appears in the Observatory
-/// (<see cref="ObservatoryUrl"/>) as the <see cref="ScheduleId"/> fires.
-/// <see cref="BindingRunId"/> lets the caller poll the bind status if desired.
-/// <see cref="StudioUrl"/> is the editable Studio member page and is null until
-/// the member is assigned to a team (a freshly provisioned member has no team).
+/// (<see cref="ObservatoryUrl"/>) only after the binding read model reports a
+/// usable bind and the schedule is enabled. <see cref="BindingRunId"/> and
+/// <see cref="BindingRunStatus"/> let the caller follow the authoritative bind
+/// read model. <see cref="StudioUrl"/> is the editable Studio member page and is
+/// null until the member is assigned to a team (a freshly provisioned member has
+/// no team).
 /// </summary>
 public sealed record ProvisionWorkflowResponse(
     string MemberId,
@@ -99,6 +123,10 @@ public sealed record ProvisionWorkflowResponse(
     string ObservatoryUrl)
 {
     public string? BindingRunId { get; init; }
+
+    public string? BindingRunStatus { get; init; }
+
+    public ProvisionWorkflowBindingFailureResponse? BindingFailure { get; init; }
 
     public string? ScheduleId { get; init; }
 

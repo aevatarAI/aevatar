@@ -15,24 +15,21 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// One-call workflow provisioning facade (C1). Composes the existing member-first
 /// services — it reinvents nothing: create a member via
 /// <see cref="IStudioMemberService.CreateAsync"/>, bind the inline workflow YAML
-/// via <see cref="IStudioMemberService.BindAsync"/>, then create a
+/// via <see cref="IStudioMemberService.BindAsync"/>, then reconcile a
 /// <b>scheduled-dispatch</b> (via <see cref="IScheduledDispatchApplicationService"/>)
-/// that produces the run under the caller scope.
+/// under the caller scope.
 ///
 /// The flow is deliberately NON-BLOCKING. Binding a workflow member is an
 /// asynchronous pipeline that can take minutes, so a synchronous handler that
 /// polled the bind to completion would exhaust the gateway timeout and never
-/// invoke. Instead the run is produced by a scheduled-dispatch:
-/// <list type="bullet">
-///   <item>it fires after the bind publishes the deterministic
-///   <c>member-{memberId}</c> service (an early fire simply retries on the
-///   schedule's recurrence);</item>
-///   <item>because the schedule kind is <see cref="ScheduledDispatchScheduleKind.Workflow"/>,
-///   the dispatch projects a freshly re-minted caller NyxID token onto the run's
-///   <c>ChatRequestEvent</c> (<c>LlmControl.SenderNyxIdAccessToken</c>), so the
-///   run's LLM calls authenticate — the one thing a direct
-///   <c>IServiceInvocationPort.InvokeAsync</c> could not provide.</item>
-/// </list>
+/// invoke. The service performs one authoritative read-model observation: pending
+/// binds get disabled schedules, successful binds may get enabled schedules, and
+/// failed/rejected binds disable any existing deterministic provision schedule.
+/// Because the schedule kind is <see cref="ScheduledDispatchScheduleKind.Workflow"/>,
+/// enabled dispatches project a freshly re-minted caller NyxID token onto the
+/// run's <c>ChatRequestEvent</c> (<c>LlmControl.SenderNyxIdAccessToken</c>), so
+/// the run's LLM calls authenticate — the one thing a direct
+/// <c>IServiceInvocationPort.InvokeAsync</c> could not provide.
 ///
 /// The schedule carries EXACTLY ONE credential source, chosen by
 /// <see cref="BuildScheduleAuth"/> to stay valid for the schedule's whole
@@ -73,18 +70,21 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     private readonly IStudioMemberService _memberService;
     private readonly IScheduledDispatchApplicationService _scheduleService;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IStudioMemberBindingRunQueryPort _bindingRunQueryPort;
     private readonly TimeProvider _timeProvider;
 
     public StudioWorkflowProvisioningService(
         IStudioMemberService memberService,
         IScheduledDispatchApplicationService scheduleService,
         IWorkflowDefinitionParser workflowDefinitionParser,
+        IStudioMemberBindingRunQueryPort bindingRunQueryPort,
         TimeProvider? timeProvider = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
         _workflowDefinitionParser = workflowDefinitionParser
             ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _bindingRunQueryPort = bindingRunQueryPort ?? throw new ArgumentNullException(nameof(bindingRunQueryPort));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -130,7 +130,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         // 2. Bind the inline workflow YAML. WorkflowId is a stable identifier the
         //    bind contract requires; deriving it from the provision key keeps one
         //    logical workflow identity across re-binds of the same member.
-        //    The bind is asynchronous — we do NOT poll it to completion.
+        //    The bind is asynchronous: observe the run read model once, but do
+        //    NOT poll it to completion.
         var bindReceipt = await _memberService.BindAsync(
             normalizedScopeId,
             memberId,
@@ -139,6 +140,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                     WorkflowId: $"workflow-{provisionKey}",
                     WorkflowYamls: [workflowYaml])),
             ct);
+
+        var bindingRun = await TryObserveBindingRunAsync(
+            normalizedScopeId,
+            memberId,
+            bindReceipt.BindingRunId,
+            ct);
+        var provisioningBindingStatus = ResolveProvisioningBindingStatus(bindingRun);
 
         // 3. Create the scheduled-dispatch that produces the run. The Workflow kind
         //    is what flips on caller-token projection. A schedule is created when
@@ -152,9 +160,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //
         //    The schedule id is deterministic (provision-{publishedServiceId}) and
         //    the write goes through EnsureAsync, so a re-provision updates the one
-        //    existing schedule instead of stacking a new enabled schedule per retry.
+        //    existing schedule instead of stacking a new schedule per retry.
         string? scheduleId = null;
-        if (ShouldSchedule(request))
+        if (IsTerminalBindingFailure(provisioningBindingStatus))
+        {
+            await DisableProvisionScheduleIfPresentAsync(publishedServiceId, ct);
+        }
+        else if (ShouldSchedule(request))
         {
             var cronExpression = ResolveCron(request, out var timezone);
             var auth = BuildScheduleAuth(subjectRef);
@@ -165,16 +177,19 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 auth,
                 cronExpression,
                 timezone,
+                enabled: EnableScheduleForBindingStatus(provisioningBindingStatus),
                 ct);
         }
 
         return new ProvisionWorkflowResponse(
             MemberId: memberId,
             ScopeId: normalizedScopeId,
-            BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
+            BindingStatus: provisioningBindingStatus,
             ObservatoryUrl: ObservatoryPath)
         {
             BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
+            BindingRunStatus = bindingRun?.Status,
+            BindingFailure = MapBindingFailure(bindingRun?.Failure),
             ScheduleId = scheduleId,
             // The editable Studio page is team-scoped; a freshly provisioned
             // member has no team yet, so the link is only built once one exists.
@@ -236,6 +251,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         ScheduledServiceInvocationAuth auth,
         string cronExpression,
         string timezone,
+        bool enabled,
         CancellationToken ct)
     {
         const int maxGenerations = 50;
@@ -248,7 +264,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             {
                 var schedule = await _scheduleService.EnsureAsync(
                     BuildScheduleConfiguration(
-                        scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone),
+                        scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone, enabled),
                     ct);
                 return NormalizeOptional(schedule.ScheduleId);
             }
@@ -260,6 +276,42 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
         throw new InvalidOperationException(
             $"Provisioning for service '{publishedServiceId}' exhausted {maxGenerations} deleted schedule generations.");
+    }
+
+    private async Task DisableProvisionScheduleIfPresentAsync(
+        string publishedServiceId,
+        CancellationToken ct)
+    {
+        const int maxGenerations = 50;
+        for (var generation = 1; generation <= maxGenerations; generation++)
+        {
+            var scheduleId = generation == 1
+                ? $"provision-{publishedServiceId}"
+                : $"provision-{publishedServiceId}.{generation}";
+            try
+            {
+                var existing = await _scheduleService.GetAsync(scheduleId, ct);
+                if (existing is null)
+                    continue;
+
+                if (!MatchesProvisionSchedule(existing, publishedServiceId))
+                    continue;
+
+                if (existing.Schedule.Enabled)
+                {
+                    await _scheduleService.DisableAsync(
+                        scheduleId,
+                        "studio workflow binding did not reach a usable state",
+                        ct);
+                }
+
+                return;
+            }
+            catch (ScheduledDispatchNotFoundException)
+            {
+                // Tombstoned generation; advance to the next deterministic id.
+            }
+        }
     }
 
     /// <summary>
@@ -275,7 +327,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string prompt,
         ScheduledServiceInvocationAuth auth,
         string cronExpression,
-        string timezone) =>
+        string timezone,
+        bool enabled) =>
         new(
             // Deterministic id: EnsureAsync converges retries onto one schedule.
             // '.'/'-' stay inside the scheduled-dispatch id charset ([A-Za-z0-9._-]).
@@ -300,9 +353,56 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                     Auth: auth)),
             CronExpression: cronExpression,
             Timezone: timezone,
-            Enabled: true,
+            Enabled: enabled,
             Headers: new Dictionary<string, string>(StringComparer.Ordinal),
             ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
+
+    private async Task<StudioMemberBindingRunStatusResponse?> TryObserveBindingRunAsync(
+        string scopeId,
+        string memberId,
+        string bindingRunId,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await _bindingRunQueryPort.GetAsync(scopeId, memberId, bindingRunId, ct);
+        }
+        catch (StudioMemberBindingRunNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private static string ResolveProvisioningBindingStatus(StudioMemberBindingRunStatusResponse? bindingRun) =>
+        bindingRun?.Status switch
+        {
+            StudioMemberBindingRunStatusNames.Succeeded => ProvisionWorkflowBindingStatusNames.Bound,
+            StudioMemberBindingRunStatusNames.Failed => ProvisionWorkflowBindingStatusNames.Failed,
+            StudioMemberBindingRunStatusNames.Rejected => ProvisionWorkflowBindingStatusNames.Rejected,
+            _ => ProvisionWorkflowBindingStatusNames.Pending,
+        };
+
+    private static bool EnableScheduleForBindingStatus(string bindingStatus) =>
+        string.Equals(bindingStatus, ProvisionWorkflowBindingStatusNames.Bound, StringComparison.Ordinal);
+
+    private static bool IsTerminalBindingFailure(string bindingStatus) =>
+        string.Equals(bindingStatus, ProvisionWorkflowBindingStatusNames.Failed, StringComparison.Ordinal) ||
+        string.Equals(bindingStatus, ProvisionWorkflowBindingStatusNames.Rejected, StringComparison.Ordinal);
+
+    private static bool MatchesProvisionSchedule(ScheduledDispatchDetail detail, string publishedServiceId) =>
+        detail.Schedule.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation &&
+        detail.Schedule.ScheduleKind == ScheduledDispatchScheduleKind.Workflow &&
+        string.Equals(detail.Schedule.ServiceId, publishedServiceId, StringComparison.Ordinal) &&
+        string.Equals(detail.Schedule.ServiceEndpointId, WorkflowInvokeEndpointId, StringComparison.Ordinal);
+
+    private static ProvisionWorkflowBindingFailureResponse? MapBindingFailure(
+        StudioMemberBindingFailureResponse? failure) =>
+        failure == null
+            ? null
+            : new ProvisionWorkflowBindingFailureResponse(
+                failure.Code,
+                failure.Message,
+                failure.FailedAt);
 
     /// <summary>
     /// A schedule (and therefore a run) is created when there is something to
@@ -315,10 +415,9 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// <summary>
     /// Resolves the cron expression. A caller-supplied recurring cron is a
     /// monitor; otherwise a one-shot cron pinned to a near-future minute is
-    /// synthesized so a single demo run fires shortly after the bind. The minute
-    /// granularity matches the standard 5-field cron the dispatch validator
-    /// accepts; the dispatch's recurrence harmlessly re-fires if the bind has not
-    /// completed by the first tick.
+    /// synthesized so a single demo run can fire shortly after a successful bind.
+    /// The minute granularity matches the standard 5-field cron the dispatch
+    /// validator accepts; pending binds leave the schedule disabled.
     /// </summary>
     private string ResolveCron(ProvisionWorkflowRequest request, out string timezone)
     {
