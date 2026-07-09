@@ -16,6 +16,27 @@ public sealed class WorkflowCompatibilityProfileTests
         _profile.Version.Should().Be("aevatar.workflow.v1");
     }
 
+    [Fact]
+    public void AevatarV1_ShouldOwnCanonicalRootFieldOrder()
+    {
+        _profile.RootFieldOrder.Should().Equal("name", "description", "configuration", "roles", "steps");
+        _profile.AllowedRootFields.Should().BeEquivalentTo(_profile.RootFieldOrder);
+        _profile.FormatRootFields().Should().Be("name, description, configuration, roles, steps");
+    }
+
+    [Theory]
+    [InlineData("version")]
+    [InlineData("inputs")]
+    [InlineData("outputs")]
+    [InlineData("triggers")]
+    [InlineData("on")]
+    [InlineData("env")]
+    [InlineData("jobs")]
+    public void AevatarV1_ShouldRejectOtherDialectRootFields(string field)
+    {
+        _profile.AllowedRootFields.Should().NotContain(field);
+    }
+
     [Theory]
     [InlineData("llm", "llm_call")]
     [InlineData("chat", "llm_call")]
