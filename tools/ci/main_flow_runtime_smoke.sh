@@ -51,6 +51,8 @@ start_host() {
   (
     ASPNETCORE_ENVIRONMENT=Development \
     ASPNETCORE_URLS="http://127.0.0.1:${HTTP_PORT}" \
+    AEVATAR_NYXID_AUTHORITY="http://127.0.0.1:${HTTP_PORT}" \
+    AEVATAR_OAUTH_REDIRECT_BASE_URL="http://127.0.0.1:${HTTP_PORT}" \
     Aevatar__Authentication__Enabled=false \
     AEVATAR_ActorRuntime__Provider=Orleans \
     AEVATAR_ActorRuntime__OrleansStreamBackend=InMemory \
