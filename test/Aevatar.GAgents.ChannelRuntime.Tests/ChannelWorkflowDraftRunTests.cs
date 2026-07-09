@@ -250,7 +250,7 @@ public sealed class ChannelWorkflowDraftRunTests
         workflowRequest.InputParts[0].Kind.Should().Be(WorkflowChatInputPartKind.Image);
         workflowRequest.InputParts[0].DataBase64.Should().BeNull();
         workflowRequest.InputParts[0].FileRef.Should().NotBeNull();
-        workflowRequest.InputParts[0].FileRef!.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        workflowRequest.InputParts[0].FileRef!.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
         workflowRequest.InputParts[0].FileRef!.SourceMessageId.Should().Be("om_123");
         workflowRequest.InputParts[0].FileRef!.SourceResourceKey.Should().Be("img_v3_1");
         workflowRequest.InputParts[0].FileRef!.MediaType.Should().Be("image/png");
@@ -1004,7 +1004,7 @@ public sealed class ChannelWorkflowDraftRunTests
         RecordingActorDispatchPort dispatch,
         IWorkflowChatRunInteractionPort workflowInteractionPort,
         ILarkNyxClient? larkClient = null,
-        IWorkflowFileIngressPort? fileIngressPort = null,
+        IFileArtifactIngressPort? fileIngressPort = null,
         ILarkOutboundClientFactory? outboundClientFactory = null) =>
         new(
             new RecordingActorRuntime(),
@@ -1116,18 +1116,18 @@ public sealed class ChannelWorkflowDraftRunTests
         }
     }
 
-    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    private sealed class RecordingWorkflowFileIngressPort : IFileArtifactIngressPort
     {
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
             var index = Requests.Count;
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
             {
                 FileId = $"wf-file-{index}",
                 ArtifactId = $"workflow-file://wf-file-{index}",

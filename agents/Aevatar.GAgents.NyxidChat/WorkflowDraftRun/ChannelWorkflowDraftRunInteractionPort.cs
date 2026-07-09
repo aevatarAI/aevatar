@@ -18,7 +18,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChannelWorkflowDraftRunInteractionPort> _logger;
     private readonly ILarkNyxClient? _larkClient;
-    private readonly IWorkflowFileIngressPort? _fileIngressPort;
+    private readonly IFileArtifactIngressPort? _fileIngressPort;
     private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
 
     public ChannelWorkflowDraftRunInteractionPort(
@@ -28,7 +28,7 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         IWorkflowChatRunInteractionPort? workflowInteractionPort = null,
         TimeProvider? timeProvider = null,
         ILarkNyxClient? larkClient = null,
-        IWorkflowFileIngressPort? fileIngressPort = null,
+        IFileArtifactIngressPort? fileIngressPort = null,
         ILarkOutboundClientFactory? larkOutboundClientFactory = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
@@ -287,13 +287,13 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
             if (!download.Succeeded || download.Content is not { Length: > 0 })
                 throw new WorkflowAttachmentIngressException("download_failed");
 
-            WorkflowFileIngressResult ingress;
+            FileArtifactIngressResult ingress;
             try
             {
                 ingress = await _fileIngressPort.IngestAsync(
-                        new WorkflowFileIngressRequest(
+                        new FileArtifactIngressRequest(
                             download.Content,
-                            WorkflowFileSourceKind.ConnectedServiceResource,
+                            FileArtifactSourceKind.ConnectedServiceResource,
                             SourceMessageId: messageId,
                             SourceResourceKey: resourceKey,
                             FileName: NormalizeOptional(download.FileName) ?? NormalizeOptional(attachment.Name),

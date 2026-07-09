@@ -52,8 +52,8 @@ using UglyToad.PdfPig.Core;
 using UglyToad.PdfPig.Fonts.Standard14Fonts;
 using UglyToad.PdfPig.Content;
 using UglyToad.PdfPig.Writer;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
 using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
 using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
@@ -83,10 +83,10 @@ public sealed class WorkflowInfrastructureCoverageTests
         options.OutputDirectory.Should().Be("/tmp/workflow-reports");
         provider.GetRequiredService<IWorkflowRunReportExportPort>()
             .Should().BeOfType<FileSystemWorkflowRunReportExporter>();
-        provider.GetRequiredService<IWorkflowFileIngressPort>()
-            .Should().BeOfType<FileSystemWorkflowFileIngressPort>();
-        provider.GetRequiredService<IWorkflowFileArtifactReadPort>()
-            .Should().BeSameAs(provider.GetRequiredService<IWorkflowFileIngressPort>());
+        provider.GetRequiredService<IFileArtifactIngressPort>()
+            .Should().BeOfType<FileSystemFileArtifactPort>();
+        provider.GetRequiredService<IFileArtifactReadPort>()
+            .Should().BeSameAs(provider.GetRequiredService<IFileArtifactIngressPort>());
         var toolNames = new List<string>();
         foreach (var toolSource in provider.GetServices<IWorkflowToolSource>())
         {
@@ -278,10 +278,10 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ServiceType == typeof(IWorkflowRunReportExportPort) &&
             x.ImplementationType == typeof(FileSystemWorkflowRunReportExporter));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowFileIngressPort) &&
+            x.ServiceType == typeof(IFileArtifactIngressPort) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowFileArtifactReadPort) &&
+            x.ServiceType == typeof(IFileArtifactReadPort) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
             x.ServiceType == typeof(WorkflowWebhookIngressRequestBuilder));
@@ -343,21 +343,21 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task FileSystemWorkflowFileIngressPort_ShouldStoreBytesAndReturnDescriptor()
+    public async Task FileSystemFileArtifactPort_ShouldStoreBytesAndReturnDescriptor()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-ingress-tests", Guid.NewGuid().ToString("N"));
         try
         {
-            var port = new FileSystemWorkflowFileIngressPort(
-                Options.Create(new FileSystemWorkflowFileIngressOptions
+            var port = new FileSystemFileArtifactPort(
+                Options.Create(new FileSystemFileArtifactOptions
                 {
                     RootDirectory = root,
                     TimeToLive = TimeSpan.FromMinutes(30),
                 }));
 
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("hello"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "hello.png",
                 MediaType: "image/png",
                 OwnerRunId: "run-1",
@@ -366,7 +366,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             var descriptor = result.FileRef;
             descriptor.FileId.Should().StartWith("wf-file-");
             descriptor.ArtifactId.Should().Be($"workflow-file://{descriptor.FileId}");
-            descriptor.SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.ChatInput);
+            descriptor.SourceKind.Should().Be(ApplicationFileArtifactSourceKind.ChatInput);
             descriptor.FileName.Should().Be("hello.png");
             descriptor.MediaType.Should().Be("image/png");
             descriptor.SizeBytes.Should().Be(5);
@@ -389,34 +389,34 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task FileSystemWorkflowFileIngressPort_ShouldDescribeAndOpenStoredContent()
+    public async Task FileSystemFileArtifactPort_ShouldDescribeAndOpenStoredContent()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-read-tests", Guid.NewGuid().ToString("N"));
         try
         {
-            var port = new FileSystemWorkflowFileIngressPort(
-                Options.Create(new FileSystemWorkflowFileIngressOptions
+            var port = new FileSystemFileArtifactPort(
+                Options.Create(new FileSystemFileArtifactOptions
                 {
                     RootDirectory = root,
                     TimeToLive = TimeSpan.FromMinutes(30),
                 }));
 
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("stored document"),
-                ApplicationWorkflowFileSourceKind.ConnectedServiceResource,
+                ApplicationFileArtifactSourceKind.ConnectedServiceResource,
                 SourceMessageId: "om_123",
                 SourceResourceKey: "file_key_123",
                 FileName: "invoice.pdf",
                 MediaType: "application/pdf"));
 
-            var readPort = (IWorkflowFileArtifactReadPort)port;
-            var secondPort = new FileSystemWorkflowFileIngressPort(
-                Options.Create(new FileSystemWorkflowFileIngressOptions
+            var readPort = (IFileArtifactReadPort)port;
+            var secondPort = new FileSystemFileArtifactPort(
+                Options.Create(new FileSystemFileArtifactOptions
                 {
                     RootDirectory = root,
                     TimeToLive = TimeSpan.FromMinutes(30),
                 }));
-            var descriptor = await ((IWorkflowFileArtifactReadPort)secondPort).DescribeAsync(new ApplicationWorkflowFileRef
+            var descriptor = await ((IFileArtifactReadPort)secondPort).DescribeAsync(new ApplicationFileArtifactRef
             {
                 ArtifactId = result.FileRef.ArtifactId,
                 Sha256 = result.FileRef.Sha256,
@@ -441,29 +441,29 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task FileSystemWorkflowFileIngressPort_ShouldBindOwnerForOwnerlessArtifact()
+    public async Task FileSystemFileArtifactPort_ShouldBindOwnerForOwnerlessArtifact()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-owner-tests", Guid.NewGuid().ToString("N"));
         try
         {
-            var port = new FileSystemWorkflowFileIngressPort(
-                Options.Create(new FileSystemWorkflowFileIngressOptions
+            var port = new FileSystemFileArtifactPort(
+                Options.Create(new FileSystemFileArtifactOptions
                 {
                     RootDirectory = root,
                     TimeToLive = TimeSpan.FromMinutes(30),
                 }));
 
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("stored document"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain"));
             result.FileRef.OwnerRunId.Should().BeNull();
 
-            var ownershipPort = (IWorkflowFileArtifactOwnershipPort)port;
+            var ownershipPort = (IFileArtifactOwnershipPort)port;
             await ownershipPort.BindOwnerAsync(result.FileRef, "run-1", "scope-1");
 
-            var readPort = (IWorkflowFileArtifactReadPort)port;
+            var readPort = (IFileArtifactReadPort)port;
             var bound = await readPort.DescribeAsync(result.FileRef with
             {
                 OwnerRunId = "run-1",
@@ -484,24 +484,24 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task FileSystemWorkflowFileIngressPort_ShouldRejectMismatchedOrExpiredRefs()
+    public async Task FileSystemFileArtifactPort_ShouldRejectMismatchedOrExpiredRefs()
     {
         var root = Path.Combine(Path.GetTempPath(), "aevatar-workflow-file-reject-tests", Guid.NewGuid().ToString("N"));
         try
         {
-            var port = new FileSystemWorkflowFileIngressPort(
-                Options.Create(new FileSystemWorkflowFileIngressOptions
+            var port = new FileSystemFileArtifactPort(
+                Options.Create(new FileSystemFileArtifactOptions
                 {
                     RootDirectory = root,
                     TimeToLive = TimeSpan.FromMinutes(30),
                 }));
 
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("sealed"),
-                ApplicationWorkflowFileSourceKind.ChatInput));
-            var readPort = (IWorkflowFileArtifactReadPort)port;
+                ApplicationFileArtifactSourceKind.ChatInput));
+            var readPort = (IFileArtifactReadPort)port;
 
-            await readPort.Invoking(x => x.DescribeAsync(new ApplicationWorkflowFileRef
+            await readPort.Invoking(x => x.DescribeAsync(new ApplicationFileArtifactRef
                 {
                     FileId = result.FileRef.FileId,
                     ArtifactId = "workflow-file://wf-file-other",
@@ -509,32 +509,32 @@ public sealed class WorkflowInfrastructureCoverageTests
                 .Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("*does not match*");
 
-            await readPort.Invoking(x => x.DescribeAsync(new ApplicationWorkflowFileRef
+            await readPort.Invoking(x => x.DescribeAsync(new ApplicationFileArtifactRef
                 {
                     FileId = "../wf-file-escape",
                 }).AsTask())
                 .Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("*invalid*");
 
-            var expired = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var expired = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("old"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 ExpiresAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds()));
 
             await readPort.Invoking(x => x.OpenReadAsync(expired.FileRef).AsTask())
                 .Should().ThrowAsync<InvalidOperationException>()
                 .WithMessage("*expired*");
 
-            var missing = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var missing = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("missing"),
-                ApplicationWorkflowFileSourceKind.ChatInput));
+                ApplicationFileArtifactSourceKind.ChatInput));
             File.Delete(Path.Combine(root, missing.FileRef.FileId!, "content.bin"));
             await readPort.Invoking(x => x.OpenReadAsync(missing.FileRef).AsTask())
                 .Should().ThrowAsync<FileNotFoundException>();
 
-            var tampered = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var tampered = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("original"),
-                ApplicationWorkflowFileSourceKind.ChatInput));
+                ApplicationFileArtifactSourceKind.ChatInput));
             await File.WriteAllTextAsync(Path.Combine(root, tampered.FileRef.FileId!, "content.bin"), "mutated!");
             await readPort.Invoking(x => x.OpenReadAsync(tampered.FileRef).AsTask())
                 .Should().ThrowAsync<InvalidOperationException>()
@@ -554,9 +554,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("invoice total: 42"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.txt",
                 MediaType: "text/plain; charset=utf-8"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -596,9 +596,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("single input file"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "single.txt",
                 MediaType: "text/plain"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -631,14 +631,14 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var explicitFile = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var explicitFile = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("explicit file"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "explicit.txt",
                 MediaType: "text/plain"));
-            var inputFile = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var inputFile = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("input file"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "input.txt",
                 MediaType: "text/plain"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -700,14 +700,14 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var first = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var first = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("first"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "first.txt",
                 MediaType: "text/plain"));
-            var second = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var second = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("second"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "second.txt",
                 MediaType: "text/plain"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -740,9 +740,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 Encoding.UTF8.GetBytes("abcdef"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "long.txt",
                 MediaType: "text/plain"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -776,9 +776,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         {
             var port = CreateFileArtifactPort(root);
             var pdfBytes = BuildSimplePdf("pdf invoice total 42");
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 pdfBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.pdf",
                 MediaType: "application/pdf"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -814,9 +814,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         {
             var port = CreateFileArtifactPort(root);
             var docxBytes = BuildSimpleDocx("invoice total 42", "approved by finance");
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 docxBytes,
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "invoice.docx",
                 MediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -854,9 +854,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 BuildSimpleDocx("abcdef"),
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "long.docx",
                 MediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -889,9 +889,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 new byte[] { 1, 2, 3 },
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "image.webp",
                 MediaType: "image/webp"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -951,9 +951,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             var port = CreateFileArtifactPort(root);
-            var result = await port.IngestAsync(new WorkflowFileIngressRequest(
+            var result = await port.IngestAsync(new FileArtifactIngressRequest(
                 new byte[] { 0xC3, 0x28 },
-                ApplicationWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.ChatInput,
                 FileName: "bad.txt",
                 MediaType: "text/plain"));
             var tool = await GetDocumentExtractToolAsync(port);
@@ -1288,21 +1288,21 @@ public sealed class WorkflowInfrastructureCoverageTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
-    private static FileSystemWorkflowFileIngressPort CreateFileArtifactPort(string root) =>
-        new(Options.Create(new FileSystemWorkflowFileIngressOptions
+    private static FileSystemFileArtifactPort CreateFileArtifactPort(string root) =>
+        new(Options.Create(new FileSystemFileArtifactOptions
         {
             RootDirectory = root,
             TimeToLive = TimeSpan.FromMinutes(30),
         }));
 
-    private static async Task<IWorkflowTool> GetDocumentExtractToolAsync(IWorkflowFileArtifactReadPort readPort)
+    private static async Task<IWorkflowTool> GetDocumentExtractToolAsync(IFileArtifactReadPort readPort)
     {
         var source = new WorkflowDocumentExtractToolSource(readPort);
         var tools = await source.GetToolsAsync();
         return tools.Should().ContainSingle(x => x.Name == "document_extract").Subject;
     }
 
-    private static string BuildDocumentExtractArguments(ApplicationWorkflowFileRef fileRef, int? maxChars = null)
+    private static string BuildDocumentExtractArguments(ApplicationFileArtifactRef fileRef, int? maxChars = null)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -1327,18 +1327,18 @@ public sealed class WorkflowInfrastructureCoverageTests
         return JsonSerializer.Serialize(payload);
     }
 
-    private static ProtoWorkflowFileRef ToProtoWorkflowFileRef(ApplicationWorkflowFileRef source) =>
+    private static ProtoWorkflowFileRef ToProtoWorkflowFileRef(ApplicationFileArtifactRef source) =>
         new()
         {
             FileId = source.FileId ?? string.Empty,
             ArtifactId = source.ArtifactId ?? string.Empty,
             SourceKind = source.SourceKind switch
             {
-                ApplicationWorkflowFileSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
-                ApplicationWorkflowFileSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
-                ApplicationWorkflowFileSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
-                ApplicationWorkflowFileSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
-                ApplicationWorkflowFileSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
+                ApplicationFileArtifactSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
+                ApplicationFileArtifactSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
+                ApplicationFileArtifactSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
+                ApplicationFileArtifactSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
+                ApplicationFileArtifactSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
                 _ => ProtoWorkflowFileSourceKind.Unspecified,
             },
             SourceMessageId = source.SourceMessageId ?? string.Empty,

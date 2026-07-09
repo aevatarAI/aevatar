@@ -7,8 +7,8 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -19,7 +19,7 @@ public sealed class ChatFormRunRequestParserTests
     {
         var services = new ServiceCollection();
         services.AddOptions();
-        services.AddSingleton<IWorkflowFileIngressPort>(new RecordingWorkflowFileIngressPort());
+        services.AddSingleton<IFileArtifactIngressPort>(new RecordingWorkflowFileIngressPort());
         services.AddSingleton<WorkflowMultipartFileInputParser>();
         services.AddSingleton<WorkflowMultipartChatRequestParser>();
 
@@ -54,7 +54,7 @@ public sealed class ChatFormRunRequestParserTests
         ingressPort.Requests.Should().ContainSingle();
         var ingressRequest = ingressPort.Requests[0];
         ingressRequest.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("hello"));
-        ingressRequest.SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.FormUpload);
+        ingressRequest.SourceKind.Should().Be(ApplicationFileArtifactSourceKind.FormUpload);
         ingressRequest.FileName.Should().Be("cat.png");
         ingressRequest.MediaType.Should().Be("image/png");
         ingressRequest.OwnerScopeId.Should().Be("scope-1");
@@ -462,7 +462,7 @@ public sealed class ChatFormRunRequestParserTests
     }
 
     private static WorkflowMultipartChatRequestParser CreateParser(
-        IWorkflowFileIngressPort ingressPort,
+        IFileArtifactIngressPort ingressPort,
         WorkflowMultipartFileIngressOptions? options = null,
         WorkflowFormFileIngressOptions? formOptions = null) =>
         new(
@@ -511,14 +511,14 @@ public sealed class ChatFormRunRequestParserTests
         };
     }
 
-    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    private sealed class RecordingWorkflowFileIngressPort : IFileArtifactIngressPort
     {
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
         public int? FailOnRequestNumber { get; init; }
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
@@ -526,7 +526,7 @@ public sealed class ChatFormRunRequestParserTests
             if (FailOnRequestNumber == index)
                 throw new IOException("file ingress failed");
 
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new ApplicationFileArtifactRef
             {
                 FileId = $"file-{index}",
                 ArtifactId = $"workflow-file://file-{index}",

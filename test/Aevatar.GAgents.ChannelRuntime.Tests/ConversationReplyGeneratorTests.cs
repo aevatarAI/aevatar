@@ -20,7 +20,7 @@ using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 
@@ -387,7 +387,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithOversizedLarkImageAttachment_ReturnsControlledVisibleError()
+    public async Task GenerateReplyAsync_WithOversizedLarkImageAttachment_ContinuesWithAttachmentVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, [1], "image/png", "large.png"));
@@ -407,23 +407,25 @@ public sealed class ConversationReplyGeneratorTests
             "img_large",
             token: "user-token");
         activity.Content.Attachments[0].SizeBytes = 10 * 1024 * 1024 + 1;
-        var streamingSink = new RecordingStreamingSink();
-
         var reply = await generator.GenerateReplyAsync(
             activity,
             new Dictionary<string, string>(),
-            streamingSink,
+            streamingSink: null,
             CancellationToken.None);
 
-        reply.Text.Should().Contain("attachment is too large");
-        reply.Text.Should().Contain("cannot process");
-        streamingSink.Emissions.Should().ContainSingle().Which.Should().Be(reply.Text);
-        providerFactory.Requests.Should().BeEmpty();
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().ContainSingle();
+        var request = providerFactory.Requests[0];
+        request.Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
+        request.Messages.Single(message => message.Role == "user").ContentParts.Should()
+            .ContainSingle(part => part.Kind == ContentPartKind.Text && part.Text == "describe it");
         lark.Downloads.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithUnsupportedLarkImageDownload_ReturnsControlledVisibleError()
+    public async Task GenerateReplyAsync_WithUnsupportedLarkImageDownload_ContinuesWithAttachmentVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/tiff", "scan.tiff"));
@@ -448,14 +450,16 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Text.Should().Contain("attachment format is not supported");
-        reply.Text.Should().Contain("cannot process");
-        providerFactory.Requests.Should().BeEmpty();
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
         lark.Downloads.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenFileIngressRejectsOversizedAttachment_ReturnsControlledVisibleError()
+    public async Task GenerateReplyAsync_WhenFileIngressRejectsAttachment_ContinuesWithAttachmentVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/png", "large.png"));
@@ -467,7 +471,7 @@ public sealed class ConversationReplyGeneratorTests
             providerFactory,
             larkClient: lark,
             fileIngressPort: new RejectingWorkflowFileIngressPort(
-                WorkflowFileIngressPolicyException.TooLarge("large.png", 10 * 1024 * 1024 + 1)),
+                new InvalidOperationException("ingress policy rejected attachment")),
             fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
 
         var reply = await generator.GenerateReplyAsync(
@@ -481,42 +485,11 @@ public sealed class ConversationReplyGeneratorTests
             streamingSink: null,
             CancellationToken.None);
 
-        reply.Text.Should().Contain("cannot process");
-        reply.Text.Should().Contain("attachment is too large");
-        providerFactory.Requests.Should().BeEmpty();
-        lark.Downloads.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task GenerateReplyAsync_WhenFileIngressRejectsUnsupportedAttachment_ReturnsControlledVisibleError()
-    {
-        var lark = new RecordingLarkNyxClient(
-            new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/png", "scan.png"));
-        var providerFactory = new RecordingProviderFactory
-        {
-            Capabilities = MultimodalCapabilities,
-        };
-        var generator = new NyxIdConversationReplyGenerator(
-            providerFactory,
-            larkClient: lark,
-            fileIngressPort: new RejectingWorkflowFileIngressPort(
-                WorkflowFileIngressPolicyException.Unsupported("scan.png", "image/x-private")),
-            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
-
-        var reply = await generator.GenerateReplyAsync(
-            CreateLarkImageActivity(
-                "msg-image-ingress-unsupported",
-                "describe it",
-                "om_ingress_unsupported",
-                "img_ingress_unsupported",
-                token: "user-token"),
-            new Dictionary<string, string>(),
-            streamingSink: null,
-            CancellationToken.None);
-
-        reply.Text.Should().Contain("cannot process");
-        reply.Text.Should().Contain("attachment format is not supported");
-        providerFactory.Requests.Should().BeEmpty();
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
         lark.Downloads.Should().ContainSingle();
     }
 
@@ -589,9 +562,9 @@ public sealed class ConversationReplyGeneratorTests
             "om_recent",
             "img_recent",
             LarkMessageResourceKind.Image));
-        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<WorkflowFileIngressRequest>(
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<FileArtifactIngressRequest>(
             request => request.Content.ToArray().SequenceEqual(imageBytes) &&
-                       request.SourceKind == WorkflowFileSourceKind.ChatInput &&
+                       request.SourceKind == FileArtifactSourceKind.ChatInput &&
                        request.SourceMessageId == "om_recent" &&
                        request.SourceResourceKey == "img_recent" &&
                        request.FileName == "recent.jpg" &&
@@ -669,7 +642,7 @@ public sealed class ConversationReplyGeneratorTests
             "img_recent",
             LarkMessageResourceKind.Image));
         defaultLark.Downloads.Should().BeEmpty();
-        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<WorkflowFileIngressRequest>(
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<FileArtifactIngressRequest>(
             request => request.Content.ToArray().SequenceEqual(imageBytes) &&
                        request.SourceMessageId == "om_recent" &&
                        request.SourceResourceKey == "img_recent");
@@ -2834,21 +2807,21 @@ public sealed class ConversationReplyGeneratorTests
             throw new NotSupportedException();
     }
 
-    private sealed class RecordingWorkflowFileArtifactPort : IWorkflowFileIngressPort, IWorkflowFileArtifactReadPort
+    private sealed class RecordingWorkflowFileArtifactPort : IFileArtifactIngressPort, IFileArtifactReadPort
     {
-        private readonly Dictionary<string, (ApplicationWorkflowFileRef FileRef, byte[] Content)> _files = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (ApplicationFileArtifactRef FileRef, byte[] Content)> _files = new(StringComparer.Ordinal);
         private int _nextId;
 
-        public List<WorkflowFileIngressRequest> IngressRequests { get; } = [];
+        public List<FileArtifactIngressRequest> IngressRequests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             IngressRequests.Add(request);
             var content = request.Content.ToArray();
             var fileId = $"wf-file-{++_nextId}";
-            var fileRef = new ApplicationWorkflowFileRef
+            var fileRef = new ApplicationFileArtifactRef
             {
                 FileId = fileId,
                 ArtifactId = $"workflow-file://{fileId}",
@@ -2865,28 +2838,28 @@ public sealed class ConversationReplyGeneratorTests
                 OwnerScopeId = request.OwnerScopeId,
             };
             _files[fileRef.ArtifactId!] = (fileRef, content);
-            return ValueTask.FromResult(new WorkflowFileIngressResult(fileRef));
+            return ValueTask.FromResult(new FileArtifactIngressResult(fileRef));
         }
 
-        public ValueTask<ApplicationWorkflowFileRef> DescribeAsync(
-            ApplicationWorkflowFileRef fileRef,
+        public ValueTask<ApplicationFileArtifactRef> DescribeAsync(
+            ApplicationFileArtifactRef fileRef,
             CancellationToken cancellationToken = default)
         {
             var stored = Resolve(fileRef);
             return ValueTask.FromResult(stored.FileRef);
         }
 
-        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
-            ApplicationWorkflowFileRef fileRef,
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            ApplicationFileArtifactRef fileRef,
             CancellationToken cancellationToken = default)
         {
             var stored = Resolve(fileRef);
-            return ValueTask.FromResult(new WorkflowFileArtifactContent(
+            return ValueTask.FromResult(new FileArtifactContent(
                 stored.FileRef,
                 new MemoryStream(stored.Content, writable: false)));
         }
 
-        private (ApplicationWorkflowFileRef FileRef, byte[] Content) Resolve(ApplicationWorkflowFileRef fileRef)
+        private (ApplicationFileArtifactRef FileRef, byte[] Content) Resolve(ApplicationFileArtifactRef fileRef)
         {
             var key = fileRef.ArtifactId ?? $"workflow-file://{fileRef.FileId}";
             if (!_files.TryGetValue(key, out var stored))
@@ -2895,12 +2868,12 @@ public sealed class ConversationReplyGeneratorTests
         }
     }
 
-    private sealed class RejectingWorkflowFileIngressPort(Exception exception) : IWorkflowFileIngressPort
+    private sealed class RejectingWorkflowFileIngressPort(Exception exception) : IFileArtifactIngressPort
     {
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default) =>
-            ValueTask.FromException<WorkflowFileIngressResult>(exception);
+            ValueTask.FromException<FileArtifactIngressResult>(exception);
     }
 
     private sealed class SequentialResponseProviderFactory(params string[] responses) : ILLMProviderFactory, ILLMProvider

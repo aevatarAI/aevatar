@@ -563,11 +563,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     Uri = "artifact-1",
                     MediaType = "application/pdf",
                     Name = "invoice.pdf",
-                    FileRef = new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef
+                    FileRef = new Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef
                     {
                         FileId = "file-1",
                         ArtifactId = "artifact-1",
-                        SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource,
+                        SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind.ConnectedServiceResource,
                         SourceMessageId = "om_1",
                         SourceResourceKey = "file_key_1",
                         FileName = "invoice.pdf",

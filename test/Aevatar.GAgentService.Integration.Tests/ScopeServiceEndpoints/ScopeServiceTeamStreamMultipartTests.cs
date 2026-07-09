@@ -108,7 +108,7 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
         host.TeamEntryMemberResolver.Calls.Should().ContainSingle().Which.Should().Be(("scope-a", "team-a", "chat"));
         host.WorkflowFileIngressPort.Requests.Should().ContainSingle();
         var ingressRequest = host.WorkflowFileIngressPort.Requests[0];
-        ingressRequest.SourceKind.Should().Be(WorkflowFileSourceKind.FormUpload);
+        ingressRequest.SourceKind.Should().Be(FileArtifactSourceKind.FormUpload);
         ingressRequest.OwnerScopeId.Should().Be("scope-a");
         ingressRequest.FileName.Should().Be("cat.png");
         ingressRequest.MediaType.Should().Be("image/png");

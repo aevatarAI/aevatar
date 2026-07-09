@@ -37,7 +37,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly INyxIdCapabilityBroker? _capabilityBroker;
     private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
-    private readonly IWorkflowFileArtifactReadPort? _fileArtifactReadPort;
+    private readonly IFileArtifactReadPort? _fileArtifactReadPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -52,7 +52,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         TimeProvider? timeProvider = null,
         INyxIdCapabilityBroker? capabilityBroker = null,
         IBindingRevocationReconciler? bindingRevocationReconciler = null,
-        IWorkflowFileArtifactReadPort? fileArtifactReadPort = null)
+        IFileArtifactReadPort? fileArtifactReadPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -522,9 +522,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             RunId = workItem.RunId,
             CorrelationId = workItem.Request.CorrelationId,
             TargetActorId = workItem.Request.TargetActorId,
-            ErrorCode = ex is NyxIdConversationReplyGenerator.AttachmentPolicyException
-                ? NyxIdConversationReplyGenerator.AttachmentPolicyErrorCode
-                : "llm_reply_failed",
+            ErrorCode = "llm_reply_failed",
             ErrorSummary = ex.Message,
             FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             Attempt = workItem.Attempt,

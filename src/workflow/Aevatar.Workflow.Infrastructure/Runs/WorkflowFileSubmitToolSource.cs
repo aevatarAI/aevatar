@@ -6,11 +6,11 @@ using Aevatar.Workflow.Core.Modules;
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
 public sealed class WorkflowFileSubmitToolSource(
-    IWorkflowFileArtifactReadPort fileArtifacts,
+    IFileArtifactReadPort fileArtifacts,
     IWorkflowFileMultipartUploadPolicyResolver policyResolver,
     IWorkflowFileMultipartUploadPort uploadPort) : IWorkflowToolSource
 {
-    private readonly IWorkflowFileArtifactReadPort _fileArtifacts =
+    private readonly IFileArtifactReadPort _fileArtifacts =
         fileArtifacts ?? throw new ArgumentNullException(nameof(fileArtifacts));
     private readonly IWorkflowFileMultipartUploadPolicyResolver _policyResolver =
         policyResolver ?? throw new ArgumentNullException(nameof(policyResolver));
@@ -22,7 +22,7 @@ public sealed class WorkflowFileSubmitToolSource(
             [new WorkflowFileSubmitTool(_fileArtifacts, _policyResolver, _uploadPort)]);
 
     private sealed class WorkflowFileSubmitTool(
-        IWorkflowFileArtifactReadPort fileArtifacts,
+        IFileArtifactReadPort fileArtifacts,
         IWorkflowFileMultipartUploadPolicyResolver policyResolver,
         IWorkflowFileMultipartUploadPort uploadPort) : IWorkflowTool
     {
@@ -35,7 +35,7 @@ public sealed class WorkflowFileSubmitToolSource(
             PropertyNameCaseInsensitive = true,
         };
 
-        private readonly IWorkflowFileArtifactReadPort _fileArtifacts = fileArtifacts;
+        private readonly IFileArtifactReadPort _fileArtifacts = fileArtifacts;
         private readonly IWorkflowFileMultipartUploadPolicyResolver _policyResolver = policyResolver;
         private readonly IWorkflowFileMultipartUploadPort _uploadPort = uploadPort;
 
@@ -72,7 +72,7 @@ public sealed class WorkflowFileSubmitToolSource(
             if (token == null)
                 return Error(destination, "missing_bearer", "workflow_file_submit requires a workflow caller bearer token.");
 
-            WorkflowFileRef descriptor;
+            FileArtifactRef descriptor;
             try
             {
                 descriptor = await _fileArtifacts.DescribeAsync(arguments.FileRef, ct).ConfigureAwait(false);
@@ -129,7 +129,7 @@ public sealed class WorkflowFileSubmitToolSource(
                 return Error(invalidDestination, policyValidation.Value.Error, policyValidation.Value.Detail);
             }
 
-            WorkflowFileArtifactContent artifact;
+            FileArtifactContent artifact;
             try
             {
                 artifact = await _fileArtifacts.OpenReadAsync(arguments.FileRef, ct).ConfigureAwait(false);
@@ -218,7 +218,7 @@ public sealed class WorkflowFileSubmitToolSource(
         }
 
         private static WorkflowToolExecutionResult? ValidateRequestedFileRef(
-            WorkflowFileRef fileRef,
+            FileArtifactRef fileRef,
             WorkflowToolExecutionRequest request,
             CandidateDestination destination)
         {
@@ -244,7 +244,7 @@ public sealed class WorkflowFileSubmitToolSource(
         }
 
         private static WorkflowToolExecutionResult? ValidateDescriptorBeforePolicy(
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             WorkflowToolExecutionRequest request,
             CandidateDestination destination)
         {
@@ -266,7 +266,7 @@ public sealed class WorkflowFileSubmitToolSource(
 
         private static (string Error, string Detail)? ValidateResolvedPolicy(
             WorkflowFileMultipartUploadPolicy policy,
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             long? requestedMaxFileBytes)
         {
             if (string.IsNullOrWhiteSpace(policy.ServiceSlug) ||
@@ -364,7 +364,7 @@ public sealed class WorkflowFileSubmitToolSource(
             }
         }
 
-        private static WorkflowFileRef ParseFileRef(JsonElement fileRefElement)
+        private static FileArtifactRef ParseFileRef(JsonElement fileRefElement)
         {
             if (TryGetProperty(fileRefElement, "fileName", "file_name", out _) ||
                 TryGetProperty(fileRefElement, "mediaType", "media_type", out _) ||
@@ -376,7 +376,7 @@ public sealed class WorkflowFileSubmitToolSource(
                     "workflow_file_submit file_ref cannot declare file_name, media_type, size_bytes, or sha256.");
             }
 
-            var sourceKind = WorkflowFileSourceKind.Unspecified;
+            var sourceKind = FileArtifactSourceKind.Unspecified;
             if (TryGetProperty(fileRefElement, "sourceKind", "source_kind", out var sourceKindElement))
             {
                 if (!TryParseSourceKind(sourceKindElement, out sourceKind))
@@ -387,7 +387,7 @@ public sealed class WorkflowFileSubmitToolSource(
                 }
             }
 
-            return new WorkflowFileRef
+            return new FileArtifactRef
             {
                 FileId = OptionalString(fileRefElement, "fileId", "file_id"),
                 ArtifactId = OptionalString(fileRefElement, "artifactId", "artifact_id"),
@@ -466,15 +466,15 @@ public sealed class WorkflowFileSubmitToolSource(
 
         private static bool TryParseSourceKind(
             JsonElement element,
-            out WorkflowFileSourceKind sourceKind)
+            out FileArtifactSourceKind sourceKind)
         {
-            sourceKind = WorkflowFileSourceKind.Unspecified;
+            sourceKind = FileArtifactSourceKind.Unspecified;
             if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out var numeric))
             {
-                if (!Enum.IsDefined(typeof(WorkflowFileSourceKind), numeric))
+                if (!Enum.IsDefined(typeof(FileArtifactSourceKind), numeric))
                     return false;
 
-                sourceKind = (WorkflowFileSourceKind)numeric;
+                sourceKind = (FileArtifactSourceKind)numeric;
                 return true;
             }
 
@@ -483,15 +483,15 @@ public sealed class WorkflowFileSubmitToolSource(
 
             sourceKind = NormalizeKey(element.GetString()) switch
             {
-                "unspecified" => WorkflowFileSourceKind.Unspecified,
-                "chatinput" => WorkflowFileSourceKind.ChatInput,
-                "formupload" => WorkflowFileSourceKind.FormUpload,
-                "connectedserviceresource" => WorkflowFileSourceKind.ConnectedServiceResource,
-                "externalresource" => WorkflowFileSourceKind.ExternalResource,
-                "generated" => WorkflowFileSourceKind.Generated,
-                _ => WorkflowFileSourceKind.Unspecified,
+                "unspecified" => FileArtifactSourceKind.Unspecified,
+                "chatinput" => FileArtifactSourceKind.ChatInput,
+                "formupload" => FileArtifactSourceKind.FormUpload,
+                "connectedserviceresource" => FileArtifactSourceKind.ConnectedServiceResource,
+                "externalresource" => FileArtifactSourceKind.ExternalResource,
+                "generated" => FileArtifactSourceKind.Generated,
+                _ => FileArtifactSourceKind.Unspecified,
             };
-            return sourceKind != WorkflowFileSourceKind.Unspecified ||
+            return sourceKind != FileArtifactSourceKind.Unspecified ||
                    NormalizeKey(element.GetString()) == "unspecified";
         }
 
@@ -553,11 +553,11 @@ public sealed class WorkflowFileSubmitToolSource(
                     File: null),
                 JsonOptions));
 
-        private static bool HasStableFileRef(WorkflowFileRef fileRef) =>
+        private static bool HasStableFileRef(FileArtifactRef fileRef) =>
             !string.IsNullOrWhiteSpace(fileRef.FileId) ||
             !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
-        private static bool HasPublicFileFacts(WorkflowFileRef fileRef) =>
+        private static bool HasPublicFileFacts(FileArtifactRef fileRef) =>
             !string.IsNullOrWhiteSpace(fileRef.FileName) ||
             !string.IsNullOrWhiteSpace(fileRef.MediaType) ||
             fileRef.SizeBytes != 0 ||
@@ -572,7 +572,7 @@ public sealed class WorkflowFileSubmitToolSource(
             string.Equals(ownerScopeId, Normalize(request.ScopeId), StringComparison.Ordinal);
 
         private static bool DescriptorOwnerMatches(
-            WorkflowFileRef descriptor,
+            FileArtifactRef descriptor,
             WorkflowToolExecutionRequest request)
         {
             var ownerRunId = Normalize(descriptor.OwnerRunId);
@@ -584,8 +584,8 @@ public sealed class WorkflowFileSubmitToolSource(
         }
 
         private static bool DescriptorMatchesValidatedDescriptor(
-            WorkflowFileRef opened,
-            WorkflowFileRef validated) =>
+            FileArtifactRef opened,
+            FileArtifactRef validated) =>
             string.Equals(Normalize(opened.FileId), Normalize(validated.FileId), StringComparison.Ordinal) &&
             string.Equals(Normalize(opened.ArtifactId), Normalize(validated.ArtifactId), StringComparison.Ordinal) &&
             opened.SizeBytes == validated.SizeBytes &&
@@ -749,7 +749,7 @@ public sealed class WorkflowFileSubmitToolSource(
     }
 
     private sealed record WorkflowFileSubmitArguments(
-        WorkflowFileRef FileRef,
+        FileArtifactRef FileRef,
         string ServiceSlug,
         string Path,
         string Method,

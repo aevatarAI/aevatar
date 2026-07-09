@@ -1,6 +1,6 @@
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
-public sealed class FileSystemWorkflowFileIngressOptions
+public sealed class FileSystemFileArtifactOptions
 {
     public string RootDirectory { get; set; } =
         Path.Combine(AppContext.BaseDirectory, "workflow-file-artifacts");

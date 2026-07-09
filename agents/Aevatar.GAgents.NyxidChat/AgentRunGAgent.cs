@@ -626,12 +626,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
-        var attachmentPolicyFailure = string.Equals(
-            stepState.LastFinishReason,
-            NyxIdConversationReplyGenerator.AttachmentPolicyErrorCode,
-            StringComparison.Ordinal) ||
-            IsControlledAttachmentFailureText(stepState.AccumulatedText);
-        var terminalFailure = !hasReplyText || attachmentPolicyFailure;
+        var terminalFailure = !hasReplyText;
         var emptyReplyDiagnostics = hasReplyText ? string.Empty : BuildEmptyReplyDiagnostics(stepState);
         if (!hasReplyText)
         {
@@ -656,12 +651,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 : "Sorry, I wasn't able to generate a response. Please try again.",
             stepState.OutboundIntent?.Clone(),
             terminalFailure ? LlmReplyTerminalState.Failed : LlmReplyTerminalState.Completed,
-            attachmentPolicyFailure
-                ? NyxIdConversationReplyGenerator.AttachmentPolicyErrorCode
-                : hasReplyText ? string.Empty : "empty_reply",
-            attachmentPolicyFailure
-                ? stepState.AccumulatedText
-                : hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
+            hasReplyText ? string.Empty : "empty_reply",
+            hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
             stepState.AppendedHistory.ToArray(),
             stepState.ToolReceipts.ToArray(),
             stepState.PendingToolCalls.ToArray());
@@ -686,20 +677,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 + "NyxID again and resend your message. 登录会话已过期或失效，请重新登录 NyxID 后再发送一次。";
         }
 
-        if (errorSummary.Contains("attachment is too large", StringComparison.OrdinalIgnoreCase)
-            || errorSummary.Contains("attachment format is not supported", StringComparison.OrdinalIgnoreCase))
-        {
-            return NyxIdConversationReplyGenerator.BuildControlledAttachmentFailureText(errorSummary);
-        }
-
         return generic;
     }
-
-    private static bool IsControlledAttachmentFailureText(string? text) =>
-        !string.IsNullOrWhiteSpace(text) &&
-        text.Contains("cannot process this attachment", StringComparison.OrdinalIgnoreCase) &&
-        (text.Contains("attachment is too large", StringComparison.OrdinalIgnoreCase) ||
-         text.Contains("attachment format is not supported", StringComparison.OrdinalIgnoreCase));
 
     // Diagnostic context for the otherwise-silent empty-reply terminal path. Reads only
     // signals already captured on the step state (finish reason, streamed-text flag,

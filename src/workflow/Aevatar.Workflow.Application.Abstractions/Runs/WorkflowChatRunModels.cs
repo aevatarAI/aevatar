@@ -13,7 +13,7 @@ public enum WorkflowChatInputPartKind
     File = 5,
 }
 
-public enum WorkflowFileSourceKind
+public enum FileArtifactSourceKind
 {
     Unspecified = 0,
     ChatInput = 1,
@@ -23,11 +23,11 @@ public enum WorkflowFileSourceKind
     Generated = 5,
 }
 
-public sealed record WorkflowFileRef
+public sealed record FileArtifactRef
 {
     public string? FileId { get; init; }
     public string? ArtifactId { get; init; }
-    public WorkflowFileSourceKind SourceKind { get; init; }
+    public FileArtifactSourceKind SourceKind { get; init; }
     public string? SourceMessageId { get; init; }
     public string? SourceResourceKey { get; init; }
     public string? FileName { get; init; }
@@ -48,7 +48,7 @@ public sealed record WorkflowChatInputPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
-    public WorkflowFileRef? FileRef { get; init; }
+    public FileArtifactRef? FileRef { get; init; }
 }
 
 public sealed record WorkflowLlmControl(

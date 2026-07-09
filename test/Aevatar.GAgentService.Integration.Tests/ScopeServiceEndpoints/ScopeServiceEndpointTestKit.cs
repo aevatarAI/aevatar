@@ -438,7 +438,7 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
             builder.Services.AddSingleton<IServiceRunQueryPort>(serviceRunQueryPort);
-            builder.Services.AddSingleton<IWorkflowFileIngressPort>(workflowFileIngressPort);
+            builder.Services.AddSingleton<IFileArtifactIngressPort>(workflowFileIngressPort);
             builder.Services.AddSingleton<IAuditTrailAppender>(auditTrailAppender);
             builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
             builder.Services.AddSingleton<WorkflowMultipartFileInputParser>();
@@ -1761,17 +1761,17 @@ public abstract class ScopeServiceEndpointTestKit
         }
     }
 
-    protected sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    protected sealed class RecordingWorkflowFileIngressPort : IFileArtifactIngressPort
     {
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
             var index = Requests.Count;
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
             {
                 FileId = $"file-{index}",
                 ArtifactId = $"workflow-file://file-{index}",

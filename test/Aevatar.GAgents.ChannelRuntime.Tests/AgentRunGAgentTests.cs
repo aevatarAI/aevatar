@@ -1509,7 +1509,7 @@ public sealed class AgentRunGAgentTests
         EventEnvelope? handled = null;
         targetActor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
             .Do(call => handled = call.Arg<EventEnvelope>());
-        var providerFactory = new SingleReplyProviderFactory("should not reach provider")
+        var providerFactory = new SingleReplyProviderFactory("reply after attachment visibility warning")
         {
             Capabilities = new LLMProviderCapabilities
             {
@@ -1556,12 +1556,14 @@ public sealed class AgentRunGAgentTests
 
         handled.Should().NotBeNull();
         var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
-        ready.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
-        ready.ErrorCode.Should().Be("attachment_policy_rejected");
-        ready.ErrorSummary.Should().Contain("attachment is too large");
-        ready.Outbound.Text.Should().Contain("attachment is too large");
-        ready.Outbound.Text.Should().Contain("cannot process");
-        providerFactory.Requests.Should().BeEmpty();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Completed);
+        ready.ErrorCode.Should().BeEmpty();
+        ready.ErrorSummary.Should().BeEmpty();
+        ready.Outbound.Text.Should().Be("reply after attachment visibility warning");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
     }
 
     [Fact]
@@ -3845,9 +3847,7 @@ public sealed class AgentRunGAgentTests
                         RunId = request.RunId,
                         CorrelationId = request.Request.CorrelationId,
                         TargetActorId = request.Request.TargetActorId,
-                        ErrorCode = ex is NyxIdConversationReplyGenerator.AttachmentPolicyException
-                            ? NyxIdConversationReplyGenerator.AttachmentPolicyErrorCode
-                            : "llm_reply_failed",
+                        ErrorCode = "llm_reply_failed",
                         ErrorSummary = ex.Message,
                         FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         Attempt = request.Attempt,
@@ -4814,15 +4814,6 @@ public sealed class AgentRunGAgentTests
         }
     }
 
-    [Fact]
-    public void ResolveTerminalFailureReply_SurfacesControlledAttachmentPolicyFailure()
-    {
-        var reply = AgentRunGAgent.ResolveTerminalFailureReply("'large.png' attachment is too large (10485761 bytes)");
-
-        reply.Should().Contain("cannot process this attachment");
-        reply.Should().Contain("attachment is too large");
-        reply.Should().Contain("supported image under 10 MB");
-    }
 }
 
 internal static class AgentRunGAgentTestExtensions
