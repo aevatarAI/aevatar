@@ -798,6 +798,26 @@ const zhCNMessages = {
   'teams.automations.form.timezone': '时区',
   'teams.automations.form.timezoneAria': '时区',
   'teams.automations.form.title': '新建成员自动化',
+  'teams.automations.credential.authorize': '授权自动化 API key',
+  'teams.automations.credential.authorizeFailed':
+    '自动化 API key 授权失败：{message}',
+  'teams.automations.credential.authorizeSuccess':
+    '自动化 API key 已授权。',
+  'teams.automations.credential.defaultName':
+    '{memberName} automation key',
+  'teams.automations.credential.missing':
+    '当前成员还没有可用于计划运行的授权 API key。',
+  'teams.automations.credential.missingHint':
+    '保存计划前，请先授权一个限定范围的自动化 key。',
+  'teams.automations.credential.missingMessage':
+    '保存计划前请先授权自动化 API key。',
+  'teams.automations.credential.ready':
+    '自动化 API key 已授权。',
+  'teams.automations.credential.readyHint':
+    '保存计划时只会附带 typed credential reference。',
+  'teams.automations.credential.section': '3. 自动化凭证',
+  'teams.automations.credential.sectionHint':
+    '计划运行使用用户授权的 API key，不使用浏览器 OAuth token。',
   'teams.automations.member.publishFirst': '先发布这个成员，再添加周期任务。',
   'teams.automations.member.publishedServiceReady': '已发布服务可用',
   'teams.automations.member.unknown': '未知成员',

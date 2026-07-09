@@ -841,6 +841,26 @@ const enUSMessages = {
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
+  'teams.automations.credential.authorize': 'Authorize automation API key',
+  'teams.automations.credential.authorizeFailed':
+    'Automation API key was not authorized: {message}',
+  'teams.automations.credential.authorizeSuccess':
+    'Automation API key authorized.',
+  'teams.automations.credential.defaultName':
+    '{memberName} automation key',
+  'teams.automations.credential.missing':
+    'This member does not have an authorized API key for scheduled runs.',
+  'teams.automations.credential.missingHint':
+    'Authorize a scoped automation key before saving this schedule.',
+  'teams.automations.credential.missingMessage':
+    'Authorize an automation API key before saving this schedule.',
+  'teams.automations.credential.ready':
+    'Automation API key authorized.',
+  'teams.automations.credential.readyHint':
+    'Only the typed credential reference is attached to the schedule.',
+  'teams.automations.credential.section': '3. Automation credential',
+  'teams.automations.credential.sectionHint':
+    'Scheduled runs use a user-authorized API key, not the browser OAuth token.',
   'teams.automations.member.publishFirst':
     'Publish this member before adding recurring work.',
   'teams.automations.member.publishedServiceReady':

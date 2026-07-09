@@ -408,6 +408,65 @@ describe("scheduledDispatchApi", () => {
     expect(body.serviceInvocation).not.toHaveProperty("revisionId");
   });
 
+  it("sends automation credential references as typed NyxID sender auth only", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.create({
+      displayName: "Daily escalation digest",
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Asia/Shanghai",
+      enabled: true,
+      headers: {
+        source: "team-automations",
+      },
+      workflowChatTarget: {
+        identity: {
+          tenantId: "scope-1",
+          appId: "default",
+          namespace: "default",
+          serviceId: "svc-alpha",
+        },
+        prompt: "Summarize escalations.",
+      },
+      automationCredentialRef: {
+        subject: {
+          platform: "nyxid",
+          tenant: "scope-1",
+          externalUserId: "ak-alpha",
+        },
+        scope: "proxy",
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.serviceInvocation.auth).toEqual({
+      senderNyxId: {
+        subject: {
+          platform: "nyxid",
+          tenant: "scope-1",
+          externalUserId: "ak-alpha",
+        },
+        scope: "proxy",
+      },
+    });
+    expect(body.headers).toEqual({
+      source: "team-automations",
+    });
+    expect(body.headers).not.toHaveProperty("automationCredential");
+    expect(body.serviceInvocation.auth).not.toHaveProperty("durableSenderBearerToken");
+    expect(JSON.stringify(body)).not.toContain("browser-oauth-access-token");
+    expect(JSON.stringify(body)).not.toContain("refreshToken");
+    expect(JSON.stringify(body)).not.toContain("aevatar_automation_secret_once");
+    expect(JSON.stringify(body)).not.toContain("memberId");
+    expect(JSON.stringify(body)).not.toContain("workflowId");
+  });
+
   it("retries schedule creation when the owner binding read model briefly lags after NyxID finalization", async () => {
     const restoreRetryDelay = configureScheduledDispatchRetryDelay(async () => {});
     const fetchMock = jest

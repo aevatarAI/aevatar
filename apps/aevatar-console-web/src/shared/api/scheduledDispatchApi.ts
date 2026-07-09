@@ -12,6 +12,7 @@ import {
   readStringRecord,
 } from "./http/decoders";
 import type { ServiceIdentity } from "@/shared/models/services";
+import type { AutomationCredentialRef } from "./automationApiKeys";
 import {
   encodeChatRequestEventBase64,
   getChatEndpointId,
@@ -36,6 +37,7 @@ export type ScheduledDispatchConfigurationInput = {
   readonly timezone?: string;
   readonly enabled?: boolean;
   readonly headers?: Readonly<Record<string, string>>;
+  readonly automationCredentialRef?: AutomationCredentialRef;
   readonly workflowChatTarget: ScheduledWorkflowChatTargetInput;
 };
 
@@ -398,6 +400,19 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
     );
   }
   const revisionId = trimOptional(input.workflowChatTarget.revisionId);
+  const automationCredentialRef = input.automationCredentialRef
+    ? {
+        subject: {
+          platform: input.automationCredentialRef.subject.platform.trim(),
+          ...(trimOptional(input.automationCredentialRef.subject.tenant)
+            ? { tenant: trimOptional(input.automationCredentialRef.subject.tenant) }
+            : {}),
+          externalUserId:
+            input.automationCredentialRef.subject.externalUserId.trim(),
+        },
+        scope: input.automationCredentialRef.scope.trim(),
+      }
+    : null;
   const chatRequest = {
     prompt,
     sessionId: trimOptional(input.workflowChatTarget.sessionId),
@@ -418,6 +433,13 @@ function encodeConfiguration(input: ScheduledDispatchConfigurationInput) {
       payloadTypeUrl: getChatRequestEventTypeUrl(),
       payloadBase64: encodeChatRequestEventBase64(chatRequest),
       ...(revisionId ? { revisionId } : {}),
+      ...(automationCredentialRef
+        ? {
+            auth: {
+              senderNyxId: automationCredentialRef,
+            },
+          }
+        : {}),
     },
   };
 }

@@ -666,6 +666,18 @@ jest.mock("@/shared/api/scheduledDispatchApi", () => ({
   },
 }));
 
+jest.mock("@/shared/api/automationApiKeys", () => ({
+  automationApiKeysApi: {
+    create: jest.fn(async () => mockCreateAutomationApiKeyCreateResult()),
+    getStatus: jest.fn(async () => mockCreateAutomationCredentialStatus()),
+    list: jest.fn(async () => ({
+      items: [],
+      totalCount: 0,
+    })),
+    revoke: jest.fn(async () => undefined),
+  },
+}), { virtual: true });
+
 jest.mock("@/shared/agui/sseFrameNormalizer", () => ({
   parseBackendSSEStream: jest.fn(async function* () {
     yield {
@@ -914,6 +926,65 @@ function createStudioApiStatusError(message: string, status: number): Error & { 
   return error;
 }
 
+const { automationApiKeysApi } = jest.requireMock(
+  "@/shared/api/automationApiKeys",
+) as {
+  automationApiKeysApi: {
+    create: jest.Mock;
+    getStatus: jest.Mock;
+    list: jest.Mock;
+    revoke: jest.Mock;
+  };
+};
+
+function mockCreateAutomationCredentialRef() {
+  return {
+    subject: {
+      platform: "nyxid",
+      tenant: "scope-1",
+      externalUserId: "ak-alpha",
+    },
+    scope: "proxy",
+  };
+}
+
+function mockCreateAutomationApiKeyMetadata(overrides?: Record<string, any>) {
+  return {
+    apiKeyId: "ak-alpha",
+    displayName: "Team Alpha Operator automation key",
+    scopeId: "scope-1",
+    status: "active",
+    keySuffix: "9af0",
+    createdAt: "2026-07-09T08:00:00Z",
+    lastUsedAt: null,
+    expiresAt: null,
+    revokedAt: null,
+    allowedMemberId: "member-team-alpha",
+    allowedServiceId: "alpha-service",
+    credentialRef: mockCreateAutomationCredentialRef(),
+    ...overrides,
+  };
+}
+
+function mockCreateAutomationCredentialStatus(overrides?: Record<string, any>) {
+  return {
+    status: "active",
+    apiKey: mockCreateAutomationApiKeyMetadata(),
+    credentialRef: mockCreateAutomationCredentialRef(),
+    ...overrides,
+  };
+}
+
+function mockCreateAutomationApiKeyCreateResult(overrides: Record<string, any> = {}) {
+  const apiKey = mockCreateAutomationApiKeyMetadata(overrides.apiKey);
+  return {
+    apiKey,
+    credentialRef: apiKey.credentialRef,
+    rawKey: "aevatar_automation_secret_once",
+    ...overrides,
+  };
+}
+
 describe("TeamDetailPage", () => {
   beforeEach(() => {
     setLocale("zh-CN", false);
@@ -991,6 +1062,21 @@ describe("TeamDetailPage", () => {
     (scheduledDispatchApi.enable as jest.Mock).mockClear();
     (scheduledDispatchApi.disable as jest.Mock).mockClear();
     (scheduledDispatchApi.delete as jest.Mock).mockClear();
+    (automationApiKeysApi.getStatus as jest.Mock).mockReset();
+    (automationApiKeysApi.getStatus as jest.Mock).mockImplementation(
+      async () => mockCreateAutomationCredentialStatus(),
+    );
+    (automationApiKeysApi.create as jest.Mock).mockReset();
+    (automationApiKeysApi.create as jest.Mock).mockImplementation(
+      async () => mockCreateAutomationApiKeyCreateResult(),
+    );
+    (automationApiKeysApi.list as jest.Mock).mockReset();
+    (automationApiKeysApi.list as jest.Mock).mockImplementation(async () => ({
+      items: [],
+      totalCount: 0,
+    }));
+    (automationApiKeysApi.revoke as jest.Mock).mockReset();
+    (automationApiKeysApi.revoke as jest.Mock).mockResolvedValue(undefined);
     (studioApi.listMembers as jest.Mock).mockReset();
     (studioApi.listMembers as jest.Mock).mockImplementation(
       async () => mockCreateMembersCatalog(),
@@ -2564,10 +2650,12 @@ describe("TeamDetailPage", () => {
           prompt: "Summarize escalations and follow-up owners.",
           revisionId: "rev-2",
         },
+        automationCredentialRef: mockCreateAutomationCredentialRef(),
       }),
     );
     expect(JSON.stringify(payload)).not.toContain("member-team-alpha");
     expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
+    expect(JSON.stringify(payload)).not.toContain("aevatar_automation_secret_once");
     expect(message.success).toHaveBeenCalledWith("自动化已创建。");
     expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
     await waitFor(() => {
@@ -2588,6 +2676,63 @@ describe("TeamDetailPage", () => {
         0,
       );
     });
+  });
+
+  it("requires a user-authorized automation API key before creating member recurring work", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (automationApiKeysApi.getStatus as jest.Mock).mockResolvedValueOnce({
+      status: "missing",
+      apiKey: null,
+      credentialRef: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
+    });
+    expect(await within(dialog).findByText("3. 自动化凭证")).toBeTruthy();
+    expect(within(dialog).getByText("当前成员还没有可用于计划运行的授权 API key。")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "创建自动化" })).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "授权自动化 API key" }));
+
+    await waitFor(() => {
+      expect(automationApiKeysApi.create).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        displayName: "Team Alpha Operator automation key",
+        allowedMemberId: "member-team-alpha",
+        allowedServiceId: "alpha-service",
+        scopes: ["proxy"],
+      });
+    });
+    expect(await within(dialog).findByText("自动化 API key 已授权。")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "创建自动化" })).not.toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建自动化" }));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+    });
+    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        automationCredentialRef: mockCreateAutomationCredentialRef(),
+        workflowChatTarget: expect.objectContaining({
+          identity: expect.objectContaining({
+            serviceId: "alpha-service",
+          }),
+        }),
+      }),
+    );
+    expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
+    expect(JSON.stringify(payload)).not.toContain("aevatar_automation_secret_once");
   });
 
   it("previews next runs from the automation form", async () => {

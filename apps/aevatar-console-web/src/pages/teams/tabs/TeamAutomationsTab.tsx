@@ -27,6 +27,11 @@ import {
 import { useIntl } from "@umijs/max";
 import React from "react";
 import {
+  automationApiKeysApi,
+  type AutomationCredentialRef,
+  type AutomationCredentialStatusResult,
+} from "@/shared/api/automationApiKeys";
+import {
   scheduledDispatchApi,
   scheduledWorkflowPromptMaxLength,
   type ScheduledDispatchConfigurationInput,
@@ -81,6 +86,13 @@ type AutomationFormState = {
   readonly preset: string;
   readonly prompt: string;
   readonly timezone: string;
+};
+
+type LocalAutomationCredentialState = {
+  readonly memberId: string;
+  readonly serviceId: string;
+  readonly status: AutomationCredentialStatusResult["status"];
+  readonly credentialRef: AutomationCredentialRef | null;
 };
 
 type ManualRunFeedback = Pick<
@@ -675,6 +687,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const [manualRunFeedbackByScheduleId, setManualRunFeedbackByScheduleId] =
     React.useState<ReadonlyMap<string, ManualRunFeedback>>(() => new Map());
   const [highlightedScheduleId, setHighlightedScheduleId] = React.useState("");
+  const [localAutomationCredential, setLocalAutomationCredential] =
+    React.useState<LocalAutomationCredentialState | null>(null);
   const delayedScheduleRefreshRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -763,6 +777,55 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const activeFormMember =
     automatableMembers.find((member) => member.memberId === formState.memberId) ??
     selectedMember;
+  const activeFormServiceId = trimText(activeFormMember?.serviceIdentity?.serviceId);
+  const activeFormMemberId = trimText(activeFormMember?.memberId);
+  const activeAutomationCredentialQueryKey = React.useMemo(
+    () =>
+      [
+        "automation-api-key-status",
+        scopeId,
+        activeFormMemberId,
+        activeFormServiceId,
+      ] as const,
+    [activeFormMemberId, activeFormServiceId, scopeId],
+  );
+  const automationCredentialStatusQuery = useQuery({
+    enabled:
+      createOpen &&
+      scopeId.length > 0 &&
+      activeFormMemberId.length > 0 &&
+      activeFormServiceId.length > 0,
+    queryKey: activeAutomationCredentialQueryKey,
+    queryFn: () =>
+      automationApiKeysApi.getStatus({
+        scopeId,
+        memberId: activeFormMemberId,
+        serviceId: activeFormServiceId,
+      }),
+  });
+  const activeAutomationCredentialStatus = React.useMemo(() => {
+    if (
+      localAutomationCredential &&
+      localAutomationCredential.memberId === activeFormMemberId &&
+      localAutomationCredential.serviceId === activeFormServiceId
+    ) {
+      return {
+        status: localAutomationCredential.status,
+        credentialRef: localAutomationCredential.credentialRef,
+      };
+    }
+
+    return {
+      status: automationCredentialStatusQuery.data?.status ?? "missing",
+      credentialRef: automationCredentialStatusQuery.data?.credentialRef ?? null,
+    };
+  }, [
+    activeFormMemberId,
+    activeFormServiceId,
+    automationCredentialStatusQuery.data?.credentialRef,
+    automationCredentialStatusQuery.data?.status,
+    localAutomationCredential,
+  ]);
   const editingScheduleId = trimText(editingSchedule?.scheduleId);
   const isEditingAutomation = editingScheduleId.length > 0;
   const trimmedPromptLength = formState.prompt.trim().length;
@@ -1251,10 +1314,81 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       scheduleDelayedRefresh();
     },
   });
+  const authorizeAutomationCredentialMutation = useMutation({
+    mutationFn: async (member: TeamAutomationMemberRow) => {
+      const serviceId = trimText(member.serviceIdentity?.serviceId);
+      if (!serviceId) {
+        throw new Error(
+          intl.formatMessage({
+            id: "teams.automations.messages.serviceIdentityMissing",
+            defaultMessage:
+              "The selected member does not have a service identity yet.",
+          }),
+        );
+      }
+
+      const result = await automationApiKeysApi.create({
+        scopeId,
+        displayName: intl.formatMessage(
+          {
+            id: "teams.automations.credential.defaultName",
+            defaultMessage: "{memberName} automation key",
+          },
+          { memberName: member.name },
+        ),
+        allowedMemberId: member.memberId,
+        allowedServiceId: serviceId,
+        scopes: ["proxy"],
+      });
+      return {
+        apiKey: result.apiKey,
+        credentialRef: result.credentialRef,
+      };
+    },
+    onError: (error) => {
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.credential.authorizeFailed",
+            defaultMessage: "Automation API key was not authorized: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: (result, member) => {
+      const memberId =
+        trimText(result.apiKey.allowedMemberId) || trimText(member.memberId);
+      const serviceId =
+        trimText(result.apiKey.allowedServiceId) ||
+        trimText(member.serviceIdentity?.serviceId);
+      setLocalAutomationCredential({
+        memberId,
+        serviceId,
+        status: "active",
+        credentialRef: result.credentialRef,
+      });
+      queryClient.setQueryData<AutomationCredentialStatusResult>(
+        activeAutomationCredentialQueryKey,
+        {
+          status: "active",
+          apiKey: result.apiKey,
+          credentialRef: result.credentialRef,
+        },
+      );
+      void message.success(
+        intl.formatMessage({
+          id: "teams.automations.credential.authorizeSuccess",
+          defaultMessage: "Automation API key authorized.",
+        }),
+      );
+    },
+  });
 
   const openCreate = React.useCallback(() => {
     const member = selectedMember;
     setEditingSchedule(null);
+    setLocalAutomationCredential(null);
     setFormState({
       cronExpression: defaultCronExpression,
       displayName: "",
@@ -1277,6 +1411,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         cronPresets.find((item) => item.cronExpression === cronExpression)?.value ??
         customPreset;
       setEditingSchedule(schedule);
+      setLocalAutomationCredential(null);
       setFormState({
         cronExpression,
         displayName: trimText(schedule.displayName),
@@ -1294,6 +1429,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
 
   const updateForm = React.useCallback(
     (patch: Partial<AutomationFormState>) => {
+      if (patch.memberId !== undefined) {
+        setLocalAutomationCredential(null);
+      }
       setFormState((current) => ({
         ...current,
         ...patch,
@@ -1376,6 +1514,16 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       );
       return;
     }
+    if (!activeAutomationCredentialStatus.credentialRef) {
+      void message.error(
+        intl.formatMessage({
+          id: "teams.automations.credential.missingMessage",
+          defaultMessage:
+            "Authorize an automation API key before saving this schedule.",
+        }),
+      );
+      return;
+    }
     const input: ScheduledDispatchConfigurationInput = {
       displayName:
         formState.displayName.trim() ||
@@ -1392,6 +1540,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       headers: {
         source: "team-automations",
       },
+      automationCredentialRef: activeAutomationCredentialStatus.credentialRef,
       workflowChatTarget: {
         identity: serviceIdentity,
         prompt,
@@ -1410,6 +1559,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     await createMutation.mutateAsync({ input, member });
   }, [
     activeFormMember,
+    activeAutomationCredentialStatus.credentialRef,
     createMutation,
     editingScheduleId,
     formState.cronExpression,
@@ -2013,7 +2163,13 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     intl,
   );
   const canCreateAutomation = Boolean(activeFormMember?.serviceIdentity);
-  const formSubmitting = createMutation.isPending || updateMutation.isPending;
+  const credentialReady = Boolean(activeAutomationCredentialStatus.credentialRef);
+  const credentialLoading =
+    automationCredentialStatusQuery.isLoading ||
+    authorizeAutomationCredentialMutation.isPending;
+  const formSubmitting =
+    createMutation.isPending ||
+    updateMutation.isPending;
   const formTitle = isEditingAutomation
     ? intl.formatMessage({
         id: "teams.automations.form.editTitle",
@@ -2236,7 +2392,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             !activeFormMember ||
             promptTooLong ||
             Boolean(formCronValidationMessage) ||
-            !canCreateAutomation,
+            !canCreateAutomation ||
+            credentialLoading ||
+            !credentialReady,
         }}
         okText={formOkText}
         onCancel={() => {
@@ -2398,6 +2556,96 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           <div
             style={{
               ...modalSectionStyle,
+              background: token.colorBgContainer,
+              border: `1px solid ${token.colorBorderSecondary}`,
+            }}
+          >
+            <div style={{ display: "grid", gap: 2 }}>
+              <Typography.Text strong>
+                {intl.formatMessage({
+                  id: "teams.automations.credential.section",
+                  defaultMessage: "3. Automation credential",
+                })}
+              </Typography.Text>
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                {intl.formatMessage({
+                  id: "teams.automations.credential.sectionHint",
+                  defaultMessage:
+                    "Scheduled runs use a user-authorized API key, not the browser OAuth token.",
+                })}
+              </Typography.Text>
+            </div>
+            <div
+              style={{
+                background: credentialReady
+                  ? token.colorSuccessBg
+                  : token.colorWarningBg,
+                border: `1px solid ${
+                  credentialReady
+                    ? token.colorSuccessBorder
+                    : token.colorWarningBorder
+                }`,
+                borderRadius: 10,
+                display: "grid",
+                gap: 10,
+                padding: 12,
+              }}
+            >
+              <Space align="center" wrap>
+                {credentialReady ? (
+                  <CheckCircleOutlined style={{ color: token.colorSuccess }} />
+                ) : (
+                  <ExclamationCircleOutlined style={{ color: token.colorWarning }} />
+                )}
+                <Typography.Text strong>
+                  {credentialReady
+                    ? intl.formatMessage({
+                        id: "teams.automations.credential.ready",
+                        defaultMessage: "Automation API key authorized.",
+                      })
+                    : intl.formatMessage({
+                        id: "teams.automations.credential.missing",
+                        defaultMessage:
+                          "This member does not have an authorized API key for scheduled runs.",
+                      })}
+                </Typography.Text>
+              </Space>
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                {credentialReady
+                  ? intl.formatMessage({
+                      id: "teams.automations.credential.readyHint",
+                      defaultMessage:
+                        "Only the typed credential reference is attached to the schedule.",
+                    })
+                  : intl.formatMessage({
+                      id: "teams.automations.credential.missingHint",
+                      defaultMessage:
+                        "Authorize a scoped automation key before saving this schedule.",
+                    })}
+              </Typography.Text>
+              {!credentialReady ? (
+                <Button
+                  disabled={!activeFormMember || credentialLoading}
+                  loading={authorizeAutomationCredentialMutation.isPending}
+                  onClick={() => {
+                    if (activeFormMember) {
+                      authorizeAutomationCredentialMutation.mutate(activeFormMember);
+                    }
+                  }}
+                  type="primary"
+                >
+                  {intl.formatMessage({
+                    id: "teams.automations.credential.authorize",
+                    defaultMessage: "Authorize automation API key",
+                  })}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          <div
+            style={{
+              ...modalSectionStyle,
               background: token.colorFillQuaternary,
               border: `1px solid ${token.colorBorderSecondary}`,
             }}
@@ -2406,7 +2654,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               <Typography.Text strong>
                 {intl.formatMessage({
                   id: "teams.automations.form.section.schedule",
-                  defaultMessage: "3. Schedule",
+                  defaultMessage: "4. Schedule",
                 })}
               </Typography.Text>
               <Typography.Text style={{ fontSize: 12 }} type="secondary">
