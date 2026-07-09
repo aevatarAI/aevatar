@@ -146,6 +146,42 @@ public sealed class AgentRunLarkCardDeliveryTests
     }
 
     [Fact]
+    public async Task FinalizeAfterVisibleCard_PreservesRunStateToolReceipts()
+    {
+        var runner = new RecordingCardRunner();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(runner, publisher: publisher);
+        agent.State.GenerationStep.ToolReceipts.Add(new Aevatar.AI.Abstractions.AgentToolReceipt
+        {
+            CallId = "call-1",
+            ToolName = "ornn_publish_skill",
+            Status = Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success,
+            SideEffectKind = "ornn.publish.skill",
+            SubjectKind = "ornn.skill",
+            SubjectId = "skill-1",
+            SubjectHash = "hash-1",
+        });
+
+        await agent.HandleEventAsync(Envelope(agent.Id, CreateCardChunk("partial")));
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        await agent.HandleNextLlmStepAsync(CreateFinalReplyStep("final"));
+
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyProduced);
+        agent.State.ToolReceipts.Should().ContainSingle(receipt => receipt.CallId == "call-1");
+
+        await DispatchPendingSelfEventsAsync(agent, publisher);
+
+        agent.State.LarkCardDelivery.Phase.Should().Be(AgentRunLarkCardDeliveryPhase.Completed);
+        agent.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
+        agent.State.ToolReceipts.Should().ContainSingle(
+            receipt => receipt.CallId == "call-1" &&
+                       receipt.Status == Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success &&
+                       receipt.SubjectId == "skill-1",
+            "the card-completion AgentRunReplyProducedEvent must carry the committed tool receipts forward instead of wiping them");
+    }
+
+    [Fact]
     public async Task CompletionSendFailure_PersistsOutbox_AndRetryDeliversConversationFactWithoutReplyToken()
     {
         var runner = new RecordingCardRunner();
