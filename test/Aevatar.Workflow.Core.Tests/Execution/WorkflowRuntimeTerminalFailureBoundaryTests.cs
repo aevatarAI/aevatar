@@ -40,6 +40,52 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     }
 
     [Fact]
+    public void RuntimeFailureMessages_ShouldFallbackToExceptionType_WhenSummaryIsBlank()
+    {
+        var message = WorkflowRuntimeFailureMessages.StartDispatchFailed(new InvalidOperationException("   "));
+
+        message.Should().Be("start_dispatch_failed: failed during start_dispatch: InvalidOperationException");
+    }
+
+    [Fact]
+    public void RuntimeFailureMessages_ShouldSanitizeCompletionStepFallbackAndTruncateLongTokens()
+    {
+        var longStepId = new string('s', 90);
+        var completion = new StepCompletedEvent
+        {
+            StepId = "  step with spaces'and quote  ",
+        };
+        var step = new StepDefinition
+        {
+            Id = longStepId,
+            Type = "custom type'with quote",
+        };
+
+        var message = WorkflowRuntimeFailureMessages.StepCompletionHandlingFailed(
+            step,
+            completion,
+            new InvalidOperationException(new string('x', 180)));
+
+        message.Should().StartWith(
+            "step_completion_handling_failed: step 'step_with_spacesand_quote' (custom_typewith_quote) failed during completion: ");
+        message.Should().NotContain("spaces'and");
+        message.Should().NotContain("type'with");
+        message.Length.Should().BeLessThanOrEqualTo(240);
+    }
+
+    [Fact]
+    public void RuntimeFailureMessages_ShouldUseDefinitionStep_WhenCompletionStepIdIsBlank()
+    {
+        var message = WorkflowRuntimeFailureMessages.StepCompletionHandlingFailed(
+            new StepDefinition { Id = "definition-step", Type = "notify" },
+            new StepCompletedEvent { StepId = " " },
+            new InvalidOperationException("boom"));
+
+        message.Should().Be(
+            "step_completion_handling_failed: step 'definition-step' (notify) failed during completion: boom");
+    }
+
+    [Fact]
     public async Task Bridge_ShouldPublishFailedStepCompletion_WhenSelectedExecutorThrows()
     {
         var module = new WorkflowExecutionBridgeModule(
@@ -167,6 +213,142 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .Should()
             .NotContain(x => x.Is(CompensationRequestEvent.Descriptor));
         host.CompensationStartAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Kernel_ShouldEnterCompensationDecision_WhenCompensableDispatchFailsAfterExecutorReceipt()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "charge",
+                    Type = "tool_call",
+                    Compensation = "refund",
+                },
+                new StepDefinition
+                {
+                    Id = "refund",
+                    Type = "tool_call",
+                },
+            ],
+        };
+        var host = new RecordingStateHost
+        {
+            RunId = "run-1",
+            FailRecordCompensableDispatch = true,
+        };
+        var module = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-1",
+                WorkflowName = "wf",
+                Input = "hello",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .Where(x => x.Is(WorkflowCompletedEvent.Descriptor))
+            .Select(x => x.Unpack<WorkflowCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().StartWith("step_dispatch_failed: step 'charge' (tool_call) failed during dispatch: ");
+        host.CompensationStartAttempts.Should().Be(1);
+        var terminalStep = host.TerminalStepAttempts.Should()
+            .ContainSingle()
+            .Subject;
+        terminalStep.Should().NotBeNull();
+        terminalStep!.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task Kernel_ShouldIgnoreDuplicateFailedCompletion_WhenRetryBackoffIsPending()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "notify",
+                    Retry = new StepRetryPolicy
+                    {
+                        MaxAttempts = 3,
+                        DelayMs = 800,
+                    },
+                },
+            ],
+        };
+        var host = new RecordingStateHost { RunId = "run-1" };
+        var module = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext();
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-1",
+                WorkflowName = "wf",
+                Input = "hello",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var firstRequest = ctx.Published
+            .Select(x => x.Event)
+            .Where(x => x.Is(StepRequestEvent.Descriptor))
+            .Select(x => x.Unpack<StepRequestEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                Success = false,
+                Error = "transient failure",
+                ExecutionId = firstRequest.ExecutionId,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var stateWithBackoff = host.States["workflow_execution_kernel"].Unpack<WorkflowExecutionKernelState>();
+        stateWithBackoff.RetryBackoffsByStepId.Should().ContainKey("step-1");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                Success = false,
+                Error = "duplicate failure",
+                ExecutionId = firstRequest.ExecutionId,
+            }),
+            ctx,
+            CancellationToken.None);
+
+        ctx.Published.Select(x => x.Event)
+            .Should()
+            .NotContain(x => x.Is(StepRequestEvent.Descriptor) || x.Is(WorkflowCompletedEvent.Descriptor));
+        var finalState = host.States["workflow_execution_kernel"].Unpack<WorkflowExecutionKernelState>();
+        finalState.RetryBackoffsByStepId.Should().ContainKey("step-1");
     }
 
     [Fact]
@@ -340,11 +522,15 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public bool FailSave { get; set; }
 
+        public bool FailRecordCompensableDispatch { get; init; }
+
         public bool StartCompensationWhenLedgerRecorded { get; init; }
 
         public int CompensationStartAttempts { get; private set; }
 
         public List<CompensableStepDispatchedEvent> CompensableDispatches { get; } = [];
+
+        public List<StepCompletedEvent?> TerminalStepAttempts { get; } = [];
 
         public Dictionary<string, Any> States { get; } = new(StringComparer.Ordinal);
 
@@ -380,6 +566,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             StepCompletedEvent? terminalStep,
             CancellationToken ct)
         {
+            TerminalStepAttempts.Add(terminalStep?.Clone());
             CompensationStartAttempts++;
             if (StartCompensationWhenLedgerRecorded && CompensableDispatches.Count > 0)
             {
@@ -398,6 +585,9 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
 
         public Task RecordCompensableStepDispatchAsync(CompensableStepDispatchedEvent evt, CancellationToken ct)
         {
+            if (FailRecordCompensableDispatch)
+                throw new InvalidOperationException("compensable dispatch record failed with bearer super-secret-token");
+
             CompensableDispatches.Add(evt);
             return Task.CompletedTask;
         }
