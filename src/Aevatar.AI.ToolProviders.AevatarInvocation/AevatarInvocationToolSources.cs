@@ -129,7 +129,7 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
     public string Description =>
         "Start a mounted/imported Aevatar Scope Workflow by workflow_id with typed inputs. " +
         "Use inline workflow_yamls only as an explicit fallback when Scope Workflow mounting/import is unavailable; Ornn workflow YAMLs from use_skill are templates/import sources, not page-visible runnable workflow authority by themselves. " +
-        "Use wait=stream for channel conversations so terminal completion can be delivered asynchronously to the same reply target.";
+        "Use wait=stream only when the current surface can deliver or observe the workflow terminal result; channel bots without workflow result delivery should not start background-only runs.";
 
     public string ParametersSchema => AevatarInvocationToolSchemas.StartWorkflow;
 

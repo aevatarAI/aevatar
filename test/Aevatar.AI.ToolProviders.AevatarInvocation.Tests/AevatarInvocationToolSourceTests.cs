@@ -1114,7 +1114,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflowForChatRun_WaitStreamWithoutRegistrationPort_ShouldReturnAcceptedWorkflowWithTypedFailure()
+    public async Task StartWorkflowForChatRun_WaitStreamWithoutRegistrationPort_ShouldNotStartWorkflow()
     {
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
@@ -1138,17 +1138,22 @@ public sealed class AevatarInvocationToolSourceTests
 
         var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
 
-        result.RunId.Should().Be("wf-command");
-        result.ActorId.Should().Be("workflow-actor");
-        result.Status.Should().Be("background_delivery_failed");
+        result.RunId.Should().BeEmpty();
+        result.ActorId.Should().BeEmpty();
+        result.Status.Should().BeEmpty();
         result.StreamTopic.Should().BeEmpty();
-        result.ErrorCode.Should().Be("workflow_background_delivery_unsupported");
-        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        result.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+        harness.WorkflowDispatch.Command.Should().BeNull(
+            "a workflow run without a registered delivery path would lose the terminal channel result");
         harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
         using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
-        resultJson.RootElement.GetProperty("status").GetString().Should().Be("background_delivery_failed");
         resultJson.RootElement.GetProperty("error").GetProperty("code").GetString()
-            .Should().Be("workflow_background_delivery_unsupported");
+            .Should().Be("channel_workflow_delivery_unavailable");
+        var errorMessage = resultJson.RootElement.GetProperty("error").GetProperty("message").GetString();
+        errorMessage.Should().NotBeNull();
+        errorMessage!.ToLowerInvariant()
+            .Should().NotContain("durable")
+            .And.NotContain("credential");
         resultJson.RootElement.TryGetProperty("workflow_run_delivery", out var missingDelivery).Should().BeFalse();
         missingDelivery.ValueKind.Should().Be(JsonValueKind.Undefined);
     }
@@ -1221,7 +1226,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task StartWorkflowForChatRun_WaitStreamWithoutDurableCredential_ShouldReturnTypedFailure()
+    public async Task StartWorkflowForChatRun_WaitStreamWithoutChannelDelivery_ShouldReturnProductFailure()
     {
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
@@ -1249,10 +1254,53 @@ public sealed class AevatarInvocationToolSourceTests
 
         var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
 
-        result.ErrorCode.Should().Be("workflow_background_delivery_unsupported");
+        result.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
         result.RunId.Should().BeEmpty();
         harness.WorkflowDispatch.Command.Should().BeNull();
         harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        var errorMessage = resultJson.RootElement.GetProperty("error").GetProperty("message").GetString();
+        errorMessage.Should().NotBeNull();
+        errorMessage!.ToLowerInvariant()
+            .Should().NotContain("durable")
+            .And.NotContain("credential");
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_DefaultWaitWithoutChannelDelivery_ShouldNotStartWorkflow()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-workflow-default-wait-no-channel-delivery",
+            durableReplyCredentialRef: string.Empty);
+        var request = BuildChatRunRequest(
+            "response-workflow",
+            "call-workflow-default-wait-no-channel-delivery-tool",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" }
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+        result.RunId.Should().BeEmpty();
+        harness.WorkflowDispatch.Command.Should().BeNull(
+            "a channel workflow run without a result delivery path would silently lose the terminal result");
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        var errorMessage = resultJson.RootElement.GetProperty("error").GetProperty("message").GetString();
+        errorMessage.Should().NotBeNull();
+        errorMessage!.ToLowerInvariant()
+            .Should().NotContain("durable")
+            .And.NotContain("credential");
     }
 
     [Fact]

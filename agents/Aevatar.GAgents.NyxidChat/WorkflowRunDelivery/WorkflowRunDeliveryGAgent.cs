@@ -17,6 +17,9 @@ namespace Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 [GAgent("nyxid.chat.workflow-run-delivery")]
 public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGAgentState>
 {
+    private const string ChannelWorkflowDeliveryUnavailableCode = "channel_workflow_delivery_unavailable";
+    private const string ChannelWorkflowDeliveryUnavailableSummary =
+        "This channel bot is not configured for workflow result delivery.";
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly NyxIdRelayOutboundPort _outboundPort;
@@ -388,7 +391,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         if (string.IsNullOrWhiteSpace(command.ReplyMessageId))
             return ("reply_message_id_required", "Workflow run delivery requires a reply message id.");
         if (string.IsNullOrWhiteSpace(command.DurableReplyCredentialRef))
-            return ("durable_reply_credential_ref_required", "Workflow run delivery requires a durable reply credential reference.");
+            return (ChannelWorkflowDeliveryUnavailableCode, ChannelWorkflowDeliveryUnavailableSummary);
 
         return null;
     }

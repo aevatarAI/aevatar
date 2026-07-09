@@ -27,6 +27,9 @@ public sealed class AevatarInvocationDispatcher
 {
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
     private const string DeletedGAgentActorNameAlias = "actor_name";
+    private const string ChannelWorkflowDeliveryUnavailableCode = "channel_workflow_delivery_unavailable";
+    private const string ChannelWorkflowDeliveryUnavailableMessage =
+        "This channel bot is not configured for workflow result delivery. The workflow was not started because its terminal result could not be delivered to this chat. Enable workflow result delivery for the bot, or invoke the workflow from a surface that can observe the run result.";
     private static readonly string[] ProtectedCallerMetadataKeys =
     [
         LLMRequestMetadataKeys.ScopeId,
@@ -331,6 +334,14 @@ public sealed class AevatarInvocationDispatcher
         var backgroundDelivery = ResolveWorkflowBackgroundDelivery(wait, AgentToolRequestContext.Current);
         if (backgroundDelivery.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
+        if (backgroundDelivery.ShouldRegister && _workflowRunDeliveryRegistrationPort is null)
+        {
+            var deliveryUnavailable = ChannelWorkflowDeliveryUnavailableError();
+            return ToChatRunRequest(
+                chatRunRequest,
+                AevatarInvocationJson.Error(deliveryUnavailable),
+                deliveryUnavailable);
+        }
 
         var callerCredential = ResolveWorkflowCallerCredential(AgentToolRequestContext.Current);
         if (callerCredential.Error != null)
@@ -620,6 +631,14 @@ public sealed class AevatarInvocationDispatcher
                 AevatarInvocationJson.Error(backgroundDelivery.Error),
                 backgroundDelivery.Error);
         }
+        if (backgroundDelivery.ShouldRegister && _workflowRunDeliveryRegistrationPort is null)
+        {
+            var deliveryUnavailable = ChannelWorkflowDeliveryUnavailableError();
+            return ToChatRunRequest(
+                chatRunRequest,
+                AevatarInvocationJson.Error(deliveryUnavailable),
+                deliveryUnavailable);
+        }
 
         var callerCredential = ResolveWorkflowCallerCredential(AgentToolRequestContext.Current);
         if (callerCredential.Error != null)
@@ -887,8 +906,8 @@ public sealed class AevatarInvocationDispatcher
         if (registration is null)
         {
             return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
-                "workflow_background_delivery_unsupported",
-                "This channel session cannot deliver workflow terminal results in the background because required reply target fields are unavailable."));
+                ChannelWorkflowDeliveryUnavailableCode,
+                ChannelWorkflowDeliveryUnavailableMessage));
         }
 
         if (_workflowRunDeliveryRegistrationPort is null)
@@ -898,8 +917,8 @@ public sealed class AevatarInvocationDispatcher
                 receipt.ActorId,
                 receipt.CommandId);
             return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
-                "workflow_background_delivery_unsupported",
-                "Workflow background delivery registration is unavailable in this host."));
+                ChannelWorkflowDeliveryUnavailableCode,
+                ChannelWorkflowDeliveryUnavailableMessage));
         }
 
         try
@@ -972,6 +991,9 @@ public sealed class AevatarInvocationDispatcher
             RegistrationScopeId: registrationScopeId);
     }
 
+    private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>
+        Error(ChannelWorkflowDeliveryUnavailableCode, ChannelWorkflowDeliveryUnavailableMessage);
+
     private static WorkflowBackgroundDeliveryResolution ResolveWorkflowBackgroundDelivery(
         InvocationWaitMode wait,
         AgentToolExecutionContext? context)
@@ -987,9 +1009,7 @@ public sealed class AevatarInvocationDispatcher
         if (credentialRef is not null)
             return WorkflowBackgroundDeliveryResolution.Enabled(credentialRef);
 
-        return WorkflowBackgroundDeliveryResolution.Failed(Error(
-            "workflow_background_delivery_unsupported",
-            "This channel session cannot deliver workflow terminal results in the background because no durable NyxID reply credential reference is available."));
+        return WorkflowBackgroundDeliveryResolution.Failed(ChannelWorkflowDeliveryUnavailableError());
     }
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(

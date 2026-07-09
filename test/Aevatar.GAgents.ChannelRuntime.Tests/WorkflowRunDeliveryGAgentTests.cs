@@ -90,6 +90,36 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task StartWithoutDurableCredential_ShouldPersistProductDeliveryFailure()
+    {
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateAgentAsync(
+            new RecordingWorkflowExecutionProjectionPort(),
+            CreateOutboundPort(new RecordingJsonHandler()),
+            new DeferredDispatchPort(),
+            new RecordingCredentialProvider(),
+            eventStore);
+
+        var invalid = StartRequest();
+        invalid.DurableReplyCredentialRef = string.Empty;
+        await agent.HandleEventAsync(Envelope(invalid));
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        agent.State.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+        agent.State.ErrorSummary.Should().NotBeNull();
+        agent.State.ErrorSummary!.ToLowerInvariant()
+            .Should().NotContain("durable")
+            .And.NotContain("credential");
+        var failed = await LastFailedEventAsync(eventStore);
+        failed.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+        failed.ErrorSummary.Should().NotBeNull();
+        failed.ErrorSummary!.ToLowerInvariant()
+            .Should().NotContain("durable")
+            .And.NotContain("credential");
+        failed.Attempt.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ProjectionDisabled_ShouldPersistFailedTerminalState()
     {
         var eventStore = new InMemoryEventStore();
