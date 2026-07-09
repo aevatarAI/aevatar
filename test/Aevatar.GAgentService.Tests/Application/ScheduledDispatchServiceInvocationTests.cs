@@ -274,16 +274,21 @@ public sealed class ScheduledDispatchServiceInvocationTests
             auth,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
-        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
         invokedChat.LlmControl.NyxIdAccessToken.Should().Be("owner-token");
         invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("existing-sender-token");
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.platform", OwnerScope.NyxIdPlatform);
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.tenant", "tenant-owner-1");
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.external_user_id", "owner-nyx-user-1");
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.scope", "proxy");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.platform");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.tenant");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.external_user_id");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.scope");
+        invoked.WorkflowCallerNyxIdCredential.Subject.Platform.Should().Be(OwnerScope.NyxIdPlatform);
+        invoked.WorkflowCallerNyxIdCredential.Subject.Tenant.Should().Be("tenant-owner-1");
+        invoked.WorkflowCallerNyxIdCredential.Subject.ExternalUserId.Should().Be("owner-nyx-user-1");
+        invoked.WorkflowCallerNyxIdCredential.Scope.Should().Be("proxy");
         var originalChat = original.Payload.Unpack<ChatRequestEvent>();
         originalChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         originalChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
@@ -337,10 +342,14 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-1");
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.platform", "lark");
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.tenant", "tenant-1");
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.external_user_id", "ou-user-1");
-        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.scope", "proxy");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.platform");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.tenant");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.external_user_id");
+        invokedChat.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.scope");
+        invoked.WorkflowCallerNyxIdCredential.Subject.Platform.Should().Be("lark");
+        invoked.WorkflowCallerNyxIdCredential.Subject.Tenant.Should().Be("tenant-1");
+        invoked.WorkflowCallerNyxIdCredential.Subject.ExternalUserId.Should().Be("ou-user-1");
+        invoked.WorkflowCallerNyxIdCredential.Scope.Should().Be("proxy");
         invokedChat.Metadata.Should().Contain("trace", "kept");
         invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
         invokedChat.Metadata.Should().Contain("schedule", "scheduled");

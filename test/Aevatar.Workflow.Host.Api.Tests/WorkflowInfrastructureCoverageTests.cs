@@ -216,6 +216,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         provider.GetRequiredService<IWorkflowScheduleApplicationService>().Should().NotBeNull();
         provider.GetRequiredService<IScheduledServiceInvocationDispatchPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceInvocationPort>().Should().NotBeNull();
+        provider.GetRequiredService<IWorkflowCallerCredentialTokenProvider>().Should().NotBeNull();
         services.Should().NotContain(x => x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
             x.ImplementationType.Name.Contains("GAgentServiceDemo", StringComparison.Ordinal));

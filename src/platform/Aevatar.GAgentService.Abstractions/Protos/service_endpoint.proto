@@ -49,6 +49,18 @@ message ServiceInvocationRequest {
   // (the dispatcher defaults it to "service-invoke"); scheduled dispatch sets "provisioned".
   string run_origin = 8;
   string schedule_id = 9;
+  ServiceInvocationWorkflowNyxIdCredentialSource workflow_caller_nyx_id_credential = 10;
+}
+
+message ServiceInvocationWorkflowNyxIdSubjectRef {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+}
+
+message ServiceInvocationWorkflowNyxIdCredentialSource {
+  ServiceInvocationWorkflowNyxIdSubjectRef subject = 1;
+  string scope = 2;
 }
 
 message ServiceInvocationAcceptedReceipt {

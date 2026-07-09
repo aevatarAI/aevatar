@@ -211,6 +211,106 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldMapTrustedWorkflowNyxIdCredentialToWorkflowCallerCredential()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            new RecordingWorkflowRunActorPort(),
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-nyx-id",
+            WorkflowCallerNyxIdCredential = new ServiceInvocationWorkflowNyxIdCredentialSource
+            {
+                Subject = new ServiceInvocationWorkflowNyxIdSubjectRef
+                {
+                    Platform = "lark",
+                    Tenant = "tenant-1",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = "proxy",
+            },
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer connector-token",
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.NyxId.Subject.Platform.Should().Be("lark");
+        workflowRequest.CallerCredential.NyxId.Subject.Tenant.Should().Be("tenant-1");
+        workflowRequest.CallerCredential.NyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
+        workflowRequest.CallerCredential.NyxId.Scope.Should().Be("proxy");
+        workflowRequest.CallerCredential.BearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldIgnoreCallerSuppliedWorkflowNyxIdCredentialHeaders()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            new RecordingWorkflowRunActorPort(),
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-untrusted-headers",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer connector-token",
+                Headers =
+                {
+                    ["workflow.caller_credential.nyx_id.subject.platform"] = "lark",
+                    ["workflow.caller_credential.nyx_id.subject.tenant"] = "tenant-1",
+                    ["workflow.caller_credential.nyx_id.subject.external_user_id"] = "ou-user-1",
+                    ["workflow.caller_credential.nyx_id.scope"] = "proxy",
+                    ["x-safe"] = "kept",
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.NyxId.Should().BeNull();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
+        workflowRequest.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.platform");
+        workflowRequest.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.tenant");
+        workflowRequest.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.subject.external_user_id");
+        workflowRequest.Headers.Should().NotContainKey("workflow.caller_credential.nyx_id.scope");
+        workflowRequest.Headers.Should().Contain("x-safe", "kept");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldPreferIdentityTenantIdOverPayloadScope()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();

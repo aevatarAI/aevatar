@@ -143,7 +143,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ServiceInvocationResolvedTarget target,
         string workflowRunActorId)
     {
-        var callerCredential = BuildWorkflowCallerCredential(source);
+        var callerCredential = BuildWorkflowCallerCredential(source, invocationRequest.WorkflowCallerNyxIdCredential);
         _logger.LogInformation(
             "Workflow service invocation caller credential prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} workflowRunActorId={WorkflowRunActorId} hasConnectorAuthorization={HasConnectorAuthorization} hasLlmOwnerToken={HasLlmOwnerToken} hasCallerBearerToken={HasCallerBearerToken}",
             invocationRequest.ScheduleId ?? string.Empty,
@@ -203,9 +203,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         return request;
     }
 
-    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(ChatRequestEvent source)
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(
+        ChatRequestEvent source,
+        ServiceInvocationWorkflowNyxIdCredentialSource? trustedNyxIdSource)
     {
-        var nyxIdCredential = BuildWorkflowCallerCredentialFromNyxIdSource(source.Headers);
+        var nyxIdCredential = BuildWorkflowCallerCredentialFromTrustedNyxIdSource(trustedNyxIdSource);
         if (nyxIdCredential.NyxId != null)
             return nyxIdCredential;
 
@@ -216,13 +218,13 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
     }
 
-    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromNyxIdSource(
-        IReadOnlyDictionary<string, string> headers)
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromTrustedNyxIdSource(
+        ServiceInvocationWorkflowNyxIdCredentialSource? source)
     {
-        var platform = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.SubjectPlatform);
-        var tenant = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.SubjectTenant);
-        var externalUserId = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.SubjectExternalUserId);
-        var scope = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.Scope);
+        var platform = source?.Subject?.Platform?.Trim() ?? string.Empty;
+        var tenant = source?.Subject?.Tenant?.Trim() ?? string.Empty;
+        var externalUserId = source?.Subject?.ExternalUserId?.Trim() ?? string.Empty;
+        var scope = source?.Scope?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(platform) ||
             string.IsNullOrWhiteSpace(tenant) ||
             string.IsNullOrWhiteSpace(externalUserId) ||
@@ -245,11 +247,6 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             },
         };
     }
-
-    private static string NormalizeHeader(IReadOnlyDictionary<string, string> headers, string key) =>
-        headers.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
-            ? value.Trim()
-            : string.Empty;
 
     private static bool IsWorkflowNyxIdCredentialHeader(string key) =>
         WorkflowNyxIdCredentialHeaders.IsReserved(key);

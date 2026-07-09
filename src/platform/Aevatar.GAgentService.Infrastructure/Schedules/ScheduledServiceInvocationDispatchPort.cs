@@ -3,7 +3,6 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
-using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -194,10 +193,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 if (credential.WorkflowSource != null)
                 {
                     chatRequest.ConnectorHttpAuthorization = string.Empty;
-                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.SubjectPlatform] = credential.WorkflowSource.Subject?.Platform ?? string.Empty;
-                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.SubjectTenant] = credential.WorkflowSource.Subject?.Tenant ?? string.Empty;
-                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.SubjectExternalUserId] = credential.WorkflowSource.Subject?.ExternalUserId ?? string.Empty;
-                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.Scope] = credential.WorkflowSource.Scope ?? string.Empty;
+                    cloned.WorkflowCallerNyxIdCredential = ToServiceInvocationWorkflowSource(credential.WorkflowSource);
                 }
                 else
                 {
@@ -307,6 +303,19 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             Scope = source.Scope?.Trim() ?? string.Empty,
         };
     }
+
+    private static ServiceInvocationWorkflowNyxIdCredentialSource ToServiceInvocationWorkflowSource(
+        WorkflowNyxIdCredentialSource source) =>
+        new()
+        {
+            Subject = new ServiceInvocationWorkflowNyxIdSubjectRef
+            {
+                Platform = source.Subject?.Platform ?? string.Empty,
+                Tenant = source.Subject?.Tenant ?? string.Empty,
+                ExternalUserId = source.Subject?.ExternalUserId ?? string.Empty,
+            },
+            Scope = source.Scope ?? string.Empty,
+        };
 
     private static bool IsUsableWorkflowSource(WorkflowNyxIdCredentialSource? source) =>
         source?.Subject != null &&
