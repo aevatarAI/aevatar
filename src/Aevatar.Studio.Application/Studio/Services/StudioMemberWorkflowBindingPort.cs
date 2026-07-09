@@ -57,10 +57,17 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 $"workflow_yaml is not a valid workflow definition: {parseResult.Error}");
         }
 
-        var member = await _memberService.GetAsync(request.ScopeId, request.MemberId, ct);
-        return IsPublished(member)
-            ? await SaveAndBindPublishedMemberAsync(request, member, ct)
-            : await BindUnpublishedMemberAsync(request, ct);
+        try
+        {
+            var member = await _memberService.GetAsync(request.ScopeId, request.MemberId, ct);
+            return IsPublished(member)
+                ? await SaveAndBindPublishedMemberAsync(request, member, ct)
+                : await BindUnpublishedMemberAsync(request, ct);
+        }
+        catch (StudioMemberNotFoundException)
+        {
+            return await BindUnpublishedMemberAsync(request, ct);
+        }
     }
 
     private async Task<StudioMemberWorkflowBindingResult> BindUnpublishedMemberAsync(
@@ -96,6 +103,12 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         StudioMemberDetailResponse member,
         CancellationToken ct)
     {
+        if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Studio member '{request.MemberId}' implementation kind '{member.Summary.ImplementationKind}' cannot be bound with a workflow.");
+        }
+
         var publishedServiceId = member.Summary.PublishedServiceId;
         if (string.IsNullOrWhiteSpace(publishedServiceId))
         {

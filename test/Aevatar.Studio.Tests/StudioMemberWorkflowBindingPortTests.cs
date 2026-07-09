@@ -140,6 +140,29 @@ public sealed class StudioMemberWorkflowBindingPortTests
     }
 
     [Fact]
+    public async Task BindAsync_WhenMemberReadModelNotMaterialized_ShouldStillDispatchBindingRun()
+    {
+        var memberService = new RecordingMemberService
+        {
+            ThrowMemberNotFoundOnGet = true,
+        };
+        var parser = new RecordingWorkflowDefinitionParser();
+        var saveAndBindPort = new RecordingSaveAndBindPort();
+        var memberCommandPort = new RecordingMemberCommandPort();
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort, (_, _) => Task.CompletedTask);
+
+        var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
+            ScopeId: "scope-1",
+            MemberId: "member-1",
+            WorkflowYaml: "name: demo\nsteps: []\n"));
+
+        result.Operation.Should().Be(StudioMemberWorkflowBindingOperationNames.Bind);
+        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
+        memberService.LastRequest.Should().NotBeNull();
+        saveAndBindPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task BindAsync_WhenMemberAlreadyPublished_ShouldSaveAndBindPublishedService()
     {
         var memberService = new RecordingMemberService
@@ -190,6 +213,32 @@ public sealed class StudioMemberWorkflowBindingPortTests
         memberCommandPort.LastRecordPublishedBinding.ImplementationRef.WorkflowId.Should().Be("workflow-explicit");
         memberCommandPort.LastRecordPublishedBinding.ImplementationRef.WorkflowRevision.Should().Be("revision-new");
         memberCommandPort.LastRecordPublishedBinding.ExpectedActorId.Should().Be("workflow-definition:workflow-new");
+    }
+
+    [Fact]
+    public async Task BindAsync_WhenPublishedMemberKindIsNotWorkflow_ShouldRejectBeforeSaveAndBind()
+    {
+        var memberService = new RecordingMemberService
+        {
+            Detail = BuildMemberDetail(
+                publishedServiceId: "published-service-1",
+                lastBoundRevisionId: "revision-existing",
+                implementationKind: MemberImplementationKindNames.Script),
+        };
+        var parser = new RecordingWorkflowDefinitionParser();
+        var saveAndBindPort = new RecordingSaveAndBindPort();
+        var memberCommandPort = new RecordingMemberCommandPort();
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+
+        var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
+            ScopeId: "scope-1",
+            MemberId: "member-1",
+            WorkflowYaml: "name: demo\nsteps: []\n"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Studio member 'member-1' implementation kind 'script' cannot be bound with a workflow.");
+        saveAndBindPort.LastRequest.Should().BeNull();
+        memberCommandPort.LastRecordPublishedBinding.Should().BeNull();
     }
 
     [Fact]
@@ -245,14 +294,15 @@ public sealed class StudioMemberWorkflowBindingPortTests
     private static StudioMemberDetailResponse BuildMemberDetail(
         string publishedServiceId = "published-service-1",
         string? lastBoundRevisionId = null,
-        StudioMemberBindingContractResponse? lastBinding = null) =>
+        StudioMemberBindingContractResponse? lastBinding = null,
+        string implementationKind = MemberImplementationKindNames.Workflow) =>
         new(
             new StudioMemberSummaryResponse(
                 MemberId: "member-1",
                 ScopeId: "scope-1",
                 DisplayName: "Member One",
                 Description: "Member description",
-                ImplementationKind: "workflow",
+                ImplementationKind: implementationKind,
                 LifecycleStage: "active",
                 PublishedServiceId: publishedServiceId,
                 LastBoundRevisionId: lastBoundRevisionId,
@@ -298,6 +348,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
         private readonly Queue<StudioMemberBindingRunStatusResponse> _bindingRuns = new();
 
         public StudioMemberDetailResponse Detail { get; init; } = BuildMemberDetail();
+        public bool ThrowMemberNotFoundOnGet { get; init; }
         public string? LastScopeId { get; private set; }
         public string? LastMemberId { get; private set; }
         public UpdateStudioMemberBindingRequest? LastRequest { get; private set; }
@@ -347,7 +398,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
             string scopeId,
             string memberId,
             CancellationToken ct = default) =>
-            Task.FromResult(Detail);
+            ThrowMemberNotFoundOnGet
+                ? throw new StudioMemberNotFoundException(scopeId, memberId)
+                : Task.FromResult(Detail);
 
         public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId,
