@@ -239,6 +239,23 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
+    public async Task DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        var evt = new StudioMemberDeleteRequested
+        {
+            ScopeId = normalizedScopeId,
+            MemberId = normalizedMemberId,
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+    }
+
     public async Task StartBindingRunAsync(
         StudioMemberBindingRunStartRequest request,
         CancellationToken ct = default)

@@ -159,6 +159,12 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
             string displayName,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("create must not rename members.");
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("create must not delete members.");
     }
 
     private sealed record CreateCall(string ScopeId, CreateStudioMemberRequest Request);

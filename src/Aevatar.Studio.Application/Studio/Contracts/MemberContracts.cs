@@ -246,6 +246,7 @@ public static class StudioMemberCommandStatusNames
 {
     public const string Accepted = "accepted";
     public const string NoChange = "no_change";
+    public const string DeleteAccepted = "delete_accepted";
 }
 
 public sealed record StudioMemberCommandResponse(

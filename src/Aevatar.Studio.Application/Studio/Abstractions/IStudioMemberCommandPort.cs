@@ -78,4 +78,15 @@ public interface IStudioMemberCommandPort
         string memberId,
         string? targetTeamId,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Dispatches a tombstone command to the StudioMember actor. The actor
+    /// owns idempotency and emits any required team-removal fact before the
+    /// delete event; published service artifacts remain owned by the platform
+    /// service lifecycle and are not cleaned up here.
+    /// </summary>
+    Task DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default);
 }

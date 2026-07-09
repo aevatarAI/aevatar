@@ -26,6 +26,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
+        command.DefaultServiceSlugs.Should().Equal("aevatar");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
     }
@@ -59,8 +60,23 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
+        command.DefaultServiceSlugs.Should().Equal("aevatar");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DispatchBootstrapIntentAsync_UsesConfiguredDefaultServiceSlugs()
+    {
+        using var environment = new OAuthBootstrapEnvironment(defaultServiceSlugs: "aevatar, custom-aevatar ");
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch);
+
+        await service.DispatchBootstrapIntentAsync(CancellationToken.None);
+
+        dispatch.Commands.Should().ContainSingle();
+        dispatch.Commands[0].DefaultServiceSlugs.Should().Equal("aevatar", "custom-aevatar");
     }
 
     [Fact]
@@ -161,24 +177,29 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         private readonly string? _oldRedirectBaseUrl;
         private readonly string? _oldAdditionalRedirectUris;
         private readonly string? _oldForceDcrOnStartup;
+        private readonly string? _oldDefaultServiceSlugs;
 
         public string Authority { get; } = "https://nyxid.test";
         public string RedirectBaseUrl { get; } = "https://aevatar.test";
         public string RedirectUri => $"{RedirectBaseUrl}{NyxIdRedirectUriResolver.CallbackPath}";
         public string ConsoleRedirectUri { get; } = "https://console.test/auth/callback";
 
-        public OAuthBootstrapEnvironment(bool forceDcrOnStartup = false)
+        public OAuthBootstrapEnvironment(bool forceDcrOnStartup = false, string? defaultServiceSlugs = null)
         {
             _oldAuthority = Environment.GetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar);
             _oldRedirectBaseUrl = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar);
             _oldAdditionalRedirectUris = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar);
             _oldForceDcrOnStartup = Environment.GetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar);
+            _oldDefaultServiceSlugs = Environment.GetEnvironmentVariable(AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar);
             Environment.SetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar, Authority);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, RedirectBaseUrl);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, ConsoleRedirectUri);
             Environment.SetEnvironmentVariable(
                 AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar,
                 forceDcrOnStartup ? "true" : null);
+            Environment.SetEnvironmentVariable(
+                AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar,
+                defaultServiceSlugs);
         }
 
         public void Dispose()
@@ -187,6 +208,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _oldRedirectBaseUrl);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, _oldAdditionalRedirectUris);
             Environment.SetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar, _oldForceDcrOnStartup);
+            Environment.SetEnvironmentVariable(AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar, _oldDefaultServiceSlugs);
         }
     }
 

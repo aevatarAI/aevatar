@@ -458,6 +458,12 @@ public sealed class StudioMemberWorkflowBindingPortTests
             UpdateStudioMemberRequest request,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
@@ -507,6 +513,12 @@ public sealed class StudioMemberWorkflowBindingPortTests
             string scopeId,
             string memberId,
             string? targetTeamId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
     }

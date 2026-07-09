@@ -518,6 +518,12 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             string scopeId, string memberId, string? targetTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not reassign teams.");
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not delete members.");
     }
 
     private sealed class InertTeamQueryPort : IStudioTeamQueryPort

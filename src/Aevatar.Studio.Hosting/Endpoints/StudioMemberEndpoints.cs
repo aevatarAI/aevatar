@@ -21,6 +21,10 @@ namespace Aevatar.Studio.Hosting.Endpoints;
 ///   - <see cref="StudioMemberNotFoundException"/> → 404
 ///   - other <see cref="InvalidOperationException"/> (validation) → 400
 ///
+/// <c>DELETE /api/scopes/{scopeId}/members/{memberId}</c> tombstones the
+/// StudioMember authority and leaves the member-owned published service
+/// artifacts/revisions untouched; the platform service lifecycle owns those.
+///
 /// IMPORTANT: every <see cref="IStudioMemberService"/> parameter must carry
 /// the <see cref="FromServicesAttribute"/>. Minimal API's
 /// <c>RequestDelegateFactory</c> probes parameter types for a
@@ -68,6 +72,8 @@ internal static class StudioMemberEndpoints
         // ADR-0017: PATCH a member's team assignment. Body shape carries
         // Merge-Patch semantics for `teamId` — see HandlePatchAsync.
         app.MapPatch("/api/scopes/{scopeId}/members/{memberId}", HandlePatchAsync)
+            .WithTags("StudioMembers");
+        app.MapDelete("/api/scopes/{scopeId}/members/{memberId}", HandleDeleteAsync)
             .WithTags("StudioMembers");
     }
 
@@ -428,6 +434,31 @@ internal static class StudioMemberEndpoints
                 memberId,
                 new UpdateStudioMemberRequest(displayNamePatch, teamIdPatch, implementationRefPatch),
                 ct);
+            return Results.Accepted(BuildMemberLocation(scopeId, memberId), receipt);
+        }
+        catch (StudioMemberNotFoundException ex)
+        {
+            return NotFound(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest("INVALID_STUDIO_MEMBER_REQUEST", ex.Message);
+        }
+    }
+
+    internal static async Task<IResult> HandleDeleteAsync(
+        HttpContext http,
+        string scopeId,
+        string memberId,
+        [FromServices] IStudioMemberService memberService,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        try
+        {
+            var receipt = await memberService.DeleteAsync(scopeId, memberId, ct);
             return Results.Accepted(BuildMemberLocation(scopeId, memberId), receipt);
         }
         catch (StudioMemberNotFoundException ex)
