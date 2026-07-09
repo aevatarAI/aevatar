@@ -194,5 +194,11 @@ public sealed class StudioMemberWorkflowBindingPortTests
             UpdateStudioMemberRequest request,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 }

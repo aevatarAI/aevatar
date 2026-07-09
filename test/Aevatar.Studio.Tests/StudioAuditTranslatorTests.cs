@@ -42,6 +42,7 @@ public sealed class StudioAuditTranslatorTests
                 typeof(StudioMemberCreatedAuditTranslator),
                 typeof(StudioMemberImplementationUpdatedAuditTranslator),
                 typeof(StudioMemberReassignedAuditTranslator),
+                typeof(StudioMemberDeletedAuditTranslator),
                 typeof(StudioTeamCreatedAuditTranslator),
                 typeof(StudioTeamUpdatedAuditTranslator),
                 typeof(StudioTeamArchivedAuditTranslator),
@@ -146,6 +147,29 @@ public sealed class StudioAuditTranslatorTests
                 {
                     ["from_team_id"] = "team-old",
                     ["to_team_id"] = "team-alpha",
+                }),
+        ];
+        yield return
+        [
+            new StudioMemberDeletedAuditTranslator(),
+            new StudioMemberDeletedEvent
+            {
+                MemberId = "m-alpha",
+                ScopeId = "scope-alpha",
+                PreviousTeamId = "team-old",
+                PublishedServiceId = "svc-alpha",
+            },
+            "studio.member.deleted",
+            "studio_member",
+            "m-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Restricted,
+                true,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["previous_team_id"] = "team-old",
+                    ["published_service_id"] = "svc-alpha",
                 }),
         ];
         yield return

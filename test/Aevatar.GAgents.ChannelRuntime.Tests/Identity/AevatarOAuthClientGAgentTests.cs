@@ -89,9 +89,11 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _registrar.Calls.Should().HaveCount(1);
         _registrar.Calls[0].Authority.Should().Be("https://nyxid.test");
         _registrar.Calls[0].RedirectUris.Should().Equal("https://aevatar.test/api/oauth/nyxid-callback");
+        _registrar.Calls[0].DefaultServiceSlugs.Should().Equal("aevatar");
         _agent.State.ClientId.Should().Be(_registrar.NextClientId);
         _agent.State.NyxidAuthority.Should().Be("https://nyxid.test");
         _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        _agent.State.DefaultServiceSlugs.Should().Equal("aevatar");
         // New writes store the key in the vault and leave [hmac_key] empty; the
         // state carries only a ref that resolves to 32 raw bytes.
         _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy plaintext field empty");
@@ -382,6 +384,50 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleEnsureProvisioned_ReDcrs_WhenDefaultServiceSlugsDrift()
+    {
+        var redirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback";
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = redirectUri,
+        };
+        cmd.DefaultServiceSlugs.Add("aevatar");
+
+        await _agent.HandleEnsureProvisioned(cmd);
+        _agent.State.DefaultServiceSlugs.Should().Equal("aevatar");
+
+        _registrar.NextClientId = "client-after-service-default-heal";
+        cmd.DefaultServiceSlugs.Add("scope-service");
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.Calls.Should().HaveCount(2,
+            "default service access is part of the NyxID Developer App authorization contract");
+        _registrar.Calls[1].DefaultServiceSlugs.Should().Equal("aevatar", "scope-service");
+        _agent.State.ClientId.Should().Be("client-after-service-default-heal");
+        _agent.State.DefaultServiceSlugs.Should().Equal("aevatar", "scope-service");
+        (await ReadEventsAsync<AevatarOAuthClientDriftReconciledEvent>())
+            .Should()
+            .ContainSingle(e => e.DriftKind == "default_service_slugs");
+    }
+
+    [Fact]
+    public async Task HandleProvision_PersistsDefaultServiceSlugs_FromCommand()
+    {
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "operator-rebuilt-client",
+            ClientIdIssuedAtUnix = 1700000000,
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+            DefaultServiceSlugs = { "aevatar", "scope-service" },
+        });
+
+        _agent.State.DefaultServiceSlugs.Should().Equal("aevatar", "scope-service");
+    }
+
+    [Fact]
     public async Task HandleEnsureProvisioned_SchedulesDurableRetry_WhenDcrFails()
     {
         _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
@@ -487,6 +533,40 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryClearedEvent>())
             .Should()
             .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleProvisioningRetryFired_IgnoresLegacyCallback_WhenPendingDefaultServicesAreCustom()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        var cmd = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        };
+        cmd.DefaultServiceSlugs.Add("aevatar");
+        cmd.DefaultServiceSlugs.Add("scope-service");
+        await _agent.HandleEnsureProvisioned(cmd);
+
+        _registrar.ThrowOnRegister = null;
+        _registrar.NextClientId = "client-after-custom-retry";
+        await _agent.HandleProvisioningRetryFired(new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+            FiredAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+
+        _registrar.Calls.Should().ContainSingle(
+            "a legacy callback without default_service_slugs must not consume a custom service-default retry");
+        _agent.State.ClientId.Should().BeEmpty();
+        _agent.State.ProvisioningRetryAttempt.Should().Be(1);
     }
 
     [Fact]
@@ -954,7 +1034,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     private sealed class RecordingDcrClient
     {
         public string NextClientId { get; set; } = "client-first";
-        public List<(string Authority, string ClientName, string[] RedirectUris)> Calls { get; } = new();
+        public List<(string Authority, string ClientName, string[] RedirectUris, string[] DefaultServiceSlugs)> Calls { get; } = new();
         public Exception? ThrowOnRegister { get; set; }
 
         /// <summary>
@@ -978,9 +1058,13 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             }
 
             public override async Task<RegistrationResult> RegisterPublicClientAsync(
-                string authority, string clientName, IReadOnlyCollection<string> redirectUris, CancellationToken ct = default)
+                string authority,
+                string clientName,
+                IReadOnlyCollection<string> redirectUris,
+                IReadOnlyCollection<string> defaultServiceSlugs,
+                CancellationToken ct = default)
             {
-                _owner.Calls.Add((authority, clientName, redirectUris.ToArray()));
+                _owner.Calls.Add((authority, clientName, redirectUris.ToArray(), defaultServiceSlugs.ToArray()));
                 if (_owner.OnRegistered is not null)
                     await _owner.OnRegistered().ConfigureAwait(false);
                 if (_owner.ThrowOnRegister is not null)

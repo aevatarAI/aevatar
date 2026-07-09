@@ -378,6 +378,26 @@ public sealed class StudioMemberService : IStudioMemberService
             DateTimeOffset.UtcNow);
     }
 
+    public async Task<StudioMemberCommandResponse> DeleteAsync(
+        string scopeId,
+        string memberId,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedMemberId = NormalizeRequired(memberId, nameof(memberId));
+
+        var existing = await _memberQueryPort.GetAsync(normalizedScopeId, normalizedMemberId, ct);
+        if (existing == null)
+            throw new StudioMemberNotFoundException(normalizedScopeId, normalizedMemberId);
+
+        await _memberCommandPort.DeleteAsync(normalizedScopeId, normalizedMemberId, ct);
+        return new StudioMemberCommandResponse(
+            StudioMemberCommandStatusNames.DeleteAccepted,
+            normalizedScopeId,
+            normalizedMemberId,
+            DateTimeOffset.UtcNow);
+    }
+
     private async Task<StudioMemberInvocationReadinessResponse> ResolveInvocationReadinessAsync(
         string scopeId,
         string? publishedServiceId,

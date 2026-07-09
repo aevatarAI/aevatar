@@ -119,5 +119,9 @@ public sealed class StudioTeamEndpointsRouteBindingTests
         public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default) =>
             Task.FromException<StudioMemberCommandResponse>(new NotImplementedException());
+
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId, string memberId, CancellationToken ct = default) =>
+            Task.FromException<StudioMemberCommandResponse>(new NotImplementedException());
     }
 }
