@@ -489,7 +489,7 @@ public sealed class WorkflowRunGAgent
             ForkSeed = request.ForkSeed,
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
-        await PublishAsync(start, TopologyAudience.Self);
+        await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
     }
 
     [EventHandler]
@@ -544,12 +544,60 @@ public sealed class WorkflowRunGAgent
             StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
 
-        await PublishAsync(new StartWorkflowEvent
+        await PublishStartWorkflowOrTerminalFailureAsync(
+            new StartWorkflowEvent
+            {
+                WorkflowName = _compiledWorkflow.Name,
+                Input = request.Input ?? string.Empty,
+                RunId = runId,
+            },
+            sessionId: string.Empty,
+            CancellationToken.None);
+    }
+
+    private async Task PublishStartWorkflowOrTerminalFailureAsync(
+        StartWorkflowEvent start,
+        string? sessionId,
+        CancellationToken ct)
+    {
+        try
         {
-            WorkflowName = _compiledWorkflow.Name,
-            Input = request.Input ?? string.Empty,
-            RunId = runId,
-        }, TopologyAudience.Self);
+            await PublishAsync(start, TopologyAudience.Self);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            Logger.LogError(
+                ex,
+                "Workflow start dispatch failed run={RunId} workflow={WorkflowName}.",
+                start.RunId,
+                start.WorkflowName);
+            var terminal = new WorkflowCompletedEvent
+            {
+                WorkflowName = start.WorkflowName,
+                RunId = start.RunId,
+                Success = false,
+                Error = WorkflowRuntimeFailureMessages.StartDispatchFailed(ex),
+            };
+            try
+            {
+                await HandleWorkflowCompleted(terminal);
+            }
+            catch (Exception terminalEx) when (!ct.IsCancellationRequested)
+            {
+                Logger.LogError(
+                    terminalEx,
+                    "Workflow start dispatch terminalization failed run={RunId}.",
+                    start.RunId);
+                await PublishAsync(new WorkflowLlmInvocationCompletedEvent
+                {
+                    RunId = start.RunId,
+                    SessionId = sessionId ?? string.Empty,
+                    Success = false,
+                    Content = "Workflow execution failed: start_dispatch_failed",
+                    Error = terminal.Error,
+                }, TopologyAudience.Parent);
+            }
+        }
     }
 
     private static string ResolveExecutionInput(WorkflowChatRequestEvent request)

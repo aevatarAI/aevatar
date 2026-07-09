@@ -388,7 +388,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldResumeInitialDispatch_WhenStartPublishFailsTransiently()
+    public async Task WorkflowLoop_ShouldTerminalizeInitialDispatch_WhenStartPublishFails()
     {
         var ctx = new SchedulingContext
         {
@@ -416,26 +416,19 @@ public class RuntimeCallbackEventizationTests
             Input = "input-v1",
         });
 
-        await FluentActions
-            .Invoking(() => module.HandleAsync(startEnvelope, ctx, CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("transient publish failure");
-
-        var pendingState = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
-        pendingState.Active.Should().BeTrue();
-        pendingState.CurrentStepDispatchPending.Should().BeTrue();
-        pendingState.CurrentStepId.Should().Be("step-1");
-
         await module.HandleAsync(startEnvelope, ctx, CancellationToken.None);
 
-        var retryStepRequest = ctx.Published
+        var completion = ctx.Published
             .Select(x => x.Event)
-            .OfType<StepRequestEvent>()
+            .OfType<WorkflowCompletedEvent>()
             .Single();
-        retryStepRequest.RunId.Should().Be("run-start-replay");
-        retryStepRequest.StepId.Should().Be("step-1");
-        retryStepRequest.Input.Should().Be("input-v1");
+        completion.RunId.Should().Be("run-start-replay");
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().StartWith("step_dispatch_failed: step 'step-1' (transform) failed during dispatch: ");
+
+        var terminalState = ctx.LoadState<WorkflowExecutionKernelState>("workflow_execution_kernel");
+        terminalState.Active.Should().BeFalse();
+        terminalState.CurrentStepDispatchPending.Should().BeFalse();
     }
 
     [Fact]
@@ -674,7 +667,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldReplayRetryBackoff_WhenRedispatchFailsTransiently()
+    public async Task WorkflowLoop_ShouldTerminalizeRetryBackoff_WhenRedispatchFails()
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -737,26 +730,18 @@ public class RuntimeCallbackEventizationTests
             },
             MetadataFor(scheduled));
 
-        await FluentActions
-            .Invoking(() => module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None))
-            .Should()
-            .ThrowAsync<InvalidOperationException>()
-            .WithMessage("transient publish failure");
+        await module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None);
 
-        ctx.Published.Should().BeEmpty();
+        var completion = ctx.Published
+            .Select(x => x.Event)
+            .OfType<WorkflowCompletedEvent>()
+            .Single();
+        completion.RunId.Should().Be("run-retry-replay");
+        completion.Success.Should().BeFalse();
+        completion.Error.Should().StartWith("step_dispatch_failed: step 'step-1' (transform) failed during dispatch: ");
         ctx.Canceled.Should().ContainSingle(x =>
             x.CallbackId.StartsWith("workflow-step-timeout:run-retry-replay:step-1:", StringComparison.Ordinal) &&
             x.ExpectedGeneration == 2);
-
-        await module.HandleAsync(backoffEnvelope, ctx, CancellationToken.None);
-
-        var retryStepRequest = ctx.Published
-            .Select(x => x.Event)
-            .OfType<StepRequestEvent>()
-            .Single();
-        retryStepRequest.RunId.Should().Be("run-retry-replay");
-        retryStepRequest.StepId.Should().Be("step-1");
-        retryStepRequest.Input.Should().Be("input-v1");
     }
 
     [Fact]
