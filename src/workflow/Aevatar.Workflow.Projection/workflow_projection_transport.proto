@@ -71,6 +71,17 @@ message WorkflowExecutionCurrentStateDocument {
   // Per-schedule correlation id carried from the committed WorkflowRunState. Observatory filter
   // dimension for "this schedule's runs"; empty for non-scheduled/legacy runs.
   string schedule_id = 32;
+  WorkflowRunSourceProvenanceReadModel source_provenance = 33;
+}
+
+message WorkflowRunSourceProvenanceReadModel {
+  string source_kind = 1;
+  string workflow_id = 2;
+  int64 draft_version = 3;
+  string workflow_revision_id = 4;
+  string binding_revision_id = 5;
+  string source_hash = 6;
+  google.protobuf.Timestamp source_captured_at_utc = 7;
 }
 
 message WorkflowExternalApprovalContinuationDocument {

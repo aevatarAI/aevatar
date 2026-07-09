@@ -671,6 +671,10 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function readPositiveVersion(value: number | null | undefined): number | undefined {
+  return typeof value === 'number' && value > 0 ? value : undefined;
+}
+
 function normalizeWorkflowSaveResult(
   result: StudioWorkflowSaveResult | StudioWorkflowFile,
 ): StudioWorkflowSaveResult {
@@ -5045,6 +5049,8 @@ const StudioPage: React.FC = () => {
           displayName: buildPendingBindCandidate.displayName,
           workflowId: workflowIdForBinding,
           workflowYamls: await buildWorkflowYamlBundle(),
+          sourceKind: 'editor_snapshot',
+          expectedDraftVersion: readPositiveVersion(activeWorkflowFile?.draftVersion),
         });
         await queryClient.invalidateQueries({
           queryKey: [
@@ -5075,6 +5081,7 @@ const StudioPage: React.FC = () => {
         result = await studioApi.bindScopeWorkflow({
           scopeId: resolvedStudioScopeId,
           displayName: buildPendingBindCandidate.displayName,
+          workflowId: trimOptional(selectedWorkflowId || activeWorkflowFile?.workflowId),
           workflowYamls: await buildWorkflowYamlBundle(),
         });
       }
@@ -5692,6 +5699,7 @@ const StudioPage: React.FC = () => {
         await studioApi.saveWorkflow({
           workflowId: activeWorkflowFile?.workflowId || undefined,
           draftExists: activeWorkflowFile?.draftExists,
+          expectedDraftVersion: readPositiveVersion(activeWorkflowFile?.draftVersion),
           scopeId: resolvedStudioScopeId || undefined,
           directoryId,
           workflowName,
@@ -6432,6 +6440,13 @@ const StudioPage: React.FC = () => {
               await studioApi.deleteWorkflow(
                 workflowId,
                 resolvedStudioScopeId || undefined,
+                readPositiveVersion(
+                  activeWorkflowFile?.workflowId === workflowId
+                    ? activeWorkflowFile?.draftVersion
+                    : visibleWorkflowSummaries.find(
+                        (workflow) => workflow.workflowId === workflowId,
+                      )?.draftVersion,
+                ),
               );
             } catch (error) {
               if (!isWorkflowNotFoundError(error)) {
@@ -6598,6 +6613,9 @@ const StudioPage: React.FC = () => {
       const draftKey = saveScopeDraftRunPayload({
         bundleName: workflowName,
         bundleYamls: workflowYamls,
+        workflowId: trimOptional(selectedWorkflowId || activeWorkflowFile?.workflowId),
+        draftVersion: readPositiveVersion(activeWorkflowFile?.draftVersion),
+        sourceKind: 'editor_snapshot',
       });
       setPromptHistory(
         savePlaygroundPromptHistoryEntry({

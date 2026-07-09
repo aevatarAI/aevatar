@@ -164,10 +164,12 @@ public sealed class WorkspaceService
         {
             throw new WorkflowDraftNotFoundException(workflowId);
         }
-
         var stableWorkflowId = string.IsNullOrWhiteSpace(workflowId)
             ? CreateWorkflowDraftId()
             : workflowId;
+        if (existingDraft != null)
+            RequireExpectedDraftVersion(request.ExpectedDraftVersion);
+        ValidateExpectedDraftVersion(stableWorkflowId, request.ExpectedDraftVersion, existingDraft?.Version);
 
         if (conflictingFile != null &&
             !string.Equals(conflictingFile.WorkflowId, stableWorkflowId, StringComparison.Ordinal))
@@ -179,6 +181,7 @@ public sealed class WorkspaceService
         }
 
         var updatedAtUtc = DateTimeOffset.UtcNow;
+        var acceptedDraftVersion = (existingDraft?.Version ?? 0) + 1;
         var stored = new StudioWorkflowDraftRecord(
             WorkflowId: stableWorkflowId,
             Name: normalizedName,
@@ -190,13 +193,22 @@ public sealed class WorkspaceService
             Layout: null,
             UpdatedAtUtc: updatedAtUtc,
             CreatedAtUtc: existingDraft?.CreatedAtUtc ?? updatedAtUtc,
-            Version: existingDraft?.Version ?? 0);
-        await _commandPort.SaveDraftAsync(stored, workspace.StateVersion, cancellationToken);
+            Version: acceptedDraftVersion);
+        await _commandPort.SaveDraftAsync(
+            stored,
+            request.ExpectedDraftVersion.HasValue ? workspace.StateVersion : null,
+            cancellationToken);
 
         return ToWorkflowDraftResponse(stored);
     }
 
-    public async Task DeleteDraftAsync(string workflowId, CancellationToken cancellationToken = default)
+    public Task DeleteDraftAsync(string workflowId, CancellationToken cancellationToken = default) =>
+        DeleteDraftAsync(workflowId, expectedDraftVersion: null, cancellationToken);
+
+    public async Task DeleteDraftAsync(
+        string workflowId,
+        long? expectedDraftVersion,
+        CancellationToken cancellationToken = default)
     {
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
         var workspace = await _queryPort.GetAsync(cancellationToken);
@@ -206,8 +218,13 @@ public sealed class WorkspaceService
         {
             throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
         }
+        RequireExpectedDraftVersion(expectedDraftVersion);
+        ValidateExpectedDraftVersion(normalizedWorkflowId, expectedDraftVersion, existingDraft.Version);
 
-        await _commandPort.DeleteDraftAsync(normalizedWorkflowId, workspace.StateVersion, cancellationToken);
+        await _commandPort.DeleteDraftAsync(
+            normalizedWorkflowId,
+            expectedDraftVersion.HasValue ? workspace.StateVersion : null,
+            cancellationToken);
     }
 
     private string AlignWorkflowYamlName(string yaml, string workflowName)
@@ -238,7 +255,8 @@ public sealed class WorkspaceService
             file.DirectoryLabel,
             file.Yaml,
             Layout: null,
-            file.UpdatedAtUtc);
+            file.UpdatedAtUtc,
+            file.Version);
 
     private static WorkspaceSettingsResponse ToSettingsResponse(StudioWorkspaceSettings settings) =>
         new(
@@ -262,10 +280,48 @@ public sealed class WorkspaceService
             file.DirectoryLabel,
             document?.Steps.Count ?? 0,
             HasLayout: false,
-            file.UpdatedAtUtc);
+            file.UpdatedAtUtc,
+            file.Version);
 
     private static string CreateWorkflowDraftId() =>
         Guid.NewGuid().ToString("N");
+
+    private static void ValidateExpectedDraftVersion(
+        string? stableWorkflowId,
+        long? expectedDraftVersion,
+        long? currentDraftVersion)
+    {
+        if (!expectedDraftVersion.HasValue)
+            return;
+
+        if (expectedDraftVersion.Value <= 0)
+            throw new InvalidOperationException("expectedDraftVersion must be greater than 0.");
+
+        var workflowId = string.IsNullOrWhiteSpace(stableWorkflowId)
+            ? string.Empty
+            : stableWorkflowId;
+        if (!currentDraftVersion.HasValue)
+        {
+            throw new WorkflowDraftVersionConflictException(
+                workflowId,
+                expectedDraftVersion.Value,
+                0);
+        }
+
+        if (currentDraftVersion.Value != expectedDraftVersion.Value)
+        {
+            throw new WorkflowDraftVersionConflictException(
+                workflowId,
+                expectedDraftVersion.Value,
+                currentDraftVersion.Value);
+        }
+    }
+
+    private static void RequireExpectedDraftVersion(long? expectedDraftVersion)
+    {
+        if (!expectedDraftVersion.HasValue)
+            throw new InvalidOperationException("expectedDraftVersion is required.");
+    }
 
     private static string NormalizeRuntimeBaseUrl(string url)
     {

@@ -132,7 +132,12 @@ public sealed class AppScopedWorkflowService
             {
                 throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
             }
+            RequireExpectedDraftVersion(request.ExpectedDraftVersion);
         }
+        ValidateExpectedDraftVersion(
+            normalizedWorkflowId,
+            request.ExpectedDraftVersion,
+            existingDraft?.Version);
 
         var scopeDirectory = CreateScopeDirectory(normalizedScopeId);
         var fileName = EnsureYamlExtension(string.IsNullOrWhiteSpace(request.FileName)
@@ -150,6 +155,7 @@ public sealed class AppScopedWorkflowService
                 conflictingDraft.WorkflowId);
         }
 
+        var acceptedDraftVersion = (existingDraft?.Version ?? 0) + 1;
         var stored = new StudioWorkflowDraftRecord(
             WorkflowId: normalizedWorkflowId,
             Name: workflowName,
@@ -161,13 +167,13 @@ public sealed class AppScopedWorkflowService
             Layout: null,
             UpdatedAtUtc: savedAtUtc,
             CreatedAtUtc: existingDraft?.CreatedAtUtc ?? savedAtUtc,
-            Version: existingDraft?.Version ?? 0);
+            Version: acceptedDraftVersion);
 
         // Scoped workspace save persists an editor draft; publish stays on the scope-binding flow.
         var receipt = await workspaceCommandPort.SaveDraftAsync(
             normalizedScopeId,
             stored,
-            expectedVersion: null,
+            expectedVersion: request.ExpectedDraftVersion.HasValue ? workspace.StateVersion : null,
             ct);
 
         return (stored, receipt);
@@ -176,6 +182,15 @@ public sealed class AppScopedWorkflowService
     public async Task DeleteDraftAsync(
         string scopeId,
         string workflowId,
+        CancellationToken ct = default)
+    {
+        await DeleteDraftAsync(scopeId, workflowId, expectedDraftVersion: null, ct);
+    }
+
+    public async Task DeleteDraftAsync(
+        string scopeId,
+        string workflowId,
+        long? expectedDraftVersion,
         CancellationToken ct = default)
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
@@ -191,8 +206,17 @@ public sealed class AppScopedWorkflowService
         {
             throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
         }
+        RequireExpectedDraftVersion(expectedDraftVersion);
+        ValidateExpectedDraftVersion(
+            normalizedWorkflowId,
+            expectedDraftVersion,
+            existingDraft.Version);
 
-        await workspaceCommandPort.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, expectedVersion: null, ct);
+        await workspaceCommandPort.DeleteDraftAsync(
+            normalizedScopeId,
+            normalizedWorkflowId,
+            expectedVersion: expectedDraftVersion.HasValue ? workspace.StateVersion : null,
+            ct);
     }
 
     // Refactor (iter56/cluster-929-studio-workflow-obsolete-shims):
@@ -310,7 +334,8 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.Label,
             parse.Document?.Steps.Count ?? 0,
             HasLayout: false,
-            draft.UpdatedAtUtc);
+            draft.UpdatedAtUtc,
+            draft.Version);
     }
 
     private WorkflowDraftResponse ToDraftWorkflowResponse(
@@ -327,7 +352,8 @@ public sealed class AppScopedWorkflowService
             scopeDirectory.Label,
             draft.Yaml,
             Layout: null,
-            draft.UpdatedAtUtc);
+            draft.UpdatedAtUtc,
+            draft.Version);
     }
 
     private static string ResolveDraftWorkflowName(
@@ -364,6 +390,42 @@ public sealed class AppScopedWorkflowService
 
     private static string CreateWorkflowDraftId() =>
         Guid.NewGuid().ToString("N");
+
+    private static void ValidateExpectedDraftVersion(
+        string workflowId,
+        long? expectedDraftVersion,
+        long? currentDraftVersion)
+    {
+        if (!expectedDraftVersion.HasValue)
+            return;
+
+        if (expectedDraftVersion.Value <= 0)
+        {
+            throw new InvalidOperationException("expectedDraftVersion must be greater than 0.");
+        }
+
+        if (!currentDraftVersion.HasValue)
+        {
+            throw new WorkflowDraftVersionConflictException(
+                workflowId,
+                expectedDraftVersion.Value,
+                0);
+        }
+
+        if (currentDraftVersion.Value != expectedDraftVersion.Value)
+        {
+            throw new WorkflowDraftVersionConflictException(
+                workflowId,
+                expectedDraftVersion.Value,
+                currentDraftVersion.Value);
+        }
+    }
+
+    private static void RequireExpectedDraftVersion(long? expectedDraftVersion)
+    {
+        if (!expectedDraftVersion.HasValue)
+            throw new InvalidOperationException("expectedDraftVersion is required.");
+    }
 
     private static string NormalizeRequired(string value, string fieldName)
     {

@@ -147,6 +147,27 @@ public sealed class StudioMemberServiceBindingTests
     }
 
     [Fact]
+    public async Task BindAsync_WorkflowSavedDraft_ShouldRequireExpectedDraftVersion()
+    {
+        var service = NewService(
+            new RecordingCommandPort(),
+            new ThrowingBindQueryPort());
+
+        var act = () => service.BindAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberBindingRequest(
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    [],
+                    SourceKind: StudioWorkflowBindingSourceKindNames.SavedDraft)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*expectedDraftVersion is required when sourceKind is 'saved_draft'*");
+    }
+
+    [Fact]
     public async Task BindAsync_ShouldFail_WhenBindingImplementationIsMissing()
     {
         var service = NewService(

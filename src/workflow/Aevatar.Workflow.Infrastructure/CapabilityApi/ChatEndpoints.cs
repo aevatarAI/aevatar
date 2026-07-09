@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using ApplicationWorkflowRunSourceProvenance = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowRunSourceProvenance;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
@@ -125,7 +126,8 @@ public static class WorkflowCapabilityEndpoints
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IWorkflowFileIngressPort? fileIngressPort = null,
+        ApplicationWorkflowRunSourceProvenance? sourceProvenance = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -170,8 +172,12 @@ public static class WorkflowCapabilityEndpoints
                 return;
             }
 
+            var request = sourceProvenance == null
+                ? normalizedRequest.Request!
+                : normalizedRequest.Request! with { SourceProvenance = sourceProvenance };
+
             var result = await chatRunService.ExecuteAsync(
-                normalizedRequest.Request!,
+                request,
                 async (frame, token) =>
                 {
                     await writer.WriteAsync(frame, token);

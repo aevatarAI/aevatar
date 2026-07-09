@@ -66,6 +66,7 @@ public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBin
                 ? null
                 : document.PlatformBindingCommandId,
             Result = ToResultResponse(document),
+            WorkflowSource = ToWorkflowSourceResponse(document),
         };
     }
 
@@ -86,6 +87,23 @@ public sealed class ProjectionStudioMemberBindingRunQueryPort : IStudioMemberBin
             ExpectedActorId: string.IsNullOrEmpty(document.ResultExpectedActorId)
                 ? null
                 : document.ResultExpectedActorId);
+    }
+
+    private static StudioWorkflowBindingSourceResponse? ToWorkflowSourceResponse(
+        StudioMemberBindingRunCurrentStateDocument document)
+    {
+        if (string.IsNullOrEmpty(document.WorkflowSourceKind))
+            return null;
+
+        return new StudioWorkflowBindingSourceResponse(
+            SourceKind: document.WorkflowSourceKind,
+            DraftVersion: document.WorkflowSourceDraftVersion > 0
+                ? document.WorkflowSourceDraftVersion
+                : null,
+            SourceHash: string.IsNullOrEmpty(document.WorkflowSourceHash)
+                ? null
+                : document.WorkflowSourceHash,
+            SourceCapturedAtUtc: document.WorkflowSourceCapturedAt?.ToDateTimeOffset());
     }
 
     private static string NormalizeBindingRunStatusWire(string? wire) => wire switch

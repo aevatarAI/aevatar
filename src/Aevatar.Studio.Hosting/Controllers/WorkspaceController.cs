@@ -187,6 +187,10 @@ public sealed class WorkspaceController : ControllerBase
             {
                 return Conflict(CreateDraftPathConflictPayload(exception));
             }
+            catch (WorkflowDraftVersionConflictException exception)
+            {
+                return Conflict(CreateDraftVersionConflictPayload(exception));
+            }
             catch (InvalidOperationException exception)
             {
                 return BadRequest(new { message = exception.Message });
@@ -200,6 +204,10 @@ public sealed class WorkspaceController : ControllerBase
         catch (WorkflowDraftPathConflictException exception)
         {
             return Conflict(CreateDraftPathConflictPayload(exception));
+        }
+        catch (WorkflowDraftVersionConflictException exception)
+        {
+            return Conflict(CreateDraftVersionConflictPayload(exception));
         }
         catch (InvalidOperationException exception)
         {
@@ -243,6 +251,10 @@ public sealed class WorkspaceController : ControllerBase
         catch (WorkflowDraftPathConflictException exception)
         {
             return Conflict(CreateDraftPathConflictPayload(exception));
+        }
+        catch (WorkflowDraftVersionConflictException exception)
+        {
+            return Conflict(CreateDraftVersionConflictPayload(exception));
         }
         catch (InvalidOperationException exception)
         {
@@ -314,6 +326,7 @@ public sealed class WorkspaceController : ControllerBase
     public async Task<IActionResult> DeleteDraft(
         string workflowId,
         [FromQuery] string? scopeId,
+        [FromQuery] long? expectedDraftVersion,
         CancellationToken cancellationToken)
     {
         try
@@ -325,11 +338,15 @@ public sealed class WorkspaceController : ControllerBase
             var scopeContext = scopeResolution.Context;
             if (scopeContext != null)
             {
-                await _scopeWorkflowService.DeleteDraftAsync(scopeContext.ScopeId, workflowId, cancellationToken);
+                await _scopeWorkflowService.DeleteDraftAsync(
+                    scopeContext.ScopeId,
+                    workflowId,
+                    expectedDraftVersion,
+                    cancellationToken);
             }
             else
             {
-                await _workspaceService.DeleteDraftAsync(workflowId, cancellationToken);
+                await _workspaceService.DeleteDraftAsync(workflowId, expectedDraftVersion, cancellationToken);
             }
 
             return NoContent();
@@ -342,6 +359,10 @@ public sealed class WorkspaceController : ControllerBase
         {
             return NotFound();
         }
+        catch (WorkflowDraftVersionConflictException exception)
+        {
+            return Conflict(CreateDraftVersionConflictPayload(exception));
+        }
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
@@ -352,6 +373,15 @@ public sealed class WorkspaceController : ControllerBase
     {
         code = "WORKFLOW_DRAFT_PATH_CONFLICT",
         message = exception.Message,
+    };
+
+    private static object CreateDraftVersionConflictPayload(WorkflowDraftVersionConflictException exception) => new
+    {
+        code = "WORKFLOW_DRAFT_VERSION_CONFLICT",
+        message = exception.Message,
+        workflowId = exception.WorkflowId,
+        expectedDraftVersion = exception.ExpectedDraftVersion,
+        currentDraftVersion = exception.CurrentDraftVersion,
     };
 
 }

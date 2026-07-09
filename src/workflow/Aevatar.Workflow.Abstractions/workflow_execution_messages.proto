@@ -149,6 +149,18 @@ message StartWorkflowEvent
   WorkflowToolRuntimeContextPayload workflow_runtime = 6;
   repeated WorkflowFileRef input_file_refs = 7;
 }
+
+message WorkflowRunSourceProvenance
+{
+  string source_kind = 1;
+  string workflow_id = 2;
+  int64 draft_version = 3;
+  string workflow_revision_id = 4;
+  string binding_revision_id = 5;
+  string source_hash = 6;
+  google.protobuf.Timestamp source_captured_at_utc = 7;
+}
+
 message BindWorkflowRunDefinitionEvent
 {
   string definition_actor_id = 1;
@@ -164,6 +176,7 @@ message BindWorkflowRunDefinitionEvent
   // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
   // non-scheduled runs. Carried from ServiceInvocationRequest.schedule_id via WorkflowDefinitionBinding.
   string schedule_id = 8;
+  WorkflowRunSourceProvenance source_provenance = 9;
 }
 message BindWorkflowDefinitionEvent
 {

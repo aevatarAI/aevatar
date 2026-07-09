@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using ApplicationWorkflowRunSourceProvenance = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowRunSourceProvenance;
 
 namespace Aevatar.Workflow.Application.Runs;
 
@@ -80,6 +81,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun,
                 scopeIdForRun,
+                request.SourceProvenance,
                 ct);
         }
 
@@ -99,7 +101,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                 workflowYamlForRun,
                 inlineWorkflowYamlMapForRun,
                 scopeIdForRun,
-                hasInlineWorkflowYamls ? WorkflowRunOrigins.Draft : WorkflowRunOrigins.AdHocChat),
+                hasInlineWorkflowYamls ? WorkflowRunOrigins.Draft : WorkflowRunOrigins.AdHocChat,
+                SourceProvenance: request.SourceProvenance),
             wrapAsFallbackTrigger: !hasInlineWorkflowYamls,
             ct);
 
@@ -118,6 +121,7 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         string workflowYamlForRun,
         IReadOnlyDictionary<string, string> inlineWorkflowYamlMapForRun,
         string scopeIdHint,
+        ApplicationWorkflowRunSourceProvenance? sourceProvenance,
         CancellationToken ct)
     {
         var sourceBinding = await _bindingReader.GetAsync(actorId, ct);
@@ -147,7 +151,8 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
                     workflowYamlForRun,
                     inlineWorkflowYamlMapForRun,
                     ResolveScopeId(sourceBinding.ScopeId, scopeIdHint),
-                    WorkflowRunOrigins.Draft),
+                    WorkflowRunOrigins.Draft,
+                    SourceProvenance: sourceProvenance),
                 wrapAsFallbackTrigger: false,
                 ct);
             return new WorkflowActorResolutionResult(

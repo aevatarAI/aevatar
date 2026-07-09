@@ -651,6 +651,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "scope-1",
       expect.objectContaining({
         prompt: "Run the unsaved workflow",
+        sourceKind: "editor_snapshot",
         workflowYamls: [expect.any(String)],
       }),
       expect.any(AbortSignal),
@@ -708,6 +709,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         expect.objectContaining({
           files: [image],
           prompt: "",
+          sourceKind: "editor_snapshot",
           workflowYamls: [expect.any(String)],
         }),
         expect.any(AbortSignal),
@@ -1292,6 +1294,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       yaml: "name: Workflow Alpha\nsteps: []\n",
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
+      draftVersion: 7,
     });
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
@@ -1439,6 +1442,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       yaml: "name: Workflow Alpha\nsteps: []\n",
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
+      draftVersion: 7,
     });
     (studioApi.serializeYaml as jest.Mock)
       .mockRejectedValueOnce(new Error("Serialization failed"))
@@ -4958,6 +4962,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       yaml: "name: Workflow Alpha\nsteps: []\n",
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
+      draftVersion: 7,
     });
     (studioApi.saveWorkflow as jest.Mock).mockResolvedValue({
       directoryId: "scope:scope-1",
@@ -4972,6 +4977,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       yaml: "name: Workflow Alpha\nsteps: []\n",
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:01Z",
+      draftVersion: 8,
     });
     (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
       bindingRunId: "binding-run-1",
@@ -5005,6 +5011,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
           scopeId: "scope-1",
           workflowId: "workflow-alpha",
           workflowName: "Workflow Alpha Published",
+          expectedDraftVersion: 7,
         }),
       );
       expect(studioApi.updateMemberDisplayName).toHaveBeenCalledWith({
@@ -5018,6 +5025,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
         scopeId: "scope-1",
         workflowId: "workflow-alpha",
         workflowYamls: [expect.stringContaining("name: Workflow Alpha Published")],
+        sourceKind: "editor_snapshot",
+        expectedDraftVersion: 8,
       });
       expect(studioApi.getMemberBindingRun).toHaveBeenCalledWith(
         "scope-1",
@@ -5070,6 +5079,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       yaml: "name: Workflow Alpha\nsteps: []\n",
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
+      draftVersion: 7,
     });
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
@@ -6077,6 +6087,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       yaml: "name: Workflow Alpha\nsteps: []\n",
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
+      draftVersion: 7,
     });
     (studioApi.bindMemberWorkflow as jest.Mock).mockResolvedValue({
       bindingRunId: "binding-run-identity-only",
@@ -6113,6 +6124,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
         scopeId: "scope-1",
         workflowId: "wf-alpha",
         workflowYamls: [expect.stringContaining("name: Workflow Alpha")],
+        sourceKind: "editor_snapshot",
+        expectedDraftVersion: 7,
       });
       expect(screen.getByText("Published")).toBeTruthy();
     });

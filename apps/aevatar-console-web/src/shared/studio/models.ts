@@ -110,6 +110,7 @@ export interface StudioWorkflowDraftSummary {
   readonly stepCount: number;
   readonly hasLayout: boolean;
   readonly updatedAtUtc: string;
+  readonly draftVersion: number;
 }
 
 export interface StudioWorkflowCommittedSummary {
@@ -130,6 +131,7 @@ export interface StudioWorkflowDraft {
   readonly yaml: string;
   readonly layout?: unknown;
   readonly updatedAtUtc: string;
+  readonly draftVersion: number;
 }
 
 export interface StudioCommittedWorkflow {
@@ -144,6 +146,7 @@ export interface StudioCommittedWorkflow {
 export interface StudioSaveWorkflowInput {
   readonly workflowId?: string | null;
   readonly draftExists?: boolean | null;
+  readonly expectedDraftVersion?: number | null;
   readonly scopeId?: string | null;
   readonly directoryId: string;
   readonly workflowName: string;
@@ -274,12 +277,20 @@ export interface StudioStartExecutionInput {
   readonly eventFormat?: string | null;
 }
 
+export type StudioWorkflowBindingSourceKind =
+  | "saved_draft"
+  | "editor_snapshot"
+  | "inline_yaml_bundle";
+
 export interface StudioMemberWorkflowBindingInput {
   readonly scopeId: string;
   readonly memberId: string;
   readonly displayName?: string | null;
   readonly workflowId: string;
   readonly workflowYamls: readonly string[];
+  readonly sourceKind?: StudioWorkflowBindingSourceKind | null;
+  readonly expectedDraftVersion?: number | null;
+  readonly sourceHash?: string | null;
   readonly revisionId?: string | null;
 }
 

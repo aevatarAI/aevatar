@@ -45,6 +45,13 @@ enum StudioMemberGAgentEndpointKind {
   STUDIO_MEMBER_GAGENT_ENDPOINT_KIND_CHAT = 2;
 }
 
+enum StudioMemberWorkflowBindingSourceKind {
+  STUDIO_MEMBER_WORKFLOW_BINDING_SOURCE_KIND_UNSPECIFIED = 0;
+  STUDIO_MEMBER_WORKFLOW_BINDING_SOURCE_KIND_SAVED_DRAFT = 1;
+  STUDIO_MEMBER_WORKFLOW_BINDING_SOURCE_KIND_EDITOR_SNAPSHOT = 2;
+  STUDIO_MEMBER_WORKFLOW_BINDING_SOURCE_KIND_INLINE_YAML_BUNDLE = 3;
+}
+
 // ─── Implementation refs ───
 //
 // Each implementation kind carries a typed sub-message rather than a generic
@@ -102,6 +109,14 @@ message StudioMemberBindingAuthorityState {
 message StudioMemberWorkflowBindingRequest {
   repeated string workflow_yamls = 1;
   string workflow_id = 2;
+  StudioMemberWorkflowBindingSource source = 3;
+}
+
+message StudioMemberWorkflowBindingSource {
+  StudioMemberWorkflowBindingSourceKind source_kind = 1;
+  int64 draft_version = 2;
+  string source_hash = 3;
+  google.protobuf.Timestamp source_captured_at_utc = 4;
 }
 
 message StudioMemberScriptBindingRequest {

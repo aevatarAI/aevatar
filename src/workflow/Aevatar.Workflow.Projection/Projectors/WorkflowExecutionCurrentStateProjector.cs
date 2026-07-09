@@ -85,6 +85,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 x => MapStepIdempotency(x.Value),
                 StringComparer.Ordinal),
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+            SourceProvenance = MapSourceProvenance(state.SourceProvenance),
         };
 
         // O2 (06-19-workflow-run-observatory): started_at is derived from the committed WorkflowRunState's
@@ -94,6 +95,24 @@ public sealed class WorkflowExecutionCurrentStateProjector
             document.StartedAtUtcValue = state.StartedAtUtc;
 
         return document;
+    }
+
+    private static WorkflowRunSourceProvenanceReadModel? MapSourceProvenance(
+        WorkflowRunSourceProvenance? source)
+    {
+        if (source == null || string.IsNullOrWhiteSpace(source.SourceKind))
+            return null;
+
+        return new WorkflowRunSourceProvenanceReadModel
+        {
+            SourceKind = source.SourceKind?.Trim() ?? string.Empty,
+            WorkflowId = source.WorkflowId?.Trim() ?? string.Empty,
+            DraftVersion = source.DraftVersion,
+            WorkflowRevisionId = source.WorkflowRevisionId?.Trim() ?? string.Empty,
+            BindingRevisionId = source.BindingRevisionId?.Trim() ?? string.Empty,
+            SourceHash = source.SourceHash?.Trim() ?? string.Empty,
+            SourceCapturedAtUtc = source.SourceCapturedAtUtc,
+        };
     }
 
     private static WorkflowStepIdempotencyReadModel MapStepIdempotency(

@@ -26,7 +26,8 @@ public sealed record WorkflowDraftSummary(
     string DirectoryLabel,
     int StepCount,
     bool HasLayout,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    long DraftVersion = 0);
 
 public sealed record WorkflowCommittedSummary(
     string WorkflowId,
@@ -44,7 +45,8 @@ public sealed record WorkflowDraftResponse(
     string DirectoryLabel,
     string Yaml,
     WorkflowLayoutDocument? Layout,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    long DraftVersion = 0);
 
 public sealed record WorkflowDraftCreateAcceptedResponse(
     bool Accepted,
@@ -75,4 +77,5 @@ public sealed record SaveWorkflowDraftRequest(
     string WorkflowName,
     string? FileName,
     string Yaml,
-    WorkflowLayoutDocument? Layout = null);
+    WorkflowLayoutDocument? Layout = null,
+    long? ExpectedDraftVersion = null);

@@ -50,6 +50,13 @@ public static class StudioMemberBindingRunRoleNames
     public const string Candidate = "candidate";
 }
 
+public static class StudioWorkflowBindingSourceKindNames
+{
+    public const string SavedDraft = "saved_draft";
+    public const string EditorSnapshot = "editor_snapshot";
+    public const string InlineYamlBundle = "inline_yaml_bundle";
+}
+
 public static class StudioMemberInvocationReadinessStatusNames
 {
     public const string Ready = "ready";
@@ -163,6 +170,12 @@ public sealed record StudioMemberBindingRunResultResponse(
     string ImplementationKind,
     string? ExpectedActorId = null);
 
+public sealed record StudioWorkflowBindingSourceResponse(
+    string SourceKind,
+    long? DraftVersion = null,
+    string? SourceHash = null,
+    DateTimeOffset? SourceCapturedAtUtc = null);
+
 // Refactor (iter159/cluster-594-first):
 //   Old pattern: Studio member binding-run status response 未暴露 StateVersion
 //   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
@@ -178,6 +191,8 @@ public sealed record StudioMemberBindingRunStatusResponse(
     public string? PlatformBindingCommandId { get; init; }
 
     public StudioMemberBindingRunResultResponse? Result { get; init; }
+
+    public StudioWorkflowBindingSourceResponse? WorkflowSource { get; init; }
 }
 
 public sealed record StudioMemberRosterResponse(
@@ -275,10 +290,16 @@ public sealed record StudioMemberWorkflowBindingSpec
     [JsonConstructor]
     public StudioMemberWorkflowBindingSpec(
         string WorkflowId,
-        IReadOnlyList<string> WorkflowYamls)
+        IReadOnlyList<string> WorkflowYamls,
+        string? SourceKind = null,
+        long? ExpectedDraftVersion = null,
+        string? SourceHash = null)
     {
         this.WorkflowId = WorkflowId;
         this.WorkflowYamls = WorkflowYamls;
+        this.SourceKind = SourceKind;
+        this.ExpectedDraftVersion = ExpectedDraftVersion;
+        this.SourceHash = SourceHash;
     }
 
     public StudioMemberWorkflowBindingSpec(IReadOnlyList<string> WorkflowYamls)
@@ -289,6 +310,12 @@ public sealed record StudioMemberWorkflowBindingSpec
     public string WorkflowId { get; init; }
 
     public IReadOnlyList<string> WorkflowYamls { get; init; }
+
+    public string? SourceKind { get; init; }
+
+    public long? ExpectedDraftVersion { get; init; }
+
+    public string? SourceHash { get; init; }
 }
 
 public sealed record StudioMemberScriptBindingSpec(

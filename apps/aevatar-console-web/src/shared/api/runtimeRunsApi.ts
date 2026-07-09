@@ -225,6 +225,12 @@ export type StreamEndpointInvokeRequest = {
 export type DraftRunRequest = {
   prompt?: string;
   workflowYamls?: readonly string[];
+  workflowId?: string;
+  draftVersion?: number;
+  sourceKind?: "saved_draft" | "editor_snapshot" | "inline_yaml_bundle";
+  sourceHash?: string;
+  workflowRevisionId?: string;
+  bindingRevisionId?: string;
   metadata?: Record<string, string>;
   files?: readonly File[];
 };
@@ -296,6 +302,15 @@ function buildDraftRunPayload(request: DraftRunRequest) {
       request.workflowYamls && request.workflowYamls.length > 0
         ? request.workflowYamls
         : undefined,
+    workflowId: trimOptional(request.workflowId),
+    draftVersion:
+      typeof request.draftVersion === "number" && request.draftVersion > 0
+        ? request.draftVersion
+        : undefined,
+    sourceKind: trimOptional(request.sourceKind),
+    sourceHash: trimOptional(request.sourceHash),
+    workflowRevisionId: trimOptional(request.workflowRevisionId),
+    bindingRevisionId: trimOptional(request.bindingRevisionId),
     headers: request.metadata,
   });
 }

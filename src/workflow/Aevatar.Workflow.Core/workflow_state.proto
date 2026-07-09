@@ -172,6 +172,7 @@ message WorkflowRunState
   // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
   // non-scheduled runs. Observatory filter dimension for "this schedule's runs".
   string schedule_id = 36;
+  WorkflowRunSourceProvenance source_provenance = 37;
 }
 
 message WorkflowRunExecutionContextState

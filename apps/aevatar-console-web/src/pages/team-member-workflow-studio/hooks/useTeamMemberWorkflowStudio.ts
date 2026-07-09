@@ -268,6 +268,10 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
+function readPositiveVersion(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && value > 0 ? value : undefined;
+}
+
 function normalizeWorkflowSaveResult(
   result: StudioWorkflowSaveResult | StudioWorkflowFile,
 ): StudioWorkflowSaveResult {
@@ -897,6 +901,7 @@ async function saveWorkflowDraft(input: {
       fileName: workflow.fileName,
       yaml: serialized.yaml,
       layout: nextLayout,
+      expectedDraftVersion: readPositiveVersion(workflow.draftVersion),
     }),
   );
   if (saveResult.kind === "accepted") {
@@ -1586,6 +1591,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         updatedAtUtc: "",
         workflowId: "",
         yaml: "",
+        draftVersion: 0,
       };
       const savedDraft = await saveWorkflowDraft({
         document,
@@ -1679,6 +1685,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         updatedAtUtc: "",
         workflowId: "",
         yaml: "",
+        draftVersion: 0,
       };
       const savedDraft = await saveWorkflowDraft({
         document,
@@ -1843,6 +1850,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             prompt: userRunMessage,
             workflowYamls: [serialized.yaml],
             files: files && files.length > 0 ? files : undefined,
+            workflowId: trimOptional(workflowQuery.data?.workflowId) || undefined,
+            draftVersion: readPositiveVersion(workflowQuery.data?.draftVersion),
+            sourceKind: "editor_snapshot",
           },
           controller.signal,
         );
@@ -1956,6 +1966,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         displayName: titleForPublish,
         workflowId: workflowIdForPublish,
         workflowYamls: [serialized.yaml],
+        sourceKind: "editor_snapshot",
+        expectedDraftVersion: readPositiveVersion(
+          savedDraft?.workflow.draftVersion ?? workflow.draftVersion,
+        ),
       });
 
       let lastRun: StudioMemberBindingRunStatusResponse | null = null;

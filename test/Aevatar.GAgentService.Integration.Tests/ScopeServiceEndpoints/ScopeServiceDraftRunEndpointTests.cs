@@ -91,6 +91,44 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldCarryEditorSnapshotSourceProvenance()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowId = "wf-alpha",
+            draftVersion = 7,
+            sourceKind = "editor_snapshot",
+            sourceHash = "sha256:editor-snapshot",
+            workflowYamls = new[]
+            {
+                "name: main\nsteps: []",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        var provenance = host.InteractionService.LastRequest!.SourceProvenance;
+        provenance.Should().NotBeNull();
+        provenance!.SourceKind.Should().Be("editor_snapshot");
+        provenance.WorkflowId.Should().Be("wf-alpha");
+        provenance.DraftVersion.Should().Be(7);
+        provenance.SourceHash.Should().Be("sha256:editor-snapshot");
+        provenance.SourceCapturedAtUtc.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldEmitAguiEvents_WhenRequested()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

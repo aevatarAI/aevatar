@@ -680,6 +680,10 @@ describe("RunsPage", () => {
     const draftKey = saveDraftRunPayload({
       workflowName: "workspace-demo",
       workflowYamls: ["name: workspace-demo\nsteps:\n  - id: review_step\n"],
+      workflowId: "wf-alpha",
+      draftVersion: 7,
+      sourceKind: "editor_snapshot",
+      sourceHash: "sha256:editor",
     });
     window.history.replaceState(
       {},
@@ -697,6 +701,10 @@ describe("RunsPage", () => {
           workflowYamls: [
             expect.stringContaining("name: workspace-demo"),
           ],
+          workflowId: "wf-alpha",
+          draftVersion: 7,
+          sourceKind: "editor_snapshot",
+          sourceHash: "sha256:editor",
         }),
         expect.any(AbortSignal)
       );

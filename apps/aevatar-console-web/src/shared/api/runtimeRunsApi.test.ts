@@ -414,6 +414,10 @@ describe("runtimeRunsApi", () => {
       {
         prompt: "Run draft",
         workflowYamls: ["name: draft"],
+        workflowId: "wf-alpha",
+        draftVersion: 7,
+        sourceKind: "editor_snapshot",
+        sourceHash: "sha256:editor",
         metadata: { source: "studio" },
       },
       new AbortController().signal
@@ -426,6 +430,10 @@ describe("runtimeRunsApi", () => {
           eventFormat: "agui",
           prompt: "Run draft",
           workflowYamls: ["name: draft"],
+          workflowId: "wf-alpha",
+          draftVersion: 7,
+          sourceKind: "editor_snapshot",
+          sourceHash: "sha256:editor",
           headers: {
             source: "studio",
           },

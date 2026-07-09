@@ -124,6 +124,44 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task CreateRunAsync_ShouldPropagateSourceProvenanceIntoRunBindingEvent()
+    {
+        var capturedAt = DateTimeOffset.Parse("2026-04-30T10:00:00Z");
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-source"] = new RecordingActor("definition-source", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-source", new StubAgent("run-source")));
+        var port = CreatePort(runtime);
+
+        await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-source",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                "scope-user-1",
+                WorkflowRunOrigins.Draft,
+                SourceProvenance: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowRunSourceProvenance(
+                    SourceKind: "editor_snapshot",
+                    WorkflowId: "wf-alpha",
+                    DraftVersion: 7,
+                    SourceHash: "sha256:editor-snapshot",
+                    SourceCapturedAtUtc: capturedAt)),
+            CancellationToken.None);
+
+        var bindEvent = ((RecordingActor)runtime.StoredActors["run-source"]).LastHandledEnvelope!.Payload!
+            .Unpack<BindWorkflowRunDefinitionEvent>();
+        bindEvent.SourceProvenance.Should().NotBeNull();
+        bindEvent.SourceProvenance.SourceKind.Should().Be("editor_snapshot");
+        bindEvent.SourceProvenance.WorkflowId.Should().Be("wf-alpha");
+        bindEvent.SourceProvenance.DraftVersion.Should().Be(7);
+        bindEvent.SourceProvenance.SourceHash.Should().Be("sha256:editor-snapshot");
+        bindEvent.SourceProvenance.SourceCapturedAtUtc.ToDateTimeOffset().Should().Be(capturedAt);
+    }
+
+    [Fact]
     public async Task CreateRunAsync_WhenExistingDefinitionActorIsUnbound_ShouldBindItInPlace()
     {
         var runtime = new RecordingActorRuntime();

@@ -6,6 +6,8 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf.WellKnownTypes;
+using ApplicationWorkflowRunSourceProvenance = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowRunSourceProvenance;
+using ProtoWorkflowRunSourceProvenance = Aevatar.Workflow.Abstractions.WorkflowRunSourceProvenance;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
@@ -103,7 +105,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.InlineWorkflowYamls,
                     definition.ScopeId,
                     definition.RunOrigin,
-                    definition.ScheduleId),
+                    definition.ScheduleId,
+                    definition.SourceProvenance),
                 ct);
 
             return new WorkflowRunCreationReceipt(
@@ -458,12 +461,22 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
         string? runOrigin,
-        string? scheduleId) =>
+        string? scheduleId,
+        ApplicationWorkflowRunSourceProvenance? sourceProvenance) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(definitionActorId, runId, workflowYaml, workflowName, inlineWorkflowYamls, scopeId, runOrigin, scheduleId)),
+            Payload = Any.Pack(BuildBindWorkflowRunDefinitionEvent(
+                definitionActorId,
+                runId,
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                scopeId,
+                runOrigin,
+                scheduleId,
+                sourceProvenance)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -522,7 +535,8 @@ internal sealed class WorkflowRunActorPort :
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         string? scopeId,
         string? runOrigin,
-        string? scheduleId)
+        string? scheduleId,
+        ApplicationWorkflowRunSourceProvenance? sourceProvenance)
     {
         var bind = new BindWorkflowRunDefinitionEvent
         {
@@ -534,11 +548,35 @@ internal sealed class WorkflowRunActorPort :
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
         };
+        var provenance = ToWorkflowRunSourceProvenance(sourceProvenance);
+        if (provenance != null)
+            bind.SourceProvenance = provenance;
 
         foreach (var (key, value) in inlineWorkflowYamls)
             bind.InlineWorkflowYamls[key] = value;
 
         return bind;
+    }
+
+    private static ProtoWorkflowRunSourceProvenance? ToWorkflowRunSourceProvenance(
+        ApplicationWorkflowRunSourceProvenance? source)
+    {
+        if (source == null)
+            return null;
+
+        var provenance = new ProtoWorkflowRunSourceProvenance
+        {
+            SourceKind = source.SourceKind?.Trim() ?? string.Empty,
+            WorkflowId = source.WorkflowId?.Trim() ?? string.Empty,
+            DraftVersion = source.DraftVersion ?? 0,
+            WorkflowRevisionId = source.WorkflowRevisionId?.Trim() ?? string.Empty,
+            BindingRevisionId = source.BindingRevisionId?.Trim() ?? string.Empty,
+            SourceHash = source.SourceHash?.Trim() ?? string.Empty,
+        };
+        if (source.SourceCapturedAtUtc.HasValue)
+            provenance.SourceCapturedAtUtc = Timestamp.FromDateTimeOffset(source.SourceCapturedAtUtc.Value);
+
+        return provenance;
     }
 
     private static string? BuildRunActorId(string? definitionActorId)

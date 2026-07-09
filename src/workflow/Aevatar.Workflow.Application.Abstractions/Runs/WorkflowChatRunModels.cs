@@ -97,6 +97,15 @@ public sealed record WorkflowChatInlineYamlBundleSource(
     IReadOnlyList<WorkflowChatInlineYamlDocument> YamlDocuments,
     string? ActorId = null);
 
+public sealed record WorkflowRunSourceProvenance(
+    string SourceKind,
+    string? WorkflowId = null,
+    long? DraftVersion = null,
+    string? WorkflowRevisionId = null,
+    string? BindingRevisionId = null,
+    string? SourceHash = null,
+    DateTimeOffset? SourceCapturedAtUtc = null);
+
 // Refactor (iter165/cluster-007):
 //   Old pattern: InlineYamlBundle reused WorkflowName, ActorId, and WorkflowYamls on the parent source, so one field meant lookup identity or inline content depending on Kind.
 //   New principle: each source variant owns a single-purpose typed submessage; legacy parent properties are read-only migration views.
@@ -188,6 +197,7 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
+    WorkflowRunSourceProvenance? SourceProvenance = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;

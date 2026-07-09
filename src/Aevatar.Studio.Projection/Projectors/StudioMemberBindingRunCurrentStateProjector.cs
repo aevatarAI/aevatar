@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioMember;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.Mapping;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.ReadModels;
@@ -66,6 +67,7 @@ public sealed class StudioMemberBindingRunCurrentStateProjector
 
         ApplyFailure(document, state.Failure);
         ApplyPlatformResult(document, state.PlatformResult);
+        ApplyWorkflowSource(document, state.Request?.Workflow?.Source);
 
         await _writeDispatcher.UpsertAsync(document, ct);
     }
@@ -94,4 +96,26 @@ public sealed class StudioMemberBindingRunCurrentStateProjector
         document.ResultImplementationKind = MemberImplementationKindMapper.ToWireName(result.ImplementationKind);
         document.ResultExpectedActorId = result.ExpectedActorId ?? string.Empty;
     }
+
+    private static void ApplyWorkflowSource(
+        StudioMemberBindingRunCurrentStateDocument document,
+        StudioMemberWorkflowBindingSource? source)
+    {
+        if (source == null)
+            return;
+
+        document.WorkflowSourceKind = ToWorkflowSourceKindWire(source.SourceKind);
+        document.WorkflowSourceDraftVersion = source.DraftVersion;
+        document.WorkflowSourceHash = source.SourceHash ?? string.Empty;
+        document.WorkflowSourceCapturedAt = source.SourceCapturedAtUtc;
+    }
+
+    private static string ToWorkflowSourceKindWire(StudioMemberWorkflowBindingSourceKind sourceKind) =>
+        sourceKind switch
+        {
+            StudioMemberWorkflowBindingSourceKind.SavedDraft => StudioWorkflowBindingSourceKindNames.SavedDraft,
+            StudioMemberWorkflowBindingSourceKind.EditorSnapshot => StudioWorkflowBindingSourceKindNames.EditorSnapshot,
+            StudioMemberWorkflowBindingSourceKind.InlineYamlBundle => StudioWorkflowBindingSourceKindNames.InlineYamlBundle,
+            _ => string.Empty,
+        };
 }

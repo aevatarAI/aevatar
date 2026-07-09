@@ -95,6 +95,36 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             .NotContain(field => field.Name.Contains("base64", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void WorkflowExecutionReadModelMapper_ShouldExposeCurrentStateSourceProvenance()
+    {
+        var capturedAt = DateTimeOffset.Parse("2026-04-30T10:00:00+00:00");
+        var mapper = new WorkflowExecutionReadModelMapper();
+
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            RootActorId = "actor-1",
+            WorkflowName = "wf",
+            Status = "running",
+            SourceProvenance = new WorkflowRunSourceProvenanceReadModel
+            {
+                SourceKind = "editor_snapshot",
+                WorkflowId = "wf-alpha",
+                DraftVersion = 7,
+                SourceHash = "sha256:editor-snapshot",
+                SourceCapturedAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(capturedAt),
+            },
+        });
+
+        snapshot.SourceProvenance.Should().NotBeNull();
+        snapshot.SourceProvenance!.SourceKind.Should().Be("editor_snapshot");
+        snapshot.SourceProvenance.WorkflowId.Should().Be("wf-alpha");
+        snapshot.SourceProvenance.DraftVersion.Should().Be(7);
+        snapshot.SourceProvenance.SourceHash.Should().Be("sha256:editor-snapshot");
+        snapshot.SourceProvenance.SourceCapturedAtUtc.Should().Be(
+            Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(capturedAt));
+    }
+
     [Theory]
     [InlineData(WorkflowExecutionCompletionStatus.Running, WorkflowRunCompletionStatus.Running)]
     [InlineData(WorkflowExecutionCompletionStatus.Completed, WorkflowRunCompletionStatus.Completed)]

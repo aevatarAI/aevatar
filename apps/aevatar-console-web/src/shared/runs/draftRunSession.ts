@@ -8,6 +8,12 @@ export type ScopeDraftRunPayload = {
   kind: "scope_draft";
   bundleName: string;
   bundleYamls: string[];
+  workflowId?: string;
+  draftVersion?: number;
+  sourceKind?: "saved_draft" | "editor_snapshot" | "inline_yaml_bundle";
+  sourceHash?: string;
+  workflowRevisionId?: string;
+  bindingRevisionId?: string;
   createdAt: string;
 };
 
@@ -63,6 +69,12 @@ function createDraftRunKey(): string {
 export function saveScopeDraftRunPayload(payload: {
   bundleName: string;
   bundleYamls: string[];
+  workflowId?: string;
+  draftVersion?: number;
+  sourceKind?: "saved_draft" | "editor_snapshot" | "inline_yaml_bundle";
+  sourceHash?: string;
+  workflowRevisionId?: string;
+  bindingRevisionId?: string;
 }): string {
   if (typeof window === "undefined") {
     return "";
@@ -75,6 +87,17 @@ export function saveScopeDraftRunPayload(payload: {
     bundleYamls: payload.bundleYamls
       .map((item) => item.trim())
       .filter((item) => item.length > 0),
+    workflowId: payload.workflowId?.trim() || undefined,
+    draftVersion:
+      typeof payload.draftVersion === "number" && payload.draftVersion > 0
+        ? payload.draftVersion
+        : undefined,
+    sourceKind: payload.sourceKind?.trim()
+      ? payload.sourceKind
+      : undefined,
+    sourceHash: payload.sourceHash?.trim() || undefined,
+    workflowRevisionId: payload.workflowRevisionId?.trim() || undefined,
+    bindingRevisionId: payload.bindingRevisionId?.trim() || undefined,
     createdAt: new Date().toISOString(),
   };
   window.sessionStorage.setItem(
@@ -310,6 +333,18 @@ export function loadDraftRunPayload(
       kind: "scope_draft",
       bundleName,
       bundleYamls,
+      workflowId: workflowPayload.workflowId?.trim() || undefined,
+      draftVersion:
+        typeof workflowPayload.draftVersion === "number" &&
+        workflowPayload.draftVersion > 0
+          ? workflowPayload.draftVersion
+          : undefined,
+      sourceKind: workflowPayload.sourceKind?.trim()
+        ? workflowPayload.sourceKind
+        : undefined,
+      sourceHash: workflowPayload.sourceHash?.trim() || undefined,
+      workflowRevisionId: workflowPayload.workflowRevisionId?.trim() || undefined,
+      bindingRevisionId: workflowPayload.bindingRevisionId?.trim() || undefined,
       createdAt: workflowPayload.createdAt?.trim() || "",
     };
   } catch {
@@ -333,10 +368,22 @@ export type ObservedServiceRunPayload = ObservedRunSessionPayload;
 export const saveDraftRunPayload = (payload: {
   workflowName: string;
   workflowYamls: string[];
+  workflowId?: string;
+  draftVersion?: number;
+  sourceKind?: "saved_draft" | "editor_snapshot" | "inline_yaml_bundle";
+  sourceHash?: string;
+  workflowRevisionId?: string;
+  bindingRevisionId?: string;
 }): string =>
   saveScopeDraftRunPayload({
     bundleName: payload.workflowName,
     bundleYamls: payload.workflowYamls,
+    workflowId: payload.workflowId,
+    draftVersion: payload.draftVersion,
+    sourceKind: payload.sourceKind,
+    sourceHash: payload.sourceHash,
+    workflowRevisionId: payload.workflowRevisionId,
+    bindingRevisionId: payload.bindingRevisionId,
   });
 
 export const saveServiceInvocationDraftPayload = (payload: {

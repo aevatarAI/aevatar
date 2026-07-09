@@ -906,6 +906,12 @@ const RunsPage: React.FC = () => {
                 {
                   prompt: requestedRun.prompt,
                   workflowYamls: scopeDraftPayload.bundleYamls,
+                  workflowId: scopeDraftPayload.workflowId,
+                  draftVersion: scopeDraftPayload.draftVersion,
+                  sourceKind: scopeDraftPayload.sourceKind,
+                  sourceHash: scopeDraftPayload.sourceHash,
+                  workflowRevisionId: scopeDraftPayload.workflowRevisionId,
+                  bindingRevisionId: scopeDraftPayload.bindingRevisionId,
                 },
                 controller.signal
               )
