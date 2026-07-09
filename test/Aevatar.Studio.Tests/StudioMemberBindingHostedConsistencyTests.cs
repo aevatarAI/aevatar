@@ -233,6 +233,13 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             CancellationToken ct = default) =>
             throw new NotSupportedException("Implementation update is not exercised by this hosted consistency test.");
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("Published binding record is not exercised by this hosted consistency test.");
+
         public Task RenameAsync(
             string scopeId,
             string memberId,

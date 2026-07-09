@@ -276,6 +276,34 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         await SendTerminalAcknowledgementAsync(evt.BindingRunId, StudioMemberBindingRunStatus.Failed);
     }
 
+    [EventHandler(EndpointName = "recordPublishedBinding")]
+    public async Task HandlePublishedBindingRecorded(StudioMemberPublishedBindingRecordedEvent evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.PublishedServiceId, evt.PublishedServiceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"publishedServiceId '{evt.PublishedServiceId}' does not match member '{State.MemberId}' publishedServiceId '{State.PublishedServiceId}'.");
+        }
+
+        if (evt.ImplementationKind != State.ImplementationKind)
+        {
+            throw new InvalidOperationException(
+                $"binding record kind '{evt.ImplementationKind}' does not match member kind '{State.ImplementationKind}'.");
+        }
+
+        if (!HasResolvedImplementationRef(evt.ImplementationRef, evt.ImplementationKind))
+        {
+            throw new InvalidOperationException("published binding record must include a resolved implementation reference for its implementation kind.");
+        }
+
+        await PersistDomainEventAsync(evt);
+    }
+
     /// <summary>
     /// Mutates the member's team assignment (ADR-0017 Locked Rule 3).
     /// The single event shape covers assign / unassign / move; from/to are
@@ -419,6 +447,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberBindingPlatformPendingEvent>(ApplyBindingPlatformPending)
             .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
             .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
+            .On<StudioMemberPublishedBindingRecordedEvent>(ApplyPublishedBindingRecorded)
             .On<StudioMemberReassignedEvent>(ApplyReassigned)
             .OrCurrent();
     }
@@ -634,6 +663,37 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return next;
     }
 
+    private static StudioMemberState ApplyPublishedBindingRecorded(
+        StudioMemberState state,
+        StudioMemberPublishedBindingRecordedEvent evt)
+    {
+        if (string.IsNullOrEmpty(state.MemberId))
+            return state;
+
+        var recordedAt = evt.RecordedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var next = state.Clone();
+        next.LastBinding = new StudioMemberBindingContract
+        {
+            PublishedServiceId = evt.PublishedServiceId,
+            RevisionId = evt.RevisionId,
+            ImplementationKind = evt.ImplementationKind,
+            BoundAtUtc = recordedAt,
+            ExpectedActorId = evt.ExpectedActorId ?? string.Empty,
+        };
+        next.ImplementationRef = evt.ImplementationRef?.Clone();
+        next.Binding = new StudioMemberBindingAuthorityState
+        {
+            CurrentBindingRunId = string.Empty,
+            CurrentStatus = StudioMemberBindingRunStatus.Unspecified,
+            LastTerminalBindingRunId = state.Binding?.LastTerminalBindingRunId ?? string.Empty,
+            LastFailure = null,
+            UpdatedAtUtc = recordedAt,
+        };
+        next.LifecycleStage = StudioMemberLifecycleStage.BindReady;
+        next.UpdatedAtUtc = recordedAt;
+        return next;
+    }
+
     private static bool CanAcceptBindingRunProgress(StudioMemberState state, string bindingRunId)
     {
         var currentRun = state.Binding?.CurrentBindingRunId;
@@ -799,19 +859,29 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         return trimmed;
     }
 
-    private static bool HasResolvedImplementationRef(StudioMemberImplementationRef? implRef)
+    private static bool HasResolvedImplementationRef(StudioMemberImplementationRef? implRef) =>
+        implRef != null &&
+        (HasResolvedImplementationRef(implRef, StudioMemberImplementationKind.Workflow) ||
+         HasResolvedImplementationRef(implRef, StudioMemberImplementationKind.Script) ||
+         HasResolvedImplementationRef(implRef, StudioMemberImplementationKind.Gagent));
+
+    private static bool HasResolvedImplementationRef(
+        StudioMemberImplementationRef? implRef,
+        StudioMemberImplementationKind implementationKind)
     {
         if (implRef == null)
             return false;
 
-        if (implRef.Workflow != null && !string.IsNullOrEmpty(implRef.Workflow.WorkflowId))
-            return true;
-        if (implRef.Script != null && !string.IsNullOrEmpty(implRef.Script.ScriptId))
-            return true;
-        if (implRef.Gagent != null && !string.IsNullOrEmpty(implRef.Gagent.ActorTypeName))
-            return true;
-
-        return false;
+        return implementationKind switch
+        {
+            StudioMemberImplementationKind.Workflow =>
+                implRef.Workflow != null && !string.IsNullOrEmpty(implRef.Workflow.WorkflowId),
+            StudioMemberImplementationKind.Script =>
+                implRef.Script != null && !string.IsNullOrEmpty(implRef.Script.ScriptId),
+            StudioMemberImplementationKind.Gagent =>
+                implRef.Gagent != null && !string.IsNullOrEmpty(implRef.Gagent.ActorTypeName),
+            _ => false,
+        };
     }
 
     private static StudioMemberImplementationKind GetRequestImplementationKind(StudioMemberBindingRequest request) =>

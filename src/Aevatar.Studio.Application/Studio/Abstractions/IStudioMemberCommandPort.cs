@@ -33,6 +33,16 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
+    /// Records that an already-published member service now points at a new
+    /// implementation revision without creating a binding run.
+    /// </summary>
+    Task RecordPublishedBindingAsync(
+        string scopeId,
+        string memberId,
+        StudioMemberPublishedBindingRecordRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Renames an existing member through the member actor's authoritative
     /// rename event. Identity fields and implementation references are left
     /// unchanged by the actor state transition.

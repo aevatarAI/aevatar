@@ -195,6 +195,31 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
+    public async Task RecordPublishedBindingAsync(
+        string scopeId,
+        string memberId,
+        StudioMemberPublishedBindingRecordRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        var implementationKind = MemberImplementationKindMapper.Parse(request.ImplementationKind);
+
+        var evt = new StudioMemberPublishedBindingRecordedEvent
+        {
+            PublishedServiceId = request.PublishedServiceId ?? string.Empty,
+            RevisionId = request.RevisionId ?? string.Empty,
+            ImplementationKind = implementationKind,
+            ImplementationRef = BuildImplementationRefMessage(request.ImplementationRef),
+            RecordedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ExpectedActorId = request.ExpectedActorId ?? string.Empty,
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+    }
+
     public async Task RenameAsync(
         string scopeId,
         string memberId,
