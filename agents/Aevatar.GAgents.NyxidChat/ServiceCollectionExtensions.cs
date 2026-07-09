@@ -131,6 +131,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<INyxIdUserLlmPreferencesStore>(),
                 sp.GetService<IUserMemoryStore>(),
                 larkClient: sp.GetService<ILarkNyxClient>(),
+                fileIngressPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>(),
+                fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactReadPort>(),
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),

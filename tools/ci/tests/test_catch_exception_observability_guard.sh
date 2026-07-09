@@ -85,6 +85,23 @@ public sealed class Fixture {
 }
 ')"
 
+when_pattern_warning="$(write_fixture when-pattern-warning '
+using System;
+public sealed class Fixture {
+  private readonly dynamic _logger;
+  public void Run() {
+    try { Work(); }
+    catch (Exception ex) when (TryBuildFallback(ex) is { } fallback) {
+      _logger.LogWarning(ex, "visible");
+      Use(fallback);
+    }
+  }
+  private void Work() {}
+  private object? TryBuildFallback(Exception ex) => new object();
+  private void Use(object fallback) {}
+}
+')"
+
 rethrow="$(write_fixture rethrow '
 using System;
 public sealed class Fixture {
@@ -134,6 +151,7 @@ assert_fails_with "returns null" python3 "${GUARD}" --root "${TMP_DIR}" "${retur
 python3 "${GUARD}" --root "${TMP_DIR}" --baseline "${baseline_file}" "${debug_only}"
 
 python3 "${GUARD}" --root "${TMP_DIR}" "${warning}"
+python3 "${GUARD}" --root "${TMP_DIR}" "${when_pattern_warning}"
 python3 "${GUARD}" --root "${TMP_DIR}" "${rethrow}"
 python3 "${GUARD}" --root "${TMP_DIR}" "${committed_failure}"
 python3 "${GUARD}" --root "${TMP_DIR}" "${typed_debug}"

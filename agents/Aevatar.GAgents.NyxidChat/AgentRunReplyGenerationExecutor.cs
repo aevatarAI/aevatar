@@ -11,6 +11,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.AI.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -36,6 +37,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly INyxIdCapabilityBroker? _capabilityBroker;
     private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
+    private readonly IWorkflowFileArtifactReadPort? _fileArtifactReadPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -49,7 +51,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IUserConfigQueryPort? userConfigQueryPort = null,
         TimeProvider? timeProvider = null,
         INyxIdCapabilityBroker? capabilityBroker = null,
-        IBindingRevocationReconciler? bindingRevocationReconciler = null)
+        IBindingRevocationReconciler? bindingRevocationReconciler = null,
+        IWorkflowFileArtifactReadPort? fileArtifactReadPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -59,6 +62,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _userConfigQueryPort = userConfigQueryPort;
         _capabilityBroker = capabilityBroker;
         _bindingRevocationReconciler = bindingRevocationReconciler;
+        _fileArtifactReadPort = fileArtifactReadPort;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -244,6 +248,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             workItem.StepState.Round,
             workItem.StepState.FinalNoToolsStep,
             toolReceipts: workItem.StepState.ToolReceipts);
+        llmRequest = await MaterializeFileRefMessagesAsync(llmRequest, ct).ConfigureAwait(false);
         if (workItem.StepState.FinalNoToolsStep && llmRequest.Tools is { Count: > 0 })
         {
             // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -327,6 +332,54 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             StepIndex = workItem.StepIndex + 1,
             Request = request.Clone(),
             LlmStepResult = result,
+        };
+    }
+
+    private async Task<LLMRequest> MaterializeFileRefMessagesAsync(LLMRequest request, CancellationToken ct)
+    {
+        if (!request.Messages.Any(static message => message.ContentParts?.Any(static part => part.FileRef is not null) == true))
+            return request;
+
+        var messages = new List<ChatMessage>(request.Messages.Count);
+        foreach (var message in request.Messages)
+        {
+            if (message.ContentParts is not { Count: > 0 } parts ||
+                !parts.Any(static part => part.FileRef is not null))
+            {
+                messages.Add(message);
+                continue;
+            }
+
+            messages.Add(new ChatMessage
+            {
+                Role = message.Role,
+                Content = message.Content,
+                ReasoningContent = message.ReasoningContent,
+                ContentParts = await NyxIdConversationReplyGenerator.MaterializeFileRefPartsAsync(
+                        parts,
+                        _fileArtifactReadPort,
+                        ct)
+                    .ConfigureAwait(false),
+                ToolCallId = message.ToolCallId,
+                ToolCalls = message.ToolCalls,
+                ToolResultView = message.ToolResultView,
+            });
+        }
+
+        return new LLMRequest
+        {
+            Messages = messages,
+            RequestId = request.RequestId,
+            Metadata = request.Metadata,
+            CallerContext = request.CallerContext,
+            ToolContext = request.ToolContext,
+            RoutingContext = request.RoutingContext,
+            LlmControl = request.LlmControl,
+            Tools = request.Tools,
+            Model = request.Model,
+            Temperature = request.Temperature,
+            MaxTokens = request.MaxTokens,
+            ResponseFormat = request.ResponseFormat,
         };
     }
 
@@ -469,7 +522,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             RunId = workItem.RunId,
             CorrelationId = workItem.Request.CorrelationId,
             TargetActorId = workItem.Request.TargetActorId,
-            ErrorCode = "llm_reply_failed",
+            ErrorCode = ex is NyxIdConversationReplyGenerator.AttachmentPolicyException
+                ? NyxIdConversationReplyGenerator.AttachmentPolicyErrorCode
+                : "llm_reply_failed",
             ErrorSummary = ex.Message,
             FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             Attempt = workItem.Attempt,
