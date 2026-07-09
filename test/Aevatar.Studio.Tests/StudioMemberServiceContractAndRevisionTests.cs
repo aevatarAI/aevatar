@@ -495,6 +495,13 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not update implementation refs.");
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not record published bindings.");
+
         public Task RenameAsync(
             string scopeId,
             string memberId,
