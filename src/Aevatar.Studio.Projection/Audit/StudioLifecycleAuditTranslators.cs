@@ -61,6 +61,29 @@ public sealed class StudioMemberReassignedAuditTranslator : StudioAuditTranslato
             });
 }
 
+public sealed class StudioMemberDeletedAuditTranslator : StudioAuditTranslatorBase<StudioMemberDeletedEvent>
+{
+    public override string EventTypeUrl =>
+        AuditCommittedEventTypeUrl.FromDescriptor(StudioMemberDeletedEvent.Descriptor);
+
+    protected override CommittedAuditSeed BuildSeed(
+        CommittedAuditTranslationContext context,
+        StudioMemberDeletedEvent evt) =>
+        StudioSeed(
+            "studio.member.deleted",
+            "studio_member",
+            evt.MemberId,
+            evt.ScopeId,
+            "Studio member deleted.",
+            AuditSensitivityLevel.Restricted,
+            true,
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["previous_team_id"] = evt.HasPreviousTeamId ? evt.PreviousTeamId : string.Empty,
+                ["published_service_id"] = evt.PublishedServiceId ?? string.Empty,
+            });
+}
+
 public sealed class StudioTeamCreatedAuditTranslator : StudioAuditTranslatorBase<StudioTeamCreatedEvent>
 {
     public override string EventTypeUrl =>

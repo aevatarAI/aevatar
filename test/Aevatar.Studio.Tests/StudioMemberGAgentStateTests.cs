@@ -605,6 +605,106 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleDeleteRequested_ShouldCommitTeamRemovalThenDeletedEvent_WhenAssigned()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(2));
+
+        await agent.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = deletedAt,
+        });
+
+        eventSourcing.RaisedEvents.Should().HaveCount(2);
+        var reassigned = eventSourcing.RaisedEvents[0]
+            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
+        reassigned.FromTeamId.Should().Be("team-1");
+        reassigned.HasToTeamId.Should().BeFalse();
+        reassigned.ReassignedAtUtc.Should().Be(deletedAt);
+
+        var deleted = eventSourcing.RaisedEvents[1]
+            .Should().BeOfType<StudioMemberDeletedEvent>().Subject;
+        deleted.MemberId.Should().Be("m-1");
+        deleted.ScopeId.Should().Be("scope-1");
+        deleted.PreviousTeamId.Should().Be("team-1");
+        deleted.PublishedServiceId.Should().Be("member-m-1");
+        deleted.DeletedAtUtc.Should().Be(deletedAt);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DeletedEvent_ShouldTombstoneStateAndClearTeamId()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var assigned = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(2));
+
+        var deleted = _agent.Apply(assigned, new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            PreviousTeamId = "team-1",
+            PublishedServiceId = "member-m-1",
+            DeletedAtUtc = deletedAt,
+        });
+
+        deleted.Deleted.Should().BeTrue();
+        deleted.DeletedAtUtc.Should().Be(deletedAt);
+        deleted.HasTeamId.Should().BeFalse();
+        deleted.PublishedServiceId.Should().Be("member-m-1");
+        deleted.UpdatedAtUtc.Should().Be(deletedAt);
+    }
+
+    [Fact]
+    public async Task HandleDeleteRequested_ShouldNoOp_WhenAlreadyDeleted()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var deleted = _agent.Apply(NewCreatedScriptMember(now), new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            PublishedServiceId = "member-m-1",
+            DeletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+        var eventSourcing = new RecordingEventSourcing(deleted);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(deleted, eventSourcing, publisher);
+
+        await agent.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Bound_ShouldCaptureLastBindingAndAdvanceLifecycle()
     {
         var now = DateTimeOffset.UtcNow;

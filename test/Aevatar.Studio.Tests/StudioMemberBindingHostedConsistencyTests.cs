@@ -255,6 +255,12 @@ public sealed class StudioMemberBindingHostedConsistencyTests
             string? targetTeamId,
             CancellationToken ct = default) =>
             throw new NotSupportedException("Team reassignment is not exercised by this hosted consistency test.");
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("Delete is not exercised by this hosted consistency test.");
     }
 
     private sealed class MutableMemberQueryPort : IStudioMemberQueryPort

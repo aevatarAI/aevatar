@@ -44,17 +44,36 @@ internal sealed class StudioTeamRosterFanoutMaterializer
         ArgumentNullException.ThrowIfNull(envelope);
 
         if (!CommittedStateEventEnvelope.TryUnpack(envelope, out var published) ||
-            published?.StateEvent?.EventData == null ||
-            !published.StateEvent.EventData.Is(StudioMemberReassignedEvent.Descriptor))
+            published?.StateEvent?.EventData == null)
         {
             return;
         }
 
-        var evt = published.StateEvent.EventData.Unpack<StudioMemberReassignedEvent>();
-        if (evt.HasFromTeamId)
-            await DispatchToTeamAsync(evt.ScopeId, evt.FromTeamId, evt, ct).ConfigureAwait(false);
-        if (evt.HasToTeamId)
-            await DispatchToTeamAsync(evt.ScopeId, evt.ToTeamId, evt, ct).ConfigureAwait(false);
+        if (published.StateEvent.EventData.Is(StudioMemberReassignedEvent.Descriptor))
+        {
+            var evt = published.StateEvent.EventData.Unpack<StudioMemberReassignedEvent>();
+            if (evt.HasFromTeamId)
+                await DispatchToTeamAsync(evt.ScopeId, evt.FromTeamId, evt, ct).ConfigureAwait(false);
+            if (evt.HasToTeamId)
+                await DispatchToTeamAsync(evt.ScopeId, evt.ToTeamId, evt, ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (published.StateEvent.EventData.Is(StudioMemberDeletedEvent.Descriptor))
+        {
+            var evt = published.StateEvent.EventData.Unpack<StudioMemberDeletedEvent>();
+            if (!evt.HasPreviousTeamId)
+                return;
+
+            var removal = new StudioMemberReassignedEvent
+            {
+                MemberId = evt.MemberId,
+                ScopeId = evt.ScopeId,
+                FromTeamId = evt.PreviousTeamId,
+                ReassignedAtUtc = evt.DeletedAtUtc,
+            };
+            await DispatchToTeamAsync(removal.ScopeId, removal.FromTeamId, removal, ct).ConfigureAwait(false);
+        }
     }
 
     private async Task DispatchToTeamAsync(

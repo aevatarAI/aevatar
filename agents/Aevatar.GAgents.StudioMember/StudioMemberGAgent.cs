@@ -62,6 +62,12 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     [EventHandler(EndpointName = "createMember")]
     public async Task HandleCreated(StudioMemberCreatedEvent evt)
     {
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException(
+                $"member '{State.MemberId}' has been deleted and cannot be recreated.");
+        }
+
         if (!string.IsNullOrEmpty(State.MemberId))
         {
             // First-write-wins on identity: a re-create with a different
@@ -100,6 +106,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
+        }
 
         var renamed = evt.Clone();
         if (string.IsNullOrEmpty(renamed.Description))
@@ -116,6 +126,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         // ImplementationKind is locked at create. Reject mismatched kinds so
@@ -143,6 +157,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member not yet created.", failedAt));
+            return;
+        }
+        if (State.Deleted)
+        {
+            await SendToAsync(runActorId, BuildRejected(evt, "STUDIO_MEMBER_NOT_FOUND", "member has been deleted.", failedAt));
             return;
         }
 
@@ -215,6 +234,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         {
             throw new InvalidOperationException("member not yet created.");
         }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
+        }
 
         if (!CanAcceptBindingRunProgress(State, evt.BindingRunId))
         {
@@ -236,6 +259,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Succeeded))
@@ -259,6 +286,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (IsTerminalBindingRunReplay(State, evt.BindingRunId, StudioMemberBindingRunStatus.Failed))
@@ -292,6 +323,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
@@ -353,6 +388,58 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
     }
 
     /// <summary>
+    /// Tombstones the member authority and emits a committed removal fact for
+    /// any current team assignment. Published service artifacts and revisions
+    /// remain untouched; their lifecycle belongs to the platform service
+    /// authority, not this member resource delete path.
+    /// </summary>
+    [EventHandler(EndpointName = "deleteMember")]
+    public async Task HandleDeleteRequested(StudioMemberDeleteRequested evt)
+    {
+        if (string.IsNullOrEmpty(State.MemberId))
+        {
+            throw new InvalidOperationException("member not yet created.");
+        }
+
+        if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
+            || !string.Equals(State.MemberId, evt.MemberId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "delete target does not match member authority state.");
+        }
+
+        if (State.Deleted)
+            return;
+
+        var deletedAt = evt.RequestedAtUtc
+            ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        var events = new List<IMessage>();
+        if (State.HasTeamId)
+        {
+            events.Add(new StudioMemberReassignedEvent
+            {
+                MemberId = State.MemberId,
+                ScopeId = State.ScopeId,
+                FromTeamId = State.TeamId,
+                ReassignedAtUtc = deletedAt,
+            });
+        }
+
+        var deleted = new StudioMemberDeletedEvent
+        {
+            MemberId = State.MemberId,
+            ScopeId = State.ScopeId,
+            PublishedServiceId = State.PublishedServiceId ?? string.Empty,
+            DeletedAtUtc = deletedAt,
+        };
+        if (State.HasTeamId)
+            deleted.PreviousTeamId = State.TeamId;
+
+        events.Add(deleted);
+        await PersistDomainEventsAsync(events);
+    }
+
+    /// <summary>
     /// Evaluates PATCH team-assignment intent inside the member authority
     /// boundary. Callers provide only the desired target; this actor derives
     /// the current source team from <see cref="State"/>, suppresses no-ops,
@@ -368,6 +455,10 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (string.IsNullOrEmpty(State.MemberId))
         {
             throw new InvalidOperationException("member not yet created.");
+        }
+        if (State.Deleted)
+        {
+            throw new InvalidOperationException("member has been deleted.");
         }
 
         if (!string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal)
@@ -420,6 +511,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             .On<StudioMemberBindingCompletedEvent>(ApplyBindingCompleted)
             .On<StudioMemberBindingFailedEvent>(ApplyBindingFailed)
             .On<StudioMemberReassignedEvent>(ApplyReassigned)
+            .On<StudioMemberDeletedEvent>(ApplyDeleted)
             .OrCurrent();
     }
 
@@ -786,6 +878,17 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             next.ClearTeamId();
         }
         next.UpdatedAtUtc = evt.ReassignedAtUtc;
+        return next;
+    }
+
+    private static StudioMemberState ApplyDeleted(
+        StudioMemberState state, StudioMemberDeletedEvent evt)
+    {
+        var next = state.Clone();
+        next.Deleted = true;
+        next.DeletedAtUtc = evt.DeletedAtUtc;
+        next.UpdatedAtUtc = evt.DeletedAtUtc;
+        next.ClearTeamId();
         return next;
     }
 
