@@ -629,8 +629,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                if (!downloaded.Succeeded ||
-                    downloaded.Content.Length == 0)
+                 if (!downloaded.Succeeded ||
+                    downloaded.Content.Length == 0 ||
+                    downloaded.Content.Length > MaxInlineImageBytes ||
+                    !IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
                 {
                     _logger.LogWarning(
                         "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} status={Status} detail={Detail}",
@@ -639,18 +641,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                         resourceKey,
                         downloaded.HttpStatus,
                         downloaded.Detail);
-                    unseenCount++;
-                    continue;
-                }
-
-                if (downloaded.Content.Length > MaxAttachmentMaterializationBytes)
-                {
-                    unseenCount++;
-                    continue;
-                }
-
-                if (!IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
-                {
                     unseenCount++;
                     continue;
                 }
