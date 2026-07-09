@@ -413,18 +413,6 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
 
         var deletedAt = evt.RequestedAtUtc
             ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
-        var events = new List<IMessage>();
-        if (State.HasTeamId)
-        {
-            events.Add(new StudioMemberReassignedEvent
-            {
-                MemberId = State.MemberId,
-                ScopeId = State.ScopeId,
-                FromTeamId = State.TeamId,
-                ReassignedAtUtc = deletedAt,
-            });
-        }
-
         var deleted = new StudioMemberDeletedEvent
         {
             MemberId = State.MemberId,
@@ -435,8 +423,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
         if (State.HasTeamId)
             deleted.PreviousTeamId = State.TeamId;
 
-        events.Add(deleted);
-        await PersistDomainEventsAsync(events);
+        await PersistDomainEventAsync(deleted);
     }
 
     /// <summary>

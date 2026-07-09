@@ -605,7 +605,7 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
-    public async Task HandleDeleteRequested_ShouldCommitTeamRemovalThenDeletedEvent_WhenAssigned()
+    public async Task HandleDeleteRequested_ShouldCommitOnlyDeletedEvent_WhenAssigned()
     {
         var now = DateTimeOffset.UtcNow;
         var current = _agent.Apply(
@@ -629,14 +629,7 @@ public sealed class StudioMemberGAgentStateTests
             RequestedAtUtc = deletedAt,
         });
 
-        eventSourcing.RaisedEvents.Should().HaveCount(2);
-        var reassigned = eventSourcing.RaisedEvents[0]
-            .Should().BeOfType<StudioMemberReassignedEvent>().Subject;
-        reassigned.FromTeamId.Should().Be("team-1");
-        reassigned.HasToTeamId.Should().BeFalse();
-        reassigned.ReassignedAtUtc.Should().Be(deletedAt);
-
-        var deleted = eventSourcing.RaisedEvents[1]
+        var deleted = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
             .Should().BeOfType<StudioMemberDeletedEvent>().Subject;
         deleted.MemberId.Should().Be("m-1");
         deleted.ScopeId.Should().Be("scope-1");
