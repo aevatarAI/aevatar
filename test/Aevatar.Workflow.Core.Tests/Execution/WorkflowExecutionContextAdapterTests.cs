@@ -550,6 +550,7 @@ public sealed class WorkflowExecutionContextAdapterTests
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                NyxId = delta.CallerCredential.NyxId?.Clone(),
             };
         }
     }

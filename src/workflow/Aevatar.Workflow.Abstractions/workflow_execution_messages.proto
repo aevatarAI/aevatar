@@ -72,9 +72,21 @@ message WorkflowLlmControlContext {
   string sender_nyx_id_access_token = 5;
 }
 
+message WorkflowNyxIdSubjectRef {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+}
+
+message WorkflowNyxIdCredentialSource {
+  WorkflowNyxIdSubjectRef subject = 1;
+  string scope = 2;
+}
+
 message WorkflowCallerCredential {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
+  WorkflowNyxIdCredentialSource nyx_id = 3;
 }
 
 message WorkflowExternalIngressContext {

@@ -1379,6 +1379,7 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
                 {
                     BearerToken = delta.CallerCredential.BearerToken,
+                    NyxId = delta.CallerCredential.NyxId?.Clone(),
                 };
             }
 

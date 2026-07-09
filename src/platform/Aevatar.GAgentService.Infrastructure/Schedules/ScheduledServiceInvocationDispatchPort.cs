@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -95,7 +96,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             dispatch.Headers,
             new ExchangedCredential(
                 exchange.Role,
-                NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role))),
+                NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role)),
+                BuildWorkflowNyxIdSource(exchange.Role, dispatch.Auth!)),
             dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
     }
 
@@ -188,7 +190,20 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             };
             chatRequest.LlmControl = control.ToPayload();
             if (projectNyxIdAccessTokenToWorkflowCallerCredential)
-                chatRequest.ConnectorHttpAuthorization = $"Bearer {token}";
+            {
+                if (credential.WorkflowSource != null)
+                {
+                    chatRequest.ConnectorHttpAuthorization = string.Empty;
+                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.SubjectPlatform] = credential.WorkflowSource.Subject?.Platform ?? string.Empty;
+                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.SubjectTenant] = credential.WorkflowSource.Subject?.Tenant ?? string.Empty;
+                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.SubjectExternalUserId] = credential.WorkflowSource.Subject?.ExternalUserId ?? string.Empty;
+                    chatRequest.Headers[WorkflowNyxIdCredentialHeaders.Scope] = credential.WorkflowSource.Scope ?? string.Empty;
+                }
+                else
+                {
+                    chatRequest.ConnectorHttpAuthorization = $"Bearer {token}";
+                }
+            }
         }
 
         cloned.Payload = Any.Pack(chatRequest);
@@ -246,8 +261,57 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         CredentialRole Role,
         ScheduledServiceInvocationCredentialExchangeResult Result);
 
-    private sealed record ExchangedCredential(CredentialRole Role, string AccessToken);
+    private sealed record ExchangedCredential(
+        CredentialRole Role,
+        string AccessToken,
+        WorkflowNyxIdCredentialSource? WorkflowSource);
 
     private static string ToErrorSubject(CredentialRole role) =>
         role == CredentialRole.ScopeOwner ? "scope owner" : "sender";
+
+    private static WorkflowNyxIdCredentialSource? BuildWorkflowNyxIdSource(
+        CredentialRole role,
+        ScheduledServiceInvocationAuth auth)
+    {
+        var source = role == CredentialRole.ScopeOwner
+            ? ToWorkflowSource(ResolveScopeOwnerSource(auth.ScopeOwnerNyxId))
+            : ToWorkflowSource(auth.SenderNyxId);
+        return IsUsableWorkflowSource(source) ? source : null;
+    }
+
+    private static ScheduledServiceInvocationNyxIdCredentialSource? ResolveScopeOwnerSource(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? source)
+    {
+        if (source == null)
+            return null;
+        if (source.OwnerSubject == null)
+            throw new ArgumentException("Schedule scope owner NyxID subject is required for workflow credential projection.", nameof(source));
+
+        return new ScheduledServiceInvocationNyxIdCredentialSource(source.OwnerSubject, source.Scope);
+    }
+
+    private static WorkflowNyxIdCredentialSource? ToWorkflowSource(
+        ScheduledServiceInvocationNyxIdCredentialSource? source)
+    {
+        if (source?.Subject == null)
+            return null;
+
+        return new WorkflowNyxIdCredentialSource
+        {
+            Subject = new WorkflowNyxIdSubjectRef
+            {
+                Platform = source.Subject.Platform?.Trim() ?? string.Empty,
+                Tenant = source.Subject.Tenant?.Trim() ?? string.Empty,
+                ExternalUserId = source.Subject.ExternalUserId?.Trim() ?? string.Empty,
+            },
+            Scope = source.Scope?.Trim() ?? string.Empty,
+        };
+    }
+
+    private static bool IsUsableWorkflowSource(WorkflowNyxIdCredentialSource? source) =>
+        source?.Subject != null &&
+        !string.IsNullOrWhiteSpace(source.Subject.Platform) &&
+        !string.IsNullOrWhiteSpace(source.Subject.Tenant) &&
+        !string.IsNullOrWhiteSpace(source.Subject.ExternalUserId) &&
+        !string.IsNullOrWhiteSpace(source.Scope);
 }

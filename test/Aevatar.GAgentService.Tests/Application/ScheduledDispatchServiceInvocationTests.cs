@@ -218,7 +218,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
             Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
         };
         var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef(
+                    OwnerScope.NyxIdPlatform,
+                    "tenant-owner-1",
+                    "owner-nyx-user-1")));
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
 
@@ -235,7 +240,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuthAndWorkflowProjection_ShouldProjectOwnerTokenToConnectorAuthorization()
+    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuthAndWorkflowProjection_ShouldProjectRefreshableOwnerSource()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
@@ -257,7 +262,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
             }),
         };
         var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef(
+                    OwnerScope.NyxIdPlatform,
+                    "tenant-owner-1",
+                    "owner-nyx-user-1")));
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
@@ -269,7 +279,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("existing-sender-token");
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer owner-token");
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.platform", OwnerScope.NyxIdPlatform);
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.tenant", "tenant-owner-1");
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.external_user_id", "owner-nyx-user-1");
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.scope", "proxy");
         var originalChat = original.Payload.Unpack<ChatRequestEvent>();
         originalChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         originalChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
@@ -322,7 +336,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-1");
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer sender-token-1");
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.platform", "lark");
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.tenant", "tenant-1");
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.subject.external_user_id", "ou-user-1");
+        invokedChat.Headers.Should().Contain("workflow.caller_credential.nyx_id.scope", "proxy");
         invokedChat.Metadata.Should().Contain("trace", "kept");
         invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
         invokedChat.Metadata.Should().Contain("schedule", "scheduled");

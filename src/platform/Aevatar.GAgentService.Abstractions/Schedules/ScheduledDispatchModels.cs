@@ -51,13 +51,16 @@ public sealed record ScheduledServiceInvocationAuth(
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,
     string? AccessToken = null,
-    string? Error = null)
+    string? Error = null,
+    DateTimeOffset? ExpiresAtUtc = null)
 {
-    public static ScheduledServiceInvocationCredentialExchangeResult Success(string accessToken) =>
-        new(true, accessToken, null);
+    public static ScheduledServiceInvocationCredentialExchangeResult Success(
+        string accessToken,
+        DateTimeOffset? expiresAtUtc = null) =>
+        new(true, accessToken, null, expiresAtUtc);
 
     public static ScheduledServiceInvocationCredentialExchangeResult Failure(string error) =>
-        new(false, null, error);
+        new(false, null, error, null);
 }
 
 public sealed record ScheduledDispatchConfiguration(

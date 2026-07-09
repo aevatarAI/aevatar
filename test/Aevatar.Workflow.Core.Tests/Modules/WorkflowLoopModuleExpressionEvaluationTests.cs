@@ -572,6 +572,7 @@ public class WorkflowLoopModuleExpressionEvaluationTests
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                NyxId = delta.CallerCredential.NyxId?.Clone(),
             };
         }
 

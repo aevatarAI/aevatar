@@ -1557,6 +1557,7 @@ public class RuntimeCallbackEventizationTests
             state.CallerCredential = new WorkflowCallerCredentialState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
+                NyxId = delta.CallerCredential.NyxId?.Clone(),
             };
         }
     }

@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\Aevatar.AGUI.Contracts\Aevatar.AGUI.Contracts.csproj" />
     <ProjectReference Include="..\..\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
     <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
+    <ProjectReference Include="..\..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />

@@ -1431,6 +1431,7 @@ public sealed class WorkflowRunGAgent
             {
                 BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                NyxId = delta.CallerCredential.NyxId?.Clone(),
             };
         }
 

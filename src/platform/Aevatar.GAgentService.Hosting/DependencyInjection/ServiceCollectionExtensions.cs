@@ -47,6 +47,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -167,6 +168,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
         services.AddScheduledCredentialExchangePort();
+        services.AddWorkflowCallerCredentialTokenProvider();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
@@ -249,6 +251,14 @@ public static class ServiceCollectionExtensions
                     broker,
                     sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
                 : new NoopScheduledServiceInvocationCredentialExchangePort());
+
+    private static void AddWorkflowCallerCredentialTokenProvider(this IServiceCollection services) =>
+        services.TryAddSingleton<IWorkflowCallerCredentialTokenProvider>(sp =>
+            sp.GetService<INyxIdCapabilityBroker>() is { } broker
+                ? new NyxIdWorkflowCallerCredentialTokenProvider(
+                    broker,
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdWorkflowCallerCredentialTokenProvider>>())
+                : new NoopWorkflowCallerCredentialTokenProvider());
 
     public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(
         this IServiceCollection services,

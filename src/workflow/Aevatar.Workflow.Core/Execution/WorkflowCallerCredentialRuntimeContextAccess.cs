@@ -23,6 +23,14 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
         if (parsed.IsInvalid)
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
+        if (HasNyxIdCredentialSource(credential?.NyxId))
+        {
+            delta.CallerCredential = new WorkflowCallerCredential
+            {
+                NyxId = NormalizeNyxIdCredentialSource(credential!.NyxId),
+            };
+            return delta;
+        }
         if (parsed.IsMissing)
             return delta;
 
@@ -99,5 +107,30 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
     {
         ArgumentNullException.ThrowIfNull(stateHost);
         return await WorkflowRunExecutionContextStateAccess.TryGetCallerCredentialAsync(stateHost, ct);
+    }
+
+    internal static bool HasNyxIdCredentialSource(WorkflowNyxIdCredentialSource? source) =>
+        source?.Subject != null &&
+        !string.IsNullOrWhiteSpace(source.Subject.Platform) &&
+        !string.IsNullOrWhiteSpace(source.Subject.Tenant) &&
+        !string.IsNullOrWhiteSpace(source.Subject.ExternalUserId) &&
+        !string.IsNullOrWhiteSpace(source.Scope);
+
+    internal static WorkflowNyxIdCredentialSource NormalizeNyxIdCredentialSource(
+        WorkflowNyxIdCredentialSource source)
+    {
+        if (!HasNyxIdCredentialSource(source))
+            throw new ArgumentException("Workflow caller NyxID credential source is incomplete.", nameof(source));
+
+        return new WorkflowNyxIdCredentialSource
+        {
+            Subject = new WorkflowNyxIdSubjectRef
+            {
+                Platform = source.Subject.Platform.Trim(),
+                Tenant = source.Subject.Tenant.Trim(),
+                ExternalUserId = source.Subject.ExternalUserId.Trim(),
+            },
+            Scope = source.Scope.Trim(),
+        };
     }
 }

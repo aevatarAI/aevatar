@@ -46,7 +46,9 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
                     "NyxID credential exchange returned an empty access token.");
             }
 
-            return ScheduledServiceInvocationCredentialExchangeResult.Success(handle.AccessToken);
+            return ScheduledServiceInvocationCredentialExchangeResult.Success(
+                handle.AccessToken,
+                ResolveExpiresAtUtc(handle));
         }
         catch (BindingNotFoundException)
         {
@@ -93,5 +95,13 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
             throw new ArgumentException("Schedule scope owner NyxID subject is required for scope owner credential exchange.", nameof(source));
 
         return source.OwnerSubject;
+    }
+
+    private static DateTimeOffset? ResolveExpiresAtUtc(CapabilityHandle handle)
+    {
+        if (handle.ExpiresAtUnix <= 0)
+            return null;
+
+        return DateTimeOffset.FromUnixTimeSeconds(handle.ExpiresAtUnix).ToUniversalTime();
     }
 }

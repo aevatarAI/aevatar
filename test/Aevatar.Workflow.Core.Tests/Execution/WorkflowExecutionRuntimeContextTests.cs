@@ -256,6 +256,42 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldRefreshNyxIdSourceOnEachCredentialResolution()
+    {
+        var provider = new RecordingWorkflowCallerCredentialTokenProvider("fresh-token-1", "fresh-token-2");
+        var context = new RecordingWorkflowExecutionContext
+        {
+            ServicesOverride = new SingleServiceProvider(provider),
+        };
+        context.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxId = new WorkflowNyxIdCredentialSource
+            {
+                Subject = new WorkflowNyxIdSubjectRef
+                {
+                    Platform = "lark",
+                    Tenant = "tenant-refresh",
+                    ExternalUserId = "user-refresh",
+                },
+                Scope = "proxy",
+            },
+        };
+
+        var first = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(
+            (IWorkflowExecutionContext)context);
+        var second = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(
+            (IWorkflowExecutionContext)context);
+
+        first.Found.Should().BeTrue();
+        first.Credential.BearerToken.Should().Be("fresh-token-1");
+        second.Found.Should().BeTrue();
+        second.Credential.BearerToken.Should().Be("fresh-token-2");
+        provider.Sources.Should().HaveCount(2);
+        provider.Sources.Select(source => source.Scope).Should().OnlyContain(scope => scope == "proxy");
+        provider.Sources.Select(source => source.Subject.ExternalUserId).Should().OnlyContain(id => id == "user-refresh");
+    }
+
+    [Fact]
     public void WorkflowCallerCredentialRuntimeAccess_ShouldReadLegacyPlaintextStateOnlyForExistingState()
     {
         var context = new RecordingWorkflowExecutionContext();
@@ -773,6 +809,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             {
                 BearerToken = delta.CallerCredential.BearerToken,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                NyxId = delta.CallerCredential.NyxId?.Clone(),
             };
         }
     }
@@ -787,7 +824,9 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         public string AgentId => "agent-1";
 
-        public IServiceProvider Services { get; } = new EmptyServiceProvider();
+        public IServiceProvider Services => ServicesOverride ?? EmptyServiceProvider.Instance;
+
+        public IServiceProvider? ServicesOverride { get; init; }
 
         public Microsoft.Extensions.Logging.ILogger Logger { get; } = NullLogger.Instance;
 
@@ -830,6 +869,35 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
     private sealed class EmptyServiceProvider : IServiceProvider
     {
+        public static readonly EmptyServiceProvider Instance = new();
+
         public object? GetService(System.Type serviceType) => null;
+    }
+
+    private sealed class SingleServiceProvider(object service) : IServiceProvider
+    {
+        public object? GetService(System.Type serviceType) =>
+            serviceType.IsInstanceOfType(service) ? service : null;
+    }
+
+    private sealed class RecordingWorkflowCallerCredentialTokenProvider(
+        params string[] accessTokens) : IWorkflowCallerCredentialTokenProvider
+    {
+        private int _index;
+
+        public List<WorkflowNyxIdCredentialSource> Sources { get; } = [];
+
+        public Task<WorkflowCallerCredentialTokenResolution> ResolveAsync(
+            WorkflowNyxIdCredentialSource source,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Sources.Add(source.Clone());
+            var token = accessTokens[Math.Min(_index, accessTokens.Length - 1)];
+            _index++;
+            return Task.FromResult(new WorkflowCallerCredentialTokenResolution(
+                token,
+                DateTimeOffset.UtcNow.AddMinutes(5)));
+        }
     }
 }

@@ -183,7 +183,12 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             });
         }
         foreach (var (key, value) in source.Headers)
+        {
+            if (IsWorkflowNyxIdCredentialHeader(key))
+                continue;
+
             request.Headers[key] = value;
+        }
         foreach (var (key, value) in source.Metadata)
             request.Metadata[key] = value;
         request.LlmControl = new WorkflowLlmControlContext
@@ -200,12 +205,54 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(ChatRequestEvent source)
     {
+        var nyxIdCredential = BuildWorkflowCallerCredentialFromNyxIdSource(source.Headers);
+        if (nyxIdCredential.NyxId != null)
+            return nyxIdCredential;
+
         var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
         if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
             return connectorCredential;
 
         return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
     }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromNyxIdSource(
+        IReadOnlyDictionary<string, string> headers)
+    {
+        var platform = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.SubjectPlatform);
+        var tenant = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.SubjectTenant);
+        var externalUserId = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.SubjectExternalUserId);
+        var scope = NormalizeHeader(headers, WorkflowNyxIdCredentialHeaders.Scope);
+        if (string.IsNullOrWhiteSpace(platform) ||
+            string.IsNullOrWhiteSpace(tenant) ||
+            string.IsNullOrWhiteSpace(externalUserId) ||
+            string.IsNullOrWhiteSpace(scope))
+        {
+            return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential();
+        }
+
+        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+        {
+            NyxId = new WorkflowNyxIdCredentialSource
+            {
+                Subject = new WorkflowNyxIdSubjectRef
+                {
+                    Platform = platform,
+                    Tenant = tenant,
+                    ExternalUserId = externalUserId,
+                },
+                Scope = scope,
+            },
+        };
+    }
+
+    private static string NormalizeHeader(IReadOnlyDictionary<string, string> headers, string key) =>
+        headers.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value.Trim()
+            : string.Empty;
+
+    private static bool IsWorkflowNyxIdCredentialHeader(string key) =>
+        WorkflowNyxIdCredentialHeaders.IsReserved(key);
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromConnectorAuthorization(string? connectorHttpAuthorization)
     {

@@ -535,6 +535,7 @@ public sealed class ToolCallModuleContextTests
                 ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
                 {
                     BearerToken = delta.CallerCredential.BearerToken,
+                    NyxId = delta.CallerCredential.NyxId?.Clone(),
                 };
             }
 

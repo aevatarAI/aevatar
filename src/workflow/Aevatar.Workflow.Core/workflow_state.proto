@@ -197,6 +197,7 @@ message WorkflowCallerCredentialState
 {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
+  WorkflowNyxIdCredentialSource nyx_id = 3;
 }
 
 message WorkflowToolRuntimeContextState

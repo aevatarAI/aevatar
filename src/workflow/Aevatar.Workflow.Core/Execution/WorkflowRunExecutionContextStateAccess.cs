@@ -104,6 +104,11 @@ internal static class WorkflowRunExecutionContextStateAccess
         out WorkflowCallerCredential credential)
     {
         var callerCredential = Get(ctx).CallerCredential;
+        if (WorkflowCallerCredentialRuntimeContextAccess.HasNyxIdCredentialSource(callerCredential?.NyxId))
+        {
+            credential = new WorkflowCallerCredential();
+            return false;
+        }
         if (HasRuntimeSecretReference(callerCredential?.RuntimeSecretReference))
         {
             credential = new WorkflowCallerCredential();
@@ -134,6 +139,12 @@ internal static class WorkflowRunExecutionContextStateAccess
         WorkflowCallerCredentialState? callerCredential,
         CancellationToken ct)
     {
+        if (WorkflowCallerCredentialRuntimeContextAccess.HasNyxIdCredentialSource(callerCredential?.NyxId))
+        {
+            var resolved = await ResolveNyxIdCredentialAsync(source, callerCredential!.NyxId, ct);
+            return (true, new WorkflowCallerCredential { BearerToken = resolved.AccessToken });
+        }
+
         if (HasRuntimeSecretReference(callerCredential?.RuntimeSecretReference))
         {
             var resolved = await TryResolveRuntimeSecretAsync(source, callerCredential!.RuntimeSecretReference, ct);
@@ -206,6 +217,38 @@ internal static class WorkflowRunExecutionContextStateAccess
             stateHostAccessor.StateHost is IRuntimeSecretStoreAccessor stateHostRuntimeAccessor)
         {
             return stateHostRuntimeAccessor.RuntimeSecretStore;
+        }
+
+        return null;
+    }
+
+    private static async Task<WorkflowCallerCredentialTokenResolution> ResolveNyxIdCredentialAsync(
+        object source,
+        WorkflowNyxIdCredentialSource nyxId,
+        CancellationToken ct)
+    {
+        var provider = ResolveTokenProvider(source)
+            ?? throw new InvalidOperationException("Workflow caller NyxID credential token provider is unavailable.");
+        var normalizedSource = WorkflowCallerCredentialRuntimeContextAccess.NormalizeNyxIdCredentialSource(nyxId);
+        var resolution = await provider.ResolveAsync(normalizedSource, ct);
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(resolution.AccessToken);
+        if (!parsed.IsValid)
+            throw new InvalidOperationException("Workflow caller NyxID credential token provider returned an invalid access token.");
+
+        return resolution with
+        {
+            AccessToken = parsed.NormalizedBearerToken ?? string.Empty,
+        };
+    }
+
+    private static IWorkflowCallerCredentialTokenProvider? ResolveTokenProvider(object source)
+    {
+        if (source is IEventContext eventContext)
+            return eventContext.Services.GetService(typeof(IWorkflowCallerCredentialTokenProvider)) as IWorkflowCallerCredentialTokenProvider;
+        if (source is IWorkflowExecutionStateHostAccessor stateHostAccessor &&
+            stateHostAccessor.StateHost is IEventContext stateHostEventContext)
+        {
+            return stateHostEventContext.Services.GetService(typeof(IWorkflowCallerCredentialTokenProvider)) as IWorkflowCallerCredentialTokenProvider;
         }
 
         return null;
