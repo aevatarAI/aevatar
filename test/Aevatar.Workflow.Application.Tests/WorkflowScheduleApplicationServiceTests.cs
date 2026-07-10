@@ -125,6 +125,26 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task WorkflowScheduleCommandPort_EnsureAsync_ShouldForwardScopeOwnerMutationContextToAdmission()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var scheduledDispatches = new ScheduledDispatchApplicationService(
+            actorPort,
+            new FakeWorkflowScheduleQueryPort(),
+            new FakeScheduledDispatchPreparationService(),
+            admissionPort);
+        var port = new WorkflowScheduleCommandPort(scheduledDispatches);
+
+        await port.EnsureAsync(CreateScopeOwnerWorkflowConfiguration("owner-ensure"));
+
+        AssertScopeOwnerAdmissionRequest(admissionPort.Requests.Should().ContainSingle().Which);
+        actorPort.Ensured.Should().ContainSingle()
+            .Which.Configuration.Target.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.OwnerSubject
+            .Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldMapWorkflowScheduleAuthToServiceInvocationAuth()
     {
         var actorPort = new FakeWorkflowScheduleActorPort
@@ -586,6 +606,24 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configuration.Headers.Should().NotContainKey("empty");
         configuration.Headers.Should().Contain("workflow.schedule.scope_id", "caller-extension");
         configuration.Headers.Should().Contain("workflow.schedule.source_actor_id", "caller-extension");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldForwardScopeOwnerMutationContextToAdmission()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        queryPort.Details["route-schedule"] = CreateDetail("route-schedule");
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = CreateService(actorPort, queryPort, admissionPort: admissionPort);
+
+        await service.UpdateAsync(
+            " route-schedule ",
+            CreateScopeOwnerWorkflowConfiguration("body-schedule"));
+
+        AssertScopeOwnerAdmissionRequest(admissionPort.Requests.Should().ContainSingle().Which);
+        actorPort.Updated.Should().ContainSingle()
+            .Which.Configuration.ScheduleId.Should().Be("route-schedule");
     }
 
     [Theory]
@@ -1094,6 +1132,30 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Enabled: true,
             Headers: new Dictionary<string, string>(),
             ScopeId: "scope-1");
+
+    private static WorkflowScheduleConfiguration CreateScopeOwnerWorkflowConfiguration(string scheduleId) =>
+        CreateConfiguration(scheduleId) with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " owner-proxy ",
+                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+            MutationContext = new WorkflowScheduleMutationContext(
+                " scope-1 ",
+                new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 ")),
+        };
+
+    private static void AssertScopeOwnerAdmissionRequest(ScheduledDispatchCredentialAdmissionRequest request)
+    {
+        request.Context.AuthenticatedScopeId.Should().Be("scope-1");
+        request.Context.AuthenticatedNyxIdOwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+        request.ScopeOwnerNyxId.Scope.Should().Be("owner-proxy");
+        request.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+        request.ServiceIdentity.TenantId.Should().Be("scope-1");
+        request.ServiceIdentity.ServiceId.Should().Be("direct");
+    }
 
     private static ScheduledDispatchDetail CreateDetail(
         string scheduleId,

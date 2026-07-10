@@ -111,7 +111,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         }
 
         var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
-        var mutationContext = BuildScheduleMutationContext(normalizedScopeId, subjectRef.Subject);
 
         // Provision identity: one (scope, display name) pair owns exactly one
         // member + workflow id + schedule, so retries converge on the same
@@ -164,7 +163,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 publishedServiceId,
                 request.Prompt ?? string.Empty,
                 auth,
-                mutationContext,
                 cronExpression,
                 timezone,
                 ct);
@@ -236,7 +234,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string publishedServiceId,
         string prompt,
         ScheduledServiceInvocationAuth auth,
-        ScheduledDispatchMutationContext mutationContext,
         string cronExpression,
         string timezone,
         CancellationToken ct)
@@ -252,8 +249,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 var schedule = await _scheduleService.EnsureAsync(
                     BuildScheduleConfiguration(
                         scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone),
-                    mutationContext,
-                    ct);
+                    ct: ct);
                 return NormalizeOptional(schedule.ScheduleId);
             }
             catch (ScheduledDispatchNotFoundException)
@@ -362,11 +358,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     private static ScheduledServiceInvocationAuth BuildScheduleAuth(
         ScheduledServiceInvocationNyxIdCredentialSource subjectRef) =>
         new(subjectRef with { Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender });
-
-    private static ScheduledDispatchMutationContext BuildScheduleMutationContext(
-        string scopeId,
-        ScheduledServiceInvocationNyxIdSubjectRef ownerSubject) =>
-        new(scopeId, ownerSubject);
 
     private static ScheduledServiceInvocationNyxIdCredentialSource BuildSenderNyxIdCredentialSource(
         ProvisionWorkflowCallerCredential credential) =>

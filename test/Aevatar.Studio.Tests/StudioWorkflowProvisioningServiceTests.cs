@@ -93,9 +93,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("go");
         chat.ScopeId.Should().Be(ScopeId);
-        schedule.MutationContext.Should().BeEquivalentTo(new ScheduledDispatchMutationContext(
-            ScopeId,
-            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "user-42")));
+        schedule.MutationContext.Should().BeNull();
     }
 
     [Fact]
@@ -121,6 +119,29 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.Sender);
         auth.Durable.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldNotUseBodyCallerAsAuthenticatedScheduleMutationContext()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            new ProvisionWorkflowCallerCredential(
+                Platform: " nyxid-body ",
+                ExternalUserId: " body-user-42 ",
+                Scope: " sender-proxy ",
+                Tenant: " body-tenant "),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth!;
+        auth.SenderNyxId!.Subject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid-body", "body-tenant", "body-user-42"));
+        auth.SenderNyxId.Scope.Should().Be("sender-proxy");
+        schedule.MutationContext.Should().BeNull();
     }
 
     [Fact]
