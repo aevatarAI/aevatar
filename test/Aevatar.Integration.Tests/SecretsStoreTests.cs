@@ -88,7 +88,7 @@ public class SecretsStoreTests
     }
 
     [Fact]
-    public void Set_WhenPlaintextDisabled_ShouldFailClosedOrPersistEncrypted()
+    public void SetAndRemove_WhenEncryptionUnavailableWithoutPlaintextOptIn_ShouldFailClosed()
     {
         var path = NewTempSecretsPath();
 
@@ -96,24 +96,11 @@ public class SecretsStoreTests
         {
             var store = new AevatarSecretsStore(path, LocalSecretProtectionOptions.NoPlaintextNoKeychain);
 
-            try
-            {
-                store.Set("K1", "V1");
-            }
-            catch (InvalidOperationException ex)
-            {
-                ex.Message.Should().Contain("plaintext").And.Contain("AEVATAR_ALLOW_PLAINTEXT_SECRETS");
-                File.Exists(path).Should().BeFalse();
-                return;
-            }
+            var act = () => store.Set("K1", "V1");
 
-            var text = File.ReadAllText(path);
-            text.Should().Contain("ciphertextB64");
-            text.Should().NotContain("\"K1\"");
-            text.Should().NotContain("\"V1\"");
-
-            var reloaded = new AevatarSecretsStore(path, LocalSecretProtectionOptions.NoPlaintextNoKeychain);
-            reloaded.Get("K1").Should().Be("V1");
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*plaintext*AEVATAR_ALLOW_PLAINTEXT_SECRETS*");
+            File.Exists(path).Should().BeFalse();
         }
         finally
         {
@@ -123,7 +110,7 @@ public class SecretsStoreTests
     }
 
     [Fact]
-    public void SetAndRemove_WithPlaintextDevOptIn_ShouldPersistWithAvailableProtection()
+    public void SetAndRemove_WithPlaintextDevOptIn_ShouldPersistToFile_AsPlaintextWhenNoMasterKey()
     {
         var path = NewTempSecretsPath();
 
@@ -139,17 +126,8 @@ public class SecretsStoreTests
             reloaded.Get("K2").Should().Be("V2");
 
             var text = File.ReadAllText(path);
-            if (text.Contains("ciphertextB64", StringComparison.Ordinal))
-            {
-                text.Should().NotContain("\"K2\"");
-                text.Should().NotContain("\"V2\"");
-                text.Should().NotContain("\"K1\"");
-            }
-            else
-            {
-                text.Should().Contain("\"K2\"");
-                text.Should().NotContain("\"K1\"");
-            }
+            text.Should().Contain("\"K2\"");
+            text.Should().NotContain("\"K1\"");
         }
         finally
         {

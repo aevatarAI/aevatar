@@ -260,6 +260,9 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
 
     private byte[]? TryGetMasterKey()
     {
+        if (!_protectionOptions.AllowMasterKeyResolution)
+            return null;
+
         // Priority 1: macOS Keychain
         if (OperatingSystem.IsMacOS())
         {
