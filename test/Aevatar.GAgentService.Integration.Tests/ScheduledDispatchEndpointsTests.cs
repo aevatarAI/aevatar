@@ -832,7 +832,7 @@ public sealed class ScheduledDispatchEndpointsTests
         var auth = configuration.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
         auth!.SenderNyxId.Should().NotBeNull();
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.DurableCredentialReference.Should().BeNull();
     }
 
     [Fact]

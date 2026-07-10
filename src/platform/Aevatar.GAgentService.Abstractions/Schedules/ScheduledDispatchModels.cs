@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules;
@@ -43,10 +44,14 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
     string Scope,
     ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
 
+public sealed record ScheduledServiceInvocationDurableCredentialReference(
+    string CredentialId,
+    SecretReference SecretReference);
+
 public sealed record ScheduledServiceInvocationAuth(
     ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
-    string? DurableSenderBearerToken = null,
-    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
+    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null,
+    ScheduledServiceInvocationDurableCredentialReference? DurableCredentialReference = null);
 
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,

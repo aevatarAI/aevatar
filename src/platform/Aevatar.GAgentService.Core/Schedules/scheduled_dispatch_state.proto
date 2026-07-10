@@ -6,6 +6,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/any.proto";
 import "agent_messages.proto";
 import "service_endpoint.proto";
+import "Credentials/credential_secret_references.proto";
 
 message ScheduledDispatchState
 {
@@ -105,6 +106,13 @@ message ScheduledServiceInvocationAuthState
   string durable_sender_bearer_token = 2;
   ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3;
   bool legacy_durable_sender_bearer_blocked = 4;
+  ScheduledServiceInvocationDurableCredentialReferenceState durable_credential_reference = 5;
+}
+
+message ScheduledServiceInvocationDurableCredentialReferenceState
+{
+  string credential_id = 1;
+  aevatar.credentials.SecretReference secret_reference = 2;
 }
 
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState

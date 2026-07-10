@@ -115,7 +115,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-9");
         auth.SenderNyxId.Scope.Should().Be("proxy");
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.DurableCredentialReference.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }
 
@@ -132,7 +132,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.DurableSenderBearerToken.Should().BeNull();
+        auth!.DurableCredentialReference.Should().BeNull();
         auth.SenderNyxId.Should().NotBeNull();
         AssertExactlyOneCredentialSource(auth);
     }
@@ -157,7 +157,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.SenderNyxId.Should().NotBeNull();
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.DurableCredentialReference.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }
 
@@ -176,7 +176,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
         response.ScheduleId.Should().Be(ScheduleId);
         member.GetBindingRunCallCount.Should().Be(0);
-        schedule.Configuration!.Target.ServiceInvocation!.Auth!.DurableSenderBearerToken.Should().BeNull();
+        schedule.Configuration!.Target.ServiceInvocation!.Auth!.DurableCredentialReference.Should().BeNull();
     }
 
     [Fact]
@@ -496,7 +496,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.Should().NotBeNull();
         var sources =
             (auth!.SenderNyxId != null ? 1 : 0) +
-            (string.IsNullOrEmpty(auth.DurableSenderBearerToken) ? 0 : 1) +
+            (auth.DurableCredentialReference != null ? 1 : 0) +
             (auth.ScopeOwnerNyxId != null ? 1 : 0);
         sources.Should().Be(1, "a scheduled dispatch must carry exactly one credential source");
     }

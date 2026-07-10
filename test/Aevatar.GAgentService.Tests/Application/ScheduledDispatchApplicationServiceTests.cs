@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Schedules;
@@ -127,7 +128,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectDurableSenderBearerTokenAuth()
+    public async Task CreateAsync_ShouldNormalizeDurableCredentialReferenceAuth()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
         var service = new ScheduledDispatchApplicationService(
@@ -135,7 +136,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService());
 
-        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-durable-auth",
             "Invoke",
             new ScheduledDispatchTargetDescriptor(
@@ -144,15 +145,100 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: " durable-run-key "))),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        DurableCredentialReference: CreateDurableCredentialReference(
+                            " credential-1 ",
+                            " sec-1 ",
+                            " owner-scope-1 ")))),
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
+        var created = actorPort.Created.Should().ContainSingle().Which;
+        var auth = created.Configuration.Target.ServiceInvocation!.Auth!.DurableCredentialReference;
+        auth.Should().NotBeNull();
+        auth!.CredentialId.Should().Be("credential-1");
+        auth.SecretReference.Ref.Should().Be("sec-1");
+        auth.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        auth.SecretReference.OwnerScopeKey.Should().Be("owner-scope-1");
+        var stateAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.DurableCredentialReference;
+        stateAuth.Should().BeEquivalentTo(auth);
+    }
+
+    [Theory]
+    [InlineData("", "sec-1", "owner-scope-1", "*CredentialId is required*")]
+    [InlineData("credential-1", "", "owner-scope-1", "*Ref is required*")]
+    [InlineData("credential-1", "sec-1", "", "*OwnerScopeKey is required*")]
+    public async Task CreateAsync_ShouldRejectIncompleteDurableCredentialReferenceAuth(
+        string credentialId,
+        string secretRef,
+        string ownerScopeKey,
+        string expectedMessage)
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(
+                DurableCredentialReference: CreateDurableCredentialReference(
+                    credentialId,
+                    secretRef,
+                    ownerScopeKey))));
+
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
-        actorPort.Created.Should().BeEmpty();
+            .WithMessage(expectedMessage);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceAuthWithWrongPurpose()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(
+                DurableCredentialReference: CreateDurableCredentialReference(purpose: "other-purpose"))));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage($"*{CredentialSecretPurposes.ScheduledNyxApiKey}*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceMixedWithSenderNyxId()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(
+                SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+                    new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                    "proxy"),
+                DurableCredentialReference: CreateDurableCredentialReference())));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one service invocation credential source is required*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceMixedWithScopeOwnerNyxId()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(
+                DurableCredentialReference: CreateDurableCredentialReference(),
+                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    "owner-proxy",
+                    new ScheduledServiceInvocationNyxIdSubjectRef(
+                        OwnerScope.NyxIdPlatform,
+                        string.Empty,
+                        "owner-nyx-user")))));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one service invocation credential source is required*");
     }
 
     [Fact]
@@ -429,7 +515,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                         SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
                             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
                             "proxy"),
-                        DurableSenderBearerToken: "durable-run-key",
+                        DurableCredentialReference: CreateDurableCredentialReference(),
                         ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
                             "owner-proxy",
                             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
@@ -439,7 +525,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
+            .WithMessage("*Exactly one service invocation credential source is required*");
     }
 
     [Fact]
@@ -605,7 +691,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldRejectDurableSenderBearerTokenAuth()
+    public async Task ScheduledDispatchActorPort_ShouldPersistDurableCredentialReferenceAuth()
     {
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
@@ -618,7 +704,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: "durable-run-key"))),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        DurableCredentialReference: CreateDurableCredentialReference()))),
             "0 9 * * *",
             "UTC",
             true,
@@ -627,11 +714,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var prepared = await new ScheduledDispatchTargetPreparationService()
             .PrepareAsync(configuration, "cmd-1", "corr-1");
 
-        var act = () => port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
+        await port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
 
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
-        dispatchPort.Envelopes.Should().BeEmpty();
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
+        command.Target.ServiceInvocation.Auth.DurableCredentialReference.Should().NotBeNull();
+        command.Target.ServiceInvocation.Auth.DurableCredentialReference.CredentialId.Should().Be("credential-1");
+        command.Target.ServiceInvocation.Auth.DurableCredentialReference.SecretReference.Ref.Should().Be("sec-1");
+        command.Target.ServiceInvocation.Auth.DurableCredentialReference.SecretReference.OwnerScopeKey.Should().Be("owner-scope-1");
     }
 
     [Fact]
@@ -1055,6 +1144,38 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "UTC",
             true,
             new Dictionary<string, string>());
+
+    private static ScheduledDispatchConfiguration CreateServiceInvocationConfiguration(
+        string scheduleId,
+        ScheduledServiceInvocationAuth auth) =>
+        new(
+            scheduleId,
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: auth)),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+    private static ScheduledServiceInvocationDurableCredentialReference CreateDurableCredentialReference(
+        string credentialId = "credential-1",
+        string secretRef = "sec-1",
+        string ownerScopeKey = "owner-scope-1",
+        string purpose = CredentialSecretPurposes.ScheduledNyxApiKey) =>
+        new(
+            credentialId,
+            new SecretReference
+            {
+                Ref = secretRef,
+                Purpose = purpose,
+                OwnerScopeKey = ownerScopeKey,
+            });
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {

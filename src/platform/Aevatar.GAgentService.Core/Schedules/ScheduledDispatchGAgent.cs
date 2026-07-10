@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -194,7 +195,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             NormalizeTarget(target),
             isCreate);
         Logger.LogInformation(
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
             NormalizeRequired(scheduleId, nameof(scheduleId)),
             isCreate,
             configuredTarget.Kind,
@@ -202,6 +203,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             HasServiceInvocationAuth(configuredTarget),
             HasScopeOwnerNyxId(configuredTarget),
             HasSenderNyxId(configuredTarget),
+            HasDurableCredentialReference(configuredTarget),
             HasLegacyDurableSenderBearerBlocked(configuredTarget));
         var configured = new ScheduledDispatchConfiguredEvent
         {
@@ -419,12 +421,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
             var stateTarget = State.Target;
             Logger.LogInformation(
-                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
+                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
                 ResolveScheduleId(),
                 State.ScheduleKind,
                 HasServiceInvocationAuth(stateTarget),
                 HasScopeOwnerNyxId(stateTarget),
                 HasSenderNyxId(stateTarget),
+                HasDurableCredentialReference(stateTarget),
                 HasLegacyDurableSenderBearerBlocked(stateTarget),
                 State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
             if (HasLegacyDurableSenderBearerBlocked(stateTarget))
@@ -578,7 +581,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
         }
 
-        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null)
+        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null && auth.DurableCredentialReference == null)
             return null;
 
         var senderNyxId = auth.SenderNyxId == null
@@ -596,7 +599,16 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 auth.ScopeOwnerNyxId.Scope ?? string.Empty,
                 ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
 
-        return new ScheduledServiceInvocationAuth(senderNyxId, null, scopeOwnerNyxId);
+        var durableCredentialReference = auth.DurableCredentialReference == null
+            ? null
+            : new ScheduledServiceInvocationDurableCredentialReference(
+                auth.DurableCredentialReference.CredentialId ?? string.Empty,
+                auth.DurableCredentialReference.SecretReference?.Clone() ?? new SecretReference());
+
+        return new ScheduledServiceInvocationAuth(
+            SenderNyxId: senderNyxId,
+            ScopeOwnerNyxId: scopeOwnerNyxId,
+            DurableCredentialReference: durableCredentialReference);
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
@@ -947,8 +959,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var hasLegacyDurableToken = !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken) ||
                                     auth.LegacyDurableSenderBearerBlocked;
-        if (auth.SenderNyxId == null && !hasLegacyDurableToken && auth.ScopeOwnerNyxId == null)
+        if (auth.SenderNyxId == null &&
+            !hasLegacyDurableToken &&
+            auth.ScopeOwnerNyxId == null &&
+            auth.DurableCredentialReference == null)
+        {
             return null;
+        }
 
         var normalized = new ScheduledServiceInvocationAuthState
         {
@@ -973,8 +990,30 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             };
         }
 
+        if (auth.DurableCredentialReference != null)
+        {
+            normalized.DurableCredentialReference = new ScheduledServiceInvocationDurableCredentialReferenceState
+            {
+                CredentialId = NormalizeOptional(auth.DurableCredentialReference.CredentialId),
+                SecretReference = NormalizeSecretReference(auth.DurableCredentialReference.SecretReference),
+            };
+        }
+
         return normalized;
     }
+
+    private static SecretReference? NormalizeSecretReference(SecretReference? reference) =>
+        reference == null
+            ? null
+            : new SecretReference
+            {
+                Ref = NormalizeOptional(reference.Ref),
+                Purpose = NormalizeOptional(reference.Purpose),
+                Fingerprint = NormalizeOptional(reference.Fingerprint),
+                Version = reference.Version,
+                OwnerScopeKey = NormalizeOptional(reference.OwnerScopeKey),
+                CreatedAtUnixMs = reference.CreatedAtUnixMs,
+            };
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? NormalizeSubject(
         ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
@@ -995,6 +1034,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static bool HasSenderNyxId(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth?.SenderNyxId != null;
+
+    private static bool HasDurableCredentialReference(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.DurableCredentialReference != null;
 
     private static bool HasLegacyDurableSenderBearerBlocked(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth?.LegacyDurableSenderBearerBlocked == true ||

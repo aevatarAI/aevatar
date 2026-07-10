@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -445,11 +446,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableToken_ShouldRejectBeforeExchange()
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReference_ShouldResolveVaultAndInjectSenderToken()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var secretVault = new RecordingSecretVault("durable-run-key");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
         var original = new ServiceInvocationRequest
         {
             CommandId = "cmd-invoke",
@@ -461,23 +463,30 @@ public sealed class ScheduledDispatchServiceInvocationTests
             }),
         };
         var auth = new ScheduledServiceInvocationAuth(
-            SenderNyxId: null,
-            DurableSenderBearerToken: "durable-run-key");
+            DurableCredentialReference: CreateDurableCredentialReference());
 
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
             auth,
             Headers: null,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*durable bearer auth is no longer supported*");
         credentialExchange.Sources.Should().BeEmpty();
-        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
+        var resolve = secretVault.ResolveRequests.Should().ContainSingle().Which;
+        resolve.Ref.Should().Be("sec-1");
+        resolve.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        resolve.OwnerScopeKey.Should().Be("owner-scope-1");
+        resolve.SubjectId.Should().Be("credential-1");
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
+        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer durable-run-key");
+        invokedChat.LlmControl.ModelOverride.Should().Be("opus");
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableTokenAndSubjectRef_ShouldRejectBeforeExchange()
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableReferenceAndSubjectRef_ShouldRejectBeforeExchange()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("subject-token");
@@ -492,12 +501,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new ScheduledServiceInvocationNyxIdCredentialSource(
                 new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "user-42"),
                 "proxy"),
-            DurableSenderBearerToken: "durable-run-key");
+            DurableCredentialReference: CreateDurableCredentialReference());
 
         var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*durable bearer auth is no longer supported*");
+            .WithMessage("*exactly one credential source*");
         credentialExchange.Sources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
     }
@@ -685,6 +694,16 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy");
 
+    private static ScheduledServiceInvocationDurableCredentialReference CreateDurableCredentialReference() =>
+        new(
+            "credential-1",
+            new SecretReference
+            {
+                Ref = "sec-1",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = "owner-scope-1",
+            });
+
     private sealed class RecordingServiceInvocationPort : IServiceInvocationPort
     {
         public List<ServiceInvocationRequest> Requests { get; } = [];
@@ -736,6 +755,29 @@ public sealed class ScheduledDispatchServiceInvocationTests
             error == null
                 ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
                 : ScheduledServiceInvocationCredentialExchangeResult.Failure(error);
+    }
+
+    private sealed class RecordingSecretVault(string? secret) : ISecretVault
+    {
+        public List<ResolveSecretRequest> ResolveRequests { get; } = [];
+
+        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ResolveRequests.Add(request);
+            return Task.FromResult(string.IsNullOrWhiteSpace(secret)
+                ? new ResolveSecretResult(null, null)
+                : new ResolveSecretResult(CreateDurableCredentialReference().SecretReference.Clone(), secret));
+        }
+
+        public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker

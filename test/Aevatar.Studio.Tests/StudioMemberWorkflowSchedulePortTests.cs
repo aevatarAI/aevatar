@@ -89,7 +89,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("owner-1");
         auth.SenderNyxId.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.DurableCredentialReference.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
     }
 

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Core.Schedules;
@@ -287,15 +288,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         if (auth == null)
             return null;
 
-        var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
-        if (durableToken.Length > 0)
-        {
-            throw new ArgumentException(
-                "Durable sender bearer token schedule auth is no longer supported.",
-                nameof(auth));
-        }
-
-        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null)
+        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null && auth.DurableCredentialReference == null)
             return null;
 
         var state = new ScheduledServiceInvocationAuthState();
@@ -315,6 +308,15 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             {
                 Scope = auth.ScopeOwnerNyxId.Scope,
                 OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        if (auth.DurableCredentialReference != null)
+        {
+            state.DurableCredentialReference = new ScheduledServiceInvocationDurableCredentialReferenceState
+            {
+                CredentialId = auth.DurableCredentialReference.CredentialId,
+                SecretReference = auth.DurableCredentialReference.SecretReference.Clone(),
             };
         }
 

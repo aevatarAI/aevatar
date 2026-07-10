@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 
@@ -334,21 +335,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             return null;
 
         var hasSenderNyxId = auth.SenderNyxId != null;
-        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
-        var hasDurableSenderBearerToken = durableToken.Length > 0;
         var hasScopeOwnerNyxId = auth.ScopeOwnerNyxId != null;
-        if (hasDurableSenderBearerToken)
-        {
-            throw new ArgumentException(
-                "Durable sender bearer token schedule auth is no longer supported; use senderNyxId or scopeOwnerNyxId so the dispatch can mint a short-lived NyxID token at fire time.",
-                nameof(auth));
-        }
+        var hasDurableCredentialReference = auth.DurableCredentialReference != null;
 
         if (Convert.ToInt32(hasSenderNyxId) +
-            Convert.ToInt32(hasScopeOwnerNyxId) != 1)
+            Convert.ToInt32(hasScopeOwnerNyxId) +
+            Convert.ToInt32(hasDurableCredentialReference) != 1)
         {
             throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth));
         }
+
+        if (hasDurableCredentialReference)
+            return new ScheduledServiceInvocationAuth(
+                DurableCredentialReference: NormalizeDurableCredentialReference(auth.DurableCredentialReference!));
 
         if (hasScopeOwnerNyxId)
         {
@@ -367,6 +366,35 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope))));
     }
+
+    private static ScheduledServiceInvocationDurableCredentialReference NormalizeDurableCredentialReference(
+        ScheduledServiceInvocationDurableCredentialReference reference)
+    {
+        var credentialId = NormalizeRequired(reference.CredentialId, nameof(reference.CredentialId));
+        if (reference.SecretReference == null)
+            throw new ArgumentException("Durable credential secret reference is required.", nameof(reference));
+
+        var secretReference = NormalizeSecretReference(reference.SecretReference);
+        if (!string.Equals(secretReference.Purpose, CredentialSecretPurposes.ScheduledNyxApiKey, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Durable credential secret reference purpose must be '{CredentialSecretPurposes.ScheduledNyxApiKey}'.",
+                nameof(reference));
+        }
+
+        return new ScheduledServiceInvocationDurableCredentialReference(credentialId, secretReference);
+    }
+
+    private static SecretReference NormalizeSecretReference(SecretReference reference) =>
+        new()
+        {
+            Ref = NormalizeRequired(reference.Ref, nameof(reference.Ref)),
+            Purpose = NormalizeRequired(reference.Purpose, nameof(reference.Purpose)),
+            Fingerprint = NormalizeOptional(reference.Fingerprint),
+            Version = reference.Version,
+            OwnerScopeKey = NormalizeRequired(reference.OwnerScopeKey, nameof(reference.OwnerScopeKey)),
+            CreatedAtUnixMs = reference.CreatedAtUnixMs,
+        };
 
     private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeOwnerSubject(
         ScheduledServiceInvocationNyxIdSubjectRef? subject)
