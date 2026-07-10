@@ -359,7 +359,7 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
 
     private byte[]? TryGetMasterKey()
     {
-        if (OperatingSystem.IsMacOS())
+        if (_protectionOptions.AllowKeychain && OperatingSystem.IsMacOS())
         {
             var key = TryGetKeychainKey();
             if (key is not null)
