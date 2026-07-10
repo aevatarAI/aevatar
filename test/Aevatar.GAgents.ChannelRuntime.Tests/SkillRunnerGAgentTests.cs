@@ -3170,7 +3170,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             SkillRunnerOutboundDeliveryRequest request,
             CancellationToken ct)
         {
-            return await DeliverAsync(request, platformMessageId: null, ct).ConfigureAwait(false);
+            return await DeliverAsync(request, platformMessageId: null, isFinal: false, ct).ConfigureAwait(false);
         }
 
         public async Task<SkillRunnerOutboundDeliveryReceipt> UpdateAsync(
@@ -3179,13 +3179,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             bool isFinal,
             CancellationToken ct)
         {
-            _ = isFinal;
-            return await DeliverAsync(request, platformMessageId, ct).ConfigureAwait(false);
+            return await DeliverAsync(request, platformMessageId, isFinal, ct).ConfigureAwait(false);
         }
 
         private async Task<SkillRunnerOutboundDeliveryReceipt> DeliverAsync(
             SkillRunnerOutboundDeliveryRequest request,
             string? platformMessageId,
+            bool isFinal,
             CancellationToken ct)
         {
             var dispatcher = ResolveDispatcher(request.AgentId);
@@ -3204,7 +3204,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             var routedTarget = new LarkChannelNativeDeliveryTargetAdapter().Adapt(target);
             var result = string.IsNullOrWhiteSpace(platformMessageId)
                 ? await sender.SendAsync(routedTarget, native, ct)
-                : await sender.UpdateAsync(routedTarget, platformMessageId, native, ct);
+                : await sender.UpdateAsync(routedTarget, platformMessageId, native, isFinal, ct);
             return new SkillRunnerOutboundDeliveryReceipt(
                 result.SentActivityId,
                 result.PlatformMessageId,

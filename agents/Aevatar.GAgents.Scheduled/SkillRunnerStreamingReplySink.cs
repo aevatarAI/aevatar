@@ -24,6 +24,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
     private readonly SkillRunnerOutboundDeliveryRequest _requestTemplate;
     private readonly ILogger? _logger;
     private string? _platformMessageId;
+    private bool _updateSealed;
     private bool _disposed;
 
     public SkillRunnerStreamingReplySink(
@@ -57,16 +58,29 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
         if (string.IsNullOrWhiteSpace(capped))
             return;
 
+        if (_updateSealed && !isFinal)
+            return;
+
         try
         {
             var request = _requestTemplate with { Text = capped };
-            var receipt = string.IsNullOrWhiteSpace(_platformMessageId)
+            var receipt = string.IsNullOrWhiteSpace(_platformMessageId) || _updateSealed
                 ? await _outboundDeliveryPort.SendAsync(request, ct).ConfigureAwait(false)
                 : await _outboundDeliveryPort.UpdateAsync(request, _platformMessageId, isFinal, ct).ConfigureAwait(false);
-            _platformMessageId = string.IsNullOrWhiteSpace(receipt.PlatformMessageId)
-                ? receipt.SentActivityId
-                : receipt.PlatformMessageId;
+            if (!_updateSealed)
+            {
+                _platformMessageId = string.IsNullOrWhiteSpace(receipt.PlatformMessageId)
+                    ? receipt.SentActivityId
+                    : receipt.PlatformMessageId;
+            }
             ChunksEmitted++;
+        }
+        catch (SkillRunnerOutboundUpdateSealedException ex) when (!isFinal)
+        {
+            _updateSealed = true;
+            _logger?.LogWarning(
+                ex,
+                "SkillRunner streaming sink: channel-native update target is sealed; final snapshot will be sent as a fresh message.");
         }
         catch (Exception ex) when (!isFinal && IsTransientFailure(ex, ct))
         {

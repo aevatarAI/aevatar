@@ -34,8 +34,18 @@ public sealed record SkillRunnerOutboundDeliveryReceipt(
     string PlatformMessageId,
     ComposeCapability Capability);
 
+internal sealed class SkillRunnerOutboundUpdateSealedException : InvalidOperationException
+{
+    public SkillRunnerOutboundUpdateSealedException(string message)
+        : base(message)
+    {
+    }
+}
+
 internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunnerOutboundDeliveryPort
 {
+    private const string MessageUpdateSealedErrorCode = "message_update_sealed";
+
     private readonly IUserAgentDeliveryTargetReader? _targetReader;
     private readonly IReadOnlyDictionary<string, IChannelNativeMessageProducer> _nativeProducers;
     private readonly IReadOnlyDictionary<string, IChannelNativeMessageSender> _nativeSenders;
@@ -130,9 +140,17 @@ internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunne
         var nativeTarget = ToNativeDeliveryTarget(target);
         var result = string.IsNullOrWhiteSpace(platformMessageId)
             ? await sender.SendAsync(nativeTarget, nativeMessage, ct).ConfigureAwait(false)
-            : await sender.UpdateAsync(nativeTarget, platformMessageId, nativeMessage, ct).ConfigureAwait(false);
+            : await sender.UpdateAsync(nativeTarget, platformMessageId, nativeMessage, isFinal, ct).ConfigureAwait(false);
         if (!result.Success)
         {
+            if (string.Equals(result.ErrorCode, MessageUpdateSealedErrorCode, StringComparison.Ordinal))
+            {
+                throw new SkillRunnerOutboundUpdateSealedException(
+                    string.IsNullOrWhiteSpace(result.ErrorMessage)
+                        ? "SkillRunner streaming update target is sealed."
+                        : result.ErrorMessage);
+            }
+
             throw new InvalidOperationException(
                 string.IsNullOrWhiteSpace(result.ErrorMessage)
                     ? $"SkillRunner outbound delivery failed: {result.ErrorCode}"

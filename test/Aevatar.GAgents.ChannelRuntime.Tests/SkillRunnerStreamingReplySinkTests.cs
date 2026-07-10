@@ -56,6 +56,27 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
+    public async Task MidStreamEditCapReached_SealsMessage_FinalizePostsCompleteTextAsFreshMessage()
+    {
+        var port = new RecordingOutboundDeliveryPort();
+        using var sink = CreateSink(port);
+
+        await sink.DispatchAsync("chunk one", isFinal: false, CancellationToken.None);
+        port.SealNextUpdate = true;
+        await sink.DispatchAsync("chunk one two", isFinal: false, CancellationToken.None);
+        await sink.DispatchAsync("chunk one two three", isFinal: false, CancellationToken.None);
+        await sink.DispatchAsync("chunk one two three FINAL", isFinal: true, CancellationToken.None);
+
+        port.Requests.Should().HaveCount(2, "sealed mid-stream snapshots do not update; finalize sends a fresh message");
+        port.Requests[0].Text.Should().Be("chunk one");
+        port.Requests[1].Text.Should().Be("chunk one two three FINAL");
+        port.UpdateRequests.Should().ContainSingle();
+        port.UpdateRequests[0].PlatformMessageId.Should().Be("platform-1");
+        sink.PlatformMessageId.Should().Be("platform-1");
+        sink.ChunksEmitted.Should().Be(2);
+    }
+
+    [Fact]
     public async Task DispatchAsync_WhenFinalSendThrows_ShouldPropagate()
     {
         var port = new RecordingOutboundDeliveryPort { FailNext = true };
@@ -99,6 +120,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
         public List<(SkillRunnerOutboundDeliveryRequest Request, string PlatformMessageId, bool IsFinal)> UpdateRequests { get; } = [];
 
         public bool FailNext { get; set; }
+        public bool SealNextUpdate { get; set; }
 
         public Task<SkillRunnerOutboundDeliveryReceipt> SendAsync(
             SkillRunnerOutboundDeliveryRequest request,
@@ -126,6 +148,12 @@ public sealed class SkillRunnerStreamingReplySinkTests
         {
             ct.ThrowIfCancellationRequested();
             UpdateRequests.Add((request, platformMessageId, isFinal));
+            if (SealNextUpdate)
+            {
+                SealNextUpdate = false;
+                throw new SkillRunnerOutboundUpdateSealedException("message update is sealed");
+            }
+
             if (FailNext)
             {
                 FailNext = false;

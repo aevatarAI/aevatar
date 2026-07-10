@@ -68,8 +68,10 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
         ChannelNativeDeliveryTarget target,
         string platformMessageId,
         ChannelNativeMessage message,
+        bool isFinal,
         CancellationToken cancellationToken)
     {
+        _ = isFinal;
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(message);
         if (string.IsNullOrWhiteSpace(platformMessageId))

@@ -7,6 +7,8 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
 {
     private const int LarkOpenIdCrossApp = 99992361;
     private const int LarkUserIdCrossTenant = 99992364;
+    private const int LarkEditCapReachedCode = 230072;
+    private const string MessageUpdateSealedErrorCode = "message_update_sealed";
 
     private readonly ILarkOutboundDispatcher _larkOutboundDispatcher;
 
@@ -64,6 +66,7 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
         ChannelNativeDeliveryTarget target,
         string platformMessageId,
         ChannelNativeMessage message,
+        bool isFinal,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(target);
@@ -88,7 +91,23 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
             cancellationToken).ConfigureAwait(false);
 
         if (!result.Succeeded)
+        {
+            if (result.LarkCode == LarkEditCapReachedCode)
+            {
+                if (isFinal)
+                    return await SendAsync(target, message, cancellationToken).ConfigureAwait(false);
+
+                return EmitResult.Failed(
+                    MessageUpdateSealedErrorCode,
+                    BuildRejectionMessage(result.LarkCode, result.Detail),
+                    retryAfter: null,
+                    capability: ComposeCapability.Unsupported,
+                    failureKind: FailureKind.PermanentAdapterError,
+                    rawErrorCode: result.LarkCode.GetValueOrDefault());
+            }
+
             throw new InvalidOperationException(BuildRejectionMessage(result.LarkCode, result.Detail));
+        }
 
         var messageId = result.MessageId ?? platformMessageId.Trim();
         return EmitResult.Sent(messageId, platformMessageId: messageId);

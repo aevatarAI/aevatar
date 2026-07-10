@@ -442,6 +442,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             ChannelNativeDeliveryTarget target,
             string platformMessageId,
             ChannelNativeMessage message,
+            bool isFinal,
             CancellationToken cancellationToken) =>
             Task.FromResult(EmitResult.Sent(platformMessageId, platformMessageId: platformMessageId));
     }

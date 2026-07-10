@@ -25,7 +25,8 @@ public sealed class TelegramChannelNativeMessageSenderTests
             target,
             "42",
             new ChannelNativeMessage("hello updated", CardPayload: null, MessageType: "text", ComposeCapability.Exact),
-            CancellationToken.None);
+            isFinal: false,
+            cancellationToken: CancellationToken.None);
 
         result.SentActivityId.ShouldBe("42");
         result.PlatformMessageId.ShouldBe("42");

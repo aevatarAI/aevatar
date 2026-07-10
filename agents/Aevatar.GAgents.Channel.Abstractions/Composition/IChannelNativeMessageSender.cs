@@ -24,5 +24,6 @@ public interface IChannelNativeMessageSender
         ChannelNativeDeliveryTarget target,
         string platformMessageId,
         ChannelNativeMessage message,
+        bool isFinal,
         CancellationToken cancellationToken);
 }
