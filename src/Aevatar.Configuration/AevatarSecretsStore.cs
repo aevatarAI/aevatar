@@ -271,15 +271,10 @@ public sealed class AevatarSecretsStore : IAevatarSecretsStore
 
     private byte[]? TryGetMasterKey()
     {
-<<<<<<< HEAD
-        if (!_protectionOptions.AllowMasterKeyResolution)
-            return null;
-=======
         if (!_protectionOptions.UseLocalMasterKeySources)
         {
             return null;
         }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         // Priority 1: macOS Keychain
         if (OperatingSystem.IsMacOS())
