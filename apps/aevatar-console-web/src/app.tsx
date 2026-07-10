@@ -1,7 +1,4 @@
-import {
-  PageLoading,
-  ProConfigProvider,
-} from "@ant-design/pro-components";
+import { ProConfigProvider } from "@ant-design/pro-components";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Badge, ConfigProvider } from "antd";
 import { getLocale, useIntl } from "@umijs/max";
@@ -46,6 +43,7 @@ import {
   resolveAntdLocale,
   resolveProIntl,
 } from "@/shared/i18n/localeProvider";
+import { AevatarPageLoading } from "@/shared/ui/AevatarLoading";
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
@@ -655,7 +653,7 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
   }, [pathname]);
 
   if (!ready) {
-    return <PageLoading fullscreen />;
+    return <AevatarPageLoading fullscreen />;
   }
 
   return <>{children}</>;
@@ -783,7 +781,7 @@ export const layout = ({
           );
         })()
       ) : (
-        <PageLoading fullscreen />
+        <AevatarPageLoading fullscreen />
       ),
     ...initialState?.settings,
     title: "",

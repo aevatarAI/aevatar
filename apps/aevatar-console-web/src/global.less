@@ -360,6 +360,120 @@ body.aevatar-studio-host
   pointer-events: none;
 }
 
+@keyframes aevatarLoadingPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes aevatarLoadingBlink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes aevatarLoadingBounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.7;
+    transform: translateY(0);
+  }
+
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.aevatar-loading-dots {
+  align-items: center;
+  color: var(--aevatar-loading-color, currentColor);
+  display: inline-flex;
+  gap: var(--aevatar-loading-gap, 6px);
+  line-height: 1;
+  min-height: var(--aevatar-loading-dot-size, 6px);
+  vertical-align: middle;
+}
+
+.aevatar-loading-dot {
+  animation: aevatarLoadingBounce 1s ease-in-out infinite;
+  background: var(--aevatar-loading-color, currentColor);
+  border-radius: 999px;
+  display: block;
+  flex: 0 0 auto;
+  height: var(--aevatar-loading-dot-size, 6px);
+  width: var(--aevatar-loading-dot-size, 6px);
+}
+
+.aevatar-loading-pulse-dot {
+  animation: aevatarLoadingPulse 1.5s ease-in-out infinite;
+  background: var(--aevatar-loading-color, currentColor);
+  border-radius: 999px;
+  display: inline-block;
+  flex: 0 0 auto;
+  height: var(--aevatar-loading-dot-size, 6px);
+  width: var(--aevatar-loading-dot-size, 6px);
+}
+
+.aevatar-loading-cursor {
+  animation: aevatarLoadingBlink 1s step-end infinite;
+  background: var(--aevatar-loading-color, currentColor);
+  display: inline-block;
+  height: 18px;
+  margin-left: 4px;
+  vertical-align: text-bottom;
+  width: 2px;
+}
+
+.aevatar-loading-visually-hidden {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.aevatar-page-loading {
+  align-items: center;
+  color: #6b7280;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  gap: 12px;
+  justify-content: center;
+  min-height: 220px;
+  padding: 24px;
+  text-align: center;
+}
+
+.aevatar-page-loading-fullscreen {
+  min-height: 100vh;
+}
+
+.aevatar-page-loading-tip {
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aevatar-loading-dot,
+  .aevatar-loading-pulse-dot,
+  .aevatar-loading-cursor {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 body.aevatar-studio-host
   .ant-pro-sider.ant-layout-sider.ant-pro-sider-fixed.ant-pro-sider-collapsed
   .ant-pro-sider-collapsed-button:hover {
