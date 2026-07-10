@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.SkillInvocations;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -2080,8 +2081,30 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.MessageId,
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
-                NormalizeOptional(registration.NyxReplyCredentialRef)),
+                BuildWorkflowResultDeliveryCredential(registration),
+                NormalizeOptional(registration.Id)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
+        };
+    }
+
+    /// <summary>
+    /// Composes the typed workflow result delivery handle from the bot registration read model:
+    /// the vault <c>SecretReference</c> persisted at provisioning plus the NyxID agent api-key id
+    /// it authorizes (the vault subject). Null when the registration carries no vault handle —
+    /// workflow background delivery then fails closed before any run is dispatched.
+    /// </summary>
+    private static ChannelWorkflowResultDeliveryCredential? BuildWorkflowResultDeliveryCredential(
+        ChannelBotRegistrationEntry registration)
+    {
+        var secretReference = registration.WorkflowResultDeliveryCredential;
+        if (string.IsNullOrWhiteSpace(secretReference?.Ref) ||
+            string.IsNullOrWhiteSpace(registration.NyxAgentApiKeyId))
+            return null;
+
+        return new ChannelWorkflowResultDeliveryCredential
+        {
+            SecretReference = secretReference.Clone(),
+            SubjectId = registration.NyxAgentApiKeyId.Trim(),
         };
     }
 
@@ -2307,7 +2330,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inboundEvent.MessageId,
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
-                NormalizeOptional(registration.NyxReplyCredentialRef)),
+                BuildWorkflowResultDeliveryCredential(registration),
+                NormalizeOptional(registration.Id)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
         }).ToPayload();
 

@@ -1,10 +1,12 @@
 using System.Net;
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -25,24 +27,29 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class WorkflowRunDeliveryGAgentTests
 {
     private const string DeliveryActorId = "workflow-run-delivery:workflow-actor:wf-command";
+    private const string AgentApiKeyId = "nyx-api-key-1";
+    private const string RegistrationScopeId = "registration-scope-1";
+    private const string AgentKeySecret = "nyxid_ag_secret_1";
 
     [Fact]
-    public async Task TerminalWorkflowEvent_ShouldDispatchContinuationAndReplyWithDurableCredential()
+    public async Task TerminalWorkflowEvent_ShouldDispatchContinuationAndReplyWithVaultResolvedAgentKey()
     {
         var projectionPort = new RecordingWorkflowExecutionProjectionPort();
         var nyxHandler = new RecordingJsonHandler();
         var outboundPort = CreateOutboundPort(nyxHandler);
         var deferredDispatchPort = new DeferredDispatchPort();
-        var credentialProvider = new RecordingCredentialProvider
-        {
-            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
-        };
-        var agent = await CreateAgentAsync(projectionPort, outboundPort, deferredDispatchPort, credentialProvider);
+        var (vault, credential) = await MintDeliveryCredentialAsync();
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            outboundPort,
+            deferredDispatchPort,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault));
         var dispatchPort = new DirectActorDispatchPort(agent);
         deferredDispatchPort.Inner = dispatchPort;
 
-        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
 
+        agent.State.BotRegistrationId.Should().Be("bot-reg-1");
         projectionPort.LastSink.Should().NotBeNull();
         await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
         {
@@ -61,24 +68,23 @@ public sealed class WorkflowRunDeliveryGAgentTests
         agent.State.TerminalText.Should().Be("workflow completed text");
         nyxHandler.Requests.Should().ContainSingle();
         nyxHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
-        nyxHandler.Requests[0].Authorization.Should().Be("Bearer nyxid_ag_secret_1");
+        nyxHandler.Requests[0].Authorization.Should().Be($"Bearer {AgentKeySecret}");
         nyxHandler.Requests[0].Body.Should().Contain("\"message_id\":\"reply-message-1\"");
         nyxHandler.Requests[0].Body.Should().Contain("\"text\":\"workflow completed text\"");
-        credentialProvider.ResolvedRefs.Should().ContainSingle("secrets://nyx/reply-1");
     }
 
     [Fact]
     public async Task StartValidationFailure_ShouldPersistFailedTerminalState()
     {
         var eventStore = new InMemoryEventStore();
+        var (_, credential) = await MintDeliveryCredentialAsync();
         var agent = await CreateAgentAsync(
             new RecordingWorkflowExecutionProjectionPort(),
             CreateOutboundPort(new RecordingJsonHandler()),
             new DeferredDispatchPort(),
-            new RecordingCredentialProvider(),
-            eventStore);
+            eventStore: eventStore);
 
-        var invalid = StartRequest();
+        var invalid = StartRequest(credential);
         invalid.ReplyMessageId = string.Empty;
         await agent.HandleEventAsync(Envelope(invalid));
 
@@ -90,18 +96,16 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
-    public async Task StartWithoutDurableCredential_ShouldPersistProductDeliveryFailure()
+    public async Task StartWithoutDeliveryCredentialHandle_ShouldPersistProductDeliveryFailure()
     {
         var eventStore = new InMemoryEventStore();
         var agent = await CreateAgentAsync(
             new RecordingWorkflowExecutionProjectionPort(),
             CreateOutboundPort(new RecordingJsonHandler()),
             new DeferredDispatchPort(),
-            new RecordingCredentialProvider(),
-            eventStore);
+            eventStore: eventStore);
 
-        var invalid = StartRequest();
-        invalid.DurableReplyCredentialRef = string.Empty;
+        var invalid = StartRequest(credential: null);
         await agent.HandleEventAsync(Envelope(invalid));
 
         agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
@@ -120,18 +124,36 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task StartWithSubjectlessCredentialHandle_ShouldPersistProductDeliveryFailure()
+    {
+        var eventStore = new InMemoryEventStore();
+        var (_, credential) = await MintDeliveryCredentialAsync();
+        credential.SubjectId = string.Empty;
+        var agent = await CreateAgentAsync(
+            new RecordingWorkflowExecutionProjectionPort(),
+            CreateOutboundPort(new RecordingJsonHandler()),
+            new DeferredDispatchPort(),
+            eventStore: eventStore);
+
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        agent.State.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+    }
+
+    [Fact]
     public async Task ProjectionDisabled_ShouldPersistFailedTerminalState()
     {
         var eventStore = new InMemoryEventStore();
+        var (_, credential) = await MintDeliveryCredentialAsync();
         var projectionPort = new RecordingWorkflowExecutionProjectionPort { ProjectionEnabledValue = false };
         var agent = await CreateAgentAsync(
             projectionPort,
             CreateOutboundPort(new RecordingJsonHandler()),
             new DeferredDispatchPort(),
-            new RecordingCredentialProvider(),
-            eventStore);
+            eventStore: eventStore);
 
-        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
 
         agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
         agent.State.ErrorCode.Should().Be("projection_disabled");
@@ -144,15 +166,15 @@ public sealed class WorkflowRunDeliveryGAgentTests
     public async Task ProjectionUnavailable_ShouldPersistFailedTerminalState()
     {
         var eventStore = new InMemoryEventStore();
+        var (_, credential) = await MintDeliveryCredentialAsync();
         var projectionPort = new RecordingWorkflowExecutionProjectionPort { ReturnAttachment = false };
         var agent = await CreateAgentAsync(
             projectionPort,
             CreateOutboundPort(new RecordingJsonHandler()),
             new DeferredDispatchPort(),
-            new RecordingCredentialProvider(),
-            eventStore);
+            eventStore: eventStore);
 
-        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
 
         agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
         agent.State.ErrorCode.Should().Be("projection_unavailable");
@@ -166,21 +188,18 @@ public sealed class WorkflowRunDeliveryGAgentTests
         var eventStore = new InMemoryEventStore();
         var projectionPort = new RecordingWorkflowExecutionProjectionPort();
         var nyxHandler = new RecordingJsonHandler(HttpStatusCode.BadRequest, """{"error":"invalid_reply"}""");
-        var credentialProvider = new RecordingCredentialProvider
-        {
-            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
-        };
+        var (vault, credential) = await MintDeliveryCredentialAsync();
         var deferredDispatchPort = new DeferredDispatchPort();
         var agent = await CreateAgentAsync(
             projectionPort,
             CreateOutboundPort(nyxHandler),
             deferredDispatchPort,
-            credentialProvider,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault),
             eventStore);
         var dispatchPort = new DirectActorDispatchPort(agent);
         deferredDispatchPort.Inner = dispatchPort;
 
-        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
         await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
         {
             RunFinished = new WorkflowRunFinishedEventPayload
@@ -204,18 +223,15 @@ public sealed class WorkflowRunDeliveryGAgentTests
     {
         var projectionPort = new RecordingWorkflowExecutionProjectionPort();
         var nyxHandler = new RecordingJsonHandler();
-        var credentialProvider = new RecordingCredentialProvider
-        {
-            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
-        };
+        var (vault, credential) = await MintDeliveryCredentialAsync();
         var deferredDispatchPort = new DeferredDispatchPort();
         var agent = await CreateAgentAsync(
             projectionPort,
             CreateOutboundPort(nyxHandler),
             deferredDispatchPort,
-            credentialProvider);
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault));
         deferredDispatchPort.Inner = new ThrowingDispatchPort(new InvalidOperationException("dispatch rejected"));
-        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
         var terminalFrame = new WorkflowRunEventEnvelope
         {
             RunFinished = new WorkflowRunFinishedEventPayload
@@ -241,22 +257,24 @@ public sealed class WorkflowRunDeliveryGAgentTests
     }
 
     [Fact]
-    public async Task MissingResolvedCredential_ShouldPersistFailedTerminalStateWithoutHttpRequest()
+    public async Task UnresolvableCredentialHandle_ShouldPersistFailedTerminalStateWithoutHttpRequest()
     {
         var eventStore = new InMemoryEventStore();
         var projectionPort = new RecordingWorkflowExecutionProjectionPort();
         var nyxHandler = new RecordingJsonHandler();
         var deferredDispatchPort = new DeferredDispatchPort();
+        // Handle minted against a different vault: shape is valid, resolution fails.
+        var (_, credential) = await MintDeliveryCredentialAsync();
         var agent = await CreateAgentAsync(
             projectionPort,
             CreateOutboundPort(nyxHandler),
             deferredDispatchPort,
-            new RecordingCredentialProvider(),
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(new InMemorySecretVault()),
             eventStore);
         var dispatchPort = new DirectActorDispatchPort(agent);
         deferredDispatchPort.Inner = dispatchPort;
 
-        await agent.HandleEventAsync(Envelope(StartRequest()));
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
         await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
         {
             RunFinished = new WorkflowRunFinishedEventPayload
@@ -266,17 +284,137 @@ public sealed class WorkflowRunDeliveryGAgentTests
         });
 
         agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
-        agent.State.ErrorCode.Should().Be("durable_reply_credential_missing");
+        agent.State.ErrorCode.Should().Be("credential_handle_missing");
         nyxHandler.Requests.Should().BeEmpty();
         var failed = await LastFailedEventAsync(eventStore);
-        failed.ErrorCode.Should().Be("durable_reply_credential_missing");
+        failed.ErrorCode.Should().Be("credential_handle_missing");
+    }
+
+    [Fact]
+    public async Task WrongPurposeCredentialHandle_ShouldFailClosedWithoutHttpRequest()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            RegistrationScopeId,
+            AgentApiKeyId,
+            AgentKeySecret,
+            "test-mint"));
+        var credential = new ChannelWorkflowResultDeliveryCredential
+        {
+            SecretReference = stored.Reference,
+            SubjectId = AgentApiKeyId,
+        };
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler),
+            deferredDispatchPort,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault));
+        var dispatchPort = new DirectActorDispatchPort(agent);
+        deferredDispatchPort.Inner = dispatchPort;
+
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        agent.State.ErrorCode.Should().Be("credential_handle_missing");
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SubjectMismatchCredentialHandle_ShouldFailClosedWithoutHttpRequest()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var (vault, credential) = await MintDeliveryCredentialAsync();
+        credential.SubjectId = "nyx-api-key-other";
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler),
+            deferredDispatchPort,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault));
+        var dispatchPort = new DirectActorDispatchPort(agent);
+        deferredDispatchPort.Inner = dispatchPort;
+
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        agent.State.ErrorCode.Should().Be("credential_handle_missing");
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolverFailure_ShouldPersistResolverUnavailableWithoutHttpRequest()
+    {
+        var eventStore = new InMemoryEventStore();
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var (_, credential) = await MintDeliveryCredentialAsync();
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler),
+            deferredDispatchPort,
+            new ThrowingCredentialResolver(),
+            eventStore);
+        var dispatchPort = new DirectActorDispatchPort(agent);
+        deferredDispatchPort.Inner = dispatchPort;
+
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        agent.State.ErrorCode.Should().Be("resolver_unavailable");
+        nyxHandler.Requests.Should().BeEmpty();
+        var failed = await LastFailedEventAsync(eventStore);
+        failed.ErrorCode.Should().Be("resolver_unavailable");
+    }
+
+    private static async Task<(InMemorySecretVault Vault, ChannelWorkflowResultDeliveryCredential Credential)>
+        MintDeliveryCredentialAsync()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            RegistrationScopeId,
+            AgentApiKeyId,
+            AgentKeySecret,
+            "test-mint"));
+        return (vault, new ChannelWorkflowResultDeliveryCredential
+        {
+            SecretReference = stored.Reference,
+            SubjectId = AgentApiKeyId,
+        });
     }
 
     private static async Task<WorkflowRunDeliveryGAgent> CreateAgentAsync(
         RecordingWorkflowExecutionProjectionPort projectionPort,
         NyxIdRelayOutboundPort outboundPort,
         DeferredDispatchPort dispatchPort,
-        RecordingCredentialProvider? credentialProvider = null,
+        IWorkflowResultDeliveryCredentialResolver? credentialResolver = null,
         InMemoryEventStore? eventStore = null)
     {
         eventStore ??= new InMemoryEventStore();
@@ -290,7 +428,7 @@ public sealed class WorkflowRunDeliveryGAgentTests
             projectionPort,
             dispatchPort,
             outboundPort,
-            credentialProvider ?? new RecordingCredentialProvider(),
+            credentialResolver ?? new SecretVaultWorkflowResultDeliveryCredentialResolver(new InMemorySecretVault()),
             NullLogger<WorkflowRunDeliveryGAgent>.Instance)
         {
             Services = services,
@@ -314,7 +452,8 @@ public sealed class WorkflowRunDeliveryGAgentTests
             Route = EnvelopeRouteSemantics.CreateDirect("test", DeliveryActorId),
         };
 
-    private static WorkflowRunDeliveryStartRequested StartRequest() =>
+    private static WorkflowRunDeliveryStartRequested StartRequest(
+        ChannelWorkflowResultDeliveryCredential? credential) =>
         new()
         {
             DeliveryId = DeliveryActorId,
@@ -326,8 +465,9 @@ public sealed class WorkflowRunDeliveryGAgentTests
             ChannelPlatform = "lark",
             ReplyMessageId = "reply-message-1",
             PlatformMessageId = "platform-message-1",
-            RegistrationScopeId = "registration-scope-1",
-            DurableReplyCredentialRef = "secrets://nyx/reply-1",
+            RegistrationScopeId = RegistrationScopeId,
+            WorkflowResultDeliveryCredential = credential?.Clone(),
+            BotRegistrationId = "bot-reg-1",
         };
 
     private static async Task<WorkflowRunDeliveryFailedEvent> LastFailedEventAsync(IEventStore eventStore)
@@ -480,15 +620,12 @@ public sealed class WorkflowRunDeliveryGAgentTests
         }
     }
 
-    private sealed class RecordingCredentialProvider : Dictionary<string, string>, ICredentialProvider
+    private sealed class ThrowingCredentialResolver : IWorkflowResultDeliveryCredentialResolver
     {
-        public List<string> ResolvedRefs { get; } = [];
-
-        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
-        {
-            ResolvedRefs.Add(credentialRef);
-            return Task.FromResult(TryGetValue(credentialRef, out var value) ? value : null);
-        }
+        public Task<string?> ResolveAsync(
+            ChannelWorkflowResultDeliveryCredential credential,
+            CancellationToken ct = default) =>
+            Task.FromException<string?>(new InvalidOperationException("vault unavailable"));
     }
 
     private sealed class PlainTextComposer(string platform) : IMessageComposer<PlainTextPayload>
