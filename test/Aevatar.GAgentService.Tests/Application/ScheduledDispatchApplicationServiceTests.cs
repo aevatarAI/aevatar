@@ -611,6 +611,75 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create), null)]
+    [InlineData(nameof(ScheduleMutationKind.Create), "")]
+    [InlineData(nameof(ScheduleMutationKind.Create), " ")]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), null)]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), "")]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), " ")]
+    [InlineData(nameof(ScheduleMutationKind.Update), null)]
+    [InlineData(nameof(ScheduleMutationKind.Update), "")]
+    [InlineData(nameof(ScheduleMutationKind.Update), " ")]
+    public async Task ScopeOwnerMutations_ShouldRejectMissingAuthenticatedScopeBeforeAdmission(
+        string mutationName,
+        string? authenticatedScopeId)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var context = CreateScopeOwnerContext() with
+        {
+            AuthenticatedScopeId = authenticatedScopeId,
+        };
+
+        var act = () => ExecuteMutationAsync(service, mutation, CreateScopeOwnerConfiguration(), context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*AuthenticatedScopeId is required*");
+        admissionPort.Requests.Should().BeEmpty();
+        AssertNoActorMutationDispatch(actorPort);
+        AssertNoScheduleQuery(queryPort);
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_ShouldMapScopeMismatchAdmissionBeforeDispatch(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort
+        {
+            Result = ScheduledDispatchCredentialAdmissionResult.ScopeMismatch(),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+
+        var act = () => ExecuteMutationAsync(
+            service,
+            mutation,
+            CreateScopeOwnerConfiguration(),
+            CreateScopeOwnerContext());
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*NyxID binding does not grant the requested schedule scope*");
+        admissionPort.Requests.Should().ContainSingle();
+        AssertNoActorMutationDispatch(actorPort);
+        AssertNoScheduleQuery(queryPort);
+    }
+
+    [Theory]
     [InlineData(nameof(ScheduleMutationKind.Create))]
     [InlineData(nameof(ScheduleMutationKind.Ensure))]
     [InlineData(nameof(ScheduleMutationKind.Update))]
@@ -1322,6 +1391,22 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ScheduleMutationKind.Update => service.UpdateAsync(configuration.ScheduleId, configuration, context),
             _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null),
         };
+
+    private static void AssertNoActorMutationDispatch(RecordingScheduledDispatchActorPort actorPort)
+    {
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    private static void AssertNoScheduleQuery(RecordingScheduledDispatchQueryPort queryPort)
+    {
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        queryPort.ListRequests.Should().BeEmpty();
+        queryPort.FilteredListRequests.Should().BeEmpty();
+    }
 
     private enum ScheduleMutationKind
     {
