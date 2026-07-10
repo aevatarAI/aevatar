@@ -1303,6 +1303,11 @@ public sealed class PolicyAwareVoiceEndpointsTests
             CancellationToken ct = default) =>
             QueryByCallerAsync(caller, ct);
 
+        public Task<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>> QueryPendingApiKeyRevocationsByCallerAsync(
+            ScheduledOwnerScope caller,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>>([]);
+
         public Task<long?> GetStateVersionForCallerAsync(
             string agentId,
             ScheduledOwnerScope caller,

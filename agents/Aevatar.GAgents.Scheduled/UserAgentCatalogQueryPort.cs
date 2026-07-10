@@ -28,13 +28,16 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
 {
     private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
+    private readonly IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string> _revocationDocumentReader;
     private readonly ILogger<UserAgentCatalogQueryPort>? _logger;
 
     public UserAgentCatalogQueryPort(
         IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
+        IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string> revocationDocumentReader,
         ILogger<UserAgentCatalogQueryPort>? logger = null)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
+        _revocationDocumentReader = revocationDocumentReader ?? throw new ArgumentNullException(nameof(revocationDocumentReader));
         _logger = logger;
     }
 
@@ -197,6 +200,45 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         return byAgentId.Values.ToArray();
     }
 
+    public async Task<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>> QueryPendingApiKeyRevocationsByCallerAsync(
+        OwnerScope caller,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+
+        var entries = new List<UserAgentApiKeyRevocationReadModelEntry>();
+        string? cursor = null;
+        do
+        {
+            var query = new ProjectionDocumentQuery
+            {
+                Take = 200,
+                Filters = BuildOwnerScopeFilters(caller),
+                Cursor = cursor,
+            };
+
+            var page = await _revocationDocumentReader.QueryAsync(query, ct);
+            foreach (var document in page.Items)
+            {
+                if (string.IsNullOrWhiteSpace(document.AgentId) ||
+                    string.IsNullOrWhiteSpace(document.ApiKeyId) ||
+                    !RevocationDocumentMatchesCaller(document, caller))
+                {
+                    continue;
+                }
+
+                entries.Add(ToRevocationEntry(document));
+                if (entries.Count >= MaxCallerCatalogEntries)
+                    return entries;
+            }
+
+            cursor = page.NextCursor;
+        }
+        while (!string.IsNullOrEmpty(cursor));
+
+        return entries;
+    }
+
     public async Task<long?> GetStateVersionForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(agentId)) return null;
@@ -351,6 +393,9 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         return caller.MatchesStrictly(documentScope);
     }
 
+    private static bool RevocationDocumentMatchesCaller(UserAgentApiKeyRevocationDocument document, OwnerScope caller) =>
+        caller.MatchesStrictly(document.OwnerScope);
+
     /// <summary>
     /// Project a stored document onto the public DTO. Issue #466 §A: the public surface
     /// carries OwnerScope as the single source of truth; the deprecated scattered fields
@@ -392,4 +437,21 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             CatalogLastEventId = document.LastEventId ?? string.Empty,
         };
     }
+
+    private static UserAgentApiKeyRevocationReadModelEntry ToRevocationEntry(UserAgentApiKeyRevocationDocument document) =>
+        new()
+        {
+            AgentId = document.AgentId ?? string.Empty,
+            ApiKeyId = document.ApiKeyId ?? string.Empty,
+            OwnerScope = document.OwnerScope?.Clone(),
+            RequestedAt = document.RequestedAtUtc?.Clone(),
+            AttemptCount = document.AttemptCount,
+            LastAttemptAt = document.LastAttemptAtUtc?.Clone(),
+            LastHttpStatus = document.LastHttpStatus,
+            LastError = document.LastError ?? string.Empty,
+            FailureKind = document.FailureKind,
+            CatalogAuthorityStateVersion = document.StateVersion,
+            CatalogLastEventId = document.LastEventId ?? string.Empty,
+        };
+
 }
