@@ -1381,7 +1381,7 @@ describe("TeamDetailPage", () => {
       .toHaveAttribute("href", expect.stringContaining("member-unpublished"));
   });
 
-  it("sets a ready member as entry before testing when the Team has no entry", async () => {
+  it("sets a ready member as entry and starts Team Test when prompt is present", async () => {
     (studioApi.getTeam as jest.Mock)
       .mockResolvedValueOnce({
         ...mockCreateTeamSummary(),
@@ -1400,10 +1400,17 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
+    expect(within(dialog).getByRole("button", { name: "开始测试" })).toBeDisabled();
+
     fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Route this customer question" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
+    const setAndTestButton = within(dialog).getByRole("button", {
+      name: "设为入口并测试",
+    });
+
+    expect(setAndTestButton).toBeEnabled();
+    fireEvent.click(setAndTestButton);
 
     await waitFor(() => {
       expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
