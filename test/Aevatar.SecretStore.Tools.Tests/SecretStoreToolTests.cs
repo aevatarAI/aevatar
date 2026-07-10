@@ -1,8 +1,12 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.SecretStore.Tools;
 using FluentAssertions;
+using StackExchange.Redis;
 using Xunit;
 
 namespace Aevatar.SecretStore.Tools.Tests;
@@ -131,7 +135,7 @@ public sealed class SecretStoreToolTests
             GarnetSecretStoreKeyring.LoadFromFile(fixture.NewKeyringPath));
 
         var resolved = await runtimeStore.ResolveAsync(new ResolveRuntimeSecretRequest(
-            fixture.Reference.Ref,
+            fixture.ReferenceRef,
             "workflow-tool-token",
             "run-alpha",
             "step-alpha",
@@ -139,6 +143,212 @@ public sealed class SecretStoreToolTests
 
         resolved.Resolved.Should().BeTrue();
         resolved.Secret.Should().Be("runtime-secret");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReencryptSecretVaultRecordsAndResolveWithNewKey()
+    {
+        using var fixture = await ReencryptionFixture.CreateVaultAsync();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await SecretStoreTool.MainAsync(
+            [
+                "reencrypt-sweep",
+                "--keyring",
+                fixture.NewKeyringPath,
+                "--secret-vault-prefix",
+                fixture.Options.SecretVaultPrefix,
+                "--runtime-secret-prefix",
+                fixture.Options.RuntimeSecretPrefix,
+                "--verify",
+            ],
+            output,
+            error,
+            fixture.Target);
+
+        exitCode.Should().Be(0);
+        output.ToString().Should().Contain("changed=1").And.Contain("updated=1").And.Contain("verifyFailures=0");
+        var record = GarnetSecretVaultRecord.Parser.ParseFrom(fixture.Target.Values[fixture.StoredKey]);
+        record.EncryptedSecret.KeyId.Should().Be("new");
+
+        var store = new RecordingGarnetSecretKeyValueStore();
+        store.Values[fixture.StoredKey] = fixture.Target.Values[fixture.StoredKey].ToArray();
+        store.Expirations[fixture.StoredKey] = fixture.Target.Ttls[fixture.StoredKey];
+        var vault = new GarnetBackedSecretVault(
+            store,
+            fixture.Options,
+            GarnetSecretStoreKeyring.LoadFromFile(fixture.NewKeyringPath),
+            TimeProvider.System);
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            fixture.ReferenceRef,
+            "oauth-refresh-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve vault after reencrypt"));
+
+        resolved.Resolved.Should().BeTrue();
+        resolved.Secret.Should().Be("vault-secret");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReportAlreadyActiveWithoutCasWrite()
+    {
+        using var fixture = await ReencryptionFixture.CreateAsync();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await SecretStoreTool.MainAsync(
+            [
+                "reencrypt-sweep",
+                "--keyring",
+                fixture.OldKeyringPath,
+                "--secret-vault-prefix",
+                fixture.Options.SecretVaultPrefix,
+                "--runtime-secret-prefix",
+                fixture.Options.RuntimeSecretPrefix,
+                "--verify",
+            ],
+            output,
+            error,
+            fixture.Target);
+
+        exitCode.Should().Be(0);
+        fixture.Target.CompareExchangeCalls.Should().Be(0);
+        output.ToString().Should().Contain("alreadyActive=1").And.Contain("verified=1");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReturnExitCodeTwoWhenScannedRecordIsMissing()
+    {
+        using var fixture = await ReencryptionFixture.CreateEmptyAsync();
+        fixture.Target.AdditionalScanKeys.Add($"{fixture.Options.RuntimeSecretPrefix}:missing");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await RunInjectedSweepAsync(fixture, output, error);
+
+        exitCode.Should().Be(2);
+        output.ToString().Should().Contain("missing=1");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReturnExitCodeTwoWhenRecordCannotBeDecrypted()
+    {
+        using var fixture = await ReencryptionFixture.CreateEmptyAsync();
+        var key = $"{fixture.Options.RuntimeSecretPrefix}:malformed";
+        fixture.Target.Values[key] = Encoding.UTF8.GetBytes("not a protobuf secret record");
+        fixture.Target.Ttls[key] = null;
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await RunInjectedSweepAsync(fixture, output, error);
+
+        exitCode.Should().Be(2);
+        output.ToString().Should().Contain("errors=1");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReturnExitCodeTwoWhenCasConflicts()
+    {
+        using var fixture = await ReencryptionFixture.CreateAsync();
+        fixture.Target.NextCasResult = SecretStoreCasResult.Conflict();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await RunInjectedSweepAsync(fixture, output, error);
+
+        exitCode.Should().Be(2);
+        output.ToString().Should().Contain("conflicts=1");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReturnExitCodeTwoWhenCasReportsMissing()
+    {
+        using var fixture = await ReencryptionFixture.CreateAsync();
+        fixture.Target.NextCasResult = SecretStoreCasResult.Missing();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await RunInjectedSweepAsync(fixture, output, error);
+
+        exitCode.Should().Be(2);
+        output.ToString().Should().Contain("missing=1");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReturnExitCodeTwoWhenCasStatusIsUnknown()
+    {
+        using var fixture = await ReencryptionFixture.CreateAsync();
+        fixture.Target.NextCasResult = new SecretStoreCasResult((SecretStoreCasStatus)999, -1);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await RunInjectedSweepAsync(fixture, output, error);
+
+        exitCode.Should().Be(2);
+        output.ToString().Should().Contain("errors=1");
+    }
+
+    [Fact]
+    public async Task ReencryptSweep_ShouldReturnExitCodeTwoWhenVerifyFindsOldStoredKey()
+    {
+        using var fixture = await ReencryptionFixture.CreateAsync();
+        fixture.Target.StoreExpectedValueAfterUpdated = true;
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await SecretStoreTool.MainAsync(
+            [
+                "reencrypt-sweep",
+                "--keyring",
+                fixture.NewKeyringPath,
+                "--secret-vault-prefix",
+                fixture.Options.SecretVaultPrefix,
+                "--runtime-secret-prefix",
+                fixture.Options.RuntimeSecretPrefix,
+                "--verify",
+            ],
+            output,
+            error,
+            fixture.Target);
+
+        exitCode.Should().Be(2);
+        output.ToString().Should().Contain("updated=1").And.Contain("verifyFailures=1");
+    }
+
+    [Fact]
+    public async Task RedisSecretStoreSweepTarget_ShouldScanGetCompareExchangeAndPreserveTtl()
+    {
+        await using var redis = await LocalRedisServer.StartAsync();
+        using var connection = await ConnectionMultiplexer.ConnectAsync(redis.ConnectionString);
+        var database = connection.GetDatabase();
+        var prefix = $"aevatar:test:secret-sweep:{Guid.NewGuid():N}";
+        var key = $"{prefix}:record";
+        var missingKey = $"{prefix}:missing";
+        var originalValue = Encoding.UTF8.GetBytes("old-record");
+        var updatedValue = Encoding.UTF8.GetBytes("new-record");
+        var wrongExpectedValue = Encoding.UTF8.GetBytes("wrong-record");
+
+        (await database.StringSetAsync(key, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
+        using var target = await RedisSecretStoreSweepTarget.ConnectAsync(redis.ConnectionString, database: -1);
+
+        var scan = await target.ScanAsync($"{prefix}:*", cursor: 0, count: 100);
+        scan.Keys.Should().Contain(key);
+        var loaded = await target.GetAsync(key);
+        loaded.Should().Equal(originalValue);
+
+        var conflict = await target.CompareExchangeAsync(key, wrongExpectedValue, updatedValue);
+        conflict.Status.Should().Be(SecretStoreCasStatus.Conflict);
+        var missing = await target.CompareExchangeAsync(missingKey, originalValue, updatedValue);
+        missing.Status.Should().Be(SecretStoreCasStatus.Missing);
+        var updated = await target.CompareExchangeAsync(key, originalValue, updatedValue);
+        updated.Status.Should().Be(SecretStoreCasStatus.Updated);
+        updated.PreservedTtlMs.Should().BeGreaterThan(0);
+
+        ((byte[]?)await database.StringGetAsync(key)).Should().Equal(updatedValue);
+        (await database.KeyTimeToLiveAsync(key)).Should().NotBeNull().And.BePositive();
     }
 
     private static string Base64Key(byte seed)
@@ -149,6 +359,24 @@ public sealed class SecretStoreToolTests
 
         return Convert.ToBase64String(bytes);
     }
+
+    private static Task<int> RunInjectedSweepAsync(
+        ReencryptionFixture fixture,
+        TextWriter output,
+        TextWriter error) =>
+        SecretStoreTool.MainAsync(
+            [
+                "reencrypt-sweep",
+                "--keyring",
+                fixture.NewKeyringPath,
+                "--secret-vault-prefix",
+                fixture.Options.SecretVaultPrefix,
+                "--runtime-secret-prefix",
+                fixture.Options.RuntimeSecretPrefix,
+            ],
+            output,
+            error,
+            fixture.Target);
 
     private sealed class ReencryptionFixture : IDisposable
     {
@@ -161,15 +389,17 @@ public sealed class SecretStoreToolTests
             GarnetSecretStoreOptions options,
             FakeSweepTarget target,
             string storedKey,
-            RuntimeSecretReference reference)
+            string referenceRef)
         {
             _oldKeyring = oldKeyring;
             _newKeyring = newKeyring;
             Options = options;
             Target = target;
             StoredKey = storedKey;
-            Reference = reference;
+            ReferenceRef = referenceRef;
         }
+
+        public string OldKeyringPath => _oldKeyring.Path;
 
         public string NewKeyringPath => _newKeyring.Path;
 
@@ -179,9 +409,80 @@ public sealed class SecretStoreToolTests
 
         public string StoredKey { get; }
 
-        public RuntimeSecretReference Reference { get; }
+        public string ReferenceRef { get; }
 
         public static async Task<ReencryptionFixture> CreateAsync()
+        {
+            var fixture = CreateEmptyCore();
+            var recordingStore = new RecordingGarnetSecretKeyValueStore();
+            var runtimeStore = new GarnetRuntimeSecretStore(
+                recordingStore,
+                fixture.Options,
+                GarnetSecretStoreKeyring.LoadFromFile(fixture.OldKeyring.Path));
+
+            var stored = await runtimeStore.PutAsync(new StoreRuntimeSecretRequest(
+                "workflow-tool-token",
+                "run-alpha",
+                "step-alpha",
+                "runtime-secret",
+                TimeSpan.FromMinutes(10),
+                ConsumeOnce: false,
+                "test store"));
+            var entry = recordingStore.Values.Should().ContainSingle().Subject;
+            fixture.Target.Values[entry.Key] = entry.Value.ToArray();
+            fixture.Target.Ttls[entry.Key] = recordingStore.Expirations[entry.Key];
+
+            return new ReencryptionFixture(
+                fixture.OldKeyring,
+                fixture.NewKeyring,
+                fixture.Options,
+                fixture.Target,
+                entry.Key,
+                stored.Reference.Ref);
+        }
+
+        public static async Task<ReencryptionFixture> CreateVaultAsync()
+        {
+            var fixture = CreateEmptyCore();
+            var recordingStore = new RecordingGarnetSecretKeyValueStore();
+            var vault = new GarnetBackedSecretVault(
+                recordingStore,
+                fixture.Options,
+                GarnetSecretStoreKeyring.LoadFromFile(fixture.OldKeyring.Path),
+                TimeProvider.System);
+
+            var stored = await vault.PutAsync(new StoreSecretRequest(
+                "oauth-refresh-token",
+                "scope-alpha",
+                "user-alpha",
+                "vault-secret",
+                "test store vault"));
+            var entry = recordingStore.Values.Should().ContainSingle().Subject;
+            fixture.Target.Values[entry.Key] = entry.Value.ToArray();
+            fixture.Target.Ttls[entry.Key] = recordingStore.Expirations[entry.Key];
+
+            return new ReencryptionFixture(
+                fixture.OldKeyring,
+                fixture.NewKeyring,
+                fixture.Options,
+                fixture.Target,
+                entry.Key,
+                stored.Reference.Ref);
+        }
+
+        public static Task<ReencryptionFixture> CreateEmptyAsync()
+        {
+            var fixture = CreateEmptyCore();
+            return Task.FromResult(new ReencryptionFixture(
+                fixture.OldKeyring,
+                fixture.NewKeyring,
+                fixture.Options,
+                fixture.Target,
+                string.Empty,
+                string.Empty));
+        }
+
+        private static EmptyReencryptionFixture CreateEmptyCore()
         {
             var oldKeyring = new TempFile($$"""
             {
@@ -208,26 +509,9 @@ public sealed class SecretStoreToolTests
                 SecretVaultPrefix = $"aevatar:test:vault:{Guid.NewGuid():N}",
                 RuntimeSecretPrefix = $"aevatar:test:runtime:{Guid.NewGuid():N}",
             };
-            var recordingStore = new RecordingGarnetSecretKeyValueStore();
-            var runtimeStore = new GarnetRuntimeSecretStore(
-                recordingStore,
-                options,
-                GarnetSecretStoreKeyring.LoadFromFile(oldKeyring.Path));
-
-            var stored = await runtimeStore.PutAsync(new StoreRuntimeSecretRequest(
-                "workflow-tool-token",
-                "run-alpha",
-                "step-alpha",
-                "runtime-secret",
-                TimeSpan.FromMinutes(10),
-                ConsumeOnce: false,
-                "test store"));
-            var entry = recordingStore.Values.Should().ContainSingle().Subject;
             var target = new FakeSweepTarget();
-            target.Values[entry.Key] = entry.Value.ToArray();
-            target.Ttls[entry.Key] = recordingStore.Expirations[entry.Key];
 
-            return new ReencryptionFixture(oldKeyring, newKeyring, options, target, entry.Key, stored.Reference);
+            return new EmptyReencryptionFixture(oldKeyring, newKeyring, options, target);
         }
 
         public void Dispose()
@@ -235,6 +519,12 @@ public sealed class SecretStoreToolTests
             _oldKeyring.Dispose();
             _newKeyring.Dispose();
         }
+
+        private sealed record EmptyReencryptionFixture(
+            TempFile OldKeyring,
+            TempFile NewKeyring,
+            GarnetSecretStoreOptions Options,
+            FakeSweepTarget Target);
     }
 
     private sealed class FakeSweepTarget : ISecretStoreSweepTarget
@@ -242,6 +532,12 @@ public sealed class SecretStoreToolTests
         public Dictionary<string, byte[]> Values { get; } = new(StringComparer.Ordinal);
 
         public Dictionary<string, TimeSpan?> Ttls { get; } = new(StringComparer.Ordinal);
+
+        public List<string> AdditionalScanKeys { get; } = [];
+
+        public SecretStoreCasResult? NextCasResult { get; set; }
+
+        public bool StoreExpectedValueAfterUpdated { get; set; }
 
         public int CompareExchangeCalls { get; private set; }
 
@@ -254,8 +550,10 @@ public sealed class SecretStoreToolTests
             ct.ThrowIfCancellationRequested();
             var prefix = pattern.EndsWith('*') ? pattern[..^1] : pattern;
             var keys = Values.Keys
+                .Concat(AdditionalScanKeys)
                 .Where(key => key.StartsWith(prefix, StringComparison.Ordinal))
                 .Order(StringComparer.Ordinal)
+                .Distinct(StringComparer.Ordinal)
                 .ToArray();
             var start = (int)cursor;
             var batch = keys.Skip(start).Take(count).ToArray();
@@ -277,14 +575,120 @@ public sealed class SecretStoreToolTests
         {
             ct.ThrowIfCancellationRequested();
             CompareExchangeCalls++;
+            if (NextCasResult != null)
+                return Task.FromResult(NextCasResult);
+
             if (!Values.TryGetValue(key, out var current))
                 return Task.FromResult(SecretStoreCasResult.Missing());
             if (!current.SequenceEqual(expectedValue))
                 return Task.FromResult(SecretStoreCasResult.Conflict());
 
-            Values[key] = newValue.ToArray();
-            var ttl = Ttls[key];
+            Values[key] = StoreExpectedValueAfterUpdated ? expectedValue.ToArray() : newValue.ToArray();
+            var ttl = Ttls.TryGetValue(key, out var existingTtl) ? existingTtl : null;
             return Task.FromResult(SecretStoreCasResult.Updated(ttl.HasValue ? (long)ttl.Value.TotalMilliseconds : -1));
+        }
+    }
+
+    private sealed class LocalRedisServer : IAsyncDisposable
+    {
+        private readonly Process _process;
+        private readonly TempDirectory _directory;
+
+        private LocalRedisServer(Process process, TempDirectory directory, int port)
+        {
+            _process = process;
+            _directory = directory;
+            ConnectionString = $"127.0.0.1:{port},abortConnect=false,connectTimeout=10000,syncTimeout=10000";
+        }
+
+        public string ConnectionString { get; }
+
+        public static async Task<LocalRedisServer> StartAsync()
+        {
+            var executable = FindRedisServer();
+            var directory = new TempDirectory();
+            var port = GetFreeTcpPort();
+            var startInfo = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            startInfo.ArgumentList.Add("--bind");
+            startInfo.ArgumentList.Add("127.0.0.1");
+            startInfo.ArgumentList.Add("--port");
+            startInfo.ArgumentList.Add(port.ToString());
+            startInfo.ArgumentList.Add("--save");
+            startInfo.ArgumentList.Add("");
+            startInfo.ArgumentList.Add("--appendonly");
+            startInfo.ArgumentList.Add("no");
+            startInfo.ArgumentList.Add("--dir");
+            startInfo.ArgumentList.Add(directory.Path);
+            startInfo.ArgumentList.Add("--dbfilename");
+            startInfo.ArgumentList.Add($"secret-sweep-{Guid.NewGuid():N}.rdb");
+            startInfo.ArgumentList.Add("--protected-mode");
+            startInfo.ArgumentList.Add("no");
+
+            var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start redis-server.");
+            var server = new LocalRedisServer(process, directory, port);
+
+            try
+            {
+                using var connection = await ConnectionMultiplexer.ConnectAsync(server.ConnectionString);
+                await connection.GetDatabase().PingAsync();
+                return server;
+            }
+            catch
+            {
+                await server.DisposeAsync();
+                throw;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (!_process.HasExited)
+            {
+                _process.Kill(entireProcessTree: true);
+                await _process.WaitForExitAsync();
+            }
+
+            _process.Dispose();
+            _directory.Dispose();
+        }
+
+        private static string FindRedisServer()
+        {
+            var configured = Environment.GetEnvironmentVariable("AEVATAR_TEST_REDIS_SERVER_PATH");
+            if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+                return configured;
+
+            var fileName = OperatingSystem.IsWindows() ? "redis-server.exe" : "redis-server";
+            var pathDirectories = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var directory in pathDirectories)
+            {
+                var candidate = Path.Combine(directory, fileName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            foreach (var candidate in new[] { "/opt/homebrew/bin/redis-server", "/usr/local/bin/redis-server", "/usr/bin/redis-server" })
+            {
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+
+            throw new InvalidOperationException(
+                "redis-server executable is required for RedisSecretStoreSweepTarget integration coverage.");
+        }
+
+        private static int GetFreeTcpPort()
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            return ((IPEndPoint)listener.LocalEndpoint).Port;
         }
     }
 
