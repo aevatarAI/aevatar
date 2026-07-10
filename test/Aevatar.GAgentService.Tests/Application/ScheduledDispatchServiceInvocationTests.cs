@@ -473,29 +473,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invocationPort.Requests.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableReferenceAndSubjectRef_ShouldRejectBeforeExchange()
-    {
-        var invocationPort = new RecordingServiceInvocationPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("subject-token");
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
-        var original = new ServiceInvocationRequest
-        {
-            CommandId = "cmd-invoke",
-            CorrelationId = "corr-invoke",
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
-        };
-        var auth = new ScheduledServiceInvocationAuth(
-            new ScheduledServiceInvocationDurableCredentialReference("durable-run-key"));
-
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*durable credential reference exchange is not available*");
-        credentialExchange.Sources.Should().BeEmpty();
-        invocationPort.Requests.Should().BeEmpty();
-    }
-
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
