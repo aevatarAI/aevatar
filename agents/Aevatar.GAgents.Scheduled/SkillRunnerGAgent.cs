@@ -2109,6 +2109,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task UpsertRegistryAsync(CancellationToken ct)
     {
         var ownerScope = State.OutboundConfig?.OwnerScope;
+        var targetPlatform = ResolveOutboundPlatform(State.OutboundConfig);
 
         var command = new UserAgentCatalogUpsertCommand
         {
@@ -2123,10 +2124,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ApiKeyId = State.OutboundConfig?.ApiKeyId ?? string.Empty,
             ScheduleCron = State.ScheduleCron ?? string.Empty,
             ScheduleTimezone = State.ScheduleTimezone ?? string.Empty,
-            LarkReceiveId = State.OutboundConfig?.LarkReceiveId ?? string.Empty,
-            LarkReceiveIdType = State.OutboundConfig?.LarkReceiveIdType ?? string.Empty,
-            LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
-            LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
+            TargetPlatform = targetPlatform,
+            ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                targetPlatform,
+                State.OutboundConfig?.NyxProviderSlug,
+                State.OutboundConfig?.ConversationId,
+                State.OutboundConfig?.LarkReceiveId,
+                State.OutboundConfig?.LarkReceiveIdType,
+                State.OutboundConfig?.LarkReceiveIdFallback,
+                State.OutboundConfig?.LarkReceiveIdTypeFallback),
             OutputFormat = State.OutboundConfig?.OutputFormat ?? SkillRunnerOutputFormat.Auto,
         };
 

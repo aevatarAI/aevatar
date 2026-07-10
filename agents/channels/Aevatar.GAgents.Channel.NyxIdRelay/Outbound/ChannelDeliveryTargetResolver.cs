@@ -1,6 +1,7 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
+using ChannelAddressModel = Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 
@@ -61,10 +62,7 @@ public sealed class ChannelDeliveryTargetResolver
             target.ConversationId,
             target.NyxProviderSlug,
             target.NyxApiKey,
-            target.LarkReceiveId,
-            target.LarkReceiveIdType,
-            target.LarkReceiveIdFallback,
-            target.LarkReceiveIdTypeFallback);
+            target.ChannelAddress);
 
     private sealed record RoutedChannelNativeDeliveryTarget(
         string AgentId,
@@ -72,14 +70,12 @@ public sealed class ChannelDeliveryTargetResolver
         string ConversationId,
         string NyxProviderSlug,
         string NyxApiKey,
-        string LarkReceiveId,
-        string LarkReceiveIdType,
-        string LarkReceiveIdFallback,
-        string LarkReceiveIdTypeFallback)
+        ChannelAddressModel ChannelAddress)
         : ChannelNativeDeliveryTarget(
             AgentId,
             Platform,
             ConversationId,
             NyxProviderSlug,
-            NyxApiKey);
+            NyxApiKey),
+            IChannelDeliveryAddressTarget;
 }

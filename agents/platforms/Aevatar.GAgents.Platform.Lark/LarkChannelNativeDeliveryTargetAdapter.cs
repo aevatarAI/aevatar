@@ -10,20 +10,31 @@ public sealed class LarkChannelNativeDeliveryTargetAdapter : IChannelNativeDeliv
     {
         ArgumentNullException.ThrowIfNull(target);
 
+        var address = (target as IChannelDeliveryAddressTarget)?.ChannelAddress;
+        var route = target as ILarkChannelNativeDeliveryRoute;
+
         return new LarkChannelNativeDeliveryTarget(
             target.AgentId,
             target.Platform,
             target.ConversationId,
             target.NyxProviderSlug,
             target.NyxApiKey,
-            ReadStringProperty(target, nameof(ILarkChannelNativeDeliveryRoute.LarkReceiveId)),
-            ReadStringProperty(target, nameof(ILarkChannelNativeDeliveryRoute.LarkReceiveIdType)),
-            ReadStringProperty(target, nameof(ILarkChannelNativeDeliveryRoute.LarkReceiveIdFallback)),
-            ReadStringProperty(target, nameof(ILarkChannelNativeDeliveryRoute.LarkReceiveIdTypeFallback)));
+            FirstNonWhiteSpace(address?.Primary.AddressId, route?.LarkReceiveId),
+            FirstNonWhiteSpace(address?.Primary.AddressType, route?.LarkReceiveIdType),
+            FirstNonWhiteSpace(address?.Fallback?.AddressId, route?.LarkReceiveIdFallback),
+            FirstNonWhiteSpace(address?.Fallback?.AddressType, route?.LarkReceiveIdTypeFallback));
     }
 
-    private static string ReadStringProperty(ChannelNativeDeliveryTarget target, string propertyName) =>
-        target.GetType().GetProperty(propertyName)?.GetValue(target) as string ?? string.Empty;
+    private static string FirstNonWhiteSpace(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return string.Empty;
+    }
 
     private sealed record LarkChannelNativeDeliveryTarget(
         string AgentId,

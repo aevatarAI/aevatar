@@ -70,8 +70,14 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 Id = "aelf-twitter-approval",
                 ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
                 NyxProviderSlug = "api-lark-bot-2",
-                LarkReceiveId = "oc_9f1b8d3835674963417954fad20f8a3c",
-                LarkReceiveIdType = "chat_id",
+                ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                    "lark",
+                    "api-lark-bot-2",
+                    "oc_9f1b8d3835674963417954fad20f8a3c",
+                    "oc_9f1b8d3835674963417954fad20f8a3c",
+                    "chat_id",
+                    null,
+                    null),
                 TargetPlatform = "lark",
                 AgentType = "delivery_target",
                 TemplateName = "explicit_delivery_target",
@@ -96,8 +102,9 @@ public sealed class UserAgentDeliveryTargetReaderTests
         target.ConversationId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
         target.NyxProviderSlug.Should().Be("api-lark-bot-2");
         target.NyxApiKey.Should().Be("secret-created-key");
-        target.LarkReceiveId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
-        target.LarkReceiveIdType.Should().Be("chat_id");
+        target.ChannelAddress.Platform.Should().Be("lark");
+        target.ChannelAddress.Primary.AddressId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+        target.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
         target.AgentType.Should().Be("delivery_target");
     }
 
@@ -121,6 +128,14 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 TargetPlatform = "email",
                 ConversationId = "approvals@example.com",
                 NyxProviderSlug = "api-email-outbound",
+                ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                    "email",
+                    "api-email-outbound",
+                    "approvals@example.com",
+                    "approvals@example.com",
+                    string.Empty,
+                    null,
+                    null),
                 AgentType = "delivery_target",
                 TemplateName = "explicit_delivery_target",
                 ApiKeyId = "key-email",
@@ -141,8 +156,9 @@ public sealed class UserAgentDeliveryTargetReaderTests
         target.Should().NotBeNull();
         target!.Platform.Should().Be("email");
         target.ConversationId.Should().Be("approvals@example.com");
-        target.LarkReceiveId.Should().BeEmpty();
-        target.LarkReceiveIdType.Should().BeEmpty();
+        target.ChannelAddress.Platform.Should().Be("email");
+        target.ChannelAddress.Primary.AddressId.Should().Be("approvals@example.com");
+        target.ChannelAddress.Primary.AddressType.Should().BeEmpty();
     }
 
     [Fact]

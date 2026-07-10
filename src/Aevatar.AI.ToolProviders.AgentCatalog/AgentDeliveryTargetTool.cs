@@ -234,6 +234,14 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                     TemplateName = "explicit_delivery_target",
                     ScopeId = keyScopeId,
                     TargetPlatform = targetPlatform,
+                    ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                        targetPlatform,
+                        nyxProviderSlug.value!,
+                        conversationId.value!,
+                        conversationId.value!,
+                        string.Empty,
+                        null,
+                        null),
                     OwnerScope = caller.Clone(),
                 },
                 ct);
@@ -327,8 +335,8 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 agent_id = entry.AgentId,
                 delivery_target_id = entry.AgentId,
                 platform = ResolveDeliveryPlatform(entry),
-                conversation_id = entry.ConversationId,
-                nyx_provider_slug = entry.NyxProviderSlug,
+                conversation_id = ResolveConversationId(entry),
+                nyx_provider_slug = ResolveProviderSlug(entry),
                 created_at = entry.CreatedAt,
                 updated_at = entry.UpdatedAt,
             })
@@ -398,6 +406,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 // should never see / pass plaintext credentials. Existing credentials
                 // are preserved through the actor's MergeNonEmpty upsert policy.
                 NyxApiKey = string.Empty,
+                TargetPlatform = platform,
+                ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                    platform,
+                    nyxProviderSlug.value!,
+                    conversationId.value!,
+                    conversationId.value!,
+                    string.Empty,
+                    null,
+                    null),
                 OwnerScope = caller.Clone(),
             },
             ct);
@@ -438,9 +455,9 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 status = "confirm_required",
                 agent_id = exists.AgentId,
                 delivery_target_id = exists.AgentId,
-                platform = exists.OwnerScope?.Platform ?? string.Empty,
-                conversation_id = exists.ConversationId,
-                nyx_provider_slug = exists.NyxProviderSlug,
+                platform = ResolveDeliveryPlatform(exists),
+                conversation_id = ResolveConversationId(exists),
+                nyx_provider_slug = ResolveProviderSlug(exists),
                 note = "Call again with confirm=true to delete this delivery target mapping.",
             });
         }
@@ -477,5 +494,11 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     }
 
     private static string ResolveDeliveryPlatform(UserAgentCatalogReadModelEntry entry) =>
-        entry.TargetPlatform ?? string.Empty;
+        Normalize(entry.ChannelAddress.Platform) ?? entry.TargetPlatform ?? string.Empty;
+
+    private static string ResolveConversationId(UserAgentCatalogReadModelEntry entry) =>
+        Normalize(entry.ChannelAddress.ConversationId) ?? entry.ConversationId;
+
+    private static string ResolveProviderSlug(UserAgentCatalogReadModelEntry entry) =>
+        Normalize(entry.ChannelAddress.ProviderSlug) ?? entry.NyxProviderSlug;
 }

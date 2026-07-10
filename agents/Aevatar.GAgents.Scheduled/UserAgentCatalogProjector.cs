@@ -96,13 +96,10 @@ public sealed class UserAgentCatalogProjector
         document.ActorId = UserAgentCatalogGAgent.WellKnownId;
         document.UpdatedAt = updatedAt;
         document.CreatedAt = entry.CreatedAt != null ? entry.CreatedAt.ToDateTimeOffset() : updatedAt;
-        document.LarkReceiveId = entry.LarkReceiveId ?? string.Empty;
-        document.LarkReceiveIdType = entry.LarkReceiveIdType ?? string.Empty;
-        document.LarkReceiveIdFallback = entry.LarkReceiveIdFallback ?? string.Empty;
-        document.LarkReceiveIdTypeFallback = entry.LarkReceiveIdTypeFallback ?? string.Empty;
         document.OutputFormat = entry.OutputFormat;
         document.SharingGrant = entry.SharingGrant?.Clone();
         document.TargetPlatform = entry.TargetPlatform ?? string.Empty;
+        document.ChannelAddress = entry.ChannelAddress?.Clone();
 
         // Project owner_scope verbatim from the upserted entry. Per issue #466 the entry
         // is the authoritative source for ownership; the projector materializes it for

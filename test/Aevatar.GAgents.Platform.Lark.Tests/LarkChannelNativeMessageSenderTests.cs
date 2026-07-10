@@ -75,10 +75,12 @@ public sealed class LarkChannelNativeMessageSenderTests
             ConversationId: "legacy-conversation",
             NyxProviderSlug: "api-lark-bot",
             NyxApiKey: "nyx-api-key-1",
-            LarkReceiveId: "oc_dm_chat_1",
-            LarkReceiveIdType: "chat_id",
-            LarkReceiveIdFallback: "on_user_1",
-            LarkReceiveIdTypeFallback: "union_id"));
+            ChannelAddress: new ChannelDeliveryAddress(
+                "lark",
+                "api-lark-bot",
+                "legacy-conversation",
+                new ChannelDeliveryAddressEndpoint("oc_dm_chat_1", "chat_id"),
+                new ChannelDeliveryAddressEndpoint("on_user_1", "union_id"))));
 
         await sender.SendAsync(
             target,
@@ -136,14 +138,12 @@ public sealed class LarkChannelNativeMessageSenderTests
         string ConversationId,
         string NyxProviderSlug,
         string NyxApiKey,
-        string LarkReceiveId,
-        string LarkReceiveIdType,
-        string LarkReceiveIdFallback,
-        string LarkReceiveIdTypeFallback)
+        ChannelDeliveryAddress ChannelAddress)
         : ChannelNativeDeliveryTarget(
             AgentId,
             Platform,
             ConversationId,
             NyxProviderSlug,
-            NyxApiKey);
+            NyxApiKey),
+            IChannelDeliveryAddressTarget;
 }

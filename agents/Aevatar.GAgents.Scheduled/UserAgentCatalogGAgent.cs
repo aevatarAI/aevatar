@@ -64,12 +64,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             ApiKeyId = MergeNonEmpty(command.ApiKeyId, existing?.ApiKeyId),
             ScheduleCron = MergeNonEmpty(command.ScheduleCron, existing?.ScheduleCron),
             ScheduleTimezone = MergeNonEmpty(command.ScheduleTimezone, existing?.ScheduleTimezone),
-            LarkReceiveId = MergeNonEmpty(command.LarkReceiveId, existing?.LarkReceiveId),
-            LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
-            LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
-            LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
             SharingGrant = existing?.SharingGrant?.Clone(),
             TargetPlatform = MergeNonEmpty(command.TargetPlatform, existing?.TargetPlatform),
+            ChannelAddress = UserAgentCatalogChannelAddress.Merge(
+                command.ChannelAddress,
+                existing?.ChannelAddress,
+                command.TargetPlatform,
+                command.NyxProviderSlug,
+                command.ConversationId),
             OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
                 ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
                 : command.OutputFormat,

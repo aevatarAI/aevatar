@@ -61,18 +61,19 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         if (string.IsNullOrWhiteSpace(nyxApiKey))
             return null;
 
+        var channelAddress = UserAgentCatalogChannelAddress.ToModel(
+            document.ChannelAddress,
+            ResolveDeliveryPlatform(document),
+            document.NyxProviderSlug,
+            document.ConversationId);
+
         return new UserAgentDeliveryTarget(
             AgentId: document.Id ?? string.Empty,
-#pragma warning disable CS0612 // legacy field read for delivery target compatibility
-            Platform: ResolveDeliveryPlatform(document),
-#pragma warning restore CS0612
-            ConversationId: document.ConversationId ?? string.Empty,
-            NyxProviderSlug: document.NyxProviderSlug ?? string.Empty,
+            Platform: channelAddress.Platform,
+            ConversationId: channelAddress.ConversationId,
+            NyxProviderSlug: channelAddress.ProviderSlug,
             NyxApiKey: nyxApiKey,
-            LarkReceiveId: document.LarkReceiveId ?? string.Empty,
-            LarkReceiveIdType: document.LarkReceiveIdType ?? string.Empty,
-            LarkReceiveIdFallback: document.LarkReceiveIdFallback ?? string.Empty,
-            LarkReceiveIdTypeFallback: document.LarkReceiveIdTypeFallback ?? string.Empty,
+            ChannelAddress: channelAddress,
             OutputFormat: document.OutputFormat,
             TemplateName: document.TemplateName ?? string.Empty,
             AgentType: document.AgentType ?? string.Empty);

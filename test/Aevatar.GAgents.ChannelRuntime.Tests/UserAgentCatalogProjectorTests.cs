@@ -52,10 +52,14 @@ public sealed class UserAgentCatalogProjectorTests
                     ScheduleCron = "0 9 * * *",
                     ScheduleTimezone = "UTC",
                     CreatedAt = createdAt,
-                    LarkReceiveId = "oc_dm_chat_1",
-                    LarkReceiveIdType = "chat_id",
-                    LarkReceiveIdFallback = "on_user_1",
-                    LarkReceiveIdTypeFallback = "union_id",
+                    ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                        "lark",
+                        "api-lark-bot",
+                        "oc_chat_1",
+                        "oc_dm_chat_1",
+                        "chat_id",
+                        "on_user_1",
+                        "union_id"),
                     OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
                 },
             },
@@ -81,17 +85,15 @@ public sealed class UserAgentCatalogProjectorTests
         document.ActorId.Should().Be("agent-registry-store");
         document.CreatedAt.Should().Be(createdAt.ToDateTimeOffset());
         document.UpdatedAt.Should().Be(_clock.UtcNow);
-        // Typed Lark target round-trips through the projection so catalog-backed senders
-        // read it via UserAgentCatalogQueryPort.ToEntry instead of falling back to
-        // conversation_id prefix inference. The fallback pair (PR #412) MUST mirror
-        // through the projection too — without it the runtime `230002 bot not in chat`
-        // retry on outbound Lark card senders / SkillRunnerGAgent would never have a
-        // fallback typed pair to retry against, even though the actor-side state captured
-        // one at create time.
-        document.LarkReceiveId.Should().Be("oc_dm_chat_1");
-        document.LarkReceiveIdType.Should().Be("chat_id");
-        document.LarkReceiveIdFallback.Should().Be("on_user_1");
-        document.LarkReceiveIdTypeFallback.Should().Be("union_id");
+        document.ChannelAddress.Should().NotBeNull();
+        document.ChannelAddress!.Platform.Should().Be("lark");
+        document.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot");
+        document.ChannelAddress.ConversationId.Should().Be("oc_chat_1");
+        document.ChannelAddress.Primary.AddressId.Should().Be("oc_dm_chat_1");
+        document.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+        document.ChannelAddress.Fallback.Should().NotBeNull();
+        document.ChannelAddress.Fallback!.AddressId.Should().Be("on_user_1");
+        document.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
         document.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
     }
 
@@ -283,32 +285,35 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public void ToEntry_ShouldRoundTripTypedLarkReceiveTarget_FromDocumentToEntry()
+    public void ToEntry_ShouldRoundTripChannelAddress_FromDocumentToEntry()
     {
-        // Outbound Lark senders consume UserAgentCatalogEntry via this conversion; dropping
-        // the typed fields would silently regress workflow / social_media DM delivery back
-        // to the prefix-inference path even after the projection captured them. The
-        // fallback pair (PR #412) is part of the same contract — the catalog-backed
-        // `230002 bot not in chat` retry depends on `LarkReceiveIdFallback` /
-        // `LarkReceiveIdTypeFallback` surviving the document → entry mapping.
         var document = new UserAgentCatalogDocument
         {
             Id = "agent-1",
             Platform = "lark",
             ConversationId = "oc_dm_chat_1",
-            LarkReceiveId = "oc_dm_chat_1",
-            LarkReceiveIdType = "chat_id",
-            LarkReceiveIdFallback = "on_user_1",
-            LarkReceiveIdTypeFallback = "union_id",
+            NyxProviderSlug = "api-lark-bot",
+            ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                "lark",
+                "api-lark-bot",
+                "oc_dm_chat_1",
+                "oc_dm_chat_1",
+                "chat_id",
+                "on_user_1",
+                "union_id"),
             OutputFormat = SkillRunnerOutputFormat.Text,
         };
 
         var entry = UserAgentCatalogQueryPort.ToEntry(document);
 
-        entry.LarkReceiveId.Should().Be("oc_dm_chat_1");
-        entry.LarkReceiveIdType.Should().Be("chat_id");
-        entry.LarkReceiveIdFallback.Should().Be("on_user_1");
-        entry.LarkReceiveIdTypeFallback.Should().Be("union_id");
+        entry.ChannelAddress.Platform.Should().Be("lark");
+        entry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot");
+        entry.ChannelAddress.ConversationId.Should().Be("oc_dm_chat_1");
+        entry.ChannelAddress.Primary.AddressId.Should().Be("oc_dm_chat_1");
+        entry.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+        entry.ChannelAddress.Fallback.Should().NotBeNull();
+        entry.ChannelAddress.Fallback!.AddressId.Should().Be("on_user_1");
+        entry.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
         entry.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
     }
 

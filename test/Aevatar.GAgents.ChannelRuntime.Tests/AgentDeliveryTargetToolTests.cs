@@ -229,8 +229,10 @@ public sealed class AgentDeliveryTargetToolTests
             captured.AgentType.Should().Be("delivery_target");
             captured.TemplateName.Should().Be("explicit_delivery_target");
             captured.TargetPlatform.Should().Be("lark");
-            captured.LarkReceiveId.Should().BeEmpty();
-            captured.LarkReceiveIdType.Should().BeEmpty();
+            captured.ChannelAddress.Platform.Should().Be("lark");
+            captured.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-2");
+            captured.ChannelAddress.Primary.AddressId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+            captured.ChannelAddress.Primary.AddressType.Should().BeEmpty();
             captured.OwnerScope.Should().NotBeNull();
             captured.OwnerScope!.MatchesStrictly(caller).Should().BeTrue();
 
@@ -291,8 +293,10 @@ public sealed class AgentDeliveryTargetToolTests
             captured!.TargetPlatform.Should().Be("email");
             captured.ConversationId.Should().Be("approvals@example.com");
             captured.NyxProviderSlug.Should().Be("api-email-outbound");
-            captured.LarkReceiveId.Should().BeEmpty();
-            captured.LarkReceiveIdType.Should().BeEmpty();
+            captured.ChannelAddress.Platform.Should().Be("email");
+            captured.ChannelAddress.ProviderSlug.Should().Be("api-email-outbound");
+            captured.ChannelAddress.Primary.AddressId.Should().Be("approvals@example.com");
+            captured.ChannelAddress.Primary.AddressType.Should().BeEmpty();
         }
         finally
         {
@@ -449,8 +453,15 @@ public sealed class AgentDeliveryTargetToolTests
                     AgentId = "aelf-twitter-approval",
                     ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
                     NyxProviderSlug = "api-lark-bot-2",
-                    LarkReceiveId = "oc_9f1b8d3835674963417954fad20f8a3c",
-                    LarkReceiveIdType = "chat_id",
+                    ChannelAddress = Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress.Empty with
+                    {
+                        Platform = "lark",
+                        ProviderSlug = "api-lark-bot-2",
+                        ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                        Primary = new Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddressEndpoint(
+                            "oc_9f1b8d3835674963417954fad20f8a3c",
+                            "chat_id"),
+                    },
                     TargetPlatform = "lark",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                     AgentType = "delivery_target",

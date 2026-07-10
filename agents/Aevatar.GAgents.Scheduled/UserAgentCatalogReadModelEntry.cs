@@ -1,5 +1,7 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
+using ChannelAddressModel = Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -30,10 +32,7 @@ public sealed class UserAgentCatalogReadModelEntry
     public Timestamp? CreatedAt { get; init; }
     public Timestamp? UpdatedAt { get; init; }
     public bool Tombstoned { get; init; }
-    public string LarkReceiveId { get; init; } = string.Empty;
-    public string LarkReceiveIdType { get; init; } = string.Empty;
-    public string LarkReceiveIdFallback { get; init; } = string.Empty;
-    public string LarkReceiveIdTypeFallback { get; init; } = string.Empty;
+    public ChannelAddressModel ChannelAddress { get; init; } = ChannelAddressModel.Empty;
     public SkillRunnerOutputFormat OutputFormat { get; init; } = SkillRunnerOutputFormat.Auto;
     public OwnerScope? OwnerScope { get; init; }
     public ScheduledAgentSharingGrant? SharingGrant { get; init; }
