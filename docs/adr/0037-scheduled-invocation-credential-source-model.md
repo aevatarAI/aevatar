@@ -53,11 +53,7 @@ owner: eanzhao
 5. **create 无副作用**：create/update 不得通过实际签发 access token 来做校验。
 6. **durable internal-only**：通用 HTTP `/api/schedules` 不接受 durable reference；只有 trusted provisioning 路径可写。
 7. **owner 不可伪造**：`SCOPE_OWNER` role 的 subject 只能来自认证 principal 的 claim，调用方不能在 body 指定（HTTP 现状已如此，下沉后 internal 入口也须遵守）。
-<<<<<<< HEAD
 8. **wire-safe 迁移**：旧 tag `1/2/3` 迁移期只标记 deprecated 并双读，不能 reserve；现有 tag `4` 保留给 `legacy_durable_sender_bearer_blocked`，新写只写 `oneof source` 的 tag `5/6`。旧 schedule 不破，下次 update 迁移，不要求一次性回填。
-=======
-8. **wire-safe 迁移**：旧 tag `1/2/3` 迁移期只标记 deprecated 并双读，不能 reserve；新写只写 `oneof source` 的 tag `5/6`。旧 schedule 不破，下次 update 迁移，不要求一次性回填。
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 9. **legacy 删除优先**：无活路径的 legacy auth 代码直接删（FI-007），不留兼容空壳。
 10. **读侧诚实**：凭证来源可经 readmodel 暴露（不含 secret）；durable id 与 raw token 都不得投影（沿用现有 `ProjectAsync_ShouldNotProjectDurableSenderBearerToken` 的安全立场）。
 
@@ -120,11 +116,7 @@ message ScheduledServiceInvocationDurableCredentialReferenceState {
 分阶段交付，每步 build + 定向测试 + 对应 `tools/ci/*guard*.sh`，详见 epic [#2404](https://github.com/aevatarAI/aevatar/issues/2404)：
 
 1. 接受本 ADR（proposed → accepted）。
-<<<<<<< HEAD
 2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableCredentialReference`；旧 tag `1/2/3` deprecated 双读，tag `4` 保留，新写只用 `5/6`；proto 重生 + reducer/replay 测试。
-=======
-2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableCredentialReference`；旧 tag `1/2/3` deprecated 双读，新写只用 `5/6`；proto 重生 + reducer/replay 测试。
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 3. **Phase 1 校验下沉**：binding/owner/scope 校验从 endpoint private static 下沉 application/domain；HTTP 与 internal 入口对齐；create 改无副作用 validation。
 4. **Phase 2 durable 收敛**：HTTP 关闭 durable；raw token → `DurableCredentialReference(id)`；Studio minted 走 reference；旧 raw durable replay fail closed；迁移相关测试。
 5. **Phase 3 注入与 legacy 收敛**：fire 时注入由 role 决定；接入 durable reference 的 broker 兑换；核实并收敛 `NyxIdAccessToken`+`NyxIdOrgToken` 双写；`ConnectorHttpAuthorization` 下沉 workflow adapter；删 legacy strip 残留。
