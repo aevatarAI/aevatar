@@ -55,4 +55,13 @@ describe('AevatarLoading', () => {
     );
     expect(screen.getByText('Loading console')).toBeInTheDocument();
   });
+
+  it('announces a default page loading label without a visible tip', () => {
+    render(<AevatarPageLoading />);
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading');
+    expect(screen.getByText('Loading')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+  });
 });

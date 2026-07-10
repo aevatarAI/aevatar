@@ -159,6 +159,7 @@ export function AevatarStreamingCursor({
 }
 
 export type AevatarPageLoadingProps = {
+  ariaLabel?: string;
   className?: string;
   fullscreen?: boolean;
   style?: React.CSSProperties;
@@ -166,6 +167,7 @@ export type AevatarPageLoadingProps = {
 };
 
 export function AevatarPageLoading({
+  ariaLabel = 'Loading',
   className,
   fullscreen = false,
   style,
@@ -183,7 +185,11 @@ export function AevatarPageLoading({
       style={style}
     >
       <AevatarLoadingDots color="#2563eb" decorative size="large" />
-      {tip ? <span className="aevatar-page-loading-tip">{tip}</span> : null}
+      {tip ? (
+        <span className="aevatar-page-loading-tip">{tip}</span>
+      ) : (
+        <span className="aevatar-loading-visually-hidden">{ariaLabel}</span>
+      )}
     </div>
   );
 }
