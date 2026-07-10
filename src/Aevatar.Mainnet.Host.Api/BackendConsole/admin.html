@@ -3784,7 +3784,7 @@ function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作�
 function viewVoice(){ return {html:suiteFrame('/voice','语音台')}; }
 
 /* ================= ⑩ 审计日志 Audit Trail —— /api/audit/trail =================
-   真实接口（cursor 分页，无 totalCount）：scope 三态 —— mine（调用者自身 scope，默认）、
+   真实接口（最新优先的 cursor 分页，无 totalCount）：scope 三态 —— mine（调用者自身 scope，默认）、
    all（平台管理员跨组织通配，后端 __all__ 分支）、custom（指定具体 scope id，跨 scope 需 admin）。
    分类/结果筛选在前端对当前页做客户端过滤（接口未暴露 category query）。 */
 var AUDIT_DATA=[];                  /* 已加载的记录行（累积，支持“加载更多”） */
@@ -4034,7 +4034,7 @@ function bindAudit(root){
   var rb=root.querySelector('#audit-root');
   function re(){ if(rb) rb.innerHTML=auditRoot(); }
   AUDIT_RERENDER=re;
-  if(!AUDIT_LOADED||AUDIT_LOADING){ if(!AUDIT_LOADING) loadAuditTrail(); }
+  if(!AUDIT_LOADING) loadAuditTrail();
   function detailFor(id){
     var r=AUDIT_DATA.filter(function(x){return x.id===id;})[0];
     if(!r) return null;
@@ -4331,7 +4331,18 @@ function bindEvents(){
       if(a==='globalSearch'){ return; }
       if(a==='drawer-close'){ closeDrawer(); return; }
       if(a==='drawer-emp'){ closeDrawer(); navigate(['fleet','c',act.getAttribute('data-co'),'e',act.getAttribute('data-emp')],{}); return; }
-      if(a==='refresh'){ act.querySelector('svg')&&act.classList.add('spin-once'); document.querySelectorAll('[data-stamp]').forEach(function(s){s.textContent=nowStamp();}); toast('已刷新（最终一致 readmodel）'); return; }
+      if(a==='refresh'){
+        act.querySelector('svg')&&act.classList.add('spin-once');
+        document.querySelectorAll('[data-stamp]').forEach(function(s){s.textContent=nowStamp();});
+        if((curParts()[0]||defaultModule())==='audit'){
+          AUDIT_LOADED=false;
+          loadAuditTrail();
+          toast('正在刷新审计日志');
+        } else {
+          toast('已刷新（最终一致 readmodel）');
+        }
+        return;
+      }
       if(a==='l0sort'){ var order=['health','cost','active']; var ni=(order.indexOf(STATE.l0Sort)+1)%3; setQuery({sort:order[ni]}); return; }
       if(a==='l1seg'){ var seg=t.closest('[data-seg]'); if(seg) setQuery({view:seg.getAttribute('data-seg')}); return; }
       if(a==='l2mode'){ var md=t.closest('[data-mode]'); if(md) setQuery({mode:md.getAttribute('data-mode')}); return; }
