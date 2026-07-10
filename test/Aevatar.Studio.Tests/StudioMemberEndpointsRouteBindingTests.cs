@@ -47,7 +47,7 @@ public sealed class StudioMemberEndpointsRouteBindingTests
             .ToList();
 
         // Ten routes mapped: create, list, get, bind, get-binding,
-        // get-binding-run, contract, activate, retire, patch (ADR-0017).
+        // get-binding-run, contract, activate, retire, patch.
         endpoints.Should().HaveCount(10);
     }
 
@@ -93,8 +93,8 @@ public sealed class StudioMemberEndpointsRouteBindingTests
             string scopeId, string memberId, string revisionId, CancellationToken ct = default) =>
             Task.FromException<StudioMemberBindingRevisionActionResponse>(new NotImplementedException());
 
-        public Task<StudioMemberDetailResponse> UpdateAsync(
+        public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default) =>
-            Task.FromException<StudioMemberDetailResponse>(new NotImplementedException());
+            Task.FromException<StudioMemberCommandResponse>(new NotImplementedException());
     }
 }

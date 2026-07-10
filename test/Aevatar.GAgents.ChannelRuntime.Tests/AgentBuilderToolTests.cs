@@ -4,20 +4,50 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentBuilderToolTests
 {
+    [Fact]
+    public void ParametersSchema_Remains_ManagementOnly()
+    {
+        var tool = new AgentBuilderTool(
+            Substitute.For<IUserAgentCatalogQueryPort>(),
+            Substitute.For<ISkillRunnerExecutionQueryPort>(),
+            Substitute.For<INyxIdApiClientFactory>(),
+            Substitute.For<ISkillRunnerCommandPort>(),
+            Substitute.For<IUserAgentCatalogCommandPort>(),
+            Substitute.For<ICallerScopeResolver>());
+
+        using var document = JsonDocument.Parse(tool.ParametersSchema);
+        var actions = document.RootElement
+            .GetProperty("properties")
+            .GetProperty("action")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToArray();
+
+        actions.Should().NotContain("create_agent");
+        tool.Description.Should().Contain("scheduled_agent_creator");
+        tool.Description.Should().NotContain("Agent creation is not handled here");
+    }
+
     [Fact]
     public async Task ExecuteAsync_DeleteAgent_DisablesActor_RevokesApiKey_AndTombstonesRegistry()
     {
@@ -33,7 +63,7 @@ public sealed class AgentBuilderToolTests
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                 }),
                 Task.FromResult<UserAgentCatalogReadModelEntry?>(null));
-        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -120,7 +150,7 @@ public sealed class AgentBuilderToolTests
                 ApiKeyId = "key-stuck",
                 OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
             }));
-        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
                 [new UserAgentCatalogReadModelEntry { AgentId = "skill-runner-stuck", OwnerScope = OwnerScope.ForNyxIdNative("user-1") }]));
 
@@ -190,10 +220,95 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_DeleteAgent_StillReturnsAccepted_WhenExecutionProjectionHasSchemaDrift()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-drift", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-drift",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                ApiKeyId = string.Empty,
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+            }));
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+            [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "skill-runner-drift",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "summary",
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "Asia/Shanghai",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                },
+            ]));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.QueryByAgentIdsAsync(
+                Arg.Any<IReadOnlyCollection<string>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>>(
+                CreateExecutionProjectionDrift()));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        catalogCommandPort.TombstoneAsync("skill-runner-drift", Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "delete_agent",
+                  "agent_id": "skill-runner-drift",
+                  "confirm": true
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("agents").EnumerateArray()
+                .Should().ContainSingle()
+                .Subject.GetProperty("agent_id").GetString().Should().Be("skill-runner-drift");
+
+            await skillRunnerPort.Received(1).DisableAsync(
+                "skill-runner-drift",
+                "delete_agent",
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).TombstoneAsync(
+                "skill-runner-drift",
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RunAgent_DispatchesManualTrigger()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+        queryPort.GetTriggerableForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
@@ -247,15 +362,342 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RunAgent_FromChannelInbound_DispatchesManualTriggerNotAdmission()
+    {
+        // Regression (prod 2026-06-11): run_agent used to route channel-context calls through
+        // the external-trigger admission protocol. Admission requires a pre-registered
+        // ExternalTriggerSource on the runner, and scheduled_agent_creator registers none,
+        // so every owner-issued /run-agent ended as a committed-but-silent
+        // SkillRunnerExternalTriggerRejectedEvent(unknown_source) while the tool replied
+        // "accepted". The owner's management-plane trigger is authorized by the caller-scope
+        // check and must dispatch TriggerAsync directly even when channel metadata is present.
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetTriggerableForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                ScopeId = "scope-1",
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForChannel("nyx-user-1", "lark", "scope-1", "ou-user")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+            ["channel.platform"] = "lark",
+            ["registration_scope_id"] = "scope-1",
+            ["channel.message_id"] = "activity-1",
+            ["channel.platform_message_id"] = "om_1",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "run_agent",
+                  "agent_id": "skill-runner-1"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            await skillRunnerPort.Received(1).TriggerAsync(
+                "skill-runner-1",
+                "run_agent",
+                Arg.Any<CancellationToken>());
+            await skillRunnerPort.DidNotReceive().AdmitExternalTriggerAsync(
+                Arg.Any<string>(),
+                Arg.Any<AdmitSkillRunnerExternalTriggerCommand>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RunAgent_UsesTriggerableAccessForSharedAgent()
+    {
+        var caller = OwnerScope.ForChannel("user-B", "lark", "scope-1", "bob");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetTriggerableForCallerAsync("skill-runner-shared", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-shared",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                SharingGrant = new ScheduledAgentSharingGrant
+                {
+                    SharedWithRegistrationScope = "scope-1",
+                    AllowTrigger = true,
+                },
+            }));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"run_agent","agent_id":"skill-runner-shared"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            await queryPort.Received(1).GetTriggerableForCallerAsync(
+                "skill-runner-shared",
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await queryPort.DidNotReceive().GetForCallerAsync(
+                "skill-runner-shared",
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await skillRunnerPort.Received(1).TriggerAsync(
+                "skill-runner-shared",
+                "run_agent",
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShareAgent_IsOwnerOnly_AndDispatchesCatalogShare()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", "scope-1", "alice");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                OwnerScope = owner,
+            }));
+
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(owner));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"share_agent","agent_id":"skill-runner-1","allow_trigger":true}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("shared_with_registration_scope").GetString().Should().Be("scope-1");
+            doc.RootElement.GetProperty("allow_trigger").GetBoolean().Should().BeTrue();
+            await queryPort.Received(1).GetForCallerAsync(
+                "skill-runner-1",
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).ShareAsync(
+                "skill-runner-1",
+                Arg.Is<OwnerScope>(scope => scope.MatchesStrictly(owner)),
+                true,
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShareAgent_NyxIdNativeCaller_ReturnsChannelScopeErrorWithoutDispatch()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-A");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"share_agent","agent_id":"skill-runner-1","allow_trigger":true}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString()
+                .Should().Be("share_agent requires a channel registration scope");
+            await queryPort.DidNotReceive().GetForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.DidNotReceive().ShareAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShareAgent_ChannelCallerWithBlankRegistrationScope_ReturnsChannelScopeErrorWithoutDispatch()
+    {
+        var caller = OwnerScope.ForChannel("user-A", "lark", " ", "alice");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"share_agent","agent_id":"skill-runner-1","allow_trigger":true}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("error").GetString()
+                .Should().Be("share_agent requires a channel registration scope");
+            await queryPort.DidNotReceive().GetForCallerAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.DidNotReceive().ShareAsync(
+                Arg.Any<string>(),
+                Arg.Any<OwnerScope>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UnshareAgent_IsOwnerOnly_AndDispatchesCatalogUnshare()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", "scope-1", "alice");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                OwnerScope = owner,
+            }));
+
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>());
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(owner));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"unshare_agent","agent_id":"skill-runner-1"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            await queryPort.Received(1).GetForCallerAsync(
+                "skill-runner-1",
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).UnshareAsync(
+                "skill-runner-1",
+                Arg.Is<OwnerScope>(scope => scope.MatchesStrictly(owner)),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_AgentStatus_JoinsPerIdCatalogAndExecutionAtToolBoundary()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetForCallerAsync("skill-runner-join", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+        queryPort.GetVisibleForCallerAsync("skill-runner-join", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-join",
                 AgentType = SkillRunnerDefaults.AgentType,
                 TemplateName = "summary",
+                OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
                 Status = string.Empty,
                 ErrorCount = 0,
                 CatalogAuthorityStateVersion = 7,
@@ -272,6 +714,12 @@ public sealed class AgentBuilderToolTests
                 Status = SkillRunnerDefaults.StatusError,
                 ErrorCount = 2,
                 LastError = "tool failed",
+                ScheduleMode = SkillRunnerScheduleMode.OneShot,
+                RunAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
+                RetiredAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 11, 10, 31, 0, TimeSpan.Zero)),
+                RetirementReason = SkillRunnerDefaults.OneShotRetirementReasonFailed,
             }));
 
         var services = new ServiceCollection();
@@ -302,10 +750,16 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("skill-runner-join");
             doc.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusError);
+            doc.RootElement.GetProperty("output_format").GetString().Should().Be("feishu_doc");
+            doc.RootElement.GetProperty("schedule_mode").GetString().Should().Be("one_shot");
+            doc.RootElement.GetProperty("run_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
+            doc.RootElement.GetProperty("retired_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
+            doc.RootElement.GetProperty("retirement_reason").GetString()
+                .Should().Be(SkillRunnerDefaults.OneShotRetirementReasonFailed);
             doc.RootElement.GetProperty("error_count").GetInt32().Should().Be(2);
             doc.RootElement.GetProperty("last_error").GetString().Should().Be("tool failed");
 
-            await queryPort.Received(1).GetForCallerAsync(
+            await queryPort.Received(1).GetVisibleForCallerAsync(
                 "skill-runner-join",
                 Arg.Any<OwnerScope>(),
                 Arg.Any<CancellationToken>());
@@ -323,7 +777,7 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_ListAgents_JoinsCatalogAndExecutionAtToolBoundary()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
             [
                 new UserAgentCatalogReadModelEntry
@@ -331,6 +785,7 @@ public sealed class AgentBuilderToolTests
                     AgentId = "skill-runner-list",
                     AgentType = SkillRunnerDefaults.AgentType,
                     TemplateName = "summary",
+                    OutputFormat = SkillRunnerOutputFormat.Text,
                 },
             ]));
 
@@ -348,6 +803,9 @@ public sealed class AgentBuilderToolTests
                         LastEventId = "runner-4",
                         Status = SkillRunnerDefaults.StatusRunning,
                         ErrorCount = 1,
+                        ScheduleMode = SkillRunnerScheduleMode.OneShot,
+                        RunAtUtc = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                            new DateTimeOffset(2026, 6, 11, 10, 30, 0, TimeSpan.Zero)),
                     },
                 }));
 
@@ -375,9 +833,12 @@ public sealed class AgentBuilderToolTests
             var agent = doc.RootElement.GetProperty("agents").EnumerateArray().Should().ContainSingle().Subject;
             agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list");
             agent.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusRunning);
+            agent.GetProperty("output_format").GetString().Should().Be("text");
+            agent.GetProperty("schedule_mode").GetString().Should().Be("one_shot");
+            agent.GetProperty("run_at_utc").ValueKind.Should().Be(JsonValueKind.Object);
             agent.GetProperty("error_count").GetInt32().Should().Be(1);
 
-            await queryPort.Received(1).QueryByCallerAsync(
+            await queryPort.Received(1).QueryVisibleByCallerAsync(
                 Arg.Any<OwnerScope>(),
                 Arg.Any<CancellationToken>());
             await executionQueryPort.Received(1).QueryByAgentIdsAsync(
@@ -391,10 +852,81 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ListAgents_ReturnsCatalogOnlyRows_WhenExecutionProjectionHasSchemaDrift()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(
+            [
+                new UserAgentCatalogReadModelEntry
+                {
+                    AgentId = "skill-runner-list-drift",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "summary",
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "Asia/Shanghai",
+                    OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                },
+            ]));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list-drift")),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>>(
+                CreateExecutionProjectionDrift()));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("total").GetInt32().Should().Be(1);
+            var agent = doc.RootElement.GetProperty("agents").EnumerateArray().Should().ContainSingle().Subject;
+            agent.GetProperty("agent_id").GetString().Should().Be("skill-runner-list-drift");
+            agent.GetProperty("template").GetString().Should().Be("summary");
+            agent.GetProperty("schedule_cron").GetString().Should().Be("0 9 * * *");
+            agent.GetProperty("schedule_timezone").GetString().Should().Be("Asia/Shanghai");
+            agent.GetProperty("status").GetString().Should().BeEmpty();
+            agent.GetProperty("output_format").GetString().Should().Be("feishu_doc");
+            agent.GetProperty("next_scheduled_run").ValueKind.Should().Be(JsonValueKind.Null);
+            doc.RootElement.TryGetProperty("error", out _).Should().BeFalse();
+
+            await queryPort.Received(1).QueryVisibleByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.Received(1).QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("skill-runner-list-drift")),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RunAgent_DispatchesEvenWhenPresentationStatusIsDisabled()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
-        queryPort.GetForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+        queryPort.GetTriggerableForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
             {
                 AgentId = "skill-runner-1",
@@ -652,6 +1184,14 @@ public sealed class AgentBuilderToolTests
                 TemplateName = "summary",
                 Status = string.Empty,
             }));
+        queryPort.GetTriggerableForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                Status = string.Empty,
+            }));
 
         var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
@@ -700,6 +1240,10 @@ public sealed class AgentBuilderToolTests
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        var scheduledAgentMapper = new ScheduledAgentCreateRequestMapper();
+        var scheduledAgentApiKeyIssuer = new ScheduledAgentApiKeyIssuer(
+            nyxClientFactory,
+            new ScheduledAgentCreatorOptions());
 
         var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
         var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
@@ -707,12 +1251,14 @@ public sealed class AgentBuilderToolTests
         var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
         var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
         var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
-        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
-        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver);
-        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver);
-        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceNyxFactory = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, null!, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, null!, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, null!, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
+        var missingSourceMapper = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, null!, scheduledAgentApiKeyIssuer);
+        var missingSourceIssuer = () => new AgentBuilderToolSource(queryPort, executionQueryPort, nyxClientFactory, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
@@ -726,6 +1272,8 @@ public sealed class AgentBuilderToolTests
         missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
         missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingSourceCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
+        missingSourceMapper.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentMapper");
+        missingSourceIssuer.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentApiKeyIssuer");
     }
 
     [Fact]
@@ -775,7 +1323,7 @@ public sealed class AgentBuilderToolTests
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
-        queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
         var source = new AgentBuilderToolSource(
@@ -784,11 +1332,17 @@ public sealed class AgentBuilderToolTests
             nyxClientFactory,
             skillRunnerPort,
             catalogCommandPort,
-            callerScopeResolver);
+            callerScopeResolver,
+            new ScheduledAgentCreateRequestMapper(),
+            new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions()));
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().ContainSingle();
-        tools[0].Name.Should().Be("agent_builder");
+        tools.Select(tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
+        var managementTool = tools.Single(tool => tool.Name == "agent_builder");
+        var creatorTool = tools.Single(tool => tool.Name == "scheduled_agent_creator");
+        creatorTool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        creatorTool.IsReadOnly.Should().BeFalse();
+        creatorTool.IsDestructive.Should().BeFalse();
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -796,11 +1350,11 @@ public sealed class AgentBuilderToolTests
         });
         try
         {
-            var result = await tools[0].ExecuteAsync("""{"action":"list_agents"}""");
+            var result = await managementTool.ExecuteAsync("""{"action":"list_agents"}""");
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("total").GetInt32().Should().Be(0);
 
-            await queryPort.Received(1).QueryByCallerAsync(
+            await queryPort.Received(1).QueryVisibleByCallerAsync(
                 Arg.Any<OwnerScope>(),
                 Arg.Any<CancellationToken>());
         }
@@ -808,6 +1362,46 @@ public sealed class AgentBuilderToolTests
         {
             AgentToolRequestContext.Current = null;
         }
+    }
+
+    [Fact]
+    public async Task AddLarkAgentAuthoring_WhenCalledTwice_ShouldResolveSingleToolSource_AndDiscoverRegisteredTools()
+    {
+        var handler = new RoutingJsonHandler();
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
+        services.AddSingleton(nyxClient);
+        services.AddSingleton(Substitute.For<IUserAgentDeliveryTargetReader>());
+        services.AddSingleton<LarkMessageComposer>();
+        services.TryAddSingleton<ILogger<FeishuCardNotificationPort>>(NullLogger<FeishuCardNotificationPort>.Instance);
+        services.AddSingleton(callerScopeResolver);
+
+        services.AddLarkAgentAuthoring();
+        services.AddLarkAgentAuthoring();
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().Should().ContainSingle().Subject;
+        source.Should().BeOfType<AgentBuilderToolSource>();
+        provider.GetService<IHumanInteractionPort>().Should().BeNull();
+        provider.GetRequiredService<IChannelInteractionNotificationPort>().Should().BeOfType<FeishuCardNotificationPort>();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
+        tools.Single(tool => tool.Name == "scheduled_agent_creator").ApprovalMode
+            .Should().Be(ToolApprovalMode.NeverRequire);
     }
 
     private static AgentBuilderTool CreateTool(IServiceCollection services)
@@ -822,6 +1416,13 @@ public sealed class AgentBuilderToolTests
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetService<ILogger<AgentBuilderTool>>());
     }
+
+    private static ProjectionIndexSchemaDriftException CreateExecutionProjectionDrift() =>
+        new(
+            "Elasticsearch",
+            "aevatar-mainnet-skill-runner-execution",
+            "aevatar-mainnet-skill-runner-execution-vold",
+            "aevatar-mainnet-skill-runner-execution-vnew");
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
     {

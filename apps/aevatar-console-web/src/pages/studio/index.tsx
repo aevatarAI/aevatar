@@ -96,11 +96,13 @@ import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import {
-  buildRuntimeGAgentAssemblyQualifiedName,
-  matchesRuntimeGAgentTypeDescriptor,
+  buildRuntimeGAgentKindValue,
+  matchesRuntimeGAgentKindDescriptor,
 } from '@/shared/models/runtime/gagents';
 import {
   getScopeServiceCurrentRevision,
+  toScopeServiceRunAuditSnapshot,
+  toScopeServiceRunSummary,
   type ScopeServiceRunAuditSnapshot,
   type ScopeServiceRunAuditStep,
   type ScopeServiceRunSummary,
@@ -116,9 +118,11 @@ import type {
   StudioMemberSummary,
   StudioTeamSummary,
   StudioValidationFinding,
+  StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowDirectory,
+  StudioWorkflowSaveResult,
 } from '@/shared/studio/models';
 import {
   formatStudioMemberLifecycleStage,
@@ -133,6 +137,11 @@ import {
   type StudioObserveSessionSeed,
 } from '@/shared/studio/observeSession';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
+import {
+  AevatarBackButton,
+  AevatarBreadcrumb,
+  type AevatarBreadcrumbItem,
+} from '@/shared/ui/aevatarPageShells';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_INTERACTIVE_CHIP_CLASS,
@@ -198,7 +207,7 @@ type BuildSurface = 'editor' | 'scripts' | 'gagent';
 type StudioSurface = 'build' | 'bind' | 'invoke' | 'observe';
 
 type DraftSaveNotice = {
-  readonly type: 'success' | 'error';
+  readonly type: 'success' | 'info' | 'error';
   readonly message: string;
 };
 
@@ -236,6 +245,9 @@ type StudioBindingRunOutcome =
     };
 
 const MEMBER_BINDING_RUN_POLL_ATTEMPTS = 8;
+const WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS = 10;
+const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
+const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
 
 // Refactor (iter160/cluster-1200): member binding run waiting uses shared
 //   probeAsyncOperation normalized states instead of duplicated page-local
@@ -659,10 +671,76 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function normalizeWorkflowSaveResult(
+  result: StudioWorkflowSaveResult | StudioWorkflowFile,
+): StudioWorkflowSaveResult {
+  if ('kind' in result) {
+    return result;
+  }
+
+  return {
+    kind: 'materialized',
+    workflow: result,
+  };
+}
+
+function describeWorkflowDraftAcceptedReceipt(
+  receipt: StudioWorkflowDraftCreateAcceptedReceipt,
+): string {
+  return (
+    trimOptional(receipt.readiness.message) ||
+    'Workflow draft was accepted. Studio is waiting for the scoped workspace projection.'
+  );
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, ms);
   });
+}
+
+function waitForWorkflowDraftMaterializationTick(): Promise<void> {
+  const testEnvironment =
+    typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
+  return delay(testEnvironment ? 0 : WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS);
+}
+
+async function waitForWorkflowDraftMaterialized(input: {
+  readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
+  readonly scopeId: string;
+}): Promise<StudioWorkflowFile> {
+  let lastNotFound: unknown = null;
+
+  for (
+    let attempt = 0;
+    attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      return await studioApi.getWorkflowDraftFile(
+        input.receipt.workflowId,
+        input.scopeId,
+      );
+    } catch (error) {
+      if (!isStudioApiStatus(error, 404)) {
+        throw error;
+      }
+
+      lastNotFound = error;
+      if (attempt < WORKFLOW_DRAFT_MATERIALIZATION_ATTEMPTS - 1) {
+        await waitForWorkflowDraftMaterializationTick();
+      }
+    }
+  }
+
+  throw lastNotFound instanceof Error
+    ? new Error(
+        'Workflow draft was accepted but is not readable yet. Retry saving in a moment.',
+        { cause: lastNotFound },
+      )
+    : new Error(
+        'Workflow draft was accepted but is not readable yet. Retry saving in a moment.',
+      );
 }
 
 function normalizeComparableText(value: string | null | undefined): string {
@@ -758,6 +836,69 @@ function resolveWorkflowIdFromRouteValue(
   }
 
   return options?.allowDirectIdFallback ? normalizedRouteValue : '';
+}
+
+function resolveWorkflowIdFromMemberWorkflowReference(
+  input: {
+    readonly workflowId?: string | null;
+    readonly memberId?: string | null;
+    readonly displayName?: string | null;
+  },
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  workflowFile?: Pick<StudioWorkflowFile, 'workflowId' | 'name' | 'fileName'> | null,
+): string {
+  const typedWorkflowId = trimOptional(input.workflowId);
+  const memberId = trimOptional(input.memberId);
+  if (typedWorkflowId) {
+    const resolvedWorkflowId = resolveWorkflowIdFromRouteValue(typedWorkflowId, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedWorkflowId) {
+      return resolvedWorkflowId;
+    }
+
+    return !memberId ||
+      normalizeComparableText(typedWorkflowId) === normalizeComparableText(memberId)
+      ? resolveWorkflowIdFromRouteValue(typedWorkflowId, workflows, {
+          allowDirectIdFallback: true,
+          workflowFile,
+        })
+      : '';
+  }
+
+  if (memberId) {
+    const resolvedByMemberId = resolveWorkflowIdFromRouteValue(memberId, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedByMemberId) {
+      return resolvedByMemberId;
+    }
+  }
+
+  const displayName = trimOptional(input.displayName);
+  if (displayName) {
+    const resolvedByDisplayName = resolveWorkflowIdFromRouteValue(displayName, workflows, {
+      allowDirectIdFallback: false,
+      workflowFile,
+    });
+    if (resolvedByDisplayName) {
+      return resolvedByDisplayName;
+    }
+  }
+
+  return memberId
+    ? resolveWorkflowIdFromRouteValue(memberId, workflows, {
+        allowDirectIdFallback: true,
+        workflowFile,
+      })
+    : '';
 }
 
 function describeSavedWorkflowLocation(
@@ -1549,40 +1690,6 @@ function resolveLifecycleScriptId(
   return '';
 }
 
-function resolveLifecycleWorkflowId(
-  memberKey: string,
-  publishedMembers: readonly PublishedStudioMemberRecord[],
-  studioScopeMembers: readonly StudioMemberSummary[],
-): string {
-  const workflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(memberKey);
-  if (workflowRouteValue) {
-    return workflowRouteValue;
-  }
-
-  const publishedWorkflowId = trimOptional(
-    findPublishedStudioMemberByMemberKey(memberKey, publishedMembers)?.matchedWorkflow
-      ?.workflowId,
-  );
-  if (publishedWorkflowId) {
-    return publishedWorkflowId;
-  }
-
-  const memberSummary = resolveStudioMemberSummaryFromMemberKey(
-    memberKey,
-    publishedMembers,
-    studioScopeMembers,
-  );
-  if (
-    normalizeStudioMemberBindingImplementationKind(
-      memberSummary?.implementationKind,
-    ) === 'workflow'
-  ) {
-    return trimOptional(memberSummary?.displayName);
-  }
-
-  return '';
-}
-
 function resolveWorkflowIdForMemberSummary(
   memberSummary: StudioMemberSummary | null | undefined,
   workflows: ReadonlyArray<{
@@ -1601,15 +1708,30 @@ function resolveWorkflowIdForMemberSummary(
     return '';
   }
 
-  const implementationRef = trimOptional(memberSummary?.displayName);
-  if (!implementationRef) {
-    return '';
-  }
+  return resolveWorkflowIdFromMemberWorkflowReference({
+    memberId: memberSummary?.memberId,
+    displayName: memberSummary?.displayName,
+  }, workflows, workflowFile);
+}
 
-  return resolveWorkflowIdFromRouteValue(implementationRef, workflows, {
-    allowDirectIdFallback: true,
-    workflowFile,
-  });
+function resolveWorkflowIdForMemberDetail(
+  input: {
+    readonly implementationRefWorkflowId?: string | null;
+    readonly memberSummary?: StudioMemberSummary | null;
+  },
+  workflows: ReadonlyArray<{
+    readonly workflowId: string;
+    readonly name: string;
+    readonly fileName: string;
+    readonly description?: string;
+  }>,
+  workflowFile?: Pick<StudioWorkflowFile, 'workflowId' | 'name' | 'fileName'> | null,
+): string {
+  return resolveWorkflowIdFromMemberWorkflowReference({
+    workflowId: input.implementationRefWorkflowId,
+    memberId: input.memberSummary?.memberId,
+    displayName: input.memberSummary?.displayName,
+  }, workflows, workflowFile);
 }
 
 function resolveLifecycleBuildSurface(input: {
@@ -2835,7 +2957,7 @@ const StudioPage: React.FC = () => {
         ? loadStoredScriptDraft(initialRouteState.scopeId || undefined, initialScriptId)
         : null;
     });
-  const [selectedGAgentTypeName, setSelectedGAgentTypeName] = useState('');
+  const [selectedAgentKind, setSelectedAgentKind] = useState('');
   const [gAgentBuildState, setGAgentBuildState] =
     useState<StudioGAgentBuildState | null>(null);
   const [selectedExecutionId, setSelectedExecutionId] = useState(
@@ -3173,12 +3295,13 @@ const StudioPage: React.FC = () => {
     queryKey: ['studio-workflow', workflowWorkspaceContextKey, selectedWorkflowId],
     enabled: studioHostReady && Boolean(selectedWorkflowId),
     queryFn: () => studioApi.getWorkflow(selectedWorkflowId, resolvedStudioScopeId),
+    staleTime: SAVED_WORKFLOW_QUERY_STALE_MS,
   });
-  const gAgentTypesQuery = useQuery({
-    queryKey: ['studio-runtime-gagent-types'],
+  const gAgentKindsQuery = useQuery({
+    queryKey: ['studio-runtime-gagent-kinds'],
     enabled: studioHostReady,
     retry: false,
-    queryFn: () => runtimeGAgentApi.listTypes(),
+    queryFn: () => runtimeGAgentApi.listKinds(),
   });
   const runtimePrimitivesQuery = useQuery({
     queryKey: ['studio-runtime-primitives'],
@@ -3196,28 +3319,28 @@ const StudioPage: React.FC = () => {
   );
   useEffect(() => {
     if (
-      (gAgentTypesQuery.data ?? []).some((descriptor) =>
-        matchesRuntimeGAgentTypeDescriptor(selectedGAgentTypeName, descriptor),
+      (gAgentKindsQuery.data ?? []).some((descriptor) =>
+        matchesRuntimeGAgentKindDescriptor(selectedAgentKind, descriptor),
       )
     ) {
       return;
     }
 
-    const fallbackTypeName =
-      (gAgentTypesQuery.data?.[0]
-        ? buildRuntimeGAgentAssemblyQualifiedName(gAgentTypesQuery.data[0])
+    const fallbackAgentKind =
+      (gAgentKindsQuery.data?.[0]
+        ? buildRuntimeGAgentKindValue(gAgentKindsQuery.data[0])
         : '');
 
-    if (!fallbackTypeName) {
+    if (!fallbackAgentKind) {
       return;
     }
 
-    setSelectedGAgentTypeName((current) =>
-      trimOptional(current) === fallbackTypeName ? current : fallbackTypeName,
+    setSelectedAgentKind((current) =>
+      trimOptional(current) === fallbackAgentKind ? current : fallbackAgentKind,
     );
   }, [
-    gAgentTypesQuery.data,
-    selectedGAgentTypeName,
+    gAgentKindsQuery.data,
+    selectedAgentKind,
   ]);
   useEffect(() => {
     const serverMembers = studioMembersQuery.data?.members ?? [];
@@ -4648,10 +4771,10 @@ const StudioPage: React.FC = () => {
     }
 
     if (activeBuildMode === 'gagent') {
-      const actorTypeName =
-        trimOptional(gAgentBuildState?.actorTypeName) ||
-        trimOptional(selectedGAgentTypeName);
-      if (!actorTypeName) {
+      const agentKind =
+        trimOptional(gAgentBuildState?.agentKind) ||
+        trimOptional(selectedAgentKind);
+      if (!agentKind) {
         return null;
       }
 
@@ -4673,7 +4796,7 @@ const StudioPage: React.FC = () => {
         description:
           t("pages.studio.index.bind.the.selected.typed.gagent.2", "Bind the selected typed GAgent as this member service, then Studio can reveal the invoke URL and endpoint contract."),
         actionLabel: 'Bind GAgent member',
-        actorTypeName,
+        agentKind,
         endpoints: [
           {
             endpointId: 'run',
@@ -4700,7 +4823,7 @@ const StudioPage: React.FC = () => {
     routeSelectedBackendMemberId,
     scriptBuildState,
     selectedScriptId,
-    selectedGAgentTypeName,
+    selectedAgentKind,
     availableScopeScripts,
     isBindSurface,
     lastAppliedScriptBuildState,
@@ -4726,7 +4849,7 @@ const StudioPage: React.FC = () => {
     }
 
     if (buildPendingBindCandidate.kind === 'gagent') {
-      const actorTypeName = trimOptional(buildPendingBindCandidate.actorTypeName);
+      const agentKind = trimOptional(buildPendingBindCandidate.agentKind);
       const routeMemberId = trimOptional(routeSelectedBackendMemberId);
       if (routeMemberId) {
         const routeMember = studioScopeMembers.find(
@@ -4747,7 +4870,7 @@ const StudioPage: React.FC = () => {
           normalizeStudioMemberBindingImplementationKind(
             memberSummary?.implementationKind || revision?.implementationKind,
           ) === 'gagent' &&
-          (trimOptional(revision?.staticActorTypeName) === actorTypeName ||
+          (trimOptional(revision?.staticAgentKind) === agentKind ||
             normalizeComparableText(memberSummary?.displayName) ===
               normalizeComparableText(buildPendingBindCandidate.displayName)),
       )?.memberSummary;
@@ -4909,10 +5032,18 @@ const StudioPage: React.FC = () => {
     let memberBindingRunOutcome: StudioBindingRunOutcome | null = null;
     if (buildPendingBindCandidate.kind === 'workflow') {
       if (resolvedBuildMemberId) {
+        const workflowIdForBinding = trimOptional(
+          selectedWorkflowId || activeWorkflowFile?.workflowId,
+        );
+        if (!workflowIdForBinding) {
+          throw new Error('Resolve a stable workflow draft id before binding this member.');
+        }
+
         const receipt = await studioApi.bindMemberWorkflow({
           scopeId: resolvedStudioScopeId,
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
+          workflowId: workflowIdForBinding,
           workflowYamls: await buildWorkflowYamlBundle(),
         });
         await queryClient.invalidateQueries({
@@ -4996,7 +5127,7 @@ const StudioPage: React.FC = () => {
           scopeId: resolvedStudioScopeId,
           memberId: resolvedBuildMemberId,
           displayName: buildPendingBindCandidate.displayName,
-          actorTypeName: buildPendingBindCandidate.actorTypeName,
+          agentKind: buildPendingBindCandidate.agentKind,
           endpoints: buildPendingBindCandidate.endpoints,
         });
         await queryClient.invalidateQueries({
@@ -5028,7 +5159,7 @@ const StudioPage: React.FC = () => {
         result = await studioApi.bindScopeGAgent({
           scopeId: resolvedStudioScopeId,
           displayName: buildPendingBindCandidate.displayName,
-          actorTypeName: buildPendingBindCandidate.actorTypeName,
+          agentKind: buildPendingBindCandidate.agentKind,
           endpoints: buildPendingBindCandidate.endpoints,
         });
       }
@@ -5037,23 +5168,30 @@ const StudioPage: React.FC = () => {
       queryKey: studioMembersQueryKey,
     });
     const servicesResult = await scopeServicesQuery.refetch();
+    const observedMemberBindingResult =
+      memberBindingRunOutcome?.kind === 'succeeded'
+        ? memberBindingRunOutcome.run.result
+        : null;
     const optimisticBoundServiceId =
+      trimOptional(observedMemberBindingResult?.publishedServiceId) ||
       trimOptional(buildPendingMemberSummary?.publishedServiceId) ||
       trimOptional(buildPendingBindCandidate.displayName) ||
       trimOptional(result?.displayName) ||
       trimOptional(result?.targetName) ||
       trimOptional(result?.workflowName);
     const boundServiceId =
+      trimOptional(observedMemberBindingResult?.publishedServiceId) ||
       trimOptional(result?.serviceId) ||
       resolveBoundServiceIdFromCatalog({
         services: servicesResult.data ?? [],
         candidates: [
+          observedMemberBindingResult?.publishedServiceId,
           buildPendingBindCandidate.displayName,
           buildPendingBindCandidate.kind === 'script'
             ? buildPendingBindCandidate.scriptId
             : '',
           buildPendingBindCandidate.kind === 'gagent'
-            ? buildPendingBindCandidate.actorTypeName
+            ? buildPendingBindCandidate.agentKind
             : '',
           result?.displayName,
           result?.targetName,
@@ -5135,6 +5273,7 @@ const StudioPage: React.FC = () => {
           trimOptional(result?.displayName) ||
           trimOptional(buildPendingBindCandidate.displayName),
         revisionId:
+          trimOptional(observedMemberBindingResult?.revisionId) ||
           trimOptional(result?.revisionId) ||
           trimOptional(buildPendingMemberSummary?.lastBoundRevisionId),
         scopeId: resolvedStudioScopeId,
@@ -5399,6 +5538,40 @@ const StudioPage: React.FC = () => {
       workflowWorkspaceContextKey,
     ],
   );
+
+  const waitForAcceptedWorkflowDraft = useCallback(
+    async (
+      receipt: StudioWorkflowDraftCreateAcceptedReceipt,
+    ): Promise<StudioWorkflowFile> => {
+      if (!resolvedStudioScopeId) {
+        throw new Error(
+          'Workflow draft was accepted without a workspace scope.',
+        );
+      }
+
+      const noticeMessage = describeWorkflowDraftAcceptedReceipt(receipt);
+      setSaveNotice({
+        type: 'info',
+        message: noticeMessage,
+      });
+      void message.info(noticeMessage);
+
+      const materializedWorkflow = await waitForWorkflowDraftMaterialized({
+        receipt,
+        scopeId: resolvedStudioScopeId,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-workspace-workflows', workflowWorkspaceContextKey],
+      });
+      return materializedWorkflow;
+    },
+    [
+      queryClient,
+      resolvedStudioScopeId,
+      workflowWorkspaceContextKey,
+    ],
+  );
+
   const confirmScriptsStudioLeave = useCallback(async () => {
     if (!isBuildScriptsSurface) {
       return true;
@@ -5515,16 +5688,22 @@ const StudioPage: React.FC = () => {
         return;
       }
 
-      const savedWorkflow = await studioApi.saveWorkflow({
-        workflowId: activeWorkflowFile?.workflowId || undefined,
-        draftExists: activeWorkflowFile?.draftExists,
-        scopeId: resolvedStudioScopeId || undefined,
-        directoryId,
-        workflowName,
-        fileName: draftFileName,
-        yaml: savePayload.yaml,
-        layout: savePayload.layout,
-      });
+      const saveResult = normalizeWorkflowSaveResult(
+        await studioApi.saveWorkflow({
+          workflowId: activeWorkflowFile?.workflowId || undefined,
+          draftExists: activeWorkflowFile?.draftExists,
+          scopeId: resolvedStudioScopeId || undefined,
+          directoryId,
+          workflowName,
+          fileName: draftFileName,
+          yaml: savePayload.yaml,
+          layout: savePayload.layout,
+        }),
+      );
+      const savedWorkflow =
+        saveResult.kind === 'accepted'
+          ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+          : saveResult.workflow;
 
       await applySavedWorkflowSelection(savedWorkflow, {
         document: savePayload.document,
@@ -5705,7 +5884,7 @@ const StudioPage: React.FC = () => {
           setInventoryBusyKey('create');
           setInventoryBusyAction('create');
           try {
-            createdScriptMember = await studioApi.createMember({
+            createdScriptMember = await studioApi.createMemberWithId({
               scopeId: resolvedStudioScopeId,
               memberId: scriptId,
               displayName: scriptDisplayName,
@@ -5779,7 +5958,7 @@ const StudioPage: React.FC = () => {
         void message.success(
           createdScriptMember
             ? t("pages.studio.index.created.script.member.opened.draft", "Created Script member {member} and opened its draft.", { member: createdScriptMember.displayName })
-            : t("pages.studio.index.created.script.draft", "Created Script draft {scriptId}.", { scriptId }),
+            : t("pages.studio.index.created.script.draft", "Created Script draft."),
         );
         return;
       }
@@ -5916,14 +6095,20 @@ const StudioPage: React.FC = () => {
     setInventoryBusyAction('create');
 
     try {
-      const savedWorkflow = await studioApi.saveWorkflow({
-        scopeId: resolvedStudioScopeId || undefined,
-        directoryId,
-        workflowName,
-        fileName: buildWorkflowFileName(workflowName),
-        yaml: buildBlankDraftYaml(workflowName),
-        layout: buildStudioWorkflowLayout(workflowName, []),
-      });
+      const saveResult = normalizeWorkflowSaveResult(
+        await studioApi.saveWorkflow({
+          scopeId: resolvedStudioScopeId || undefined,
+          directoryId,
+          workflowName,
+          fileName: buildWorkflowFileName(workflowName),
+          yaml: buildBlankDraftYaml(workflowName),
+          layout: buildStudioWorkflowLayout(workflowName, []),
+        }),
+      );
+      const savedWorkflow =
+        saveResult.kind === 'accepted'
+          ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+          : saveResult.workflow;
 
       await applySavedWorkflowSelection(savedWorkflow);
       setCreateMemberModalOpen(false);
@@ -6104,21 +6289,27 @@ const StudioPage: React.FC = () => {
           ),
           availableStepTypes,
         });
-        const savedWorkflow = await studioApi.saveWorkflow({
-          workflowId,
-          scopeId: resolvedStudioScopeId || undefined,
-          directoryId:
-            (isSelectedWorkflow ? draftDirectoryId : '') ||
-            fallbackWorkflowFile.directoryId ||
-            currentWorkflowSummary?.directoryId ||
-            inventoryDirectoryId,
-          workflowName: nextWorkflowName,
-          fileName: buildWorkflowFileName(nextWorkflowName),
-          yaml: serialized.yaml,
-          layout:
-            (isSelectedWorkflow ? draftWorkflowLayout : null) ||
-            fallbackWorkflowFile.layout,
-        });
+        const saveResult = normalizeWorkflowSaveResult(
+          await studioApi.saveWorkflow({
+            workflowId,
+            scopeId: resolvedStudioScopeId || undefined,
+            directoryId:
+              (isSelectedWorkflow ? draftDirectoryId : '') ||
+              fallbackWorkflowFile.directoryId ||
+              currentWorkflowSummary?.directoryId ||
+              inventoryDirectoryId,
+            workflowName: nextWorkflowName,
+            fileName: buildWorkflowFileName(nextWorkflowName),
+            yaml: serialized.yaml,
+            layout:
+              (isSelectedWorkflow ? draftWorkflowLayout : null) ||
+              fallbackWorkflowFile.layout,
+          }),
+        );
+        const savedWorkflow =
+          saveResult.kind === 'accepted'
+            ? await waitForAcceptedWorkflowDraft(saveResult.receipt)
+            : saveResult.workflow;
 
         if (isSelectedWorkflow) {
           setEditableWorkflowDocument(
@@ -7236,31 +7427,31 @@ const StudioPage: React.FC = () => {
     return trimOptional(matchedMember?.memberSummary?.memberId);
   }, [publishedScopeMembers, selectedScriptId]);
   const activeGAgentPublishedServiceId = useMemo(() => {
-    const actorTypeName = trimOptional(selectedGAgentTypeName);
-    if (!actorTypeName) {
+    const agentKind = trimOptional(selectedAgentKind);
+    if (!agentKind) {
       return '';
     }
 
     const matchedMember = publishedScopeMembers.find(
       ({ revision }) =>
         revision?.implementationKind === 'gagent' &&
-        trimOptional(revision.staticActorTypeName) === actorTypeName,
+        trimOptional(revision.staticAgentKind) === agentKind,
     );
     return trimOptional(matchedMember?.service.serviceId);
-  }, [publishedScopeMembers, selectedGAgentTypeName]);
+  }, [publishedScopeMembers, selectedAgentKind]);
   const activeGAgentPublishedMemberId = useMemo(() => {
-    const actorTypeName = trimOptional(selectedGAgentTypeName);
-    if (!actorTypeName) {
+    const agentKind = trimOptional(selectedAgentKind);
+    if (!agentKind) {
       return '';
     }
 
     const matchedMember = publishedScopeMembers.find(
       ({ revision }) =>
         revision?.implementationKind === 'gagent' &&
-        trimOptional(revision.staticActorTypeName) === actorTypeName,
+        trimOptional(revision.staticAgentKind) === agentKind,
     );
     return trimOptional(matchedMember?.memberSummary?.memberId);
-  }, [publishedScopeMembers, selectedGAgentTypeName]);
+  }, [publishedScopeMembers, selectedAgentKind]);
   const activeBuildPublishedServiceId =
     activeBuildMode === 'workflow'
       ? activeWorkflowPublishedServiceId
@@ -7663,24 +7854,22 @@ const StudioPage: React.FC = () => {
       trimOptional(workbenchPublishedServiceId);
     const memberPublishedServiceExists =
       Boolean(memberPublishedServiceId) &&
-      publishedScopeServices.some(
+      (publishedScopeServices.some(
         (service) => trimOptional(service.serviceId) === memberPublishedServiceId,
+      ) ||
+        trimOptional(recentlyBoundServiceId) === memberPublishedServiceId
       );
     if (memberPublishedServiceExists) {
       return;
     }
 
-    const workflowLookupValue =
-      trimOptional(memberImplementationRef?.workflowId) ||
-      trimOptional(memberSummary?.displayName) ||
-      trimOptional(memberSummary?.memberId);
-    const workflowId = resolveWorkflowIdFromRouteValue(
-      workflowLookupValue,
-      visibleWorkflowSummaries,
+    const workflowId = resolveWorkflowIdForMemberDetail(
       {
-        allowDirectIdFallback: true,
-        workflowFile: activeWorkflowFile,
+        implementationRefWorkflowId: memberImplementationRef?.workflowId,
+        memberSummary,
       },
+      visibleWorkflowSummaries,
+      activeWorkflowFile,
     );
     if (!workflowId) {
       return;
@@ -7724,6 +7913,7 @@ const StudioPage: React.FC = () => {
     history,
     isStudioLocation,
     publishedScopeServices,
+    recentlyBoundServiceId,
     resolvedStudioScopeId,
     routeBuildFocus.kind,
     routeSelectedBackendMemberKey,
@@ -7981,14 +8171,14 @@ const StudioPage: React.FC = () => {
         workbenchPublishedServiceRevision?.implementationKind,
     );
     if (implementationKind === 'gagent') {
-      const actorTypeName =
+      const agentKind =
         trimOptional(
-          workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
+          workbenchStudioMemberDetailQuery.data?.implementationRef?.agentKind,
         ) ||
-        trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName);
-      if (actorTypeName) {
-        setSelectedGAgentTypeName((current) =>
-          trimOptional(current) === actorTypeName ? current : actorTypeName,
+        trimOptional(workbenchPublishedServiceRevision?.staticAgentKind);
+      if (agentKind) {
+        setSelectedAgentKind((current) =>
+          trimOptional(current) === agentKind ? current : agentKind,
         );
       }
       if (buildSurface !== 'gagent') {
@@ -8033,11 +8223,11 @@ const StudioPage: React.FC = () => {
     studioSurface,
     workbenchPublishedServiceRevision?.implementationKind,
     workbenchPublishedServiceRevision?.scriptId,
-    workbenchPublishedServiceRevision?.staticActorTypeName,
+    workbenchPublishedServiceRevision?.staticAgentKind,
     workbenchStudioMember?.displayName,
     workbenchStudioMember?.implementationKind,
     workbenchStudioMember?.publishedServiceId,
-    workbenchStudioMemberDetailQuery.data?.implementationRef?.actorTypeName,
+    workbenchStudioMemberDetailQuery.data?.implementationRef?.agentKind,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.implementationKind,
     workbenchStudioMemberDetailQuery.data?.implementationRef?.scriptId,
   ]);
@@ -8092,19 +8282,28 @@ const StudioPage: React.FC = () => {
           setSelectedScriptId('');
           setTemplateWorkflow('');
         } else {
-          const lifecycleWorkflowId = resolveLifecycleWorkflowId(
+          const lifecycleMemberSummary = resolveStudioMemberSummaryFromMemberKey(
             lifecycleMemberKey,
             publishedScopeMembers,
             studioScopeMembers,
           );
-          const resolvedLifecycleWorkflowId = resolveWorkflowIdFromRouteValue(
-            lifecycleWorkflowId,
-            visibleWorkflowSummaries,
-            {
-              allowDirectIdFallback: true,
-              workflowFile: activeWorkflowFile,
-            },
+          const lifecycleWorkflowRouteValue = readWorkflowMemberRouteValueFromMemberKey(
+            lifecycleMemberKey,
           );
+          const resolvedLifecycleWorkflowId = lifecycleWorkflowRouteValue
+            ? resolveWorkflowIdFromRouteValue(
+                lifecycleWorkflowRouteValue,
+                visibleWorkflowSummaries,
+                {
+                  allowDirectIdFallback: true,
+                  workflowFile: activeWorkflowFile,
+                },
+              )
+            : resolveWorkflowIdForMemberSummary(
+                lifecycleMemberSummary,
+                visibleWorkflowSummaries,
+                activeWorkflowFile,
+              );
           if (resolvedLifecycleWorkflowId) {
             setSelectedWorkflowId(resolvedLifecycleWorkflowId);
             setSelectedScriptId('');
@@ -8239,7 +8438,13 @@ const StudioPage: React.FC = () => {
             {
               take: 12,
             },
-          ),
+          ).then((catalog) => ({
+            displayName: catalog.displayName,
+            runs: catalog.runs.map(toScopeServiceRunSummary),
+            scopeId: catalog.scopeId,
+            serviceId: catalog.publishedServiceId,
+            serviceKey: catalog.publishedServiceKey,
+          })),
     retry: false,
   });
   const observeServiceRuns = useMemo(() => {
@@ -8312,7 +8517,7 @@ const StudioPage: React.FC = () => {
               actorId:
                 trimOptional(selectedObserveBackendRunSummary?.actorId) || undefined,
             },
-          ),
+          ).then(toScopeServiceRunAuditSnapshot),
     retry: false,
   });
   useEffect(() => {
@@ -8491,7 +8696,7 @@ const StudioPage: React.FC = () => {
               trimOptional(routeSelectedBackendMemberId) ||
               trimOptional(workbenchPublishedServiceRevision?.workflowName) ||
               trimOptional(workbenchPublishedServiceRevision?.scriptId) ||
-              trimOptional(workbenchPublishedServiceRevision?.staticActorTypeName) ||
+              trimOptional(workbenchPublishedServiceRevision?.staticAgentKind) ||
               trimOptional(workbenchPublishedService?.displayName) ||
               trimOptional(workbenchPublishedService?.serviceId) ||
               trimOptional(routeSelectedBackendMemberId) ||
@@ -8513,7 +8718,7 @@ const StudioPage: React.FC = () => {
           ? 'Workflow implementation'
           : selectedScriptId
             ? 'Script implementation'
-            : trimOptional(selectedGAgentTypeName)
+            : trimOptional(selectedAgentKind)
               ? 'GAgent implementation'
               : 'Member implementation';
   const currentMemberDescription = !hasSelectedMemberFocus
@@ -8548,7 +8753,7 @@ const StudioPage: React.FC = () => {
                   trimOptional(workbenchPublishedServiceRevision?.revisionId) ||
                   trimOptional(workbenchPublishedService?.deploymentStatus) ||
               t("pages.studio.index.published.member", "Published member"),
-              }) || t("pages.studio.index.published.member.ready", "Published member ready for Bind, Invoke, or Observe.")
+              }) || t("pages.studio.index.published.member.ready", "Published member ready for callable runtime inspection.")
             : formatStudioAssetMeta({
                 primary: currentMemberImplementationLabel,
                 secondary:
@@ -8902,22 +9107,15 @@ const StudioPage: React.FC = () => {
   const selectedInventoryIsEntryMember =
     Boolean(selectedInventoryEntryMemberId) &&
     selectedInventoryEntryMemberId === studioTeamEntryMemberId;
-  const selectedInventoryEntryMemberSummary =
-    workbenchStudioMember?.memberId === selectedInventoryEntryMemberId
-      ? workbenchStudioMember
-      : workbenchStudioMemberSummary?.memberId === selectedInventoryEntryMemberId
-        ? workbenchStudioMemberSummary
-        : null;
-  const selectedInventoryEntryMemberReady =
-    normalizeStudioMemberLifecycleStage(
-      selectedInventoryEntryMemberSummary?.lifecycleStage,
-    ) === 'bind_ready' &&
-    Boolean(trimOptional(selectedInventoryEntryMemberSummary?.publishedServiceId));
+  const selectedInventoryEntryMemberResolved =
+    Boolean(selectedInventoryEntryMemberId) &&
+    trimOptional(workbenchStudioMemberSummary?.memberId) ===
+      selectedInventoryEntryMemberId;
   const canSetSelectedInventoryEntryMember = Boolean(
     resolvedStudioScopeId &&
       resolvedStudioTeamId &&
       selectedInventoryEntryMemberId &&
-      selectedInventoryEntryMemberReady,
+      selectedInventoryEntryMemberResolved,
   );
   const handleSetSelectedInventoryEntryMember = useCallback(async () => {
     if (
@@ -8965,7 +9163,6 @@ const StudioPage: React.FC = () => {
     resolvedStudioScopeId,
     resolvedStudioTeamId,
     selectedInventoryEntryMemberId,
-    selectedInventoryEntryMemberReady,
     selectedInventoryIsEntryMember,
     studioTeamSummaryQueryKey,
   ]);
@@ -9197,13 +9394,10 @@ const StudioPage: React.FC = () => {
             trimOptional(selectedMemberSummary?.memberId);
 
           if (memberImplementationKind === 'workflow') {
-            const workflowId = resolveWorkflowIdFromRouteValue(
-              memberImplementationName,
+            const workflowId = resolveWorkflowIdForMemberSummary(
+              selectedMemberSummary,
               visibleWorkflowSummaries,
-              {
-                allowDirectIdFallback: true,
-                workflowFile: activeWorkflowFile,
-              },
+              activeWorkflowFile,
             );
             if (workflowId) {
               const selectedWorkflowSummary = visibleWorkflowSummaries.find(
@@ -9423,12 +9617,12 @@ const StudioPage: React.FC = () => {
         if (selectedMemberImplementationKind === 'gagent') {
           const memberKey =
             selectedMemberId ? `member:${selectedMemberId}` : normalizedMemberKey;
-          const actorTypeName = trimOptional(
-            selectedPublishedMember?.revision?.staticActorTypeName,
+          const agentKind = trimOptional(
+            selectedPublishedMember?.revision?.staticAgentKind,
           );
-          if (actorTypeName) {
-            setSelectedGAgentTypeName((current) =>
-              trimOptional(current) === actorTypeName ? current : actorTypeName,
+          if (agentKind) {
+            setSelectedAgentKind((current) =>
+              trimOptional(current) === agentKind ? current : agentKind,
             );
           }
           setSelectedWorkflowId('');
@@ -9594,7 +9788,7 @@ const StudioPage: React.FC = () => {
                   primary:
                     trimOptional(serviceRevision.workflowName) ||
                     trimOptional(serviceRevision.scriptId) ||
-                    trimOptional(serviceRevision.staticActorTypeName),
+                    trimOptional(serviceRevision.staticAgentKind),
                   secondary:
                     trimOptional(serviceRevision.primaryActorId) ||
                     trimOptional(service.primaryActorId),
@@ -9810,7 +10004,7 @@ const StudioPage: React.FC = () => {
                 lastAppliedScriptBuildState.saveStatus === 'applied'))
           : false) ||
         workbenchPublishedService ||
-        (isBuildGAgentSurface && trimOptional(selectedGAgentTypeName))
+        (isBuildGAgentSurface && trimOptional(selectedAgentKind))
     );
   const selectedMemberCanInvoke =
     selectedMemberCanBind &&
@@ -10201,6 +10395,38 @@ const StudioPage: React.FC = () => {
           }))
     : buildTeamsHref();
   const studioReturnLabel = t("pages.studio.index.copy.18", "Back to Team");
+  const studioTeamLabel =
+    trimOptional(studioTeamSummaryQuery.data?.displayName) ||
+    (routeState.teamId ? t("pages.studio.index.teamBreadcrumb", "Team") : "");
+  const studioTeamsHref = resolvedStudioScopeId
+    ? buildTeamDetailHref({ scopeId: resolvedStudioScopeId })
+    : buildTeamsHref();
+  const studioBreadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: studioTeamsHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(studioTeamsHref);
+      },
+      title: t("pages.studio.index.teamsBreadcrumb", "Teams"),
+    },
+    ...(studioTeamLabel
+      ? [
+          {
+            href: studioReturnHref,
+            onClick: (event: React.MouseEvent<HTMLAnchorElement>) => {
+              event.preventDefault();
+              history.push(studioReturnHref);
+            },
+            title: studioTeamLabel,
+          } satisfies AevatarBreadcrumbItem,
+        ]
+      : []),
+    {
+      current: true,
+      title: t("pages.studio.index.studioBreadcrumb", "Studio"),
+    },
+  ];
   const currentStudioReturnTo =
     routeState.returnTo ||
     (typeof window === 'undefined'
@@ -10379,28 +10605,12 @@ const StudioPage: React.FC = () => {
         padding: '8px 16px 4px',
       }}
     >
-      <button
-        aria-label={studioReturnLabel}
-        className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-        type="button"
-        onClick={() => history.push(studioReturnHref)}
-        style={{
-          alignItems: 'center',
-          background: 'transparent',
-          border: 'none',
-          color: '#2452b5',
-          cursor: 'pointer',
-          display: 'inline-flex',
-          flexShrink: 0,
-          fontSize: 11,
-          fontWeight: 700,
-          gap: 4,
-          letterSpacing: 0,
-          padding: 0,
-        }}
-      >
-        ← {studioReturnLabel}
-      </button>
+      <AevatarBackButton
+        ariaLabel={studioReturnLabel}
+        onBack={() => history.push(studioReturnHref)}
+        title={studioReturnLabel}
+      />
+      <AevatarBreadcrumb items={studioBreadcrumbItems} />
       <div
         style={{
           alignItems: 'center',
@@ -10564,11 +10774,11 @@ const StudioPage: React.FC = () => {
     <StudioGAgentBuildPanel
       scopeId={resolvedStudioScopeId || undefined}
       currentMemberLabel={currentMemberLabel}
-      gAgentTypes={gAgentTypesQuery.data ?? []}
-      gAgentTypesLoading={gAgentTypesQuery.isLoading}
-      gAgentTypesError={gAgentTypesQuery.isError ? gAgentTypesQuery.error : null}
-      selectedGAgentTypeName={selectedGAgentTypeName}
-      onSelectGAgentTypeName={setSelectedGAgentTypeName}
+      gAgentKinds={gAgentKindsQuery.data ?? []}
+      gAgentKindsLoading={gAgentKindsQuery.isLoading}
+      gAgentKindsError={gAgentKindsQuery.isError ? gAgentKindsQuery.error : null}
+      selectedAgentKind={selectedAgentKind}
+      onSelectAgentKind={setSelectedAgentKind}
       onBuildStateChange={setGAgentBuildState}
       onContinueToBind={(nextBuildState) => {
         setGAgentBuildState(nextBuildState);
@@ -10701,6 +10911,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <PageContainer
+      breadcrumbRender={false}
       childrenContentStyle={{
         margin: 0,
         minHeight: '100%',

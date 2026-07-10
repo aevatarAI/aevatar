@@ -22,6 +22,7 @@ owner: eanzhao
 |---|---|---|
 | `POST /api/chat` | HTTP + SSE | 发起一次 run，并持续接收运行时 envelope 投影流 |
 | `GET /api/ws/chat` | WebSocket | 与 `/api/chat` 同能力，使用 WS 封装 |
+| `POST /api/workflow-webhooks/{routeKey}` | HTTP JSON | 认证外部 webhook，并按 Host binding 启动新 run |
 | `POST /api/workflows/resume` | HTTP JSON | 恢复 `human_input/human_approval` 挂起步骤 |
 | `POST /api/workflows/signal` | HTTP JSON | 向等待信号的步骤发送 signal |
 
@@ -35,6 +36,7 @@ owner: eanzhao
 - 这里的 `EventEnvelope` 是 runtime message envelope，不等于 Event Sourcing 的领域事件记录。
 - 命令主链路不额外经过 ingress queue/stream；stream 保留给 actor envelope 的投影、实时输出与读侧观察。
 - `command.ack` / `accepted=true` 对外只应被解释为“系统接受了该次交互并返回追踪句柄”，不应被解释为领域事件已提交或 ReadModel 已可见。
+- Webhook ingress 是 start-run 入口，不是 `wait_signal` continuation；外部 JSON 只在 Host/Adapter 边界解析，进入应用层后只保留 typed `WorkflowExternalIngressContext` 与 `WorkflowChatRunRequest`。
 
 ## 2. 输入模型（chat）
 
@@ -65,6 +67,130 @@ owner: eanzhao
 - 若同时传 `workflow` 与 `workflowYamls`，以 `workflowYamls` 为准。
 - `direct/auto/auto_review` 可显式传入，按注册表解析，不要求存在同名文件。
 
+### HTTP 请求 producer
+
+`POST /api/chat` 支持两种 Host/API 边界 producer；两者最终都会被规范化为同一个 `WorkflowChatRunRequest`，并进入同一条 CQRS command skeleton。Host 不直接编排 workflow run，也不因为表单上传创建第二套执行链路。
+
+#### JSON Chat Input
+
+`application/json` body 是 `ChatInput`：
+
+```json
+{
+  "prompt": "describe the release plan",
+  "workflow": "direct",
+  "sessionId": "session-1",
+  "scopeId": "scope-1"
+}
+```
+
+常用 source 字段：
+
+| Field | Meaning |
+|---|---|
+| `workflow` | 已注册 workflow 名称查找。 |
+| `workflowYamls` | inline YAML bundle，首项为入口。 |
+| `source.definitionActor.actorId` | 显式复用 workflow definition actor。 |
+| `source.inlineBundle` | typed inline YAML bundle。 |
+
+#### Multipart File Producer
+
+`multipart/form-data` 用于在 Host/API 边界上传文件并启动同一条 chat run 主链路。multipart shape、字段名、大小、媒体类型、raw `payload` JSON 与 pending file bytes 由 workflow infrastructure 的共享 `WorkflowMultipartFileInputParser` 处理；artifact ingress 与 typed `WorkflowFileRef` 注入只在确认目标语义后发生。
+
+必需字段：
+
+| Field | Requirement |
+|---|---|
+| `file` | 必须至少出现一个文件 part；字段名必须是 `file`，可通过 `WorkflowFormFileIngress:FileFieldName` 调整。同一字段可重复，按 form 顺序追加 input parts。 |
+
+可选字段：
+
+| Field | Meaning |
+|---|---|
+| `payload` | 可选 `ChatInput` JSON；不得包含 `inputParts[].inlineFile`、`inputParts[].fileRef` 或 `inputParts[].dataBase64`。 |
+| `prompt` | 覆盖或补充 payload 中的 prompt。 |
+| `workflow` | 覆盖或补充 payload 中的 workflow name。 |
+| `sessionId` | 覆盖或补充 payload 中的 session id。 |
+| `scopeId` | 覆盖或补充 payload 中的 workflow scope id，同时传给 file ingress owner scope。 |
+| `workflowYaml` | legacy single inline YAML field。 |
+| `workflowYamls` | inline YAML bundle；同名 form field 可重复。 |
+
+默认校验：
+
+| Option | Default |
+|---|---|
+| `WorkflowMultipartFileIngress:MaxFileBytes` | `10485760` |
+| `WorkflowMultipartFileIngress:AllowedMediaTypes` | `image/png`, `image/jpeg`, `image/webp`, `audio/mpeg`, `audio/wav`, `audio/wave`, `audio/x-wav`, `video/mp4`, `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/csv`, `text/plain`, `text/markdown`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` |
+
+成功路径：
+
+1. Host 先校验 caller credential；无效 bearer 不读取文件、不写 artifact store。
+2. Host 通过共享 parser 校验 multipart shape、字段名、大小、media type，并得到 raw payload JSON 与 pending files。
+3. `/api/chat` 兼容 facade 在 payload 校验通过后调用 `IWorkflowFileIngressPort.IngestAsync(...)`，`SourceKind=FormUpload`。
+4. 共享 parser 的 mapping helper 把返回的 typed `WorkflowFileRef` 构造成既有 `ChatInputContentPart.fileRef`；`image/*`、`audio/*`、`video/*` 分别映射为 `type=image/audio/video`，其余已允许的 document/text/spreadsheet 类型统一映射为 `type=file`。
+5. `ChatRunRequestNormalizer` 继续生成 `WorkflowChatRunRequest`，后续 CQRS command skeleton 不区分 JSON producer 与 form producer。
+
+actor-facing command、state、readmodel、stream frame 与日志都不得携带上传文件 bytes/base64；它们只携带 `WorkflowFileRef` 或由它派生出的 URI/metadata。
+
+常见 Host/API 边界错误：
+
+| Code | HTTP status | Meaning |
+|---|---:|---|
+| `INVALID_CALLER_CREDENTIAL` | 400 | Authorization bearer 格式无效。 |
+| `INVALID_CHAT_INPUT` | 400 | JSON body 或 multipart payload 不是合法 `ChatInput`。 |
+| `INVALID_FILE_INPUT` | 400 | 文件缺失、字段名不匹配、media type 不允许、大小超限或 payload 试图携带 actor-facing file payload。 |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | 请求不是 JSON，也不是 `multipart/form-data`。 |
+| `PROMPT_REQUIRED` | 400 | normalizer 无法从 prompt 或 input parts 得到有效输入。 |
+| `WORKFLOW_NOT_FOUND` | 404 | workflow 名称未命中。 |
+| `WORKFLOW_BINDING_MISMATCH` | 409 | 目标 actor workflow binding 与请求不一致。 |
+
+WebSocket 不接收 `multipart/form-data`。文件输入应先经 HTTP artifact ingress producer 生成 typed file ref，或由客户端使用已有 `fileRef` descriptor。
+
+Scope service stream 入口（如 `/api/scopes/{scopeId}/invoke/chat:stream`、member/team stream）也可以接收 `multipart/form-data`，但 Host 只做 Content-Type 分派、path `scopeId` 权威性、DTO 反序列化、service kind gating 和错误映射。共享 parser 先返回 raw payload JSON、`HasFiles` 与 pending files；只有 service invocation 目标解析并确认是 workflow service 后，Host 才使用 path `scopeId` 调用 `IWorkflowFileIngressPort.IngestAsync(...)` 并追加 typed file refs。static / scripting 目标收到 multipart 文件时 fail closed，且不得通过公开 JSON `inputParts`、headers 或 metadata 承载上传文件语义。
+
+### 多模态文件输入
+
+`inputParts` 支持两类文件载体：
+
+1. `inlineFile`：只用于小型 inline bytes。`inlineFile.sizeBytes` 是可选校验字段，服务端只用它和 decoded base64 长度比对；它不是客户端声明的 workflow 文件事实。Host API 会把 decoded bytes 写入 workflow file ingress store，并把 command input part 替换为 typed `WorkflowFileRef`，因此 actor-facing request 不长期携带 inline base64。
+2. `fileRef`：用于已经由外部 ingress、connected service 或后续 artifact store 产生的稳定文件引用。API 会归一化为 typed `WorkflowFileRef` 并写入 command envelope，同时保留旧的 `uri/name/mediaType` 镜像字段供现有消费者兼容。`type` 可为 `image`、`audio`、`video` 或 `file`；`file` 表示通用文件/文档引用，不再拆成多个 actor-facing 行为枚举。
+
+```json
+{
+  "inputParts": [
+    {
+      "type": "file",
+      "fileRef": {
+        "fileId": "file-1",
+        "artifactId": "artifact-1",
+        "sourceKind": "connected_service_resource",
+        "sourceMessageId": "om_1",
+        "sourceResourceKey": "file_key_1",
+        "fileName": "invoice.pdf",
+        "mediaType": "application/pdf",
+        "sha256": "redacted",
+        "createdAtUnixMs": 1710000000000,
+        "expiresAtUnixMs": 1710003600000
+      }
+    }
+  ]
+}
+```
+
+`fileRef` 约束：
+
+- `fileId` 或 `artifactId` 至少有一个必须存在；旧 `uri` 会被映射为 `artifactId`。
+- `sourceKind` 可省略；显式传入时必须是 `chat_input`、`form_upload`、`connected_service_resource`、`external_resource`、`generated` 或 `unspecified`。
+- 时间戳必须为非负 Unix milliseconds；同时存在 `createdAtUnixMs` 与 `expiresAtUnixMs` 时，过期时间不得早于创建时间。
+- public `fileRef` 不接受 `sizeBytes`。文件大小事实只能由 ingress/artifact descriptor 或 decoded bytes 产生，不能由客户端在 reusable file ref 上声明。
+- 当前文件链路支持 chat/API inline bytes 暂存、Lark resource 下载、command-level `fileRef` 替换、descriptor-only projection readmodel 物化、单一公开 `document_extract` 文档抽取，以及 workflow-only 文件提交。
+- `document_extract` 只能读取 workflow artifact store 中的文件引用；显式 arguments `fileRef` 优先，未传 `fileRef` 时只允许从当前 step 的 typed input file refs 中选择唯一一项，0 个或多个输入文件都 fail closed。`extraction_kind` 可省略或设为 `text`，此时返回既有 descriptor + bounded extracted text JSON shape；支持 UTF-8 text/json/markdown/csv、PDF text、DOCX text，以及 `image/png` / `image/jpeg` 图片文字抽取。图片路径默认最多读取 5 MiB，只通过已配置且支持 image input 的 `ILLMProvider.ChatStreamAsync` 聚合文本 delta；未配置或不支持时返回 `image_provider_unavailable`，图片超限返回 `image_too_large`，provider 异常返回 `image_extraction_failed`。`image/webp` 当前仍不属于 `document_extract` 支持类型。结果不返回 bytes/base64。
+- `document_extract` 也支持 `extraction_kind=schema_bound_json`，但仍是同一个公开 tool，不新增第二个 OCR/tool surface。该模式必须提供 `schema_contract`，形如 `{ "name": "invoice_summary", "description": "...", "schema": { ... } }`；v1 schema guard 只允许收敛 JSON Schema 子集（`type/properties/required/additionalProperties/items/enum/description/title/$schema`），并对 provider 结果做 fail-closed 校验。成功输出为 canonical JSON envelope：`extraction_kind=schema_bound_json`、`media_type`、sanitized `file` descriptor、`schema_name`、`schema_hash`、`structured_result`；不会回显 provider raw body、base64/data URI、prompt 或 extracted text。缺少 provider 返回 `schema_bound_provider_unavailable`，provider 异常返回 `schema_bound_extraction_failed`，provider JSON 无效或不符合 schema 返回 `schema_bound_validation_failed`。
+- `schema_bound_json` v1 的结构化结果仍只通过既有 `WorkflowToolCallCompletedEvent.result_json` / `StepCompletedEvent.output` string 通道传播，不修改 `workflow_execution_messages.proto`。一旦 schema-bound output 成为 actor state、domain event payload、readmodel/projection transport、SDK DTO/response、跨模块 command/query contract，或 workflow engine 开始解释 `structured_result` 内业务字段，必须新增 `.proto` typed contract，并把 string output 只视为兼容序列化。
+- `workflow_file_submit` 是 workflow-only、policy-bound 的 NyxID multipart upload primitive。tool 参数只表达候选上传请求：`file_ref`、`slug`、`path`、`method`、`file_field_name`、字符串 `form` 字段、`output.kind`、`output.selector` 与可收窄的 `max_file_bytes`；执行前必须由 `IWorkflowFileMultipartUploadPolicyResolver` 解析为 Host/provider-owned safety policy decision，无 policy、policy 不可用或被拒绝都 fail closed。Mainnet resolver 不维护静态 destination allowlist，也不决定用户能上传到哪个 NyxID service；它只限制通用安全上限（当前允许 `POST/PUT/PATCH` 这类上传/替换/局部更新方法，并使用 Mainnet 文件大小上限，用户 `max_file_bytes` 只能进一步收窄）。Workflow runtime 继续负责候选 destination 的通用校验：相对 `path`、非空 `slug/file_field_name`、安全 `output.selector`、禁止 `target/headers/body/raw_body/bytes/base64/data_uri` 等；resolved policy 中的 `slug/path/file_field_name/form/output.kind/output.selector` 从 candidate 透传，不包含 destination-level media type allowlist。Workflow runtime 只依赖 `IWorkflowFileArtifactReadPort`、`IWorkflowFileMultipartUploadPolicyResolver` 与 `IWorkflowFileMultipartUploadPort`，不直接依赖 `NyxIdApiClient`、connected-service submit target registry 或 Lark upload adapter。public `file_ref` 只携带 identity/ownership，文件名、媒体类型、大小与 hash 只能来自 artifact descriptor；结果固定为 `success/error/detail/output_code/output_kind/http_status/provider_code/destination/file`，不生成 `file_token`、`file_code` 等 provider alias，也不回显 provider raw body、bytes/base64/data URI。文件内容只在 artifact read port 与 NyxID multipart upload port 边界流式传递，不进入 actor state/readmodel/prompt/result JSON。
+- workflow file artifact backend 由 Host 组合显式选择。`FileSystem` backend 是本地/测试默认；生产环境必须使用 `WorkflowFileArtifacts:Backend=External`，并由部署显式注册 ingress/read/ownership/cleanup 四个 artifact ports。缺少任一端口时启动 fail closed，不能静默回落到 filesystem。
+- artifact descriptor manifest 是文件可读性的提交记录；workflow run 归属仍是 actor-owned fact。Host 只通过后台 `IWorkflowFileArtifactCleanupPort` 触发 provider-owned cleanup；provider 基于 durable descriptor/index state 清理过期 descriptor-committed artifacts 与未完成 staged content，不使用进程内 run/artifact registry。
+
 ## 3. 自动编排能力（按 prompt 决策）
 
 框架内建了 `direct`、`auto`、`auto_review` 三个 workflow（内部能力）。
@@ -94,6 +220,21 @@ owner: eanzhao
 - 不自动执行，只输出最终 YAML（适合手动触发最终 run）。
 
 ## 4. Human Approval / Human Input 如何继续
+
+### Webhook start-run
+
+`POST /api/workflow-webhooks/{routeKey}` 用于外部系统认证后启动新的 workflow run。`routeKey` 只匹配 Host 配置里的 binding；workflow 名称、scope、delivery id 来源、prompt 映射与 HMAC header 都由 `WorkflowWebhookIngress` options 承载，不在生产代码硬编码具体 workflow。
+
+运行语义：
+
+- Host 读取 raw JSON、执行 HMAC 校验、按 binding 映射 delivery id 与 prompt，然后构造 typed `WorkflowChatRunRequest`。
+- `CommandIdSeed` 与 `CorrelationIdSeed` 使用稳定格式 `webhook:{routeKey}:{sourceId}:{deliveryId}`。
+- `WorkflowChatRequestEvent.external_ingress` 承载 typed route/source/delivery/fingerprint/auth 信息；这些稳定语义不得塞进 `Metadata`。
+- 防重放由 `IWorkflowWebhookReplayStore` 承载，生产实现必须是 durable/distributed first-writer-wins store；显式 in-memory 实现只允许本地或测试使用。
+- 启用 webhook ingress 但没有 replay store 时，Host fail closed 返回 `503 WEBHOOK_REPLAY_STORE_UNAVAILABLE`。
+- 成功响应是 `202 Accepted`，只表示命令已被接受并可追踪；不承诺 run 已提交、执行完成或 readmodel 已刷新。
+
+`POST /api/workflows/signal` 仍只用于已有 run 的 `wait_signal` continuation，必须携带已知 `actorId + runId + signalName`，不能作为新 run webhook trigger 使用。
 
 当 run 到 `human_input` 或 `human_approval`，运行时 envelope 投影流会发出 `HUMAN_INPUT_REQUEST`，包含：
 

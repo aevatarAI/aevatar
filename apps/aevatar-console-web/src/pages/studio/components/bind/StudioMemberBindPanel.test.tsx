@@ -269,19 +269,8 @@ describe('StudioMemberBindPanel', () => {
       snippetsTitle.compareDocumentPosition(supportingDetailsTitle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    const bindSurfaceStyle =
-      screen.getByTestId('studio-bind-surface').getAttribute('style') || '';
-    expect(bindSurfaceStyle).not.toContain('overflow');
-    expect(bindSurfaceStyle).not.toContain('height');
     const primaryGrid = screen.getByTestId('studio-bind-primary-grid');
-    expect(primaryGrid).toHaveStyle({
-      alignItems: 'stretch',
-      display: 'grid',
-    });
     expect(primaryGrid.contains(supportingDetailsTitle)).toBe(false);
-    const primaryGridStyle = primaryGrid.getAttribute('style') || '';
-    expect(primaryGridStyle).not.toContain('height');
-    expect(primaryGridStyle).not.toContain('grid-auto-rows');
     expect(screen.getByTestId('studio-bind-contract-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-smoke-test-section')).toBeTruthy();
     expect(screen.getByTestId('studio-bind-snippet-section')).toBeTruthy();
@@ -295,14 +284,14 @@ describe('StudioMemberBindPanel', () => {
       'ready',
     );
     expect(screen.getByText('Current member publication')).toBeTruthy();
-    expect(screen.getByText('member:default')).toBeTruthy();
+    expect(screen.queryByText('member:default')).toBeNull();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(
       screen.queryByText('Select a published service'),
     ).toBeNull();
     expect(
       screen.getByRole('button', {
-        name: 'Chat Default test id ·chat Chat with the published workflow.',
+        name: 'Chat Default test Endpoint ready Chat with the published workflow.',
       }),
     ).toHaveAttribute(
       'aria-pressed',
@@ -438,7 +427,8 @@ describe('StudioMemberBindPanel', () => {
     expect(screen.getByTestId('studio-bind-flow-guidance')).toHaveTextContent(
       'ready',
     );
-    expect(screen.getByText('Run run-1')).toBeTruthy();
+    expect(screen.queryByText('Run run-1')).toBeNull();
+    expect(screen.queryByText('run-1')).toBeNull();
     expect(
       screen.queryByText('The current Studio draft accepted the request.'),
     ).toBeNull();

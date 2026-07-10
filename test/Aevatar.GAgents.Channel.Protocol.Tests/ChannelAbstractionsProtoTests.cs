@@ -1,6 +1,8 @@
 using System.Linq;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Shouldly;
 
@@ -63,6 +65,24 @@ public sealed class ChannelAbstractionsProtoTests
                     ActionId = "approve",
                     SubmittedValue = "true",
                     SourceMessageId = "om_123",
+                    ActionKind = ActionElementKind.FormSubmit,
+                    WorkflowResume = new WorkflowResumeActionPayload
+                    {
+                        ActorId = "workflow-actor-1",
+                        RunId = "run-1",
+                        StepId = "tool-step",
+                        ToolApproval = new WorkflowToolApprovalResumeActionPayload
+                        {
+                            ExecutionId = "exec-1",
+                            ToolCallId = "tool-call-1",
+                            ApprovalRequestId = "approval-1",
+                        },
+                    },
+                    NyxIdApproval = new NyxIdApprovalActionPayload
+                    {
+                        RequestId = "nyx-approval-1",
+                        Approved = true,
+                    },
                 },
             },
             ReplyToActivityId = "orig-1",
@@ -103,6 +123,11 @@ public sealed class ChannelAbstractionsProtoTests
             Label = "Ack",
             Value = "ack",
             IsPrimary = true,
+            NyxIdApproval = new NyxIdApprovalActionPayload
+            {
+                RequestId = "nyx-approval-1",
+                Approved = false,
+            },
         });
         activity.Content.Cards.Add(new CardBlock
         {
@@ -116,7 +141,14 @@ public sealed class ChannelAbstractionsProtoTests
 
         parsed.ShouldBe(activity);
         parsed.Content.CardAction.ActionId.ShouldBe("approve");
+        parsed.Content.CardAction.ActionKind.ShouldBe(ActionElementKind.FormSubmit);
+        parsed.Content.CardAction.WorkflowResume.ToolApproval.ExecutionId.ShouldBe("exec-1");
+        parsed.Content.CardAction.WorkflowResume.ToolApproval.ToolCallId.ShouldBe("tool-call-1");
+        parsed.Content.CardAction.WorkflowResume.ToolApproval.ApprovalRequestId.ShouldBe("approval-1");
+        parsed.Content.CardAction.NyxIdApproval.RequestId.ShouldBe("nyx-approval-1");
+        parsed.Content.CardAction.NyxIdApproval.Approved.ShouldBeTrue();
         parsed.Content.Actions[0].Kind.ShouldBe(ActionElementKind.Button);
+        parsed.Content.Actions[0].NyxIdApproval.Approved.ShouldBeFalse();
         parsed.Conversation.Scope.ShouldBe(ConversationScope.Thread);
         parsed.OutboundDelivery.ReplyMessageId.ShouldBe("relay-msg-1");
         parsed.TransportExtras.NyxAgentApiKeyId.ShouldBe("nyx-key-1");
@@ -127,6 +159,13 @@ public sealed class ChannelAbstractionsProtoTests
             .ShouldContain(nameof(MessageContent));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(CardActionSubmission));
+        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(NyxIdApprovalActionPayload));
+        ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(WorkflowToolApprovalResumeActionPayload));
+        WorkflowResumeActionPayload.Descriptor.FindFieldByName("tool_approval")!.FieldNumber.ShouldBe(8);
+        ActionElement.Descriptor.FindFieldByName("nyx_id_approval")!.FieldNumber.ShouldBe(13);
+        CardActionSubmission.Descriptor.FindFieldByName("nyx_id_approval")!.FieldNumber.ShouldBe(9);
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(OutboundDeliveryContext));
         ChatActivityReflection.Descriptor.MessageTypes.Select(x => x.Name)
@@ -199,5 +238,151 @@ public sealed class ChannelAbstractionsProtoTests
             .ShouldContain(nameof(ChannelTransportBinding));
         ScheduleReflection.Descriptor.EnumTypes.Select(x => x.Name)
             .ShouldContain(nameof(ProjectionVerdict));
+    }
+
+    [Fact]
+    public void DeliveryLedgerContracts_ShouldExposeStableFieldNumbers()
+    {
+        DeliveryKind.TextMessage.ShouldBe((DeliveryKind)1);
+        DeliveryKind.StreamingCard.ShouldBe((DeliveryKind)2);
+        DeliveryKind.InteractiveCard.ShouldBe((DeliveryKind)3);
+        DeliveryKind.FailureNotification.ShouldBe((DeliveryKind)4);
+        DeliveryStatus.Succeeded.ShouldBe((DeliveryStatus)1);
+        DeliveryStatus.FailedPreSend.ShouldBe((DeliveryStatus)2);
+        DeliveryStatus.FailedPostSend.ShouldBe((DeliveryStatus)3);
+
+        AssertField<DeliveryTarget>("channel", 1, FieldType.Message);
+        AssertField<DeliveryTarget>("conversation_key", 2, FieldType.String);
+        AssertField<DeliveryTarget>("platform", 3, FieldType.String);
+        AssertField<DeliveryTarget>("receive_id", 4, FieldType.String);
+        AssertField<DeliveryTarget>("receive_id_type", 5, FieldType.String);
+        AssertField<DeliveryTarget>("conversation_id", 6, FieldType.String);
+        AssertField<DeliveryTarget>("reply_message_id", 7, FieldType.String);
+
+        AssertField<DeliveryProducedEvent>("run_id", 1, FieldType.String);
+        AssertField<DeliveryProducedEvent>("turn_id", 2, FieldType.String);
+        AssertField<DeliveryProducedEvent>("delivery_kind", 3, FieldType.Enum);
+        AssertField<DeliveryProducedEvent>("target", 4, FieldType.Message);
+        AssertField<DeliveryProducedEvent>("status", 5, FieldType.Enum);
+        AssertField<DeliveryProducedEvent>("lark_message_id", 6, FieldType.String);
+        AssertField<DeliveryProducedEvent>("card_id", 7, FieldType.String);
+        AssertField<DeliveryProducedEvent>("request_id", 8, FieldType.String);
+        AssertField<DeliveryProducedEvent>("source_event_id", 9, FieldType.String);
+        AssertField<DeliveryProducedEvent>("produced_at_version", 10, FieldType.Int64);
+
+        AssertField<DeliveryLedgerEntry>("delivery_kind", 1, FieldType.Enum);
+        AssertField<DeliveryLedgerEntry>("status", 2, FieldType.Enum);
+        AssertField<DeliveryLedgerEntry>("target", 3, FieldType.Message);
+        AssertField<DeliveryLedgerEntry>("lark_message_id", 4, FieldType.String);
+        AssertField<DeliveryLedgerEntry>("card_id", 5, FieldType.String);
+        AssertField<DeliveryLedgerEntry>("request_id", 6, FieldType.String);
+        AssertField<DeliveryLedgerEntry>("source_event_id", 7, FieldType.String);
+        AssertField<DeliveryLedgerEntry>("produced_at_version", 8, FieldType.Int64);
+    }
+
+    [Fact]
+    public void DeliveryProducedEvent_ShouldRoundTripTypedLedgerFields()
+    {
+        var produced = new DeliveryProducedEvent
+        {
+            RunId = "run-1",
+            TurnId = "turn-1",
+            DeliveryKind = DeliveryKind.InteractiveCard,
+            Target = new DeliveryTarget
+            {
+                Channel = ChannelId.From("lark"),
+                ConversationKey = "lark:tenant:thread",
+                Platform = "lark",
+                ReceiveId = "oc_1",
+                ReceiveIdType = "chat_id",
+                ConversationId = "conv-1",
+                ReplyMessageId = "reply-1",
+            },
+            Status = DeliveryStatus.FailedPostSend,
+            LarkMessageId = "om_1",
+            CardId = "card-1",
+            RequestId = "request-1",
+            SourceEventId = "chunk-1",
+            ProducedAtVersion = 42,
+        };
+
+        var parsed = DeliveryProducedEvent.Parser.ParseFrom(produced.ToByteArray());
+
+        parsed.ShouldBe(produced);
+        parsed.Target.Channel.Value.ShouldBe("lark");
+        parsed.Status.ShouldBe(DeliveryStatus.FailedPostSend);
+    }
+
+    [Fact]
+    public void DeliveryLedgerEntry_ShouldRoundTripReadModelRow()
+    {
+        var entry = new DeliveryLedgerEntry
+        {
+            DeliveryKind = DeliveryKind.TextMessage,
+            Status = DeliveryStatus.Succeeded,
+            Target = new DeliveryTarget
+            {
+                Channel = ChannelId.From("nyxid"),
+                ConversationKey = "nyxid:user",
+            },
+            LarkMessageId = "om_2",
+            CardId = "card-2",
+            RequestId = "request-2",
+            SourceEventId = "event-2",
+            ProducedAtVersion = 7,
+        };
+
+        var parsed = DeliveryLedgerEntry.Parser.ParseFrom(entry.ToByteArray());
+
+        parsed.ShouldBe(entry);
+        parsed.Target.Channel.Value.ShouldBe("nyxid");
+    }
+
+    [Fact]
+    public void InteractionSpecMapper_ShouldProjectTypedSpecToMessageContent()
+    {
+        var spec = new InteractionSpec
+        {
+            Title = "Review",
+            Body = "Deploy v1?",
+            Disposition = InteractionDisposition.Ephemeral,
+        };
+        spec.Actions.Add(new InteractionAction
+        {
+            Kind = InteractionActionKind.Select,
+            ActionId = "route",
+            Label = "Route",
+            Style = InteractionActionStyle.Primary,
+            ApprovalDecision = InteractionApprovalDecision.Approve,
+            Options =
+            {
+                new InteractionOption { Label = "Canary", Value = "canary" },
+            },
+        });
+        spec.Fields.Add(new InteractionField
+        {
+            Title = "Env",
+            Text = "prod",
+            IsShort = true,
+        });
+
+        var content = InteractionSpecMapper.ToMessageContent(spec);
+
+        content.Text.ShouldBe("Review\nDeploy v1?");
+        content.Disposition.ShouldBe(MessageDisposition.Ephemeral);
+        content.Actions.ShouldHaveSingleItem().Kind.ShouldBe(ActionElementKind.Select);
+        content.Actions[0].WorkflowResume.Approved.ShouldBeTrue();
+        content.Actions[0].Options.ShouldHaveSingleItem().Value.ShouldBe("canary");
+        content.Cards.ShouldHaveSingleItem().Fields.ShouldHaveSingleItem().IsShort.ShouldBeTrue();
+    }
+
+    private static void AssertField<TMessage>(string name, int number, FieldType type)
+        where TMessage : IMessage<TMessage>, new()
+    {
+        var descriptor = new TMessage().Descriptor;
+        var field = descriptor.FindFieldByName(name);
+        field.ShouldNotBeNull();
+        field!.FieldNumber.ShouldBe(number);
+        field.FieldType.ShouldBe(type);
     }
 }

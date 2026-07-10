@@ -6,7 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Hosting.Sse;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
@@ -30,6 +31,9 @@ public static class ScopeWorkflowEndpoints
         var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeWorkflows");
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
             .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest);
+        group.MapPost("/{scopeId}/workflows:save-and-bind", HandleSaveAndBindWorkflowAsync)
+            .Produces<ScopeWorkflowSaveAndBindResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
@@ -49,6 +53,14 @@ public static class ScopeWorkflowEndpoints
         [FromServices] IScopeWorkflowCommandPort workflowCommandPort,
         CancellationToken ct)
         => await HandleUpsertWorkflowAsyncCore(http, scopeId, workflowId, request, workflowCommandPort, ct);
+
+    internal static async Task<IResult> HandleSaveAndBindWorkflowAsync(
+        HttpContext http,
+        string scopeId,
+        SaveAndBindScopeWorkflowHttpRequest request,
+        [FromServices] IScopeWorkflowSaveAndBindPort saveAndBindPort,
+        CancellationToken ct)
+        => await HandleSaveAndBindWorkflowAsyncCore(http, scopeId, request, saveAndBindPort, ct);
 
     internal static async Task<IResult> HandleListWorkflowsAsync(
         HttpContext http,
@@ -124,6 +136,42 @@ public static class ScopeWorkflowEndpoints
         }
     }
 
+    private static async Task<IResult> HandleSaveAndBindWorkflowAsyncCore(
+        HttpContext http,
+        string scopeId,
+        SaveAndBindScopeWorkflowHttpRequest request,
+        IScopeWorkflowSaveAndBindPort saveAndBindPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var result = await saveAndBindPort.SaveAndBindAsync(
+                new ScopeWorkflowSaveAndBindRequest(
+                    scopeId,
+                    request.WorkflowId,
+                    request.WorkflowYaml,
+                    request.WorkflowName,
+                    request.DisplayName,
+                    request.InlineWorkflowYamls,
+                    request.AppId,
+                    request.ServiceId,
+                    request.ExposureDesired),
+                ct);
+            return Results.Accepted(result.Workflow.ReadModelUrl, result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_USER_WORKFLOW_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
     private static async Task<IResult> HandleListWorkflowsAsyncCore(
         HttpContext http,
         string scopeId,
@@ -174,17 +222,20 @@ public static class ScopeWorkflowEndpoints
             if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
-            if (workflow == null)
+            var lookup = await workflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct);
+            if (!lookup.IsRunnable)
             {
-                return Results.NotFound(new
-                {
-                    code = "USER_WORKFLOW_NOT_FOUND",
-                    message = BuildWorkflowNotFoundMessage(scopeId, workflowId),
-                });
+                var (statusCode, code, message) = MapWorkflowLookupError(scopeId, workflowId, lookup);
+                return Results.Json(
+                    new
+                    {
+                        code,
+                        message,
+                    },
+                    statusCode: statusCode);
             }
 
-            return Results.Json(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
+            return Results.Json(await BuildWorkflowDetailAsync(lookup.Workflow!, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -210,14 +261,15 @@ public static class ScopeWorkflowEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
-            if (workflow == null)
+            var lookup = await workflowQueryPort.LookupByWorkflowIdAsync(scopeId, workflowId, ct);
+            if (!lookup.IsRunnable)
             {
+                var (statusCode, code, message) = MapWorkflowLookupError(scopeId, workflowId, lookup);
                 await WriteJsonErrorResponseAsync(
                     http,
-                    StatusCodes.Status404NotFound,
-                    "USER_WORKFLOW_NOT_FOUND",
-                    BuildWorkflowNotFoundMessage(scopeId, workflowId),
+                    statusCode,
+                    code,
+                    message,
                     ct);
                 return;
             }
@@ -225,7 +277,7 @@ public static class ScopeWorkflowEndpoints
             await HandleRunWorkflowStreamCoreAsync(
                 http,
                 scopeId,
-                workflow,
+                lookup.Workflow!,
                 request.Prompt,
                 request.SessionId,
                 request.Headers,
@@ -439,6 +491,14 @@ public static class ScopeWorkflowEndpoints
         CancellationToken ct)
     {
         prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
+        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        if (!callerCredential.Succeeded)
+        {
+            var (statusCode, code, message) = MapRunStartError(callerCredential.Error);
+            await WriteJsonErrorResponseAsync(http, statusCode, code, message, ct);
+            return;
+        }
+
         await HandleAguiStreamAsync(
             http,
             new WorkflowChatRunRequest(
@@ -447,7 +507,7 @@ public static class ScopeWorkflowEndpoints
                 sessionId,
                 Metadata: headers,
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId)),
-                ConnectorHttpAuthorization: ConnectorHttpAuthorizationExtractor.Extract(http),
+                CallerCredential: callerCredential.Credential,
                 LlmControl: ToWorkflowLlmControl(llmControl),
                 Headers: headers),
             chatRunService,
@@ -523,6 +583,26 @@ public static class ScopeWorkflowEndpoints
     private static string BuildWorkflowActorNotFoundMessage(string scopeId) =>
         $"Workflow actor was not found for scope '{scopeId}'.";
 
+    private static (int StatusCode, string Code, string Message) MapWorkflowLookupError(
+        string scopeId,
+        string workflowId,
+        ScopeWorkflowLookupResult lookup) =>
+        lookup.Status switch
+        {
+            ScopeWorkflowLookupStatus.NotFound => (
+                StatusCodes.Status404NotFound,
+                "USER_WORKFLOW_NOT_FOUND",
+                BuildWorkflowNotFoundMessage(scopeId, workflowId)),
+            ScopeWorkflowLookupStatus.Stale => (
+                StatusCodes.Status409Conflict,
+                "USER_WORKFLOW_STALE",
+                $"Workflow '{workflowId}' runtime readmodel is stale for scope '{scopeId}'."),
+            _ => (
+                StatusCodes.Status409Conflict,
+                "USER_WORKFLOW_NOT_READY",
+                $"Workflow '{workflowId}' is not ready to run for scope '{scopeId}'."),
+        };
+
     internal static bool TryParseEventFormat(
         string? rawValue,
         out ScopeWorkflowStreamEventFormat eventFormat)
@@ -558,7 +638,6 @@ public static class ScopeWorkflowEndpoints
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         scopedHeaders.Remove(LegacyConnectorHttpAuthorizationBlockedKey);
-        // Refactor (iter169/cluster-issue1551): Old pattern: scoped headers carried connector auth metadata. New principle: headers stay annotations; connector auth uses WorkflowChatRunRequest.ConnectorHttpAuthorization.
 
         return scopedHeaders;
     }
@@ -573,8 +652,6 @@ public static class ScopeWorkflowEndpoints
 
         return new ChatLlmControlInput
         {
-            NyxIdAccessToken = control.NyxIdAccessToken,
-            NyxIdOrgToken = control.NyxIdOrgToken,
             ModelOverride = control.ModelOverride,
             NyxIdRoutePreference = control.NyxIdRoutePreference,
             MaxToolRoundsOverride = control.MaxToolRoundsOverride,
@@ -589,16 +666,18 @@ public static class ScopeWorkflowEndpoints
 
         var model = NormalizeOptional(control.ModelOverride);
         var userMemoryPrompt = NormalizeOptional(control.UserMemoryPrompt);
+        var routePreference = NormalizeOptional(control.NyxIdRoutePreference);
         var maxToolRounds = control.MaxToolRoundsOverride is > 0
             ? control.MaxToolRoundsOverride
             : null;
-        if (model == null && userMemoryPrompt == null && maxToolRounds == null)
+        if (model == null && userMemoryPrompt == null && routePreference == null && maxToolRounds == null)
             return null;
 
         return new WorkflowLlmControl(
-            model,
-            maxToolRounds,
-            userMemoryPrompt);
+            ModelOverride: model,
+            MaxToolRoundsOverride: maxToolRounds,
+            UserMemoryPrompt: userMemoryPrompt,
+            RoutePreference: routePreference);
     }
 
     internal static async Task<LLMControlContext?> BuildScopedLlmControlAsync(
@@ -608,10 +687,9 @@ public static class ScopeWorkflowEndpoints
         if (http == null)
             return null;
 
-        var bearerToken = ExtractBearerToken(http);
         var control = new LLMControlContext(
-            NyxIdAccessToken: bearerToken,
-            NyxIdOrgToken: bearerToken,
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
@@ -640,9 +718,11 @@ public static class ScopeWorkflowEndpoints
                     NyxIdRoutePreference = route,
                 };
             }
-            catch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Best-effort; fall back to provider defaults if config unavailable.
+                var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+                var logger = loggerFactory?.CreateLogger("Aevatar.GAgentService.ScopeWorkflowEndpoints");
+                logger?.LogWarning(ex, "Failed to resolve scoped user LLM configuration; falling back to provider defaults.");
             }
         }
 
@@ -651,16 +731,6 @@ public static class ScopeWorkflowEndpoints
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        var auth = http.Request.Headers.Authorization.FirstOrDefault();
-        if (auth == null || !auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var bearerToken = auth["Bearer ".Length..].Trim();
-        return string.IsNullOrWhiteSpace(bearerToken) ? null : bearerToken;
-    }
 
     internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
     {
@@ -676,6 +746,7 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
+            WorkflowChatRunStartError.InvalidCallerCredential => (StatusCodes.Status400BadRequest, "INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
             _ => (StatusCodes.Status400BadRequest, "RUN_START_FAILED", "Failed to resolve actor."),
         };
     }
@@ -707,6 +778,16 @@ public static class ScopeWorkflowEndpoints
         string? DisplayName = null,
         Dictionary<string, string>? InlineWorkflowYamls = null,
         string? RevisionId = null);
+
+    public sealed record SaveAndBindScopeWorkflowHttpRequest(
+        string? WorkflowId,
+        string WorkflowYaml,
+        string? WorkflowName = null,
+        string? DisplayName = null,
+        Dictionary<string, string>? InlineWorkflowYamls = null,
+        string? AppId = null,
+        string? ServiceId = null,
+        bool? ExposureDesired = null);
 
     public sealed record RunScopeWorkflowByIdStreamHttpRequest(
         string Prompt,

@@ -2,6 +2,40 @@
 
 set -euo pipefail
 
+scan_projection_document_reader_list_async() {
+  local projection_document_reader_scan_roots=("$@")
+  local projection_document_reader_file
+  local projection_document_reader_names
+  local projection_document_reader_name
+
+  while IFS= read -r projection_document_reader_file; do
+    [[ -z "${projection_document_reader_file}" ]] && continue
+
+    projection_document_reader_names="$(
+      {
+        rg --no-filename --no-line-number -o \
+          'IProjectionDocumentReader<[^>]+>[[:space:]]+_?[A-Za-z][A-Za-z0-9_]*' \
+          "${projection_document_reader_file}" \
+          | rg -o '_?[A-Za-z][A-Za-z0-9_]*$' \
+          | sort -u
+      } || true
+    )"
+
+    while IFS= read -r projection_document_reader_name; do
+      [[ -z "${projection_document_reader_name}" ]] && continue
+
+      rg -n --with-filename \
+        "(^|[^A-Za-z0-9_])${projection_document_reader_name}\\.ListAsync\\(" \
+        "${projection_document_reader_file}" || true
+    done <<< "${projection_document_reader_names}"
+  done < <(rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" 2>/dev/null)
+}
+
+if [[ "${AEVATAR_ARCHITECTURE_GUARDS_RUN_PROJECTION_DOCUMENT_READER_SCAN_ONLY:-}" == "1" ]]; then
+  scan_projection_document_reader_list_async "$@"
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
@@ -120,6 +154,104 @@ check_channel_inbound_no_runtime_credential() {
 }
 
 check_channel_inbound_no_runtime_credential
+
+check_voice_tool_credential_ref_boundary() {
+  local report
+
+  set +e
+  report="$(
+    rg -n "IVoiceSessionCredentialStore|VoiceVolatileSessionCredentialStore|VoiceCallerCredentialScope|google\.protobuf\.Any[[:space:]]+tool_context" \
+      src test docs \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs' \
+      | awk -F: '
+{
+  file = $1;
+  line_no = $2;
+  text = substr($0, length(file) + length(line_no) + 3);
+
+  if (file == "tools/ci/architecture_guards.sh")
+    next;
+
+  if (text ~ /ShouldNotContain\("nyx_id_access_token"\)/)
+    next;
+
+  print $0;
+}'
+  )"
+  local status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "Voice tool credential boundary guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "Voice tool caller credentials must use typed VoiceToolExecutionContext. Process-local session token stores, VoiceCallerCredentialScope, and raw-bearing Any tool_context are forbidden."
+    exit 1
+  fi
+}
+
+check_voice_tool_credential_ref_boundary
+
+check_workflow_core_interaction_boundary() {
+  local workflow_core_dir="src/workflow/Aevatar.Workflow.Core"
+  local report
+
+  set +e
+  report="$(
+    rg -n "Aevatar\.GAgents\.Channel\.Abstractions|MessageContent|LarkMessageComposer|open-apis/im/v1/messages|interactive_card|raw Lark|raw card JSON|\"type\"[[:space:]]*:[[:space:]]*\"template\"" "${workflow_core_dir}" \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs'
+  )"
+  local status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "Workflow Core interaction boundary guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "Workflow Core must carry typed InteractionSpec only; channel content and raw card payloads belong at the channel boundary."
+    exit 1
+  fi
+
+  set +e
+  report="$(
+    rg -n "Metadata[[:space:]]*\[[[:space:]]*\"interaction\"|metadata[[:space:]]*\[[[:space:]]*\"interaction\"" \
+      src/workflow agents \
+      -g '*Human*Interaction*.cs' \
+      -g '*Notify*.cs' \
+      -g '*Notification*.cs' \
+      -g '!**/bin/**' \
+      -g '!**/obj/**' \
+      -g '!*.g.cs' \
+      -g '!*.Designer.cs'
+  )"
+  status=$?
+  set -e
+
+  if [[ ${status} -ne 0 && ${status} -ne 1 ]]; then
+    echo "HITL/notify metadata interaction guard execution failed."
+    exit "${status}"
+  fi
+
+  if [ -n "${report}" ]; then
+    echo "${report}"
+    echo "HITL/notify control must consume typed interaction contracts, not Metadata[\"interaction\"] bags."
+    exit 1
+  fi
+}
+
+check_workflow_core_interaction_boundary
 
 bash tools/ci/aevatar_oauth_client_es_acl_guard.sh
 bash tools/ci/static_service_activation_guard.sh || exit $?
@@ -515,6 +647,7 @@ streaming_proxy_consumer_report="$(
     | awk -F: '
 BEGIN {
   allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"] = 1;
+  allowed["src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs"] = 1;
   allowed["tools/ci/architecture_guards.sh"] = 1;
   allowed["tools/ci/README.md"] = 1;
 }
@@ -839,6 +972,7 @@ END {
 fi
 
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/workflow_call_context_guard.sh"
 bash "${SCRIPT_DIR}/command_observation_attach_only_guard.sh"
 bash "${SCRIPT_DIR}/projection_attach_existing_side_read_guard.sh"
 bash "${SCRIPT_DIR}/public_projection_ensure_ports_guard.sh"
@@ -846,10 +980,13 @@ bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
 bash "${SCRIPT_DIR}/agent_kind_naming_guard.sh"
+bash "${SCRIPT_DIR}/gagent_registry_kind_guard.sh"
 bash "${SCRIPT_DIR}/proto_lint_guard.sh"
 bash "${SCRIPT_DIR}/channel_mega_interface_guard.sh"
 bash "${SCRIPT_DIR}/channel_native_sdk_import_guard.sh"
 bash "${SCRIPT_DIR}/channel_platform_project_reference_guard.sh"
+echo "Running catch exception observability guard..."
+bash "${SCRIPT_DIR}/catch_exception_observability_guard.sh"
 python3 "${REPO_ROOT}/tools/ci/guards/project_reference_layer_guard.py" \
   --root "${REPO_ROOT}" \
   --allowlist "${REPO_ROOT}/tools/ci/project_reference_layer_allowlist.tsv" \
@@ -862,6 +999,7 @@ bash "${SCRIPT_DIR}/studio_projection_readmodel_registration_guard.sh"
 bash "${SCRIPT_DIR}/studio_fact_owner_guard.sh"
 bash "${SCRIPT_DIR}/studio_catalog_storage_serializer_guard.sh"
 bash "${SCRIPT_DIR}/frontend_static_boundary_guard.sh"
+bash "${SCRIPT_DIR}/workflow_observatory_readonly_guard.sh"
 
 studio_catalog_query_ports=(
   "src/Aevatar.Studio.Application/Studio/Abstractions/IConnectorCatalogQueryPort.cs"
@@ -944,17 +1082,14 @@ if rg -n "Projection:ReadModel:Bindings" src test; then
 fi
 
 set +e
-# Check for reader.ListAsync() calls (dot-prefixed) in files that use IProjectionDocumentReader.
-# Business-domain ListAsync methods (e.g., IStreamingProxyParticipantStore.ListAsync) are excluded
-# by requiring the call to be on a reader/document field (dot prefix pattern).
+# Check only ListAsync() calls on variables declared as IProjectionDocumentReader.
+# Business query ports may expose ListAsync and must not be inferred from file or path names.
 projection_document_reader_scan_roots=(src test)
 if [[ -d demos ]]; then
   projection_document_reader_scan_roots+=(demos)
 fi
 projection_document_reader_list_report="$(
-  rg -l "IProjectionDocumentReader<" "${projection_document_reader_scan_roots[@]}" \
-    | xargs -r rg -n "\.ListAsync\(" \
-    | rg -i "(reader|document|projection).*\.ListAsync"
+  scan_projection_document_reader_list_async "${projection_document_reader_scan_roots[@]}"
 )"
 projection_document_reader_list_status=$?
 set -e
@@ -1332,7 +1467,7 @@ if [ -n "${reducer_test_coverage_violations}" ]; then
 fi
 
 stateful_replay_contract_requirements=(
-  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
+  "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentReplayContractTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
 )
 
@@ -1363,6 +1498,9 @@ bash tools/ci/projection_route_mapping_guard.sh
 
 echo "Running closed-world workflow guards..."
 bash tools/ci/workflow_closed_world_guards.sh
+
+echo "Running workflow saga compensation guard..."
+bash tools/ci/workflow_saga_compensation_guard.sh
 
 echo "Running workflow run-id guard..."
 bash tools/ci/workflow_runid_guard.sh
@@ -1686,6 +1824,21 @@ if [ -n "${projection_provider_business_using_hits}" ]; then
   exit 1
 fi
 
+agent_projection_provider_hits="$(
+  rg -n "Aevatar\.CQRS\.Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)|Projection\.Providers\.(Elasticsearch|InMemory|Neo4j)" \
+    agents \
+    -g '*.cs' \
+    -g '*.csproj' \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' || true
+)"
+
+if [ -n "${agent_projection_provider_hits}" ]; then
+  echo "${agent_projection_provider_hits}"
+  echo "Agent projects must not reference concrete projection providers. Wire provider-specific document stores in the host composition root."
+  exit 1
+fi
+
 projection_provider_store_files=(
   "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
   "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs"
@@ -1715,7 +1868,9 @@ command_side_readmodel_violations="$(
     src/workflow/Aevatar.Workflow.Application \
     src/workflow/Aevatar.Workflow.Host.Api \
     src/Aevatar.Mainnet.Host.Api \
-    -g '*.cs' || true
+    -g '*.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs' \
+    -g '!src/Aevatar.Mainnet.Host.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions.cs' || true
 )"
 
 if [ -n "${command_side_readmodel_violations}" ]; then
@@ -1874,6 +2029,119 @@ check_orchestration_class_guard() {
   fi
 }
 
+check_system_skill_overlay_dual_seam_injection() {
+  local nyxid_chat_gagent_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatGAgent.cs"
+  local conversation_reply_generator_file="agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs"
+  local prompt_injection_test_file="test/Aevatar.AI.Tests/SystemSkillOverlayPromptInjectionTests.cs"
+
+  # Direct-chat seam: the chartered chat actor (NyxIdChatGAgent) injects the overlay inside its
+  # DecorateSystemPrompt via the shared host-level provider (issue #2498).
+  if ! rg -q "override string DecorateSystemPrompt" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${nyxid_chat_gagent_file}"; then
+    echo "System skill overlay direct-chat seam must inject the overlay in NyxIdChatGAgent.DecorateSystemPrompt via the shared provider (SystemSkillOverlayRequest.DirectChat)."
+    exit 1
+  fi
+
+  # Non-channel isolation (#2586): the base RoleGAgent serves classifier/workflow subclasses too, so
+  # Aevatar.AI.Core must never resolve the overlay provider — otherwise every RoleGAgent subclass
+  # gets channel capability how-to force-injected into its system prompt each turn.
+  if rg -q "ISystemSkillOverlayProvider>" src/Aevatar.AI.Core -g '*.cs'; then
+    echo "Aevatar.AI.Core must not resolve ISystemSkillOverlayProvider; overlay injection belongs to the two chartered seams (NyxIdChatGAgent + ConversationReplyGenerator)."
+    exit 1
+  fi
+
+  if ! awk '
+    /private string BuildSystemPrompt[[:space:]]*\(/ {
+      in_func = 1
+      body_started = 0
+      brace_depth = 0
+    }
+    in_func {
+      line = $0
+      if (line ~ /AppendSystemSkillOverlay[[:space:]]*\(/) {
+        found = 1
+      }
+
+      opens = gsub(/\{/, "{", line)
+      closes = gsub(/\}/, "}", line)
+      if (!body_started && opens > 0) {
+        body_started = 1
+      }
+      brace_depth += opens - closes
+      if (body_started && brace_depth == 0) {
+        in_func = 0
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  ' "${conversation_reply_generator_file}"; then
+    echo "System skill overlay channel seam must call AppendSystemSkillOverlay from ConversationReplyGenerator.BuildSystemPrompt."
+    exit 1
+  fi
+
+  if [ ! -f "${prompt_injection_test_file}" ]; then
+    echo "System skill overlay prompt injection tests are required."
+    exit 1
+  fi
+
+  # Both seams must resolve a REAL overlay provider, not just declare the interface or lean on a test
+  # stub: a non-test implementation of ISystemSkillOverlayProvider must exist and be registered in DI,
+  # otherwise the channel seam injects nothing in production and the dual-seam claim is hollow.
+  if ! rg -q -e '[:,][[:space:]]*ISystemSkillOverlayProvider\b' agents src -g '*.cs'; then
+    echo "A production ISystemSkillOverlayProvider implementation is required so the channel seam injects a real overlay (not a test stub)."
+    exit 1
+  fi
+
+  if ! rg -q -e 'AddSingleton<ISystemSkillOverlayProvider' agents src -g '*.cs'; then
+    echo "ISystemSkillOverlayProvider must be registered in production DI so both reply seams resolve a real overlay."
+    exit 1
+  fi
+}
+
+# Honest scope: this only asserts the golden-tasks document exists and is non-empty. No eval is
+# executed — there is no eval harness yet. Rename to check_system_skill_overlay_eval_gate once a
+# real runner consumes the tasks and its exit code gates CI.
+check_system_skill_overlay_golden_tasks_doc_present() {
+  local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
+
+  if [ ! -s "${eval_file}" ]; then
+    echo "System skill overlay golden-tasks document is required (tools/eval/system_skill_overlay_golden_tasks.md)."
+    exit 1
+  fi
+}
+
+check_system_skill_overlay_set_source() {
+  local options_file="src/Aevatar.AI.Abstractions/ToolProviders/SystemSkillOverlayOptions.cs"
+  local provider_file="src/Aevatar.AI.ToolProviders.Ornn/SystemSkillOverlay/OrnnSystemSkillOverlayProvider.cs"
+  local provider_interface="src/Aevatar.AI.Abstractions/ToolProviders/ISystemSkillOverlayProvider.cs"
+
+  # The overlay source is a public, org-owned skillset resolved by a non-secret name — never an org
+  # service token secret (issue #2498). Reintroducing OrgServiceToken re-adds a secret and a squat vector.
+  if rg -q -e 'OrgServiceToken' agents src -g '*.cs'; then
+    echo "System skill overlay must not reintroduce OrgServiceToken; the public org-owned set is read with no secret."
+    exit 1
+  fi
+  if ! rg -q -e '\bSetName\b' "${options_file}"; then
+    echo "System skill overlay options must expose the non-secret SetName as the overlay source."
+    exit 1
+  fi
+
+  # Members come from the skillset (membership = trust anchor), not a squattable tag search.
+  if ! rg -q -e 'GetSkillSetAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must resolve members from the skillset (GetSkillSetAsync)."
+    exit 1
+  fi
+  if rg -q -e 'SearchSkillsAsync' "${provider_file}"; then
+    echo "The Ornn overlay provider must not fall back to a tag search (SearchSkillsAsync); the set is the source."
+    exit 1
+  fi
+
+  # Never query-time: the seam read GetCurrent must be a synchronous cached read, not an awaited fetch.
+  if rg -q -e 'Task<[^>]*>[[:space:]]+GetCurrent' "${provider_interface}"; then
+    echo "ISystemSkillOverlayProvider.GetCurrent must be a synchronous cached read (never a query-time fetch)."
+    exit 1
+  fi
+}
+
 check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Application/Runs/WorkflowChatRunApplicationService.cs" \
   60 \
@@ -1886,6 +2154,9 @@ check_orchestration_class_guard \
   "src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowExecutionProjectionService.cs" \
   190 \
   10
+check_system_skill_overlay_dual_seam_injection
+check_system_skill_overlay_golden_tasks_doc_present
+check_system_skill_overlay_set_source
 
 echo "Running CQRS/EventSourcing boundary guard..."
 bash tools/ci/cqrs_eventsourcing_boundary_guard.sh
@@ -1905,8 +2176,14 @@ bash tools/ci/runtime_callback_guards.sh
 echo "Running channel card literal guard..."
 bash tools/ci/channel_card_literal_guard.sh
 
+echo "Running tool approval wiring guard..."
+bash tools/ci/tool_approval_wiring_guard.sh
+
 echo "Running Nyx relay replay authority guard..."
 python3 tools/ci/guards/nyx_relay_replay_authority_guard.py
+
+echo "Running Lark agent path contract guard..."
+bash tools/ci/lark_agent_path_contract_guard.sh
 
 echo "Running docs lint guard..."
 bash tools/docs/lint.sh

@@ -35,12 +35,22 @@ message ScheduledDispatchState
   google.protobuf.Timestamp pending_next_fire_at = 24;
   google.protobuf.Timestamp pending_next_fire_requested_at = 25;
   ScheduledDispatchScheduleKindState schedule_kind = 26;
+  bool deleted = 27;
+  google.protobuf.Timestamp deleted_at_utc_value = 28;
+  // Number of times the actor reactivated and found an armed occurrence overdue
+  // past the grace window with no terminal fire record. This is a detection
+  // counter (once per overdue armed occurrence), not a total-missed-occurrence
+  // tally: a long-dormant actor that misses many ticks records one detection
+  // when it reactivates against the earliest still-armed occurrence.
+  int32 overdue_fire_detected_count = 29;
+  google.protobuf.Timestamp last_overdue_fire_at_utc_value = 30;
 }
 
 enum ScheduledDispatchScheduleKindState
 {
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_GENERIC = 0;
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_WORKFLOW = 1;
+  SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_SKILL_RUNNER = 2;
 }
 
 enum ScheduledDispatchRuntimeCallbackBackendState
@@ -83,6 +93,37 @@ message ScheduledServiceInvocationTargetState
   google.protobuf.Any payload = 3;
   string revision_id = 4;
   aevatar.gagentservice.ServiceInvocationCaller caller = 5;
+  ScheduledServiceInvocationAuthState auth = 6;
+}
+
+message ScheduledServiceInvocationAuthState
+{
+  ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1;
+  // Legacy field. Older schedule events may contain a raw bearer here; reducers
+  // must not copy it into current state or runtime dispatch. Keep the field
+  // readable until old events have been migrated, then reserve it.
+  string durable_sender_bearer_token = 2;
+  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3;
+  bool legacy_durable_sender_bearer_blocked = 4;
+}
+
+message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+{
+  string scope = 1;
+  ScheduledServiceInvocationNyxIdSubjectRefState owner_subject = 2;
+}
+
+message ScheduledServiceInvocationNyxIdCredentialSourceState
+{
+  ScheduledServiceInvocationNyxIdSubjectRefState subject = 1;
+  string scope = 2;
+}
+
+message ScheduledServiceInvocationNyxIdSubjectRefState
+{
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
 }
 
 message ScheduledDispatchCreateCommand
@@ -101,6 +142,21 @@ message ScheduledDispatchCreateCommand
 }
 
 message ScheduledDispatchUpdateCommand
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  string target_actor_id = 3;
+  aevatar.EventEnvelope trigger_envelope = 4;
+  string cron_expression = 5;
+  string timezone = 6;
+  bool enabled = 7;
+  map<string, string> headers = 8;
+  string payload_type_url = 9;
+  ScheduledDispatchTargetState target = 10;
+  ScheduledDispatchScheduleKindState schedule_kind = 11;
+}
+
+message ScheduledDispatchEnsureCommand
 {
   string schedule_id = 1;
   string display_name = 2;
@@ -154,6 +210,17 @@ message ScheduledDispatchDisabledEvent
   google.protobuf.Timestamp disabled_at = 2;
 }
 
+message ScheduledDispatchDeleteCommand
+{
+  string reason = 1;
+}
+
+message ScheduledDispatchDeletedEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp deleted_at = 2;
+}
+
 message ScheduledDispatchNextFireIntentRecordedEvent
 {
   google.protobuf.Timestamp next_fire_at = 1;
@@ -199,6 +266,13 @@ message ScheduledDispatchFireFailedEvent
   string idempotency_key = 3;
   string error = 4;
   bool manual = 5;
+}
+
+message ScheduledDispatchFireOverdueDetectedEvent
+{
+  google.protobuf.Timestamp scheduled_fire_at = 1;
+  google.protobuf.Timestamp detected_at = 2;
+  int64 overdue_seconds = 3;
 }
 
 message ScheduledDispatchFireRecordState

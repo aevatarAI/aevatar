@@ -1,4 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Authentication.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -25,11 +28,22 @@ public static class ServiceCollectionExtensions
         // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
         var options = new NyxIdToolOptions();
         configure(options);
-        services.TryAddSingleton(options);
+        services.RemoveAll<NyxIdToolOptions>();
+        services.AddSingleton(options);
         services.AddHttpClient<NyxIdApiClient>();
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
+        services.Replace(ServiceDescriptor.Singleton<
+            IWorkflowFileMultipartUploadPort,
+            NyxIdWorkflowFileMultipartUploadPort>());
+        if (services.Any(static descriptor => descriptor.ServiceType == typeof(IWorkflowFileIngressPort)))
+        {
+            services.TryAddSingleton<INyxIdProxyFileArtifactIngress>(sp =>
+                new NyxIdProxyWorkflowFileArtifactIngress(
+                    sp.GetRequiredService<IWorkflowFileIngressPort>()));
+        }
+
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
 
@@ -38,6 +52,29 @@ public static class ServiceCollectionExtensions
         //   New principle: NyxID is a remote submit/status port; local approval/yield remains host-owned.
         services.TryAddTransient<IRemoteToolApprovalPort, NyxIdRemoteToolApprovalPort>();
 
+        return services;
+    }
+
+    // 06-20-observatory-admin-cross-scope (G3/G8): registers the NyxID-backed platform-admin authorizer + user
+    //   directory behind their provider-agnostic interfaces, plus the per-token decision cache. Requires
+    //   AddNyxIdTools to have registered NyxIdApiClient (the typed client backing INyxIdUserReadApi).
+    //   Authorizer/directory are scoped (per-request); the IMemoryCache that backs the decision cache is the
+    //   singleton, so positive decisions are shared across requests within the TTL.
+    public static IServiceCollection AddNyxIdPlatformAuthorization(
+        this IServiceCollection services,
+        IConfiguration? configuration = null,
+        Action<ObservatoryAdminAuthorizationOptions>? configure = null)
+    {
+        services.AddMemoryCache();
+        var optionsBuilder = services.AddOptions<ObservatoryAdminAuthorizationOptions>();
+        if (configuration is not null)
+            optionsBuilder.Bind(configuration.GetSection(ObservatoryAdminAuthorizationOptions.ConfigSection));
+        if (configure is not null)
+            optionsBuilder.Configure(configure);
+
+        services.TryAddTransient<INyxIdUserReadApi>(static sp => sp.GetRequiredService<NyxIdApiClient>());
+        services.TryAddScoped<IPlatformAdminAuthorizer, NyxIdPlatformAdminAuthorizer>();
+        services.TryAddScoped<IPlatformUserDirectory, NyxIdPlatformUserDirectory>();
         return services;
     }
 }

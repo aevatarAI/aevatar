@@ -168,6 +168,7 @@ internal sealed class TestEventHandlerContext :
         EventEnvelopePublishOptions? options = null,
         CancellationToken ct = default)
     {
+        _ = ct;
         var lease = Schedule(callbackId, evt, dueTime, period, options);
         return Task.FromResult(lease);
     }
@@ -293,7 +294,7 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
     public Task ClearExecutionContextAsync(CancellationToken ct = default)
     {
         ExecutionContextState.Llm = null;
-        ExecutionContextState.Connector = null;
+        ExecutionContextState.CallerCredential = null;
         return Task.CompletedTask;
     }
 
@@ -321,6 +322,55 @@ internal sealed class TestAgent(string id, string? runId = null) : IAgent, IWork
         _executionStates.Remove(scopeKey);
         return Task.CompletedTask;
     }
+
+    Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+        WorkflowCompletedEvent terminalFailure,
+        StepCompletedEvent? terminalStep,
+        CancellationToken ct)
+    {
+        _ = terminalFailure;
+        _ = terminalStep;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+        CompensableStepDispatchedEvent evt,
+        CancellationToken ct)
+    {
+        _ = evt;
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct = default)
+    {
+        _ = completion;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+        string runId,
+        string error,
+        CancellationToken ct = default)
+    {
+        _ = runId;
+        _ = error;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+        new(
+            WorkflowCompensationTransitionStatus.NoCompensableLedger,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
 
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -357,7 +407,7 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
     public Task ClearExecutionContextAsync(CancellationToken ct = default)
     {
         ExecutionContextState.Llm = null;
-        ExecutionContextState.Connector = null;
+        ExecutionContextState.CallerCredential = null;
         return Task.CompletedTask;
     }
 
@@ -386,6 +436,55 @@ internal sealed class TestWorkflowRunAgent(string id, string runId) : IAgent, IW
         return Task.CompletedTask;
     }
 
+    Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+        WorkflowCompletedEvent terminalFailure,
+        StepCompletedEvent? terminalStep,
+        CancellationToken ct)
+    {
+        _ = terminalFailure;
+        _ = terminalStep;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+        CompensableStepDispatchedEvent evt,
+        CancellationToken ct)
+    {
+        _ = evt;
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+        CompensationStepCompletedEvent completion,
+        CancellationToken ct = default)
+    {
+        _ = completion;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+        string runId,
+        string error,
+        CancellationToken ct = default)
+    {
+        _ = runId;
+        _ = error;
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(NoCompensableLedger());
+    }
+
+    private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+        new(
+            WorkflowCompensationTransitionStatus.NoCompensableLedger,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty);
+
     public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
     public Task<string> GetDescriptionAsync() => Task.FromResult("stub-workflow-run");
@@ -406,8 +505,8 @@ internal static class WorkflowExecutionContextTestState
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
@@ -419,11 +518,11 @@ internal static class WorkflowExecutionContextTestState
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }

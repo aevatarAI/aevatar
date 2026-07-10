@@ -1,11 +1,13 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Hosting.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Actors;
+using Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider;
@@ -31,8 +33,8 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
 
         provider.GetService<IActorRuntime>().Should().NotBeNull();
-        provider.GetService<IAgentTypeVerifier>().Should().NotBeNull();
-        provider.GetService<IActorTypeProbe>().Should().NotBeNull();
+        provider.GetService<IAgentKindVerifier>().Should().NotBeNull();
+        provider.GetService<IActorKindProbe>().Should().NotBeNull();
         provider.GetRequiredService<AevatarActorRuntimeOptions>().Provider.Should().Be(AevatarActorRuntimeOptions.ProviderInMemory);
     }
 
@@ -50,7 +52,27 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntime));
         descriptor.Should().NotBeNull();
         descriptor!.ImplementationType.Should().Be(typeof(OrleansActorRuntime));
-        services.Should().Contain(x => x.ServiceType == typeof(IActorTypeProbe) && x.ImplementationType == typeof(OrleansActorTypeProbe));
+        services.Should().Contain(x => x.ServiceType == typeof(IActorKindProbe) && x.ImplementationType == typeof(OrleansActorKindProbe));
+    }
+
+    [Fact]
+    public void AddAevatarActorRuntime_WhenProviderIsOrleans_ShouldUseDurableCallbackScheduler()
+    {
+        // Regression: the shared local runtime extension registers the in-memory callback
+        // scheduler first, so the Orleans extension must Replace (not TryAdd) it. Otherwise
+        // production keeps the in-memory scheduler and durable timeouts/reminders are lost on
+        // every pod restart.
+        var services = new ServiceCollection();
+        var configuration = BuildConfiguration(new Dictionary<string, string?>
+        {
+            [$"{AevatarActorRuntimeOptions.SectionName}:Provider"] = AevatarActorRuntimeOptions.ProviderOrleans,
+        });
+
+        services.AddAevatarActorRuntime(configuration);
+
+        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntimeCallbackScheduler));
+        descriptor.Should().NotBeNull();
+        descriptor!.ImplementationType.Should().Be(typeof(OrleansActorRuntimeDurableCallbackScheduler));
     }
 
     [Fact]

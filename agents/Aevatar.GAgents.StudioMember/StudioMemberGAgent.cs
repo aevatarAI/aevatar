@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -17,6 +18,7 @@ namespace Aevatar.GAgents.StudioMember;
 /// <see cref="ApplyCreated"/> so a stale or hand-crafted event payload
 /// cannot break the rename-safe invariant.
 /// </summary>
+[GAgent("studio.member")]
 public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProjectedActor
 {
     public static string ProjectionKind => "studio-member";
@@ -99,7 +101,13 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             throw new InvalidOperationException("member not yet created.");
         }
 
-        await PersistDomainEventAsync(evt);
+        var renamed = evt.Clone();
+        if (string.IsNullOrEmpty(renamed.Description))
+            renamed.Description = State.Description;
+        if (renamed.UpdatedAtUtc == null)
+            renamed.UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        await PersistDomainEventAsync(renamed);
     }
 
     [EventHandler(EndpointName = "updateImplementation")]
@@ -432,9 +440,11 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             DisplayName = evt.DisplayName,
             Description = evt.Description,
             ImplementationKind = evt.ImplementationKind,
-            ImplementationRef = null,
+            ImplementationRef = evt.ImplementationRef?.Clone(),
             PublishedServiceId = derivedPublishedServiceId,
-            LifecycleStage = StudioMemberLifecycleStage.Created,
+            LifecycleStage = HasResolvedImplementationRef(evt.ImplementationRef)
+                ? StudioMemberLifecycleStage.BuildReady
+                : StudioMemberLifecycleStage.Created,
             CreatedAtUtc = evt.CreatedAtUtc,
             UpdatedAtUtc = evt.CreatedAtUtc,
             LastBinding = null,
@@ -584,6 +594,7 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
             RevisionId = evt.RevisionId,
             ImplementationKind = evt.ImplementationKind,
             BoundAtUtc = evt.CompletedAtUtc,
+            ExpectedActorId = ResolveExpectedActorId(evt),
         };
         if (HasResolvedImplementationRef(evt.ImplementationRef))
         {
@@ -630,6 +641,9 @@ public sealed class StudioMemberGAgent : GAgentBase<StudioMemberState>, IProject
                && string.Equals(currentRun, bindingRunId, StringComparison.Ordinal)
                && !IsCurrentBindingTerminal(state);
     }
+
+    private static string ResolveExpectedActorId(StudioMemberBindingCompletedEvent evt) =>
+        evt.ExpectedActorId ?? string.Empty;
 
     private static bool HasActiveBindingRun(StudioMemberState state, string incomingBindingRunId)
     {

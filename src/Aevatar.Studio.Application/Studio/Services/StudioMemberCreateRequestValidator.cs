@@ -15,23 +15,57 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// </summary>
 internal static class StudioMemberCreateRequestValidator
 {
-    public static void Validate(CreateStudioMemberRequest request)
+    public static CreateStudioMemberRequest Validate(string scopeId, CreateStudioMemberRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        if (request.ImplementationRef != null)
+        {
+            throw new StudioMemberCreateImplementationRefNotAllowedException(scopeId);
+        }
 
         ValidateDisplayName(request.DisplayName);
         ValidateDescription(request.Description);
         ValidateMemberId(request.MemberId);
         ValidateTeamId(request.TeamId);
+
+        var implementationKind = ValidateImplementationKind(request.ImplementationKind);
+
+        return request with
+        {
+            DisplayName = request.DisplayName.Trim(),
+            Description = request.Description?.Trim(),
+            MemberId = string.IsNullOrWhiteSpace(request.MemberId) ? null : request.MemberId.Trim(),
+            TeamId = request.TeamId?.Trim(),
+            ImplementationKind = implementationKind,
+            ImplementationRef = null,
+        };
     }
 
-    private static void ValidateDisplayName(string? displayName)
+    public static CreateStudioMemberRequest Validate(CreateStudioMemberRequest request) =>
+        Validate(string.Empty, request);
+
+    private static string ValidateImplementationKind(string? implementationKind)
+    {
+        var normalized = implementationKind?.Trim().ToLowerInvariant() ?? string.Empty;
+        return normalized switch
+        {
+            MemberImplementationKindNames.Workflow
+                or MemberImplementationKindNames.Script
+                or MemberImplementationKindNames.GAgent => normalized,
+            "" => throw new InvalidOperationException("implementationKind is required."),
+            _ => throw new InvalidOperationException(
+                $"implementationKind '{implementationKind}' is not supported."),
+        };
+    }
+
+    public static string ValidateAndNormalizeDisplayName(string? displayName)
     {
         var trimmed = displayName?.Trim();
         if (string.IsNullOrEmpty(trimmed))
         {
             throw new InvalidOperationException(
-                "displayName is required when creating a member.");
+                "displayName is required.");
         }
 
         if (trimmed.Length > StudioMemberInputLimits.MaxDisplayNameLength)
@@ -39,7 +73,12 @@ internal static class StudioMemberCreateRequestValidator
             throw new InvalidOperationException(
                 $"displayName must be at most {StudioMemberInputLimits.MaxDisplayNameLength} characters.");
         }
+
+        return trimmed;
     }
+
+    private static void ValidateDisplayName(string? displayName) =>
+        _ = ValidateAndNormalizeDisplayName(displayName);
 
     private static void ValidateDescription(string? description)
     {

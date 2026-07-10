@@ -26,6 +26,7 @@ public static class LLMRequestMetadataKeys
     /// caller (Studio API, streaming proxy) — fall back to ambient prefs.
     /// </summary>
     public const string SenderBindingId = "aevatar.sender_binding_id";
+    public const string SenderNyxUserId = "aevatar.sender_nyx_user_id";
 
     /// <summary>
     /// Short-lived NyxID access token issued for <see cref="SenderBindingId"/>.

@@ -3,6 +3,8 @@
 // 封装 Chat API 返回的文本、tool_calls、Token 用量
 // ─────────────────────────────────────────────────────────────
 
+using Aevatar.AI.Abstractions;
+
 namespace Aevatar.AI.Abstractions.LLMProviders;
 
 /// <summary>LLM 同步 Chat 响应 DTO。</summary>
@@ -53,6 +55,9 @@ public sealed class LLMStreamChunk
 
     /// <summary>Token 用量（通常最后一块才有）。</summary>
     public TokenUsage? Usage { get; init; }
+
+    /// <summary>Typed authority receipt produced by a completed receipt-worthy tool call.</summary>
+    public AgentToolReceipt? ToolReceipt { get; init; }
 }
 
 /// <summary>Token 用量统计。</summary>

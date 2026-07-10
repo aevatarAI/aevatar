@@ -88,9 +88,58 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
     }
 
+    public async Task ShareAsync(
+        string agentId,
+        OwnerScope ownerScope,
+        bool allowTrigger,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentId))
+            throw new ArgumentException("agentId is required.", nameof(agentId));
+        ArgumentNullException.ThrowIfNull(ownerScope);
+
+        await EnsureCatalogActorAsync(ct);
+
+        var envelope = BuildEnvelope(new UserAgentCatalogShareCommand
+        {
+            AgentId = agentId,
+            OwnerScope = ownerScope.Clone(),
+            AllowTrigger = allowTrigger,
+        });
+        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+    }
+
+    public async Task UnshareAsync(
+        string agentId,
+        OwnerScope ownerScope,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(agentId))
+            throw new ArgumentException("agentId is required.", nameof(agentId));
+        ArgumentNullException.ThrowIfNull(ownerScope);
+
+        await EnsureCatalogActorAsync(ct);
+
+        var envelope = BuildEnvelope(new UserAgentCatalogUnshareCommand
+        {
+            AgentId = agentId,
+            OwnerScope = ownerScope.Clone(),
+        });
+        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+    }
+
     private async Task EnsureCatalogActorAsync(CancellationToken ct)
     {
         _ = await _actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
             ?? await _actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
     }
+
+    private static EventEnvelope BuildEnvelope(IMessage command) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
+        };
 }

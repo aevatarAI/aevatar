@@ -40,6 +40,9 @@ public sealed class ServiceCommandApplicationServiceTests
         provisioner.RevisionCatalogRequests.Should().ContainSingle();
         provisioner.DeploymentRequests.Should().ContainSingle();
         provisioner.ServingSetRequests.Should().ContainSingle();
+        provisioner.InvocationCatalogRequests.Should().HaveCount(3);
+        provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
+            ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Should().HaveCount(3);
     }
 
@@ -59,6 +62,17 @@ public sealed class ServiceCommandApplicationServiceTests
         {
             Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
         });
+        var reconcileExposureReceipt = await service.ReconcileExternalExposureAsync(new ReconcileExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+            OpenapiUrl = "https://api.test/api/services/svc/openapi.json",
+            DesiredSpecHash = "hash-1",
+            CredentialKid = "kid-1",
+        });
+        var retireExposureReceipt = await service.RetireExternalExposureAsync(new RetireExternalExposureCommand
+        {
+            Identity = identity.Clone(),
+        });
         var defaultReceipt = await service.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
         {
             Identity = identity.Clone(),
@@ -67,12 +81,19 @@ public sealed class ServiceCommandApplicationServiceTests
 
         createReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         updateReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        reconcileExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
+        retireExposureReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.TargetActorId.Should().Be(ServiceActorIds.Definition(identity));
         defaultReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rev-1");
-        provisioner.DefinitionRequests.Should().HaveCount(3);
+        provisioner.DefinitionRequests.Should().HaveCount(5);
+        provisioner.InvocationCatalogRequests.Should().HaveCount(5);
+        provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
+            ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
             AnyTypeUrl<CreateServiceDefinitionCommand>(),
             AnyTypeUrl<UpdateServiceDefinitionCommand>(),
+            AnyTypeUrl<ReconcileExternalExposureCommand>(),
+            AnyTypeUrl<RetireExternalExposureCommand>(),
             AnyTypeUrl<SetDefaultServingRevisionCommand>(),
         ]);
     }
@@ -110,6 +131,9 @@ public sealed class ServiceCommandApplicationServiceTests
         publishReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r3");
         retireReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r4");
         provisioner.RevisionCatalogRequests.Should().HaveCount(4);
+        provisioner.InvocationCatalogRequests.Should().HaveCount(4);
+        provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
+            ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.RevisionCatalog(identity));
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
             AnyTypeUrl<CreateServiceRevisionCommand>(),
@@ -143,6 +167,8 @@ public sealed class ServiceCommandApplicationServiceTests
         deactivateReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:dep-1");
         provisioner.DeploymentRequests.Should().HaveCount(2);
         provisioner.ServingSetRequests.Should().ContainSingle();
+        provisioner.InvocationCatalogRequests.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(identity);
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
             AnyTypeUrl<ActivateServiceRevisionCommand>(),
             AnyTypeUrl<DeactivateServiceDeploymentCommand>(),
@@ -186,6 +212,9 @@ public sealed class ServiceCommandApplicationServiceTests
         rolloutReceipt.TargetActorId.Should().Be(ServiceActorIds.Rollout(identity));
         provisioner.ServingSetRequests.Should().HaveCount(2);
         provisioner.RolloutRequests.Should().ContainSingle();
+        provisioner.InvocationCatalogRequests.Should().HaveCount(2);
+        provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
+            ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Should().HaveCount(2);
         dispatchPort.Calls[0].envelope.Payload.Unpack<ReplaceServiceServingTargetsCommand>()
             .Targets.Should().ContainSingle();
@@ -224,6 +253,9 @@ public sealed class ServiceCommandApplicationServiceTests
         rollbackReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:rollout-1");
         provisioner.RolloutRequests.Should().HaveCount(3);
         provisioner.ServingSetRequests.Should().HaveCount(2);
+        provisioner.InvocationCatalogRequests.Should().HaveCount(2);
+        provisioner.InvocationCatalogRequests.Should().OnlyContain(x =>
+            ServiceKeys.Build(x) == ServiceKeys.Build(identity));
         dispatchPort.Calls.Select(x => x.actorId).Should().OnlyContain(x => x == ServiceActorIds.Rollout(identity));
         dispatchPort.Calls.Select(x => x.envelope.Payload.TypeUrl).Should().Contain([
             AnyTypeUrl<AdvanceServiceRolloutCommand>(),
@@ -309,6 +341,8 @@ public sealed class ServiceCommandApplicationServiceTests
 
         public List<ServiceIdentity> RolloutRequests { get; } = [];
 
+        public List<ServiceIdentity> InvocationCatalogRequests { get; } = [];
+
         public Task<string> EnsureDefinitionTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             DefinitionRequests.Add(identity.Clone());
@@ -337,6 +371,12 @@ public sealed class ServiceCommandApplicationServiceTests
         {
             RolloutRequests.Add(identity.Clone());
             return Task.FromResult(ServiceActorIds.Rollout(identity));
+        }
+
+        public Task<string> EnsureInvocationCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            InvocationCatalogRequests.Add(identity.Clone());
+            return Task.FromResult(ServiceActorIds.InvocationCatalog(identity));
         }
     }
 

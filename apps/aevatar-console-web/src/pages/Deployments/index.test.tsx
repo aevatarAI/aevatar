@@ -298,7 +298,7 @@ describe('DeploymentsPage', () => {
   it('shows the service deployment list before an operator opens a service', async () => {
     renderDeploymentsPage();
 
-    expect(await screen.findByText('Aevatar / Platform')).toBeInTheDocument();
+    expect(await screen.findByText('Platform')).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { name: 'Deployments' }),
     ).toBeInTheDocument();
@@ -387,7 +387,7 @@ describe('DeploymentsPage', () => {
     expect(
       screen.getByRole('button', { name: '加载范围变更' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Trade Agent')).toBeInTheDocument();
+    expect(screen.getAllByText('Trade Agent').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '重置' }));
 
@@ -426,7 +426,8 @@ describe('DeploymentsPage', () => {
     expect(
       screen.getByRole('button', { name: '部署候选版本' }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText('dep-1').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Trade Agent').length).toBeGreaterThan(0);
+    expect(screen.queryByText('dep-1')).toBeNull();
   });
 
   it('opens the service deployment drawer from the service list row', async () => {
@@ -577,10 +578,8 @@ describe('DeploymentsPage', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText('已观察')).toBeNull();
     expect(screen.getAllByText('需核对').length).toBeGreaterThanOrEqual(3);
-    expect(
-      screen.getByText(/服务目标已包含 rev-12/),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/流量拆分已包含 rev-12/)).toBeInTheDocument();
+    expect(screen.getByText('Serving evidence')).toBeInTheDocument();
+    expect(screen.getByText('Traffic evidence')).toBeInTheDocument();
     expect(screen.getByText('候选修订')).toBeInTheDocument();
     expect(screen.getAllByText('rev-12').length).toBeGreaterThan(0);
     expect(screen.queryByText('候选版本已在服务态生效')).toBeNull();

@@ -27,44 +27,54 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
     private readonly IOpenAIRealtimeSessionFactory _sessionFactory;
     private readonly OpenAIRealtimeProviderOptions _options;
+    private readonly IRealtimeProviderCredentialResolver? _credentialResolver;
     private readonly ILogger _logger;
 
     private bool _disposed;
 
     public OpenAIRealtimeProvider(
         OpenAIRealtimeProviderOptions? options = null,
-        ILogger<OpenAIRealtimeProvider>? logger = null)
+        ILogger<OpenAIRealtimeProvider>? logger = null,
+        IRealtimeProviderCredentialResolver? credentialResolver = null)
         : this(
             new OpenAIRealtimeSessionFactory(),
             options ?? new OpenAIRealtimeProviderOptions(),
-            logger ?? NullLogger<OpenAIRealtimeProvider>.Instance)
+            logger ?? NullLogger<OpenAIRealtimeProvider>.Instance,
+            credentialResolver)
     {
     }
 
     internal OpenAIRealtimeProvider(
         IOpenAIRealtimeSessionFactory sessionFactory,
         OpenAIRealtimeProviderOptions options,
-        ILogger logger)
+        ILogger logger,
+        IRealtimeProviderCredentialResolver? credentialResolver = null)
     {
         _sessionFactory = sessionFactory ?? throw new ArgumentNullException(nameof(sessionFactory));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _credentialResolver = credentialResolver;
     }
 
     public async Task<RealtimeVoiceProviderSession> ConnectAsync(
         VoiceProviderSessionKey sessionKey,
         VoiceProviderConfig config,
         Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+        Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
         CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(eventSink);
-        ValidateProviderConfig(config);
+        ArgumentNullException.ThrowIfNull(audioSink);
 
-        var session = await _sessionFactory.StartConversationSessionAsync(config, _options.DefaultModel, ct);
-        var providerSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink);
+        var effectiveConfig = await ResolveEffectiveConfigAsync(sessionKey, config, ct);
+        ValidateProviderConfig(effectiveConfig);
+
+        var session = await _sessionFactory.StartConversationSessionAsync(effectiveConfig, _options.DefaultModel, ct);
+        var providerSession = new OpenAIRealtimeProviderSession(sessionKey, session, this, _logger, eventSink, audioSink);
         providerSession.Start();
+        await providerSession.UpdateSessionAsync(BuildNoAutoResponseSessionConfig(), createResponse: false, ct);
         return providerSession;
     }
 
@@ -80,7 +90,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
     private static string BuildInjectedEventText(VoiceConversationEventInjection injection) =>
         $"External event observed:\n{InjectionJsonFormatter.Format(injection)}";
 
-    private static VoiceProviderEvent? MapSessionEvent(OpenAIRealtimeSessionEvent sessionEvent, int sampleRateHz) =>
+    private static VoiceProviderEvent? MapSessionEvent(OpenAIRealtimeSessionEvent sessionEvent) =>
         sessionEvent switch
         {
             OpenAIRealtimeSpeechStartedEvent => new VoiceProviderEvent
@@ -112,15 +122,6 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                     ProviderResponseId = finished.ProviderResponseId,
                 },
             },
-            OpenAIRealtimeOutputAudioDeltaEvent audio => new VoiceProviderEvent
-            {
-                AudioReceived = new VoiceAudioReceived
-                {
-                    Pcm16 = Google.Protobuf.ByteString.CopyFrom(audio.Pcm16),
-                    SampleRateHz = sampleRateHz,
-                    ProviderResponseId = audio.ProviderResponseId,
-                },
-            },
             OpenAIRealtimeFunctionCallEvent functionCall => new VoiceProviderEvent
             {
                 FunctionCall = new VoiceFunctionCallRequested
@@ -131,6 +132,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                     ProviderResponseId = functionCall.ProviderResponseId,
                 },
             },
+            OpenAIRealtimeErrorEvent error when IsBenignRealtimeRaceError(error.Code) => null,
             OpenAIRealtimeErrorEvent error => new VoiceProviderEvent
             {
                 Error = new VoiceProviderError
@@ -149,7 +151,20 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             _ => null,
         };
 
-    private BinaryData BuildSessionUpdateEvent(VoiceSessionConfig session, int sampleRateHz)
+    // Benign idempotent realtime races that must NOT reach the client as fatal errors:
+    //   response_cancel_not_active               — an explicit response.cancel that lost the race to
+    //                                              OpenAI's server-side interrupt_response; the active
+    //                                              response is already gone.
+    //   conversation_already_has_active_response — a redundant response.create while one is active.
+    // Both mean the cancel/create post-condition already holds, so they are no-ops, not failures.
+    private static bool IsBenignRealtimeRaceError(string code) =>
+        string.Equals(code, "response_cancel_not_active", StringComparison.Ordinal) ||
+        string.Equals(code, "conversation_already_has_active_response", StringComparison.Ordinal);
+
+    private BinaryData BuildSessionUpdateEvent(
+        VoiceSessionConfig session,
+        int sampleRateHz,
+        bool? createResponseOverride = null)
     {
         // Refactor (iter94/cluster-809):
         // Old:OpenAI SDK typed beta session options.
@@ -165,7 +180,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 ["input"] = new JsonObject
                 {
                     ["format"] = BuildPcmAudioFormat(sampleRateHz),
-                    ["turn_detection"] = BuildTurnDetection(),
+                    ["turn_detection"] = BuildTurnDetection(session, createResponseOverride),
                 },
                 ["output"] = new JsonObject
                 {
@@ -182,6 +197,19 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         if (tools.Count > 0)
             sessionObject["tool_choice"] = "auto";
 
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            var toolNames = new List<string>(tools.Count);
+            foreach (var t in tools)
+                toolNames.Add(t?["name"]?.GetValue<string>() ?? "?");
+            _logger.LogInformation(
+                "voice session.update built: {ToolCount} tools, tool_choice={ToolChoice}, instructions={InstrChars} chars, tools=[{ToolNames}]",
+                tools.Count,
+                tools.Count > 0 ? "auto" : "none",
+                (sessionObject["instructions"]?.GetValue<string>() ?? string.Empty).Length,
+                string.Join(",", toolNames));
+        }
+
         var updateEvent = new JsonObject
         {
             ["type"] = "session.update",
@@ -190,6 +218,13 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
         return BinaryData.FromString(updateEvent.ToJsonString());
     }
+
+    private static VoiceSessionConfig BuildNoAutoResponseSessionConfig() =>
+        new()
+        {
+            SampleRateHz = OpenAIRealtimeProviderOptions.DefaultSampleRateHz,
+            TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+        };
 
     private JsonArray BuildTools(VoiceSessionConfig session)
     {
@@ -254,19 +289,34 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             ["rate"] = sampleRateHz,
         };
 
-    private JsonNode? BuildTurnDetection()
+    private JsonNode? BuildTurnDetection(VoiceSessionConfig session, bool? createResponseOverride = null)
     {
-        if (!_options.EnableServerVad)
-            return null;
+        return session.TurnDetectionMode switch
+        {
+            VoiceTurnDetectionMode.Disabled or VoiceTurnDetectionMode.ClientVad => null,
+            VoiceTurnDetectionMode.Unspecified when !_options.EnableServerVad => null,
+            VoiceTurnDetectionMode.Unspecified or VoiceTurnDetectionMode.ServerVad =>
+                BuildServerVadTurnDetection(session, createResponseOverride),
+            _ => null,
+        };
+    }
 
+    private JsonObject BuildServerVadTurnDetection(VoiceSessionConfig session, bool? createResponseOverride = null)
+    {
         return new JsonObject
         {
             ["type"] = "server_vad",
-            ["threshold"] = _options.DetectionThreshold,
-            ["prefix_padding_ms"] = (int)_options.PrefixPadding.TotalMilliseconds,
-            ["silence_duration_ms"] = (int)_options.SilenceDuration.TotalMilliseconds,
+            ["threshold"] = session.VadDetectionThreshold > 0
+                ? session.VadDetectionThreshold
+                : _options.DetectionThreshold,
+            ["prefix_padding_ms"] = session.VadPrefixPaddingMs > 0
+                ? session.VadPrefixPaddingMs
+                : (int)_options.PrefixPadding.TotalMilliseconds,
+            ["silence_duration_ms"] = session.VadSilenceDurationMs > 0
+                ? session.VadSilenceDurationMs
+                : (int)_options.SilenceDuration.TotalMilliseconds,
             ["interrupt_response"] = _options.InterruptResponseOnSpeech,
-            ["create_response"] = _options.AutoCreateResponse,
+            ["create_response"] = createResponseOverride ?? _options.AutoCreateResponse,
         };
     }
 
@@ -282,6 +332,28 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         }
 
         return requested;
+    }
+
+    // Refactor (cluster-voice-nyxid-ephemeral-broker):
+    //   Old pattern: config.ApiKey was a static OPENAI_API_KEY loaded from host config/env and used as-is.
+    //   New principle: when a credential resolver is wired (NyxID broker mode), resolve a short-lived
+    //     ephemeral key per connect; otherwise fall back to the static config key (local/direct dev).
+    //   The resolved key only opens the provider connection and is never persisted.
+    private async Task<VoiceProviderConfig> ResolveEffectiveConfigAsync(
+        VoiceProviderSessionKey sessionKey,
+        VoiceProviderConfig config,
+        CancellationToken ct)
+    {
+        if (_credentialResolver is null)
+            return config;
+
+        var resolvedApiKey = await _credentialResolver.ResolveApiKeyAsync(sessionKey, config, ct);
+        if (string.IsNullOrWhiteSpace(resolvedApiKey))
+            return config;
+
+        var effective = config.Clone();
+        effective.ApiKey = resolvedApiKey;
+        return effective;
     }
 
     private static void ValidateProviderConfig(VoiceProviderConfig config)
@@ -307,6 +379,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         private readonly OpenAIRealtimeProvider _connector;
         private readonly ILogger _logger;
         private readonly Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> _eventSink;
+        private readonly Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> _audioSink;
         private readonly CancellationTokenSource _physicalSessionCancellation = new();
         private Task? _receiveTask;
         private bool _disposed;
@@ -317,13 +390,15 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             IOpenAIRealtimeSession session,
             OpenAIRealtimeProvider connector,
             ILogger logger,
-            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink)
+            Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink)
         {
             _callbackKey = sessionKey;
             _physicalSession = session;
             _connector = connector;
             _logger = logger;
             _eventSink = eventSink;
+            _audioSink = audioSink;
         }
 
         public void Start()
@@ -337,6 +412,22 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
                 return Task.CompletedTask;
 
             return _physicalSession.SendInputAudioAsync(BinaryData.FromBytes(pcm16.ToArray()), ct);
+        }
+
+        public override async Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(inputImage);
+            if (inputImage.Data.IsEmpty)
+                return;
+
+            var mediaType = string.IsNullOrWhiteSpace(inputImage.MediaType)
+                ? "image/png"
+                : inputImage.MediaType.Trim();
+            if (!mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Image media_type must start with 'image/'.", nameof(inputImage));
+
+            await _physicalSession.SendInputImageAsync(BuildInputImageEvent(inputImage, mediaType), ct);
+            await _physicalSession.StartResponseAsync(ct);
         }
 
         public override async Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
@@ -367,6 +458,19 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             await _physicalSession.SendSessionUpdateAsync(_connector.BuildSessionUpdateEvent(session, _outputSampleRateHz), ct);
         }
 
+        internal async Task UpdateSessionAsync(
+            VoiceSessionConfig session,
+            bool createResponse,
+            CancellationToken ct)
+        {
+            ArgumentNullException.ThrowIfNull(session);
+
+            _outputSampleRateHz = _connector.ResolveSampleRateHz(session.SampleRateHz);
+            await _physicalSession.SendSessionUpdateAsync(
+                _connector.BuildSessionUpdateEvent(session, _outputSampleRateHz, createResponse),
+                ct);
+        }
+
         internal async Task InjectUserTextAsync(string text, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(text))
@@ -378,6 +482,29 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 
             await _physicalSession.AddItemAsync(item, ct);
             await _physicalSession.StartResponseAsync(ct);
+        }
+
+        private static BinaryData BuildInputImageEvent(VoiceInputImage inputImage, string mediaType)
+        {
+            var eventObject = new JsonObject
+            {
+                ["type"] = "conversation.item.create",
+                ["item"] = new JsonObject
+                {
+                    ["type"] = "message",
+                    ["role"] = "user",
+                    ["content"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["type"] = "input_image",
+                            ["image_url"] = $"data:{mediaType};base64,{Convert.ToBase64String(inputImage.Data.ToByteArray())}",
+                        },
+                    },
+                },
+            };
+
+            return BinaryData.FromString(eventObject.ToJsonString());
         }
 
         public override async ValueTask DisposeAsync()
@@ -398,7 +525,36 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             {
                 await foreach (var sessionEvent in _physicalSession.ReceiveEventsAsync(ct).WithCancellation(ct))
                 {
-                    var providerEvent = MapSessionEvent(sessionEvent, _outputSampleRateHz);
+                    if (sessionEvent is OpenAIRealtimeOutputAudioDeltaEvent audio)
+                    {
+                        await EmitAudioAsync(new VoiceProviderAudioFrame(
+                            audio.Pcm16,
+                            _outputSampleRateHz,
+                            audio.ProviderResponseId), ct);
+                        continue;
+                    }
+
+                    // Genuine server-side rejections (rate_limit, auth, …) surface at Warning and reach
+                    // the client as an Error frame. Benign idempotent races
+                    // (response_cancel_not_active from losing to interrupt_response;
+                    // conversation_already_has_active_response from a redundant response.create) are
+                    // expected on every barge-in — log at Debug and let MapSessionEvent drop them so a
+                    // working voice session is never shown to the user as a fatal error.
+                    if (sessionEvent is OpenAIRealtimeErrorEvent errorEvent)
+                    {
+                        if (IsBenignRealtimeRaceError(errorEvent.Code))
+                            _logger.LogDebug(
+                                "OpenAI realtime benign race error code={ErrorCode} message={ErrorMessage} (suppressed)",
+                                errorEvent.Code,
+                                errorEvent.Message);
+                        else
+                            _logger.LogWarning(
+                                "OpenAI realtime error code={ErrorCode} message={ErrorMessage}",
+                                errorEvent.Code,
+                                errorEvent.Message);
+                    }
+
+                    var providerEvent = MapSessionEvent(sessionEvent);
                     if (providerEvent != null)
                         await EmitAsync(providerEvent, ct);
                 }
@@ -423,6 +579,18 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             {
                 _logger.LogWarning(ex, "OpenAI realtime provider callback failed for event {EventCase}.",
                     providerEvent.EventCase);
+            }
+        }
+
+        private async Task EmitAudioAsync(VoiceProviderAudioFrame audioFrame, CancellationToken ct)
+        {
+            try
+            {
+                await _audioSink(_callbackKey, audioFrame, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "OpenAI realtime provider audio callback failed.");
             }
         }
     }

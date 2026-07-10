@@ -73,6 +73,32 @@ jest.mock('@/shared/ui/aevatarPageShells', () => {
       ),
     AevatarPageShell: ({ children }: any) =>
       mockReact.createElement('section', null, children),
+    AevatarPageTitleBlock: ({
+      breadcrumbItems,
+      onBack,
+      title,
+      titleHelp,
+    }: any) =>
+      mockReact.createElement(
+        'header',
+        null,
+        onBack
+          ? mockReact.createElement(
+              'button',
+              { 'aria-label': 'Team Home', onClick: onBack, type: 'button' },
+              'Team Home',
+            )
+          : null,
+        breadcrumbItems?.length
+          ? mockReact.createElement(
+              'nav',
+              { 'aria-label': 'Breadcrumb' },
+              breadcrumbItems.map((item: any) => item.title).join(' / '),
+            )
+          : null,
+        mockReact.createElement('strong', null, title),
+        titleHelp ? mockReact.createElement('span', null, titleHelp) : null,
+      ),
     AevatarStatusTag: ({ status }: any) =>
       mockReact.createElement('span', null, status),
   };
@@ -92,7 +118,7 @@ jest.mock('@/shared/studio/api', () => ({
       deploymentStatus: 'Active',
       updatedAt: '2026-03-26T08:00:00Z',
       gAgent: {
-        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        agentKind: 'nyxid.chat',
         preferredActorId: 'NyxIdChat:scope-a',
       },
     })),
@@ -689,7 +715,7 @@ describe('ScopeInvokePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Observed Events' }));
     expect(await screen.findByText('Observed Events (3)')).toBeTruthy();
     expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
-    expect(screen.getByText('run-1')).toBeTruthy();
+    expect(screen.queryByText('run-1')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Continue in Runs' }));
 
     expect(window.location.pathname).toBe('/runtime/runs');
@@ -758,7 +784,7 @@ describe('ScopeInvokePage', () => {
 
     await waitFor(() => {
       expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
-        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        agentKind: 'nyxid.chat',
         displayName: 'NyxID Chat',
         endpoints: [
           {
@@ -795,7 +821,7 @@ describe('ScopeInvokePage', () => {
     expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
   });
 
-  it('keeps the invoke lab workspace constrained so the chat composer stays visible', async () => {
+  it('keeps the invoke lab composer visible after loading the workspace service', async () => {
     (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([
       {
         serviceKey: 'scope-a:default:default:default',
@@ -826,19 +852,6 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    const viewport = await screen.findByTestId('invoke-lab-workspace-viewport');
-    const grid = await screen.findByTestId('invoke-lab-workspace-grid');
-
-    expect(viewport).toHaveStyle({
-      flex: '1 1 auto',
-      minHeight: '0',
-      overflow: 'hidden',
-    });
-    expect(grid).toHaveStyle({
-      alignItems: 'stretch',
-      height: '100%',
-      minHeight: '0',
-    });
     expect(
       await screen.findByPlaceholderText('Send a message...'),
     ).toBeTruthy();

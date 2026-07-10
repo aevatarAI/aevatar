@@ -17,7 +17,6 @@ public sealed class AppScopedWorkflowService
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly IStudioWorkspaceQueryPort? _workspaceQueryPort;
     private readonly IStudioWorkspaceCommandPort? _workspaceCommandPort;
-    private readonly IStudioMemberCommandPort? _memberCommandPort;
     private readonly ILogger<AppScopedWorkflowService>? _logger;
 
     public AppScopedWorkflowService(
@@ -25,14 +24,12 @@ public sealed class AppScopedWorkflowService
         IWorkflowDefinitionParser workflowDefinitionParser,
         IStudioWorkspaceQueryPort? workspaceQueryPort = null,
         IStudioWorkspaceCommandPort? workspaceCommandPort = null,
-        IStudioMemberCommandPort? memberCommandPort = null,
         ILogger<AppScopedWorkflowService>? logger = null)
     {
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         _workspaceQueryPort = workspaceQueryPort;
         _workspaceCommandPort = workspaceCommandPort;
-        _memberCommandPort = memberCommandPort;
         _logger = logger;
     }
 
@@ -65,20 +62,31 @@ public sealed class AppScopedWorkflowService
                 draft);
     }
 
-    public Task<WorkflowDraftResponse> CreateDraftAsync(
+    public async Task<WorkflowDraftCreateAcceptedResponse> CreateDraftAsync(
         string scopeId,
         SaveWorkflowDraftRequest request,
         CancellationToken ct = default)
-        => SaveDraftAsync(scopeId, workflowId: null, request, ct);
+    {
+        var (draft, receipt) = await SaveDraftCommandAsync(scopeId, workflowId: null, request, ct);
+        return ToDraftCreateAcceptedResponse(draft.WorkflowId, receipt);
+    }
 
-    public Task<WorkflowDraftResponse> UpdateDraftAsync(
+    public async Task<WorkflowDraftResponse> UpdateDraftAsync(
         string scopeId,
         string workflowId,
         SaveWorkflowDraftRequest request,
         CancellationToken ct = default)
-        => SaveDraftAsync(scopeId, NormalizeRequired(workflowId, nameof(workflowId)), request, ct);
+    {
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var (draft, _) = await SaveDraftCommandAsync(
+            normalizedScopeId,
+            NormalizeRequired(workflowId, nameof(workflowId)),
+            request,
+            ct);
+        return ToDraftWorkflowResponse(normalizedScopeId, draft);
+    }
 
-    private async Task<WorkflowDraftResponse> SaveDraftAsync(
+    private async Task<(StudioWorkflowDraftRecord Draft, StudioWorkspaceCommandReceipt Receipt)> SaveDraftCommandAsync(
         string scopeId,
         string? workflowId,
         SaveWorkflowDraftRequest request,
@@ -113,7 +121,7 @@ public sealed class AppScopedWorkflowService
         var workspace = await workspaceQueryPort.GetAsync(normalizedScopeId, ct);
         var savedAtUtc = DateTimeOffset.UtcNow;
         var normalizedWorkflowId = string.IsNullOrWhiteSpace(workflowId)
-            ? CreateScopedWorkflowId(workflowName, workspace.Drafts.Select(static draft => draft.WorkflowId))
+            ? CreateWorkflowDraftId()
             : workflowId;
 
         var existingDraft = workspace.Drafts.FirstOrDefault(draft =>
@@ -127,12 +135,26 @@ public sealed class AppScopedWorkflowService
         }
 
         var scopeDirectory = CreateScopeDirectory(normalizedScopeId);
-        var fileName = EnsureYamlExtension(normalizedWorkflowId);
+        var fileName = EnsureYamlExtension(string.IsNullOrWhiteSpace(request.FileName)
+            ? workflowName
+            : request.FileName.Trim());
+        var filePath = $"{scopeDirectory.Path}/{fileName}";
+        var conflictingDraft = workspace.Drafts.FirstOrDefault(draft =>
+            string.Equals(draft.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        if (conflictingDraft != null &&
+            !string.Equals(conflictingDraft.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal))
+        {
+            throw new WorkflowDraftPathConflictException(
+                normalizedWorkflowId,
+                $"{scopeDirectory.Label}/{fileName}",
+                conflictingDraft.WorkflowId);
+        }
+
         var stored = new StudioWorkflowDraftRecord(
             WorkflowId: normalizedWorkflowId,
             Name: workflowName,
             FileName: fileName,
-            FilePath: $"{scopeDirectory.Path}/{fileName}",
+            FilePath: filePath,
             DirectoryId: scopeDirectory.DirectoryId,
             DirectoryLabel: scopeDirectory.Label,
             Yaml: normalizedYaml,
@@ -142,26 +164,13 @@ public sealed class AppScopedWorkflowService
             Version: existingDraft?.Version ?? 0);
 
         // Scoped workspace save persists an editor draft; publish stays on the scope-binding flow.
-        await workspaceCommandPort.SaveDraftAsync(
+        var receipt = await workspaceCommandPort.SaveDraftAsync(
             normalizedScopeId,
             stored,
-            workspace.StateVersion,
+            expectedVersion: null,
             ct);
 
-        if (existingDraft == null)
-        {
-            // Refactor (iter290/cluster1316-first): Old pattern: scoped draft save without member authority. New principle: reuse existing StudioMember command port.
-            await CreateMemberAuthorityAsync(
-                normalizedScopeId,
-                normalizedWorkflowId,
-                workflowName,
-                parsed.Document?.Description,
-                ct);
-        }
-
-        return ToDraftWorkflowResponse(
-            normalizedScopeId,
-            stored);
+        return (stored, receipt);
     }
 
     public async Task DeleteDraftAsync(
@@ -183,7 +192,7 @@ public sealed class AppScopedWorkflowService
             throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
         }
 
-        await workspaceCommandPort.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, workspace.StateVersion, ct);
+        await workspaceCommandPort.DeleteDraftAsync(normalizedScopeId, normalizedWorkflowId, expectedVersion: null, ct);
     }
 
     // Refactor (iter56/cluster-929-studio-workflow-obsolete-shims):
@@ -304,26 +313,6 @@ public sealed class AppScopedWorkflowService
             draft.UpdatedAtUtc);
     }
 
-    private async Task CreateMemberAuthorityAsync(
-        string scopeId,
-        string memberId,
-        string displayName,
-        string? description,
-        CancellationToken ct)
-    {
-        var memberCommandPort = _memberCommandPort
-            ?? throw new InvalidOperationException("Studio member command port is not configured.");
-
-        await memberCommandPort.CreateAsync(
-            scopeId,
-            new CreateStudioMemberRequest(
-                DisplayName: displayName,
-                ImplementationKind: MemberImplementationKindNames.Workflow,
-                Description: string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
-                MemberId: memberId),
-            ct);
-    }
-
     private WorkflowDraftResponse ToDraftWorkflowResponse(
         string scopeId,
         StudioWorkflowDraftRecord draft)
@@ -356,28 +345,25 @@ public sealed class AppScopedWorkflowService
         return draft.WorkflowId;
     }
 
-    private static string CreateScopedWorkflowId(
-        string workflowName,
-        IEnumerable<string> existingWorkflowIds)
-    {
-        var baseWorkflowId = StudioDocumentIdNormalizer.Normalize(workflowName, "workflow");
-        var existingIds = existingWorkflowIds.ToHashSet(StringComparer.Ordinal);
-        if (!existingIds.Contains(baseWorkflowId))
-        {
-            return baseWorkflowId;
-        }
+    private static WorkflowDraftCreateAcceptedResponse ToDraftCreateAcceptedResponse(
+        string workflowId,
+        StudioWorkspaceCommandReceipt receipt) =>
+        new(
+            Accepted: true,
+            WorkflowId: workflowId,
+            CommandId: receipt.CommandId,
+            AckStage: "accepted",
+            ActorId: receipt.ActorId,
+            WorkspaceId: receipt.WorkspaceId,
+            ExpectedVersion: receipt.ExpectedVersion,
+            AckedAtUtc: DateTimeOffset.UtcNow,
+            Readiness: new WorkflowDraftReadinessResponse(
+                Readable: false,
+                Stage: "projection_pending",
+                Message: "The workflow draft create command was accepted. Poll the workflow draft by id until the scoped workspace read model observes it."));
 
-        for (var suffix = 2; suffix < int.MaxValue; suffix++)
-        {
-            var candidate = $"{baseWorkflowId}-{suffix}";
-            if (!existingIds.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new InvalidOperationException("Unable to allocate a unique scoped workflow draft id.");
-    }
+    private static string CreateWorkflowDraftId() =>
+        Guid.NewGuid().ToString("N");
 
     private static string NormalizeRequired(string value, string fieldName)
     {

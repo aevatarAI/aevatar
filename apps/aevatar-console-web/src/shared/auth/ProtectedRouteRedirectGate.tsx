@@ -1,8 +1,8 @@
-import { PageLoading } from "@ant-design/pro-components";
-import React from "react";
-import { CONSOLE_HOME_ROUTE } from "@/shared/navigation/consoleHome";
-import { history } from "@/shared/navigation/history";
-import { sanitizeReturnTo } from "./session";
+import React from 'react';
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
+import { history } from '@/shared/navigation/history';
+import { AevatarPageLoading } from '@/shared/ui/AevatarLoading';
+import { sanitizeReturnTo } from './session';
 
 type ProtectedRouteRedirectGateProps = {
   pathname: string;
@@ -16,7 +16,7 @@ function buildLoginRoute(returnTo: string): string {
 }
 
 function getCurrentReturnTo(pathname: string): string {
-  return pathname === "/"
+  return pathname === '/'
     ? CONSOLE_HOME_ROUTE
     : `${pathname}${window.location.search}${window.location.hash}`;
 }
@@ -28,5 +28,5 @@ export const ProtectedRouteRedirectGate: React.FC<
     history.replace(buildLoginRoute(getCurrentReturnTo(pathname)));
   }, [pathname]);
 
-  return <PageLoading fullscreen />;
+  return <AevatarPageLoading fullscreen />;
 };

@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -11,9 +12,6 @@ namespace Aevatar.Workflow.Core.Modules;
 /// Self-reflection loop: draft → critique → improve → critique → ...
 /// Repeats until critique says "PASS" or max rounds reached.
 /// </summary>
-// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
 public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
 {
     private const string ModuleStateKey = "reflect";
@@ -212,6 +210,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             StepId = state.StepId,
         };
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -248,6 +247,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             RunId = state.RunId,
             StepId = state.StepId,
         };
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -289,9 +289,6 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         MapField<string, string> source,
         WorkflowLlmExecutionIntent intent)
     {
-        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
-        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
         foreach (var (key, value) in source)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
@@ -318,6 +315,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             destination[key.Trim()] = value.Trim();
         }
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)
     {

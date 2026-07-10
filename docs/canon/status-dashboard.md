@@ -112,9 +112,9 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不创建 run、不调用固定 actor/team，只验证 host 组合层是否仍具备 core-loop 所需能力：
 
 1. `workspace.default` tool set 可解析。
-2. 五个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
+2. 四个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
 3. route policy 使用 `ForwardToModel + tool_choice_hint` 表达 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 目标；旧 GAgent/team wire action 已删除。
-4. `wait=complete` 在 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 上只保留公开参数与 accepted/streaming receipt 语义；完成态由 `aevatar_observe_run` 或 `aevatar_query_readmodel` 读取 readmodel 获取，不再进入 ChatRun completion 协调。
+4. `wait=complete` 在 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 上只保留公开参数与 accepted/streaming receipt 语义；完成态由 typed `aevatar_observe_run` target 读取单一 readmodel 获取，不再进入 ChatRun completion 协调。普通 workflow 查询走 workflow-owned `workflow_actor_current_state`、`workflow_status`、`event_query`。
 
 `http_status` 支持的常用参数：
 
@@ -129,11 +129,14 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 | `ExpectedBodyContains` / `ExpectedBodyRegex` | 成功响应必须包含的 body 条件 |
 | `ForbiddenBodyContains` / `ForbiddenBodyRegex` | 成功响应不得包含的 body 条件 |
 | `DegradedOnNon2xx` | unexpected non-2xx 是否标为 degraded，而不是 down |
-| `Auth.Mode` | 可选认证模式：`none`、`static_bearer`、`client_credentials`、`auto` |
+| `Auth.Mode` | 可选认证模式：`none`、`static_bearer`、`client_credentials`、`scope_service_token`、`auto` |
 | `Auth.StaticBearerConfigurationKey` | `static_bearer` 使用的配置键 |
 | `Auth.TokenEndpoint` | `client_credentials` 使用的 OAuth token endpoint |
 | `Auth.ClientIdConfigurationKey` / `Auth.ClientSecretConfigurationKey` | `client_credentials` 使用的 client id / secret 配置键 |
 | `Auth.ClientCredentialsScope` | `client_credentials` 请求的 OAuth scope |
+| `Auth.ScopeId` | `scope_service_token` 使用的 scope id（自签 token 的 `scope_id` claim，须与被探端点路径一致） |
+
+`scope_service_token` 让 host 用 `IScopeServiceTokenIssuer` 自签一个短生命周期 scope service token（Bearer，带 `scope_id` claim），用于探测 host 自身的鉴权端点并断言真实成功（200）。token 由 host 侧 `IProbeServiceTokenProvider` 按 scope 缓存、临到期前刷新。当 scope service tokens 未启用（provider 缺失）或拿不到 token 时，executor 把该探针记为 `unknown`（detail `credential_unavailable`），绝不发未鉴权请求、绝不误报 `down`。解析出的 Bearer 即使 target 未声明 `Header.Authorization` 也会自动附加。
 
 `static_bearer` 用于长期机器 bearer，例如 NyxID API key / Agent Key。不要把人工登录产生的短期 access token 配成这里的生产值；它会过期，过期后整组探针会一起 401。
 
@@ -178,8 +181,13 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 `/api/status`：
 
 1. 调用 `IHealthStatusQueryPort.ListAllAsync`。
-2. 将 `HealthProbeTargetDocument` 映射成 JSON。
-3. 聚合 overall：有 down 则 down，有 degraded 则 degraded，全 unknown 且没有 ok 则 unknown，否则 ok。
+2. 将 `HealthProbeTargetDocument` 映射成 JSON（含 `severity`）。
+3. 聚合 overall（按 severity 加权、诚实口径）：
+   - 只统计 status 已知（ok/degraded/down）的 enabled target；status 为 `unknown`（例如未配置凭证的 canary）一律排除，永不把面板拖红。
+   - 任一 `critical` target 为 `down` → overall `down`。
+   - 否则任一 target 为 `degraded`，或任一非 critical target 为 `down` → overall `degraded`。
+   - 否则存在已知 ok → `ok`；否则 `unknown`。
+   - 口径目的：liveness 绿不能掩盖 critical 业务面 down；非 critical 失败降级但不黑屏。
 4. 计算最近样本窗口的 availability。
 
 `/api/status` 返回的是当前已物化视图，不承诺强一致。调用方应结合 `last_check_at`、`last_success_at`、`state_version`、`updated_at_utc` 判断新鲜度。
@@ -188,22 +196,41 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 
 当 `Aevatar:Status:Targets` 为空且 `UseBuiltInTargets=true` 时，`StatusDashboardManifest` 会生成 mainnet 默认 target 集。
 
-默认类别：
+默认类别（`category` 即展示分层）：
 
 | Category | 含义 |
 |---|---|
 | `self` | 当前 Mainnet Host 的 liveness / readiness |
-| `feature` | Aevatar 对外功能面或内部 readmodel freshness |
+| `llm` | OpenAI 兼容 LLM ingress（`/v1/*`） |
+| `studio` | Studio / App 对外匿名健康面（`/api/health`、`/api/app/context`） |
+| `feature` | Aevatar 核心功能面或内部 readmodel freshness |
 | `upstream` | NyxID 等上游依赖 |
 
-内置 probe 包括：
+每个 target 另有 `severity`（`critical` / `standard` / `canary`），用于 §8 的诚实 overall 聚合。`critical` 表示该面 down 即代表产品对用户不可用；`canary` 表示带凭证/付费的深度探针，失败只降级、未配置即 `unknown` 不参与聚合。
 
-1. `self-liveness` / `self-readiness`。
-2. `aevatar-core-loop-tools`，展示当前分支核心的 LLM-driven Aevatar invocation/tool-choice 链路是否在 host 组合层可用。
-3. `channel-bot-runtime` readmodel freshness。
-4. NyxID `/health` 与 OIDC discovery 上游探测。
+无凭证内置 probe（始终开启，全部断言真实成功状态）：
 
-默认内置 target 不包含“期望返回 401”的 auth gate。401 只能证明匿名请求被拦截，不能证明业务链路可用；若探针目标是业务健康，必须显式配置带凭证的 target，并把 `ExpectedStatuses` 设为真实成功状态（通常是 `200`）。生产环境可以显式配置 `Targets` 覆盖内置集合，也可以保留内置集合并只通过配置项调整 base URL、token、timeout 与 interval。
+1. `self-liveness`（standard）/ `self-readiness`（critical）。
+2. `studio-health`（`/api/health` → 200）、`app-context`（`/api/app/context` → 200）：匿名 200 即真实成功信号。
+3. `aevatar-core-loop-tools`（critical），展示当前分支核心的 LLM-driven Aevatar invocation/tool-choice 链路是否在 host 组合层可用。
+4. `channel-bot-runtime` readmodel freshness（standard）。
+5. NyxID `/health` 与 OIDC discovery 上游探测（standard）。
+
+凭证门控的 LLM canary（仅当配置了 `Aevatar:Status:Probe:CanaryBearer` 时生成，`severity=canary`）：
+
+1. `llm-catalog`：带 canary bearer 读 `GET /v1/models` → 200 + 合法列表 body，证明 LLM ingress 与 NyxID catalog 聚合端到端可用，无模型调用成本。
+2. `llm-completion-canary`：带 canary bearer `POST /v1/chat/completions`（最便宜模型、`max_tokens≈8`、prompt `ping`）→ 200 + body 含 `choices`，端到端验证 LLM 真能出结果。默认 15 分钟一次；未配置凭证即不探测（不误报 down）。两者复用 `static_bearer` 认证模式，executor 在探测时从 `Aevatar:Status:Probe:CanaryBearer` 读取密钥。
+
+凭证门控的编排 / observatory 探针（仅当配置了 `Aevatar:Status:Probe:ScopeId` 时生成，`scope_service_token` 认证、断言 200）：
+
+1. `orchestration-scope-read`：带自签 scope service token 读 `GET /api/scopes/{ScopeId}/services` → 200，证明编排读路径与 scope 鉴权端到端可用。
+2. `observatory-read`：带自签 scope service token 读 `GET /api/workflow/observatory/me` → 200，证明 observatory 读路径可用。
+
+二者需 `Aevatar:Authentication:ScopeServiceTokens:Enabled=true` + 签名密钥才能真正出 token；未启用时降级为 `unknown`（`credential_unavailable`），不误报 down。不使用 draft-run 工作流 canary：draft-run 对内部工具错误也返回 200，是误导性的“200=ok”信号，违背 §9.1 同一原则。
+
+`Aevatar:Status:Probe` 配置：`CanaryBearer`（真实 NyxID 凭证，空则禁用 LLM canary）、`CanaryModel`（默认 `deepseek/deepseek-v4-flash`）、`CanaryIntervalSeconds`（默认 900）、`CanaryMaxTokens`（默认 8）、`ScopeId`（探针 scope，空则禁用编排/observatory 探针）。
+
+默认内置 target 不包含”期望返回 401”的 auth gate。401 只能证明匿名请求被拦截，不能证明业务链路可用；若探针目标是业务健康，必须显式配置带凭证的 target，并把 `ExpectedStatuses` 设为真实成功状态（通常是 `200`）。生产环境可以显式配置 `Targets` 覆盖内置集合，也可以保留内置集合并只通过配置项调整 base URL、token、timeout 与 interval。
 
 ### 9.1 退役探针
 
@@ -335,14 +362,14 @@ internal sealed class MyReadmodelFreshnessSource : IReadmodelFreshnessSource
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HttpStatusProbeExecutorTests.cs` | HTTP executor status/body/header/timeout 行为 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/ReadmodelFreshnessProbeExecutorTests.cs` | freshness executor 分类逻辑 |
 | `test/Aevatar.GAgents.StatusDashboard.Tests/HealthProbeTargetProjectorTests.cs` | actor state 到 readmodel 的物化 |
-| `test/Aevatar.Hosting.Tests/MainnetStatusEndpointsTests.cs` | mainnet `/status` 与 `/api/status` endpoint |
-| `test/Aevatar.Hosting.Tests/MainnetHostCompositionTests.cs` | Mainnet host 注册与 `aevatar_core_loop` executor 可用性 |
+| `test/Aevatar.Capabilities.Tests/MainnetStatusEndpointsTests.cs` | mainnet `/status` 与 `/api/status` endpoint |
+| `test/Aevatar.Capabilities.Tests/MainnetHostCompositionTests.cs` | Mainnet host 注册与 `aevatar_core_loop` executor 可用性 |
 
 常用验证命令：
 
 ```bash
 dotnet test test/Aevatar.GAgents.StatusDashboard.Tests/Aevatar.GAgents.StatusDashboard.Tests.csproj --nologo
-dotnet test test/Aevatar.Hosting.Tests/Aevatar.Hosting.Tests.csproj --filter MainnetStatusEndpointsTests --nologo
+dotnet test test/Aevatar.Capabilities.Tests/Aevatar.Capabilities.Tests.csproj --filter MainnetStatusEndpointsTests --nologo
 ```
 
 若修改测试或新增测试，还必须执行：

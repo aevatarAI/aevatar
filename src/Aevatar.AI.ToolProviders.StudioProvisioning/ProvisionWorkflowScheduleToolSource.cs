@@ -1,0 +1,54 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Studio.Application.Provisioning;
+
+namespace Aevatar.AI.ToolProviders.StudioProvisioning;
+
+/// <summary>
+/// Tool source for the channel-free workflow scheduling tool
+/// <c>aevatar_provision_workflow_schedule</c> (the Observatory-delivered analogue
+/// of the Lark <c>scheduled_agent_creator</c>). It depends only on the narrow
+/// <see cref="IWorkflowScheduleProvisioningPort"/> from the Studio Abstractions
+/// project, so this tool provider keeps the thin-abstraction layering the other
+/// tool providers follow (no reference to the Studio application impl assembly).
+/// </summary>
+public sealed class ProvisionWorkflowScheduleToolSource : IAgentToolSource
+{
+    private readonly IWorkflowScheduleProvisioningPort _provisioningPort;
+
+    public ProvisionWorkflowScheduleToolSource(IWorkflowScheduleProvisioningPort provisioningPort)
+    {
+        _provisioningPort = provisioningPort
+            ?? throw new ArgumentNullException(nameof(provisioningPort));
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            [new ProvisionWorkflowScheduleTool(_provisioningPort)]);
+    }
+}
+
+/// <summary>
+/// Tool source for local Studio team creation. The port is optional so hosts can
+/// register the source generically while only exposing the tool when Studio team
+/// application services are composed.
+/// </summary>
+public sealed class CreateStudioTeamToolSource : IAgentToolSource
+{
+    private readonly IStudioTeamProvisioningPort? _teamProvisioningPort;
+
+    public CreateStudioTeamToolSource(IStudioTeamProvisioningPort? teamProvisioningPort = null)
+    {
+        _teamProvisioningPort = teamProvisioningPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _teamProvisioningPort is null
+                ? []
+                : [new CreateStudioTeamTool(_teamProvisioningPort)]);
+    }
+}

@@ -5,6 +5,8 @@ using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -25,12 +27,15 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
 {
     private const string PublisherActorId = "agent-run-reply-generation-executor";
+    private const string InvalidGrantRevokeReason = "nyx_invalid_grant";
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly IConversationReplyGenerator _replyGenerator;
     private readonly IInteractiveReplyCollector? _interactiveReplyCollector;
     private readonly Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
+    private readonly INyxIdCapabilityBroker? _capabilityBroker;
+    private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -42,7 +47,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         ILogger<AgentRunReplyGenerationExecutor> logger,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        INyxIdCapabilityBroker? capabilityBroker = null,
+        IBindingRevocationReconciler? bindingRevocationReconciler = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -50,6 +57,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _relayOptions = relayOptions;
         _scopeResolver = scopeResolver;
         _userConfigQueryPort = userConfigQueryPort;
+        _capabilityBroker = capabilityBroker;
+        _bindingRevocationReconciler = bindingRevocationReconciler;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -81,9 +90,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 generationContext.LlmControl,
                 generationContext.ToolContext,
                 replyRequest.PriorHistory.ToArray(),
+                BuildAttachmentInputContext(replyRequest, generationContext.LlmControl),
                 forceDisableTools: false,
                 metadataCts.Token)
                 .ConfigureAwait(false);
+            var ownerFallbackControl = ResolveInitialOwnerFallbackControl(
+                generationContext.OwnerFallbackLlmControl,
+                plan.OwnerFallbackLlmControl,
+                fallbackToServerDefaultRouting: true);
+            var ownerFallbackToolContext = ResolveInitialOwnerFallbackToolContext(
+                generationContext.OwnerFallbackToolContext,
+                plan.OwnerFallbackToolContext,
+                ownerFallbackControl);
 
             var state = new AgentRunReplyStepState
             {
@@ -101,6 +119,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 FinalNoToolsStep = plan.DisableTools,
                 LlmControl = plan.LlmControl.ToPayload(),
                 ToolContext = plan.ToolContext.ToPayload(),
+                OwnerFallbackLlmControl = ownerFallbackControl.ToPayload(),
+                OwnerFallbackToolContext = ownerFallbackToolContext.ToPayload(),
             };
             foreach (var pair in plan.Metadata)
                 state.ExternalMetadata[pair.Key] = pair.Value;
@@ -141,6 +161,17 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             await DispatchToRunActorAsync(workItem.RunActorId, command, CancellationToken.None)
                 .ConfigureAwait(false);
         }
+        catch (Exception ex) when (TryBuildOwnerFallbackCommand(workItem, ex) is { } fallback)
+        {
+            _logger.LogWarning(
+                ex,
+                "Agent run LLM step failed before completion; retrying with bot owner LLM config and no tools: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                workItem.RunId,
+                workItem.Request.CorrelationId,
+                workItem.StepIndex);
+            await DispatchToRunActorAsync(workItem.RunActorId, fallback, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
         catch (Exception ex)
         {
             await DispatchStepFailureAsync(workItem, ex).ConfigureAwait(false);
@@ -171,9 +202,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
-        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, request.TargetActorId);
+        using TurnStreamingReplySink? streamingSink = TryBuildStreamingSink(request, workItem.RunActorId, request.TargetActorId);
         var streamingState = TryBuildStreamingReplyState(streamingSink);
         var generator = RequireStepGenerator();
+        var stepMetadata = AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata);
+        var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
         var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
         if (workItem.StepState.FinalNoToolsStep)
         {
@@ -181,14 +214,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             // slash silently consumed.
             // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
             // non-slash text path unchanged (owner-LLM chat fallback).
-            planToolContext = planToolContext with { SenderBinding = AgentToolSenderBindingContext.Empty };
+            planToolContext = ClearSenderBinding(planToolContext);
+            if (UsesServerDefaultFallbackRouting(stepControl))
+            {
+                stepMetadata = StripServerDefaultFallbackMetadata(stepMetadata);
+                stepControl = UseServerDefaultRouting(stepControl);
+                planToolContext = UseServerDefaultRouting(planToolContext, stepControl);
+            }
         }
+        (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
+            .ConfigureAwait(false);
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
-                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
-                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
+                stepMetadata,
+                stepControl,
                 planToolContext,
                 priorHistory: null,
+                attachmentContext: null,
                 forceDisableTools: workItem.StepState.FinalNoToolsStep,
                 ct: ct)
             .ConfigureAwait(false);
@@ -200,7 +242,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             plan.ToolContext,
             plan.LlmControl,
             workItem.StepState.Round,
-            workItem.StepState.FinalNoToolsStep);
+            workItem.StepState.FinalNoToolsStep,
+            toolReceipts: workItem.StepState.ToolReceipts);
         if (workItem.StepState.FinalNoToolsStep && llmRequest.Tools is { Count: > 0 })
         {
             // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -296,16 +339,27 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
         var generator = RequireStepGenerator();
+        var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
+        var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
+        (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
+            .ConfigureAwait(false);
         var plan = await generator.BuildStepPlanAsync(
                 request.Activity!,
                 AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
-                AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState),
-                AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState),
+                stepControl,
+                planToolContext,
                 priorHistory: null,
+                attachmentContext: null,
                 forceDisableTools: false,
                 ct)
             .ConfigureAwait(false);
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        // Interactive reply tools (reply_with_interaction) execute here, during the tool
+        // step — not during the LLM step that emitted the tool calls. The AsyncLocal
+        // collector scope does not survive the actor continuation hop between steps, so
+        // the tool step must open its own scope for relay turns and return the captured
+        // intent as a typed fact on the step result.
+        using var interactiveScope = TryBeginInteractiveScope(request);
         var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
             .ConfigureAwait(false);
 
@@ -316,8 +370,21 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         foreach (var toolResult in results)
         {
             toolStepResult.ResultMessages.Add(AgentRunReplyStepMappers.ToProto(
-                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.Result)));
+                ToolCallLoop.BuildToolResultMessage(toolResult.CallId, toolResult.ToolName, toolResult.Result)));
+            if (toolResult.Receipt is not null)
+                toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }
+
+        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
+            toolStepResult.OutboundIntent = outboundIntent.Clone();
+
+        // Defense-in-depth complement to the Kafka transport fix (commit f2c2319e7):
+        // bound the tool-result payload before it enters the
+        // AgentRunNextToolStepRequestedEvent command envelope, so an oversized
+        // aggregate (e.g. large multi-source JSON) degrades to a truncated-but-useful
+        // reply instead of failing the whole run with an opaque ProduceException once
+        // the serialized envelope exceeds the broker's max.message.bytes.
+        ToolResultPayloadBounds.BoundResultMessages(toolStepResult.ResultMessages);
 
         return new AgentRunNextToolStepRequestedEvent
         {
@@ -359,6 +426,34 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var typedIntent = generator.TryTakeOutboundIntent();
         var scopedIntent = _interactiveReplyCollector?.TryTake();
         return typedIntent ?? scopedIntent;
+    }
+
+    private AgentRunOwnerFallbackStepRequested? TryBuildOwnerFallbackCommand(
+        AgentRunReplyStepExecutionRequest workItem,
+        Exception ex)
+    {
+        if (workItem.StepState.FinalNoToolsStep)
+            return null;
+        if (workItem.StepState.OwnerFallbackLlmControl is null &&
+            workItem.StepState.OwnerFallbackToolContext is null)
+        {
+            return null;
+        }
+        if (!string.IsNullOrWhiteSpace(workItem.StepState.AccumulatedText))
+            return null;
+        if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
+            return null;
+
+        return new AgentRunOwnerFallbackStepRequested
+        {
+            RunId = workItem.RunId,
+            CorrelationId = workItem.Request.CorrelationId,
+            TargetActorId = workItem.Request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Reason = ex.Message ?? string.Empty,
+            Request = workItem.Request.Clone(),
+        };
     }
 
     private async Task DispatchStepFailureAsync(AgentRunReplyStepExecutionRequest workItem, Exception ex)
@@ -406,14 +501,19 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             Payload = Any.Pack(command),
-            Route = command is AgentRunNextLlmStepRequestedEvent or AgentRunNextToolStepRequestedEvent
+            Route = command is AgentRunNextLlmStepRequestedEvent
+                    or AgentRunNextToolStepRequestedEvent
+                    or AgentRunOwnerFallbackStepRequested
                 ? EnvelopeRouteSemantics.CreateTopologyPublication(runActorId, TopologyAudience.Self)
                 : EnvelopeRouteSemantics.CreateDirect(PublisherActorId, runActorId),
         };
         await _actorDispatchPort.DispatchAsync(runActorId, envelope, ct).ConfigureAwait(false);
     }
 
-    private TurnStreamingReplySink? TryBuildStreamingSink(NeedsLlmReplyEvent request, string targetActorId)
+    private TurnStreamingReplySink? TryBuildStreamingSink(
+        NeedsLlmReplyEvent request,
+        string runActorId,
+        string targetActorId)
     {
         if (_relayOptions is not { StreamingRepliesEnabled: true })
             return null;
@@ -429,14 +529,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             return null;
 
         var cardMode = _relayOptions.StreamingCardKitEnabled;
+        var streamingTargetActorId = cardMode ? runActorId : targetActorId;
         return new TurnStreamingReplySink(
             _actorDispatchPort,
-            targetActorId,
+            streamingTargetActorId,
             request.CorrelationId,
             request.RegistrationId,
             request.Activity.Clone(),
             request.ReplyToken,
             request.ReplyTokenExpiresAtUnixMs,
+            request.RunId,
             _timeProvider,
             _logger,
             cardMode);
@@ -461,7 +563,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private sealed record ReplyGenerationContext(
         IReadOnlyDictionary<string, string> Metadata,
         LLMControlContext LlmControl,
-        AgentToolExecutionContext ToolContext);
+        AgentToolExecutionContext ToolContext,
+        LLMControlContext OwnerFallbackLlmControl,
+        AgentToolExecutionContext OwnerFallbackToolContext);
 
     private async Task<ReplyGenerationContext> BuildGenerationContextAsync(
         NeedsLlmReplyEvent request,
@@ -475,20 +579,215 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (routedModel is not null)
             control = control with { ModelOverride = routedModel };
 
-        var userAccessToken = request.Activity?.TransportExtras?.NyxUserAccessToken?.Trim();
-        if (!string.IsNullOrWhiteSpace(userAccessToken))
-        {
-            control = control with
-            {
-                NyxIdAccessToken = userAccessToken,
-                NyxIdOrgToken = userAccessToken,
-            };
-        }
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+
+        // Re-mint the sender's short-lived NyxID token here, in the deferred reply
+        // run. The synchronous inbound path mints a sender token but ConversationGAgent
+        // strips transient credentials before persisting NeedsLlmReplyEvent, so by the
+        // time this deferred run executes the token is gone. The binding-id + tenant
+        // survive as identity facts on the tool context, so we re-mint by binding id
+        // and overlay the fresh token onto LlmControl; ToToolContext then projects it
+        // into ToolContext.Credentials so sender-credentialed mutation tools (use_skill)
+        // run under the sender's own NyxID instead of being denied. Owner fallback is
+        // derived below with the sender token cleared, so a failed/empty re-mint still
+        // leaves the bot-owner LLM path intact.
+        control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
+
+        var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
+        var ownerFallbackToolContext = ClearSenderBinding(toolContext);
+
+        control = OverlayActivityUserToken(request, control);
 
         return new ReplyGenerationContext(
             metadata,
             control,
-            AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+            toolContext,
+            ownerFallbackControl,
+            ownerFallbackToolContext);
+    }
+
+    private async Task<LLMControlContext> ApplySenderTokenAsync(
+        NeedsLlmReplyEvent request,
+        AgentToolExecutionContext toolContext,
+        LLMControlContext control,
+        CancellationToken ct)
+    {
+        var broker = _capabilityBroker;
+        if (broker is null)
+            return control;
+
+        var bindingId = NormalizeOptional(toolContext.SenderBinding.BindingId);
+        if (bindingId is null)
+            return control;
+
+        if (!TryRebuildSenderSubject(toolContext, out var subject))
+        {
+            _logger.LogDebug(
+                "Sender token re-mint skipped: tool context lacks platform/sender-id to rebuild the external subject. correlation={CorrelationId}",
+                request.CorrelationId);
+            return control;
+        }
+
+        try
+        {
+            var handle = await broker
+                .IssueShortLivedByBindingIdAsync(
+                    subject,
+                    bindingId,
+                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
+                    ct)
+                .ConfigureAwait(false);
+            var accessToken = NormalizeOptional(handle.AccessToken);
+            if (accessToken is null)
+            {
+                _logger.LogWarning(
+                    "Sender NyxID token re-mint returned an empty token; deferred reply run keeps owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                    request.CorrelationId,
+                    subject.Platform,
+                    subject.Tenant,
+                    subject.ExternalUserId);
+                return control;
+            }
+
+            return control with { SenderNyxIdAccessToken = accessToken };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (BindingRevokedException ex)
+        {
+            // Grant is gone upstream (NyxID invalid_grant). Reconcile the local
+            // binding so /whoami shows unbound and /init lets the sender re-bind.
+            // Best-effort, off the reply path: never await or block the turn.
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding revoked at NyxID during deferred re-mint; reconciling local binding and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                request.CorrelationId,
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            TriggerBindingReconcile(subject);
+            return control;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to re-mint sender NyxID token in deferred reply run; falling back to bot owner LLM config. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                request.CorrelationId,
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return control;
+        }
+    }
+
+    // Re-supplies runtime credentials onto the token-less per-step control/tool-context read from the
+    // persisted (stripped) step-state. Reproduces BuildGenerationContextAsync's derivation from the
+    // transient request: owner token from the Activity user token, sender token re-minted from the
+    // retained binding identity (choice A — re-mint per step keeps the persisted waterline free of
+    // bearer tokens and hands each step a fresh short-lived sender token). On the owner-fallback step
+    // the run actor has cleared the Activity token and the sender binding, so the owner token comes
+    // from request.LlmControl (the bot-owner token it re-supplied) and no sender token is minted.
+    private async Task<(LLMControlContext Control, AgentToolExecutionContext ToolContext)> ReSupplyRuntimeCredentialsAsync(
+        NeedsLlmReplyEvent request,
+        LLMControlContext stepControl,
+        AgentToolExecutionContext planToolContext,
+        CancellationToken ct)
+    {
+        var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
+        requestControl = OverlayActivityUserToken(request, requestControl);
+
+        var control = stepControl with
+        {
+            NyxIdAccessToken = requestControl.NyxIdAccessToken,
+            NyxIdOrgToken = requestControl.NyxIdOrgToken,
+            SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
+        };
+        var toolContext = planToolContext with
+        {
+            Credentials = new AgentToolCredentials(
+                requestControl.NyxIdAccessToken,
+                requestControl.NyxIdOrgToken,
+                requestControl.SenderNyxIdAccessToken),
+        };
+        return (control, toolContext);
+    }
+
+    private static LLMControlContext OverlayActivityUserToken(NeedsLlmReplyEvent request, LLMControlContext control)
+    {
+        var userAccessToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        if (userAccessToken is null)
+            return control;
+        return control with
+        {
+            NyxIdAccessToken = userAccessToken,
+            NyxIdOrgToken = userAccessToken,
+        };
+    }
+
+    private static bool TryRebuildSenderSubject(
+        AgentToolExecutionContext toolContext,
+        out ExternalSubjectRef subject)
+    {
+        subject = new ExternalSubjectRef();
+        var platform = NormalizeOptional(toolContext.Channel.Platform);
+        var senderId = NormalizeOptional(toolContext.Channel.SenderId);
+        if (platform is null || senderId is null)
+            return false;
+
+        // Mirror TryResolveExternalSubject's normalization so the rebuilt subject
+        // matches the one the synchronous path resolved (and the actor id derived
+        // from it): platform lowercased, fields trimmed. Tenant is carried as an
+        // identity fact (SenderBinding.SenderTenant); a null tenant is valid for
+        // platforms without a tenant scope.
+        subject = new ExternalSubjectRef
+        {
+            Platform = platform.ToLowerInvariant(),
+            Tenant = NormalizeOptional(toolContext.SenderBinding.SenderTenant) ?? string.Empty,
+            ExternalUserId = senderId,
+        };
+        return true;
+    }
+
+    private void TriggerBindingReconcile(ExternalSubjectRef subject)
+    {
+        var reconciler = _bindingRevocationReconciler;
+        if (reconciler is null)
+            return;
+
+        var subjectSnapshot = subject.Clone();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await reconciler
+                    .ReconcileRevokedAsync(subjectSnapshot, InvalidGrantRevokeReason, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort self-heal; reconcile failures must never surface on
+                // the reply path. The reconciler logs its own dispatch failures;
+                // this only catches unexpected faults so the fire-and-forget task
+                // never escapes unobserved.
+                _logger.LogWarning(ex, "Binding reconcile after invalid_grant failed (best-effort, ignored).");
+            }
+        });
+    }
+
+    private static ChatAttachmentInputContext BuildAttachmentInputContext(
+        NeedsLlmReplyEvent request,
+        LLMControlContext control)
+    {
+        var token = NormalizeOptional(control.NyxIdAccessToken)
+                    ?? NormalizeOptional(control.NyxIdOrgToken)
+                    ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        return new ChatAttachmentInputContext(
+            request.RecentAttachmentActivities.Select(entry => entry.Clone()).ToArray(),
+            token);
     }
 
     private async Task<LLMControlContext> ApplyBotOwnerLlmConfigAsync(
@@ -577,6 +876,98 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
     }
 
+    private static AgentToolExecutionContext ClearSenderBinding(AgentToolExecutionContext context) =>
+        context with
+        {
+            SenderBinding = AgentToolSenderBindingContext.Empty,
+            Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
+        };
+
+    private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>
+        control with
+        {
+            SenderNyxIdAccessToken = null,
+            ModelOverride = null,
+            NyxIdRoutePreference = null,
+            MaxToolRoundsOverride = null,
+        };
+
+    private static bool UsesServerDefaultFallbackRouting(LLMControlContext control) =>
+        string.IsNullOrWhiteSpace(control.ModelOverride) &&
+        string.IsNullOrWhiteSpace(control.NyxIdRoutePreference) &&
+        !control.MaxToolRoundsOverride.HasValue;
+
+    private static AgentToolExecutionContext UseServerDefaultRouting(
+        AgentToolExecutionContext context,
+        LLMControlContext control)
+    {
+        var sanitized = ClearSenderBinding(context) with
+        {
+            Routing = new LLMRequestRoutingContext(
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: NormalizeOptional(control.UserMemoryPrompt) ?? NormalizeOptional(context.Routing.UserMemoryPrompt)),
+        };
+        return control.ToToolContext(sanitized);
+    }
+
+    private static Dictionary<string, string> StripServerDefaultFallbackMetadata(
+        IReadOnlyDictionary<string, string> metadata)
+    {
+        var sanitized = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
+        sanitized.Remove(LLMRequestMetadataKeys.SenderBindingId);
+        sanitized.Remove(LLMRequestMetadataKeys.SenderNyxIdAccessToken);
+        sanitized.Remove(LLMRequestMetadataKeys.ModelOverride);
+        sanitized.Remove(LLMRequestMetadataKeys.NyxIdRoutePreference);
+        sanitized.Remove(LLMRequestMetadataKeys.MaxToolRoundsOverride);
+        return sanitized;
+    }
+
+    private static LLMControlContext ResolveInitialOwnerFallbackControl(
+        LLMControlContext ownerSnapshot,
+        LLMControlContext? planFallback,
+        bool fallbackToServerDefaultRouting = false)
+    {
+        var candidate = planFallback ?? LLMControlContext.Empty;
+        return new LLMControlContext(
+            NormalizeOptional(ownerSnapshot.NyxIdAccessToken),
+            NormalizeOptional(ownerSnapshot.NyxIdOrgToken),
+            SenderNyxIdAccessToken: null,
+            fallbackToServerDefaultRouting
+                ? null
+                : NormalizeOptional(candidate.ModelOverride) ?? NormalizeOptional(ownerSnapshot.ModelOverride),
+            fallbackToServerDefaultRouting
+                ? null
+                : NormalizeOptional(candidate.NyxIdRoutePreference) ?? NormalizeOptional(ownerSnapshot.NyxIdRoutePreference),
+            fallbackToServerDefaultRouting
+                ? null
+                : candidate.MaxToolRoundsOverride ?? ownerSnapshot.MaxToolRoundsOverride,
+            NormalizeOptional(candidate.UserMemoryPrompt) ?? NormalizeOptional(ownerSnapshot.UserMemoryPrompt));
+    }
+
+    private static AgentToolExecutionContext ResolveInitialOwnerFallbackToolContext(
+        AgentToolExecutionContext ownerSnapshot,
+        AgentToolExecutionContext? planFallback,
+        LLMControlContext ownerControl)
+    {
+        var source = planFallback ?? ownerSnapshot;
+        source = source with
+        {
+            SenderBinding = AgentToolSenderBindingContext.Empty,
+            Credentials = new AgentToolCredentials(
+                NormalizeOptional(ownerControl.NyxIdAccessToken),
+                NormalizeOptional(ownerControl.NyxIdOrgToken),
+                SenderNyxIdAccessToken: null),
+            Routing = new LLMRequestRoutingContext(
+                NormalizeOptional(ownerControl.ModelOverride),
+                NormalizeOptional(ownerControl.NyxIdRoutePreference),
+                ownerControl.MaxToolRoundsOverride,
+                NormalizeOptional(ownerControl.UserMemoryPrompt)),
+        };
+        return ownerControl.ToToolContext(source);
+    }
+
     private sealed class StreamingReplyRunState : IStreamingReplySink
     {
         private readonly TurnStreamingReplySink _sink;
@@ -634,7 +1025,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 }
             }
 
-            await _sink.DispatchAsync(text, ct).ConfigureAwait(false);
+            await _sink.DispatchAsync(text, isFinal, ct).ConfigureAwait(false);
             if (_sink.ChunksEmitted > _chunksEmitted)
             {
                 _lastEmittedText = text;

@@ -18,7 +18,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                 "Suspends workflow execution until an external signal arrives.",
                 [
                     new PrimitiveParameterDescriptor("signal_name", "string", true, "Signal name used to resume this waiter."),
-                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Maximum wait duration in milliseconds."),
+                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Maximum wait duration in milliseconds, capped at 86400000."),
                 ]),
             ["workflow_call"] = new(
                 "Invokes another workflow definition as a sub-workflow.",
@@ -52,6 +52,17 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                 "Runs a reflection step to refine prior output.",
                 [
                     new PrimitiveParameterDescriptor("prompt", "string", false, "Reflection prompt."),
+                ]),
+            ["self_reschedule"] = new(
+                "Ensures a workflow schedule through the actor-owned scheduled-dispatch mainline.",
+                [
+                    new PrimitiveParameterDescriptor("schedule_id", "string", true, "Stable schedule id owned by ScheduledDispatchGAgent."),
+                    new PrimitiveParameterDescriptor("cron_expression", "string", true, "Cron expression for future workflow runs."),
+                    new PrimitiveParameterDescriptor("timezone", "string", false, "IANA or system timezone id.", DefaultValue: "UTC"),
+                    new PrimitiveParameterDescriptor("workflow_name", "string", false, "Workflow service name when service_id is not supplied."),
+                    new PrimitiveParameterDescriptor("service_id", "string", false, "Explicit workflow service id."),
+                    new PrimitiveParameterDescriptor("scope_id", "string", true, "Scope or tenant id for the workflow service invocation."),
+                    new PrimitiveParameterDescriptor("prompt", "string", false, "Prompt for the scheduled workflow chat request."),
                 ]),
         };
 
@@ -181,6 +192,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                         "http" => NormalizeDistinct(entry.Http.AllowedInputKeys),
                         "cli" => NormalizeDistinct(entry.Cli.AllowedInputKeys),
                         "mcp" => NormalizeDistinct(entry.MCP.AllowedInputKeys),
+                        "host_callback" => NormalizeDistinct(entry.HostCallback.AllowedInputKeys),
                         _ => [],
                     },
                     AllowedOperations = typeKey switch
@@ -188,6 +200,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                         "http" => NormalizeDistinct(entry.Http.AllowedMethods),
                         "cli" => NormalizeDistinct(entry.Cli.AllowedOperations),
                         "mcp" => NormalizeDistinct(entry.MCP.AllowedTools.Concat([entry.MCP.DefaultTool])),
+                        "host_callback" => NormalizeDistinct(entry.HostCallback.AllowedOperations),
                         _ => [],
                     },
                     FixedArguments = typeKey switch
@@ -218,7 +231,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
         {
             "transform" or "assign" or "retrieve_facts" or "cache" => "data",
             "guard" or "conditional" or "switch" or "while" or "delay" or "wait_signal" or "checkpoint" or "workflow_loop" or "workflow_yaml_validate" => "control",
-            "foreach" or "parallel" or "race" or "map_reduce" or "workflow_call" or "vote" or "dynamic_workflow" => "composition",
+            "foreach" or "parallel" or "race" or "map_reduce" or "workflow_call" or "vote" or "dynamic_workflow" or "self_reschedule" => "composition",
             "llm_call" or "tool_call" or "evaluate" or "reflect" => "ai",
             "connector_call" or "secure_connector_call" or "emit" => "integration",
             "human_input" or "human_approval" or "secure_input" => "human",

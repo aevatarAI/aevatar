@@ -5,8 +5,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID user endpoints (service base URLs).</summary>
-public sealed class NyxIdEndpointsTool : IAgentTool
+public sealed class NyxIdEndpointsTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
+    public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
+
     private readonly NyxIdApiClient _client;
 
     public NyxIdEndpointsTool(NyxIdApiClient client) => _client = client;

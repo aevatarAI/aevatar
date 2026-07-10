@@ -31,9 +31,9 @@ import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import {
-  buildRuntimeGAgentAssemblyQualifiedName,
-  buildRuntimeGAgentTypeLabel,
-  type RuntimeGAgentTypeDescriptor,
+  buildRuntimeGAgentKindValue,
+  buildRuntimeGAgentKindLabel,
+  type RuntimeGAgentKindDescriptor,
 } from '@/shared/models/runtime/gagents';
 import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
@@ -51,12 +51,16 @@ import {
 } from '@/shared/studio/scriptPackage';
 import {
   createStepInspectorDraft,
-  readStepParameterValue,
-  resolveStepParameterName,
-  normalizeStepParametersForType,
-  parseInspectorParameters,
   type StudioStepInspectorDraft,
 } from '@/shared/studio/document';
+import {
+  buildNodeConfigFields,
+  findNodeConfigPrimitiveDescriptor,
+  formatNodeConfigFieldCopy,
+  updateNodeConfigFieldParametersText,
+  validateNodeConfigParametersText,
+  type NodeConfigField,
+} from '@/shared/studio/nodeConfigFields';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type {
   DraftRunResult,
@@ -526,10 +530,14 @@ function createGAgentDraftRunTimeoutError(): Error {
 
 function getRunDebugLines(state: DraftRunState): string[] {
   return [
-    state.runId.trim() ? `runId: ${state.runId.trim()}` : '',
-    state.actorId.trim() ? `actorId: ${state.actorId.trim()}` : '',
-    state.commandId.trim() ? `commandId: ${state.commandId.trim()}` : '',
-    state.events.length > 0 ? `events: ${state.events.length}` : '',
+    state.runId.trim() ? t("pages.studio.studiobuildpanels.current.run.ready", "current run: ready") : '',
+    state.actorId.trim() ? t("pages.studio.studiobuildpanels.runtime.actor.ready", "runtime actor: ready") : '',
+    state.commandId.trim() ? t("pages.studio.studiobuildpanels.command.accepted", "command: accepted") : '',
+    state.events.length > 0
+      ? t("pages.studio.studiobuildpanels.events.count", "events: {count}", {
+          count: state.events.length,
+        })
+      : '',
   ].filter(Boolean);
 }
 
@@ -587,217 +595,8 @@ function extractRunFinishedOutput(result: unknown): string {
   }
 
   const record = result as Record<string, unknown>;
-  // Refactor (iter98/cluster-790): Old: UI relied on generic/fallback result shapes after backend missed-live synthesis. New: typed GAgentDraftRunResultPayload exposes result.output.
   const candidate = record.output ?? record.Output ?? record.message ?? record.text;
   return typeof candidate === 'string' ? candidate : '';
-}
-
-function tryParseStepParameters(
-  value: string,
-): Record<string, unknown> | null {
-  try {
-    return parseInspectorParameters(value);
-  } catch {
-    return null;
-  }
-}
-
-function normalizePrimitiveParameterDescriptor(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): WorkflowPrimitiveDescriptor['parameters'][number] {
-  const resolvedName = resolveStepParameterName(stepType, parameter.name);
-  if (resolvedName === parameter.name) {
-    return parameter;
-  }
-
-  return {
-    ...parameter,
-    name: resolvedName,
-  };
-}
-
-function isLLMPromptInstructionParameter(
-  stepType: string,
-  parameterName: string,
-): boolean {
-  return (
-    stepType.trim().toLowerCase() === 'llm_call' &&
-    resolveStepParameterName(stepType, parameterName) === 'prompt_prefix'
-  );
-}
-
-function getParameterDisplayLabel(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): string {
-  return isLLMPromptInstructionParameter(stepType, parameter.name)
-    ? t("pages.studio.studiobuildpanels.prompt.instruction", "Prompt instruction")
-    : parameter.name;
-}
-
-function getParameterDisplayDescription(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): string {
-  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
-    return t("pages.studio.studiobuildpanels.prompt.instruction.description", "Instruction added before each workflow run input reaches the LLM.");
-  }
-
-  return parameter.description || t("pages.studio.studiobuildpanels.type.parameter", "Type: {type}", { type: parameter.type });
-}
-
-function getParameterPlaceholder(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): string {
-  if (isLLMPromptInstructionParameter(stepType, parameter.name)) {
-    return t("pages.studio.studiobuildpanels.prompt.instruction.placeholder", "e.g. Translate the user input to Japanese");
-  }
-
-  return parameter.default || parameter.type || t("pages.studio.studiobuildpanels.value.placeholder", "Value");
-}
-
-function shouldUseParameterDefault(
-  stepType: string,
-  parameter: WorkflowPrimitiveDescriptor['parameters'][number],
-): boolean {
-  return !isLLMPromptInstructionParameter(stepType, parameter.name);
-}
-
-function normalizeParameterEditorSourceValue(
-  stepType: string,
-  parameterName: string,
-  value: unknown,
-): unknown {
-  if (
-    isLLMPromptInstructionParameter(stepType, parameterName) &&
-    value !== null &&
-    typeof value === 'object'
-  ) {
-    return '';
-  }
-
-  return value;
-}
-
-function normalizePrimitiveParameterDescriptors(
-  stepType: string,
-  parameters: readonly WorkflowPrimitiveDescriptor['parameters'][number][],
-): WorkflowPrimitiveDescriptor['parameters'][number][] {
-  const nextParameters: WorkflowPrimitiveDescriptor['parameters'][number][] = [];
-  const seenParameterNames = new Set<string>();
-
-  for (const parameter of parameters) {
-    const normalizedParameter = normalizePrimitiveParameterDescriptor(
-      stepType,
-      parameter,
-    );
-    const normalizedName = normalizedParameter.name.trim().toLowerCase();
-    if (!normalizedName || seenParameterNames.has(normalizedName)) {
-      continue;
-    }
-
-    seenParameterNames.add(normalizedName);
-    nextParameters.push(normalizedParameter);
-  }
-
-  return nextParameters;
-}
-
-function formatParameterEditorValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return '';
-  }
-
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (
-    typeof value === 'number' ||
-    typeof value === 'boolean'
-  ) {
-    return String(value);
-  }
-
-  return JSON.stringify(value, null, 2);
-}
-
-function coerceParameterEditorValue(
-  rawValue: string,
-  parameterType: string,
-): unknown {
-  const trimmed = rawValue.trim();
-  const normalizedType = parameterType.trim().toLowerCase();
-
-  if (!trimmed) {
-    return '';
-  }
-
-  if (
-    normalizedType === 'bool' ||
-    normalizedType === 'boolean'
-  ) {
-    return trimmed.toLowerCase() === 'true';
-  }
-
-  if (
-    normalizedType === 'number' ||
-    normalizedType === 'int' ||
-    normalizedType === 'int32' ||
-    normalizedType === 'int64' ||
-    normalizedType === 'float' ||
-    normalizedType === 'double'
-  ) {
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : trimmed;
-  }
-
-  if (
-    (normalizedType === 'json' ||
-      normalizedType === 'object' ||
-      normalizedType === 'array' ||
-      normalizedType === 'map') &&
-    ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']')))
-  ) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return trimmed;
-    }
-  }
-
-  return trimmed;
-}
-
-function updateStepDraftParameterValue(
-  draft: StudioStepInspectorDraft,
-  parameterName: string,
-  parameterType: string,
-  rawValue: string,
-): StudioStepInspectorDraft {
-  const resolvedParameterName = resolveStepParameterName(draft.type, parameterName);
-  const nextParameters = normalizeStepParametersForType(
-    draft.type,
-    tryParseStepParameters(draft.parametersText) ?? {},
-  );
-  const trimmed = rawValue.trim();
-
-  if (!trimmed) {
-    delete nextParameters[resolvedParameterName];
-  } else {
-    nextParameters[resolvedParameterName] = coerceParameterEditorValue(
-      rawValue,
-      parameterType,
-    );
-  }
-
-  return {
-    ...draft,
-    parametersText: JSON.stringify(nextParameters, null, 2),
-  };
 }
 
 function areStepInspectorDraftsEqual(
@@ -1014,7 +813,10 @@ export type StudioWorkflowBuildPanelProps = {
   ) => void;
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
-  readonly saveNotice?: { readonly type: 'success' | 'error'; readonly message: string } | null;
+  readonly saveNotice?: {
+    readonly type: 'success' | 'info' | 'error';
+    readonly message: string;
+  } | null;
   readonly workflowGraph: {
     readonly steps: readonly StudioGraphStep[];
     readonly nodes: Node[];
@@ -1197,31 +999,28 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
   );
   const selectedPrimitiveDescriptor = React.useMemo(
     () =>
-      runtimePrimitives.find((primitive) => {
-        const selectedType = stepDraft?.type || selectedStep?.type || '';
-        if (primitive.name.trim().toLowerCase() === selectedType.trim().toLowerCase()) {
-          return true;
-        }
-
-        return primitive.aliases.some(
-          (alias) => alias.trim().toLowerCase() === selectedType.trim().toLowerCase(),
-        );
-      }) ?? null,
+      findNodeConfigPrimitiveDescriptor(
+        runtimePrimitives,
+        stepDraft?.type || selectedStep?.type || '',
+      ),
     [runtimePrimitives, selectedStep?.type, stepDraft?.type],
   );
-  const selectedPrimitiveParameters = React.useMemo(
-    () =>
-      normalizePrimitiveParameterDescriptors(
-        stepDraft?.type || selectedStep?.type || '',
-        selectedPrimitiveDescriptor?.parameters ?? [],
-      ),
-    [selectedPrimitiveDescriptor, selectedStep?.type, stepDraft?.type],
-  );
-  const parsedStepParameters = React.useMemo(
+  const stepParameterConfig = React.useMemo(
     () =>
       stepDraft
-        ? tryParseStepParameters(stepDraft.parametersText)
+        ? buildNodeConfigFields({
+            nodeType: stepDraft.type,
+            parametersText: stepDraft.parametersText,
+            primitiveDescriptor: selectedPrimitiveDescriptor,
+          })
         : null,
+    [selectedPrimitiveDescriptor, stepDraft],
+  );
+  const stepParameterDraftError = React.useMemo(
+    () =>
+      stepDraft
+        ? validateNodeConfigParametersText(stepDraft.parametersText)
+        : '',
     [stepDraft],
   );
 
@@ -1259,6 +1058,14 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
     }
 
     const currentStepDraft = stepDraftRef.current;
+    const currentParameterError = currentStepDraft
+      ? validateNodeConfigParametersText(currentStepDraft.parametersText)
+      : '';
+    if (currentParameterError) {
+      setStepMutationError(currentParameterError);
+      void message.error(currentParameterError);
+      return;
+    }
 
     if (!scopeId) {
       const visibleMessage = 'Resolve the current workspace before running the workflow draft.';
@@ -1383,6 +1190,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
       return;
     }
 
+    const currentParameterError = validateNodeConfigParametersText(
+      currentStepDraft.parametersText,
+    );
+    if (currentParameterError) {
+      setStepMutationError(currentParameterError);
+      void message.error(currentParameterError);
+      return;
+    }
+
     stepMutationPendingRef.current = true;
     setStepMutationPending('apply');
     setStepMutationError('');
@@ -1400,6 +1216,15 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
 
   const handleSaveDraft = React.useCallback(() => {
     const currentStepDraft = stepDraftRef.current;
+    const currentParameterError = currentStepDraft
+      ? validateNodeConfigParametersText(currentStepDraft.parametersText)
+      : '';
+    if (currentParameterError) {
+      setStepMutationError(currentParameterError);
+      void message.error(currentParameterError);
+      return;
+    }
+
     onSaveDraft(
       currentStepDraft &&
         selectedStepDraftSeed &&
@@ -1509,7 +1334,7 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <Space wrap size={[8, 8]}>
             <Button
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-              disabled={!canSaveWorkflow}
+              disabled={!canSaveWorkflow || Boolean(stepParameterDraftError)}
               loading={savePending}
               onClick={handleSaveDraft}
             >
@@ -1526,7 +1351,13 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
           <Alert
             message={saveNotice.message}
             showIcon
-            type={saveNotice.type === 'success' ? 'success' : 'error'}
+            type={
+              saveNotice.type === 'success'
+                ? 'success'
+                : saveNotice.type === 'info'
+                  ? 'info'
+                  : 'error'
+            }
           />
         ) : null}
       </div>
@@ -1776,70 +1607,85 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                 </div>
                 <div style={{ ...workflowFieldStyle, gridColumn: '1 / -1' }}>
                   <div style={workflowSectionHeadingStyle}>{t("pages.studio.studiobuildpanels.parameters.2", "Parameters")}</div>
-                  {selectedPrimitiveParameters.length ? (
+                  {stepParameterConfig?.parseError ? (
+                    <Alert
+                      message={stepParameterConfig.parseError}
+                      showIcon
+                      type="error"
+                    />
+                  ) : null}
+                  {stepParameterConfig?.fields.length ? (
                     <div style={{ display: 'grid', gap: 10 }}>
-                      {selectedPrimitiveParameters.map((parameter) => {
-                        const parameterDisplayLabel = getParameterDisplayLabel(
-                          stepDraft.type,
-                          parameter,
+                      {stepParameterConfig.fields.map((field) => {
+                        const label = formatNodeConfigFieldCopy(field.label);
+                        const description = formatNodeConfigFieldCopy(
+                          field.description,
                         );
-                        const parameterAriaLabel = `Parameter ${parameterDisplayLabel}`;
-                        const parameterPlaceholder = getParameterPlaceholder(
-                          stepDraft.type,
-                          parameter,
+                        const placeholder = formatNodeConfigFieldCopy(
+                          field.placeholder,
                         );
-                        const parameterDescription = getParameterDisplayDescription(
-                          stepDraft.type,
-                          parameter,
-                        );
-                        const parameterValue = normalizeParameterEditorSourceValue(
-                          stepDraft.type,
-                          parameter.name,
-                          readStepParameterValue(
-                            parsedStepParameters,
-                            stepDraft.type,
-                            parameter.name,
-                          ),
-                        );
-                        const currentValue = formatParameterEditorValue(
-                          parameterValue ??
-                            (shouldUseParameterDefault(stepDraft.type, parameter)
-                              ? parameter.default
-                              : ''),
-                        );
-
+                        const parameterAriaLabel = `Parameter ${label}`;
+                        const inputId = `workflow-step-parameter-${field.name}`;
                         return (
                           <div
-                            key={parameter.name}
+                            key={field.name}
                             style={workflowFieldStyle}
                           >
                             <label
-                              htmlFor={`workflow-step-parameter-${parameter.name}`}
+                              htmlFor={inputId}
                               style={workflowFieldLabelStyle}
                             >
-                              {parameterDisplayLabel}
-                              {parameter.required ? ' *' : ''}
+                              {label}
+                              {field.required ? ' *' : ''}
                             </label>
-                            {parameter.enumValues.length > 0 ? (
+                            {field.kind === 'select' ? (
                               <Select
-                                allowClear={!parameter.required}
+                                allowClear={!field.required}
                                 aria-label={parameterAriaLabel}
-                                id={`workflow-step-parameter-${parameter.name}`}
-                                options={parameter.enumValues.map((value) => ({
-                                  label: value,
-                                  value,
+                                id={inputId}
+                                options={field.options.map((option) => ({
+                                  label: formatNodeConfigFieldCopy(option.label),
+                                  value: option.value,
                                 }))}
-                                placeholder={parameterPlaceholder}
-                                value={currentValue || undefined}
+                                placeholder={placeholder}
+                                value={field.value || undefined}
                                 onChange={(value) =>
                                   updateStepDraft((current) =>
                                     current
-                                      ? updateStepDraftParameterValue(
-                                          current,
-                                          parameter.name,
-                                          parameter.type,
-                                          String(value || ''),
-                                        )
+                                      ? {
+                                          ...current,
+                                          parametersText:
+                                            updateNodeConfigFieldParametersText({
+                                              field,
+                                              nodeType: current.type,
+                                              parametersText: current.parametersText,
+                                              rawValue: String(value || ''),
+                                            }),
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            ) : field.kind === 'json' ? (
+                              <Input.TextArea
+                                aria-label={parameterAriaLabel}
+                                autoSize={{ minRows: 3, maxRows: 8 }}
+                                id={inputId}
+                                placeholder={placeholder}
+                                value={field.value}
+                                onChange={(event) =>
+                                  updateStepDraft((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          parametersText:
+                                            updateNodeConfigFieldParametersText({
+                                              field,
+                                              nodeType: current.type,
+                                              parametersText: current.parametersText,
+                                              rawValue: event.target.value,
+                                            }),
+                                        }
                                       : current,
                                   )
                                 }
@@ -1847,25 +1693,29 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                             ) : (
                               <Input
                                 aria-label={parameterAriaLabel}
-                                id={`workflow-step-parameter-${parameter.name}`}
-                                placeholder={parameterPlaceholder}
-                                value={currentValue}
+                                id={inputId}
+                                placeholder={placeholder}
+                                value={field.value}
                                 onChange={(event) =>
                                   updateStepDraft((current) =>
                                     current
-                                      ? updateStepDraftParameterValue(
-                                          current,
-                                          parameter.name,
-                                          parameter.type,
-                                          event.target.value,
-                                        )
+                                      ? {
+                                          ...current,
+                                          parametersText:
+                                            updateNodeConfigFieldParametersText({
+                                              field,
+                                              nodeType: current.type,
+                                              parametersText: current.parametersText,
+                                              rawValue: event.target.value,
+                                            }),
+                                        }
                                       : current,
                                   )
                                 }
                               />
                             )}
                             <div style={workflowInlineMetaStyle}>
-                              {parameterDescription}
+                              {description}
                             </div>
                           </div>
                         );
@@ -1938,7 +1788,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
                   {t("pages.studio.studiobuildpanels.delete.step.2", "Delete step")}</Button>
                 <Button
                   className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-                  disabled={!selectedStepId || !stepDraft || Boolean(stepMutationPending)}
+                  disabled={
+                    !selectedStepId ||
+                    !stepDraft ||
+                    Boolean(stepMutationPending) ||
+                    Boolean(stepParameterDraftError)
+                  }
                   loading={stepMutationPending === 'apply'}
                   type="primary"
                   onClick={() => void handleApplyStepChanges()}
@@ -2001,7 +1856,11 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             icon={<PlayCircleOutlined />}
             loading={runState.status === 'running'}
             type="primary"
-            disabled={Boolean(dryRunBlockedReason?.trim()) || runState.status === 'running'}
+            disabled={
+              Boolean(dryRunBlockedReason?.trim()) ||
+              runState.status === 'running' ||
+              Boolean(stepParameterDraftError)
+            }
             onClick={() => void handleRun()}
           >
             {t("pages.studio.studiobuildpanels.run.4", "Run")}</Button>
@@ -2136,6 +1995,26 @@ function buildAppliedScriptDetail(
       sourceHash: summary.activeSourceHash || acceptedScript.sourceHash,
     },
   };
+}
+
+function formatScriptDisplayLabel(
+  detail: ScopedScriptDetail | null | undefined,
+  fallback = 'Script',
+): string {
+  const record = detail as
+    | (ScopedScriptDetail & {
+        script?: { displayName?: string | null; name?: string | null } | null;
+        source?: { displayName?: string | null; name?: string | null } | null;
+      })
+    | null
+    | undefined;
+  const candidate =
+    record?.script?.displayName ||
+    record?.script?.name ||
+    record?.source?.displayName ||
+    record?.source?.name ||
+    '';
+  return candidate.trim() || fallback;
 }
 
 export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
@@ -2545,7 +2424,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       setSaveObservationStatus('applied');
       setSaveStatus('applied');
       setSaveNotice(
-        `Save applied for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+        t("pages.studio.studiobuildpanels.save.applied", "Save applied."),
       );
     },
     [onRefreshScripts, onScriptDraftSaved, scopeId],
@@ -2600,7 +2479,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
           setSaveStatus('failed');
           setSaveNotice(
             observation.message ||
-              `Save rejected for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}.`,
+              t("pages.studio.studiobuildpanels.save.rejected", "Save rejected."),
           );
           return;
         }
@@ -2610,13 +2489,20 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
         if (nextDelay == null) {
           saveObservationTimerRef.current = null;
           setSaveNotice(
-            `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Still waiting for catalog; use Refresh catalog to check again.`,
+            t(
+              "pages.studio.studiobuildpanels.save.accepted.waiting.for.catalog",
+              "Save accepted. Still waiting for catalog; use Refresh catalog to check again.",
+            ),
           );
           return;
         }
 
         setSaveNotice(
-          `Save accepted for ${accepted.acceptedScript.scriptId} · revision ${accepted.acceptedScript.revisionId}. Waiting for catalog; checking again in ${Math.round(nextDelay / 1000)}s.`,
+          t(
+            "pages.studio.studiobuildpanels.save.accepted.checking.again",
+            "Save accepted. Waiting for catalog; checking again in {value1}s.",
+            { value1: Math.round(nextDelay / 1000) },
+          ),
         );
         saveObservationTimerRef.current = window.setTimeout(() => {
           void pollSaveObservation(
@@ -2767,7 +2653,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
       setPromotionHistory((current) => [decision, ...current].slice(0, 6));
       setPromotionNotice(
         decision.accepted
-          ? `Promotion accepted: ${decision.candidateRevision || decision.proposalId}.`
+          ? 'Promotion accepted.'
           : decision.failureReason || `Promotion ${decision.status || 'not accepted'}.`,
       );
     } catch (error) {
@@ -2879,7 +2765,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     ...(pendingScriptDraft?.scriptId
                       ? [
                           {
-                            label: t("pages.studio.studiobuildpanels.draft", "{value1} (draft)", { value1: pendingScriptDraft.scriptId }),
+                            label: t("pages.studio.studiobuildpanels.script.draft", "Script draft"),
                             value: pendingScriptDraft.scriptId,
                           },
                         ]
@@ -2892,13 +2778,13 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                     )
                       ? [
                           {
-                            label: t("pages.studio.studiobuildpanels.applied", "{value1} (applied)", { value1: observedAppliedScript.script.scriptId }),
+                            label: t("pages.studio.studiobuildpanels.script.applied", "Applied script"),
                             value: observedAppliedScript.script.scriptId,
                           },
                         ]
                       : []),
                     ...availableScripts.map((detail) => ({
-                      label: detail.script?.scriptId || 'script',
+                      label: formatScriptDisplayLabel(detail),
                       value: detail.script?.scriptId || '',
                     })),
                   ]}
@@ -2956,9 +2842,11 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
               }}
             >
               <Typography.Text type="secondary">
-                {activeScript?.script?.scriptId || '-'} · {lifecycleStatus} {t("pages.studio.studiobuildpanels.validation.2", "· validation")}{' '}
+                {formatScriptDisplayLabel(activeScript, t("pages.studio.studiobuildpanels.script", "Script"))} · {lifecycleStatus} {t("pages.studio.studiobuildpanels.validation.2", "· validation")}{' '}
                 {validationStatus} {t("pages.studio.studiobuildpanels.save.2", "· save")}{saveObservationStatus} {t("pages.studio.studiobuildpanels.rev.2", "· rev")}{' '}
-                {currentRevision || t("pages.studio.studiobuildpanels.generated.on.save.2", "generated on save")}
+                {currentRevision
+                  ? t("pages.studio.studiobuildpanels.version.ready", "version ready")
+                  : t("pages.studio.studiobuildpanels.generated.on.save.2", "generated on save")}
               </Typography.Text>
             </div>
           ) : null}
@@ -3297,11 +3185,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                 >
                   <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.run.facts.2", "Run facts")}</div>
                   {[
-                    ['Run', lastRunResult.runId],
-                    ['Runtime', lastRunResult.runtimeActorId],
-                    ['Definition', lastRunResult.definitionActorId],
                     ['Command type', lastRunResult.commandTypeUrl],
-                    ['Source hash', lastRunResult.sourceHash],
                     ['Activity', lastRunResult.activityUrl],
                   ].map(([label, value]) => (
                     <div key={label} style={{ display: 'grid', gap: 2 }}>
@@ -3368,8 +3252,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
                         {decision.accepted ? t("pages.studio.studiobuildpanels.accepted.2", "Accepted") : decision.status || t("pages.studio.studiobuildpanels.decision.2", "Decision")}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        {decision.scriptId} · {decision.baseRevision || '-'} →{' '}
-                        {decision.candidateRevision || '-'}
+                        {t("pages.studio.studiobuildpanels.script.promotion.version.summary", "Script promotion version summary")}
                       </Typography.Text>
                       {decision.failureReason ? (
                         <Typography.Text type="danger">
@@ -3392,7 +3275,7 @@ export const StudioScriptBuildPanel: React.FC<StudioScriptBuildPanelProps> = ({
 };
 
 export type StudioGAgentBuildState = {
-  readonly actorTypeName: string;
+  readonly agentKind: string;
   readonly displayName: string;
   readonly initialPrompt: string;
   readonly persistenceMode: 'grain' | 'ephemeral';
@@ -3403,11 +3286,11 @@ export type StudioGAgentBuildState = {
 export type StudioGAgentBuildPanelProps = {
   readonly scopeId?: string;
   readonly currentMemberLabel: string;
-  readonly gAgentTypes: readonly RuntimeGAgentTypeDescriptor[];
-  readonly gAgentTypesLoading: boolean;
-  readonly gAgentTypesError: unknown;
-  readonly selectedGAgentTypeName: string;
-  readonly onSelectGAgentTypeName: (value: string) => void;
+  readonly gAgentKinds: readonly RuntimeGAgentKindDescriptor[];
+  readonly gAgentKindsLoading: boolean;
+  readonly gAgentKindsError: unknown;
+  readonly selectedAgentKind: string;
+  readonly onSelectAgentKind: (value: string) => void;
   readonly onBuildStateChange?: (state: StudioGAgentBuildState) => void;
   readonly onContinueToBind: (state: StudioGAgentBuildState) => void;
 };
@@ -3415,11 +3298,11 @@ export type StudioGAgentBuildPanelProps = {
 export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   scopeId,
   currentMemberLabel,
-  gAgentTypes,
-  gAgentTypesLoading,
-  gAgentTypesError,
-  selectedGAgentTypeName,
-  onSelectGAgentTypeName,
+  gAgentKinds,
+  gAgentKindsLoading,
+  gAgentKindsError,
+  selectedAgentKind,
+  onSelectAgentKind,
   onBuildStateChange,
   onContinueToBind,
 }) => {
@@ -3437,16 +3320,16 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   );
   const [runState, setRunState] = React.useState<DraftRunState>(IDLE_DRAFT_RUN_STATE);
   const abortControllerRef = React.useRef<AbortController | null>(null);
-  const selectedType = React.useMemo(
+  const selectedKindDescriptor = React.useMemo(
     () =>
-      gAgentTypes.find((descriptor) =>
-        buildRuntimeGAgentAssemblyQualifiedName(descriptor) === selectedGAgentTypeName,
+      gAgentKinds.find((descriptor) =>
+        buildRuntimeGAgentKindValue(descriptor) === selectedAgentKind,
       ) || null,
-    [gAgentTypes, selectedGAgentTypeName],
+    [gAgentKinds, selectedAgentKind],
   );
-  const selectedTypeName =
-    selectedGAgentTypeName ||
-    (gAgentTypes[0] ? buildRuntimeGAgentAssemblyQualifiedName(gAgentTypes[0]) : '');
+  const selectedAgentKindValue =
+    selectedAgentKind ||
+    (gAgentKinds[0] ? buildRuntimeGAgentKindValue(gAgentKinds[0]) : '');
   const toolTags = React.useMemo(
     () =>
       toolsDraft
@@ -3457,21 +3340,21 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   );
   const currentBuildState = React.useMemo<StudioGAgentBuildState>(
     () => ({
-      actorTypeName: selectedTypeName,
+      agentKind: selectedAgentKindValue,
       displayName: displayName.trim(),
       initialPrompt: initialPrompt.trim(),
       persistenceMode,
       role: role.trim(),
       tools: toolTags,
     }),
-    [displayName, initialPrompt, persistenceMode, role, selectedTypeName, toolTags],
+    [displayName, initialPrompt, persistenceMode, role, selectedAgentKindValue, toolTags],
   );
 
   React.useEffect(() => {
-    if (!selectedGAgentTypeName && selectedTypeName) {
-      onSelectGAgentTypeName(selectedTypeName);
+    if (!selectedAgentKind && selectedAgentKindValue) {
+      onSelectAgentKind(selectedAgentKindValue);
     }
-  }, [onSelectGAgentTypeName, selectedGAgentTypeName, selectedTypeName]);
+  }, [onSelectAgentKind, selectedAgentKind, selectedAgentKindValue]);
 
   React.useEffect(() => {
     setDisplayName((current) => current || currentMemberLabel || 'Member GAgent');
@@ -3489,10 +3372,10 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
   );
 
   const handleRun = React.useCallback(async () => {
-    if (!scopeId || !selectedTypeName.trim() || !runPrompt.trim()) {
+    if (!scopeId || !selectedAgentKindValue.trim() || !runPrompt.trim()) {
       setRunState({
         ...IDLE_DRAFT_RUN_STATE,
-        error: 'Workspace, GAgent type, and prompt are required before running.',
+        error: 'Workspace, GAgent kind, and prompt are required before running.',
         status: 'error',
       });
       return;
@@ -3515,7 +3398,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
       const response = await runtimeGAgentApi.streamDraftRun(
         scopeId,
         {
-          actorTypeName: selectedTypeName,
+          agentKind: selectedAgentKindValue,
           prompt: runPrompt,
           timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
         },
@@ -3555,7 +3438,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
         abortControllerRef.current = null;
       }
     }
-  }, [runPrompt, scopeId, selectedTypeName]);
+  }, [runPrompt, scopeId, selectedAgentKindValue]);
 
   return (
     <div data-testid="studio-gagent-build-panel" style={buildWorkbenchGridStyle}>
@@ -3564,18 +3447,18 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
           <div style={{ display: 'grid', gap: 4 }}>
             <div style={sectionEyebrowStyle}>{t("pages.studio.studiobuildpanels.gagent.definition.2", "GAgent Definition")}</div>
             <div style={sectionDescriptionStyle}>
-              {t("pages.studio.studiobuildpanels.gagent.mode.build.member", "GAgent mode defines the current member's Actor type, display name, role, initial Prompt, tools, and state persistence semantics in Build.")}</div>
+              {t("pages.studio.studiobuildpanels.gagent.mode.build.member", "GAgent mode defines the current member's Agent kind, display name, role, initial Prompt, tools, and state persistence semantics in Build.")}</div>
           </div>
           <div style={{ alignItems: 'center', display: 'flex', gap: 8, justifyContent: 'space-between' }}>
             <Space wrap size={[8, 8]}>
               <Tag color="green">{t("pages.studio.studiobuildpanels.template.seeded.2", "template · seeded")}</Tag>
-              {selectedType ? (
-                <Tag>{buildRuntimeGAgentTypeLabel(selectedType)}</Tag>
+              {selectedKindDescriptor ? (
+                <Tag>{buildRuntimeGAgentKindLabel(selectedKindDescriptor)}</Tag>
               ) : null}
             </Space>
           </div>
-          {gAgentTypesError ? (
-            <Alert message={describeError(gAgentTypesError)} showIcon type="error" />
+          {gAgentKindsError ? (
+            <Alert message={describeError(gAgentKindsError)} showIcon type="error" />
           ) : null}
           <div
             style={{
@@ -3584,17 +3467,17 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
               gridTemplateColumns: '160px minmax(0, 1fr)',
             }}
           >
-            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.type.url.2", "Type URL")}</div>
+            <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.gagent.kind.2", "GAgent kind")}</div>
             <Select
-              aria-label={t("pages.studio.studiobuildpanels.gagent.type.2", "GAgent type")}
-              loading={gAgentTypesLoading}
-              value={selectedTypeName || undefined}
-              onChange={onSelectGAgentTypeName}
-              options={gAgentTypes.map((descriptor) => ({
-                label: buildRuntimeGAgentTypeLabel(descriptor),
-                value: buildRuntimeGAgentAssemblyQualifiedName(descriptor),
+              aria-label={t("pages.studio.studiobuildpanels.gagent.type.2", "GAgent kind")}
+              loading={gAgentKindsLoading}
+              value={selectedAgentKindValue || undefined}
+              onChange={onSelectAgentKind}
+              options={gAgentKinds.map((descriptor) => ({
+                label: buildRuntimeGAgentKindLabel(descriptor),
+                value: buildRuntimeGAgentKindValue(descriptor),
               }))}
-              placeholder={t("pages.studio.studiobuildpanels.select.typed.gagent.2", "Select a typed GAgent")}
+              placeholder={t("pages.studio.studiobuildpanels.select.typed.gagent.2", "Select a GAgent kind")}
             />
 
             <div style={{ ...sectionEyebrowStyle, paddingTop: 10 }}>{t("pages.studio.studiobuildpanels.display.name.2", "Display name")}</div>
@@ -3658,7 +3541,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             {t("pages.studio.studiobuildpanels.gagent.build.actor.service", "GAgent Build only defines Actor semantics. Publish the Service and Endpoint in Bind.")}</Typography.Text>
           <Button
             className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
-            disabled={!selectedTypeName}
+            disabled={!selectedAgentKindValue}
             type="primary"
             onClick={() => onContinueToBind(currentBuildState)}
           >
@@ -3676,7 +3559,7 @@ export const StudioGAgentBuildPanel: React.FC<StudioGAgentBuildPanelProps> = ({
             {t("pages.studio.studiobuildpanels.draft.input.3", "Draft input")}</span>
         </div>
         <div style={sectionDescriptionStyle}>
-          {t("pages.studio.studiobuildpanels.gagent.prompt.transcript", "Run the currently selected GAgent type as a draft to verify that the prompt and transcript match expectations.")}</div>
+          {t("pages.studio.studiobuildpanels.gagent.prompt.transcript", "Run the currently selected GAgent kind as a draft to verify that the prompt and transcript match expectations.")}</div>
         <Input.TextArea
           aria-label={t("pages.studio.studiobuildpanels.gagent.dry.run.input.2", "GAgent dry run input")}
           autoSize={{ minRows: 6, maxRows: 10 }}
@@ -3760,7 +3643,7 @@ export function getDefaultBuildModeCards(scriptsEnabled: boolean): readonly Stud
       key: 'gagent',
       label: 'GAgent',
       description:
-        t("pages.studio.studiobuildpanels.wire.typed.gagent.actor.with.2", "Wire a typed GAgent actor with long-lived state. Best when one member owns durable behavior."),
+        t("pages.studio.studiobuildpanels.wire.typed.gagent.actor.with.2", "Wire a GAgent kind actor with long-lived state. Best when one member owns durable behavior."),
       hint: 'When · State lives with one agent',
     },
   ];

@@ -98,6 +98,8 @@ export interface StudioWorkspaceSettings {
 }
 
 export interface StudioWorkflowDraftSummary {
+  readonly activeRevisionId?: string | null;
+  readonly serviceKey?: string | null;
   readonly workflowId: string;
   readonly name: string;
   readonly description: string;
@@ -150,6 +152,36 @@ export interface StudioSaveWorkflowInput {
   readonly layout?: unknown;
 }
 
+export interface StudioSaveAndBindWorkflowInput {
+  readonly scopeId: string;
+  readonly workflowId?: string | null;
+  readonly workflowYaml: string;
+  readonly workflowName?: string | null;
+  readonly displayName?: string | null;
+  readonly inlineWorkflowYamls?: Record<string, string> | null;
+  readonly appId?: string | null;
+  readonly serviceId?: string | null;
+  readonly exposureDesired?: boolean | null;
+}
+
+export interface StudioWorkflowDraftCreateReadiness {
+  readonly readable: boolean;
+  readonly stage: string;
+  readonly message: string;
+}
+
+export interface StudioWorkflowDraftCreateAcceptedReceipt {
+  readonly accepted: true;
+  readonly workflowId: string;
+  readonly commandId: string;
+  readonly ackStage: string;
+  readonly actorId: string;
+  readonly workspaceId: string;
+  readonly expectedVersion?: number | null;
+  readonly ackedAtUtc: string;
+  readonly readiness: StudioWorkflowDraftCreateReadiness;
+}
+
 export interface StudioParseYamlResult {
   readonly document?: StudioWorkflowDocument | null;
   readonly graph?: unknown;
@@ -163,6 +195,36 @@ export type StudioWorkflowFile = StudioWorkflowDraft & {
   readonly draftExists?: boolean;
   readonly findings: StudioValidationFinding[];
 };
+
+export type StudioWorkflowSaveResult =
+  | {
+      readonly kind: "materialized";
+      readonly workflow: StudioWorkflowFile;
+    }
+  | {
+      readonly kind: "accepted";
+      readonly receipt: StudioWorkflowDraftCreateAcceptedReceipt;
+    };
+
+export interface StudioSaveAndBindWorkflowAcceptedResult {
+  readonly scopeId: string;
+  readonly workflowId: string;
+  readonly revisionId: string;
+  readonly workflow?: {
+    readonly scopeId: string;
+    readonly workflowId: string;
+    readonly serviceKey?: string;
+    readonly revisionId: string;
+    readonly readModelUrl?: string;
+    readonly acceptanceStage?: string;
+    readonly propagationStage?: string;
+    readonly displayName?: string;
+    readonly workflowName?: string;
+  };
+  readonly binding?: StudioScopeBindingResult;
+  readonly acceptanceStage: string;
+  readonly propagationStage: string;
+}
 
 export interface StudioSerializeYamlResult {
   readonly yaml: string;
@@ -190,7 +252,7 @@ export interface StudioExecutionSummary {
   readonly roleReplyCount?: number | null;
   readonly output?: string | null;
   readonly auditUpdatedAtUtc?: string | null;
-  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session';
+  readonly auditSource?: 'service-run-summary' | 'run-audit' | 'invoke-session' | 'draft-run-session';
 }
 
 export interface StudioExecutionFrame {
@@ -210,6 +272,15 @@ export interface StudioStartExecutionInput {
   readonly scopeId?: string | null;
   readonly workflowId?: string | null;
   readonly eventFormat?: string | null;
+}
+
+export interface StudioMemberWorkflowBindingInput {
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly displayName?: string | null;
+  readonly workflowId: string;
+  readonly workflowYamls: readonly string[];
+  readonly revisionId?: string | null;
 }
 
 export type StudioScopeBindingImplementationKind =
@@ -287,7 +358,7 @@ export interface StudioScopeBindingResult {
     readonly definitionActorId: string;
   } | null;
   readonly gAgent?: {
-    readonly actorTypeName: string;
+    readonly diagnosticClrTypeName: string;
   } | null;
 }
 
@@ -316,6 +387,7 @@ export interface StudioScopeBindingRevision {
   readonly scriptDefinitionActorId: string;
   readonly scriptSourceHash: string;
   readonly staticActorTypeName: string;
+  readonly staticAgentKind?: string;
 }
 
 export interface StudioScopeBindingStatus {
@@ -360,7 +432,7 @@ export function describeStudioScopeBindingRevisionTarget(
     case 'script':
       return revision.scriptId || 'Script';
     case 'gagent':
-      return revision.staticActorTypeName || 'GAgent';
+      return revision.staticAgentKind || revision.staticActorTypeName || 'GAgent';
     default:
       return 'Unknown';
   }
@@ -457,6 +529,7 @@ export interface StudioMemberSummary {
   readonly displayName: string;
   readonly description: string;
   readonly implementationKind: StudioMemberImplementationKind;
+  readonly implementationRef?: StudioMemberImplementationRef | null;
   readonly lifecycleStage: StudioMemberLifecycleStage;
   readonly publishedServiceId: string;
   readonly lastBoundRevisionId: string | null;
@@ -471,7 +544,8 @@ export interface StudioMemberImplementationRef {
   readonly workflowRevision?: string | null;
   readonly scriptId?: string | null;
   readonly scriptRevision?: string | null;
-  readonly actorTypeName?: string | null;
+  readonly agentKind?: string | null;
+  readonly diagnosticActorTypeName?: string | null;
 }
 
 export interface StudioMemberBindingContract {
@@ -492,6 +566,14 @@ export type StudioMemberBindingRunStatus =
   | 'rejected'
   | 'unknown';
 
+export type StudioMemberBindingAckStage =
+  | 'dispatch_accepted'
+  | 'unknown';
+
+export type StudioMemberBindingRunRole =
+  | 'candidate'
+  | 'unknown';
+
 export interface StudioMemberBindingFailure {
   readonly code: string;
   readonly message?: string | null;
@@ -505,8 +587,16 @@ export interface StudioMemberBindingRunStatusResponse {
   readonly memberId: string;
   readonly stateVersion?: number | null;
   readonly platformBindingCommandId?: string | null;
+  readonly result?: StudioMemberBindingRunResult | null;
   readonly failure?: StudioMemberBindingFailure | null;
   readonly updatedAt?: string | null;
+}
+
+export interface StudioMemberBindingRunResult {
+  readonly publishedServiceId: string;
+  readonly revisionId: string;
+  readonly implementationKind: StudioMemberImplementationKind;
+  readonly expectedActorId?: string | null;
 }
 
 export interface StudioMemberBindingAcceptedResponse {
@@ -514,6 +604,20 @@ export interface StudioMemberBindingAcceptedResponse {
   readonly bindingRunId: string;
   readonly scopeId: string;
   readonly memberId: string;
+  readonly ackStage?: StudioMemberBindingAckStage | null;
+  readonly bindingRunRole?: StudioMemberBindingRunRole | null;
+}
+
+export type StudioMemberCommandStatus =
+  | 'accepted'
+  | 'no_change'
+  | 'unknown';
+
+export interface StudioMemberCommandResponse {
+  readonly status: StudioMemberCommandStatus;
+  readonly scopeId: string;
+  readonly memberId: string;
+  readonly ackedAt?: string | null;
 }
 
 export interface StudioMemberDetail {
@@ -580,6 +684,119 @@ export interface StudioTeamRoster {
   readonly nextPageToken?: string | null;
 }
 
+export type StudioWorkflowBoardExecutionAvailability =
+  | 'available'
+  | 'unavailable'
+  | 'pending_backend_contract'
+  | 'unknown';
+
+export type StudioWorkflowBoardExecutionStatus =
+  | 'running'
+  | 'waiting'
+  | 'failed'
+  | 'timed_out'
+  | 'retrying'
+  | 'completed'
+  | 'stopped'
+  | 'unknown';
+
+export type StudioWorkflowBoardCurrentNodeStatus =
+  | 'running'
+  | 'waiting'
+  | 'pending'
+  | 'failed'
+  | 'completed'
+  | 'unknown';
+
+export type StudioWorkflowBoardPendingNodeStatus =
+  | 'waiting'
+  | 'pending'
+  | 'queued'
+  | 'unknown';
+
+export interface StudioWorkflowBoardSnapshotRequest {
+  readonly teamId?: string | null;
+  readonly memberId?: string | null;
+  readonly take?: number;
+}
+
+export interface StudioWorkflowBoardCounts {
+  readonly running: number;
+  readonly waiting: number;
+  readonly failed: number;
+  readonly retrying: number;
+  readonly completed: number;
+}
+
+export interface StudioWorkflowBoardProgress {
+  readonly completedSteps: number;
+  readonly totalSteps: number;
+}
+
+export interface StudioWorkflowBoardCurrentNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly status: StudioWorkflowBoardCurrentNodeStatus;
+  readonly startedAt?: string | null;
+  readonly updatedAt?: string | null;
+  readonly durationMs?: number | null;
+}
+
+export interface StudioWorkflowBoardCompletedNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly completedAt?: string | null;
+  readonly durationMs?: number | null;
+}
+
+export interface StudioWorkflowBoardPendingNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly status: StudioWorkflowBoardPendingNodeStatus;
+  readonly reason?: string | null;
+}
+
+export interface StudioWorkflowBoardFailedNode {
+  readonly nodeId: string;
+  readonly name: string;
+  readonly failedAt?: string | null;
+}
+
+export interface StudioWorkflowBoardMemberSnapshot {
+  readonly memberId: string;
+  readonly displayName: string;
+  readonly executionAvailability: StudioWorkflowBoardExecutionAvailability;
+  readonly executionStatus: StudioWorkflowBoardExecutionStatus;
+  readonly progress: StudioWorkflowBoardProgress;
+  readonly completedNodes: readonly StudioWorkflowBoardCompletedNode[];
+  readonly pendingNodes: readonly StudioWorkflowBoardPendingNode[];
+  readonly failedNodes: readonly StudioWorkflowBoardFailedNode[];
+  readonly workflowId?: string | null;
+  readonly workflowName?: string | null;
+  readonly publishedServiceId?: string | null;
+  readonly actorId?: string | null;
+  readonly roleSummary?: string | null;
+  readonly currentExecutionId?: string | null;
+  readonly currentNode?: StudioWorkflowBoardCurrentNode | null;
+  readonly lastNodeUpdatedAt?: string | null;
+}
+
+export interface StudioWorkflowBoardTeamSnapshot {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly totalMemberCount?: number | null;
+  readonly members: readonly StudioWorkflowBoardMemberSnapshot[];
+}
+
+export interface StudioWorkflowBoardSnapshot {
+  readonly scopeId: string;
+  readonly generatedAt: string;
+  readonly watermark?: string | null;
+  readonly counts: StudioWorkflowBoardCounts;
+  readonly teams: readonly StudioWorkflowBoardTeamSnapshot[];
+  readonly lastNodeUpdatedAt?: string | null;
+}
+
 export interface StudioTeamCreateInput {
   readonly scopeId: string;
   readonly displayName: string;
@@ -592,6 +809,20 @@ export interface StudioTeamUpdateInput {
   readonly teamId: string;
   readonly displayName?: string | null;
   readonly description?: string | null;
+}
+
+export type StudioTeamCommandStatus =
+  | 'accepted'
+  | 'no_change'
+  | 'unknown';
+
+export interface StudioTeamCommandResponse {
+  readonly status: StudioTeamCommandStatus;
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly commandId?: string | null;
+  readonly correlationId?: string | null;
+  readonly ackedAt?: string | null;
 }
 
 export type StudioMemberBindingTargetKind = StudioScopeBindingTargetKind;
@@ -648,7 +879,7 @@ export interface StudioScopeGAgentBindingInput {
   readonly scopeId: string;
   readonly serviceId?: string | null;
   readonly displayName?: string | null;
-  readonly actorTypeName: string;
+  readonly agentKind: string;
   readonly endpoints: readonly StudioScopeGAgentEndpointInput[];
   readonly revisionId?: string | null;
 }

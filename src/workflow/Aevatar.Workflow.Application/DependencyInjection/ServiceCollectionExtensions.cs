@@ -4,17 +4,22 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.CQRS.Core.Streaming;
+using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Observatory;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
+using Aevatar.Workflow.Application.RunForks;
 using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Schedules;
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -38,6 +43,8 @@ public static class ServiceCollectionExtensions
             var catalog = new WorkflowDefinitionCatalog();
             if (options.RegisterBuiltInDirectWorkflow)
                 catalog.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
+            if (options.RegisterBuiltInStudioWorkflow)
+                catalog.Register("studio", WorkflowDefinitionCatalog.BuiltInStudioYaml);
             if (options.RegisterBuiltInAutoWorkflow)
                 catalog.Register("auto", WorkflowDefinitionCatalog.CreateBuiltInAutoYaml());
             if (options.RegisterBuiltInAutoReviewWorkflow)
@@ -58,6 +65,19 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunStartError>, WorkflowRunCommandTargetResolver>();
         services.AddSingleton<ICommandTargetResolver<WorkflowChatRunRequest, WorkflowRunAcceptedCommandTarget, WorkflowChatRunStartError>, WorkflowRunAcceptedCommandTargetResolver>();
         services.AddSingleton<ICommandEnvelopeFactory<WorkflowChatRunRequest>, WorkflowChatRequestEnvelopeFactory>();
+        services.TryAddSingleton<ICommandTargetResolver<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunStartError>, WorkflowForkRunCommandTargetResolver>();
+        services.TryAddSingleton<ICommandTargetDispatcher<WorkflowForkRunCommandTarget>>(sp =>
+            new ActorCommandTargetDispatcher<WorkflowForkRunCommandTarget>(
+                sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorDispatchPort>()));
+        services.TryAddSingleton<ICommandTargetEnvelopeFactory<WorkflowForkRunCommand, WorkflowForkRunCommandTarget>, WorkflowForkRunCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandReceiptFactory<WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt>, WorkflowForkRunAcceptedReceiptFactory>();
+        services.TryAddSingleton<ICommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>, DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>();
+        services.TryAddSingleton<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>, WorkflowForkRunCommandDispatchService>();
+        services.TryAddSingleton(sp => new Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>(
+            () => sp.GetRequiredService<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICommittedStatePublicationHook,
+            WorkflowRunForkCoordinator>());
         services.AddSingleton<ICommandTargetDispatcher<WorkflowRunCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunCommandTarget>>();
         services.AddSingleton<ICommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>, ActorCommandTargetDispatcher<WorkflowRunAcceptedCommandTarget>>();
         services.AddSingleton<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>, WorkflowRunAcceptedReceiptFactory>();
@@ -70,6 +90,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowRunDurableCompletionResolver>();
         services.TryAddSingleton<ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>>(sp =>
             sp.GetRequiredService<WorkflowRunDurableCompletionResolver>());
+        // 06-20-observatory-run-state-feed (R2): gate that confirms an ad-hoc run's current-state doc has
+        // materialized before its throwaway actors are reclaimed. Built from the head-version + durable
+        // materialization-watermark read ports (supplied by Infrastructure); options bound by the host.
+        services.TryAddSingleton<WorkflowRunReclaimOptions>();
+        services.TryAddSingleton<WorkflowRunMaterializationReclaimGate>(sp =>
+            new WorkflowRunMaterializationReclaimGate(
+                sp.GetRequiredService<IWorkflowRunCommittedVersionPort>(),
+                sp.GetRequiredService<IWorkflowRunMaterializationWatermarkPort>(),
+                sp.GetRequiredService<WorkflowRunReclaimOptions>(),
+                logger: sp.GetService<Microsoft.Extensions.Logging.ILogger<WorkflowRunMaterializationReclaimGate>>()));
+        services.TryAddSingleton<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunObservationScopeLeasePreparation>();
         services.TryAddSingleton<ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>, WorkflowRunObservationLifecycle>();
         services.TryAddSingleton<IEventFrameMapper<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>, IdentityEventFrameMapper<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>, DefaultEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>>();
@@ -82,13 +113,13 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ICommandDurableCompletionResolver<WorkflowChatRunAcceptedReceipt, WorkflowProjectionCompletionStatus>>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>>(),
                 sp.GetRequiredService<ICommandObservationLifecycle<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(),
-                sp.GetRequiredService<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>>()));
+                sp.GetRequiredService<ICommandReceiptFactory<WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt>>(),
+                sp.GetRequiredService<ICommandObservationScopeLeasePreparation<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>()));
         services.AddSingleton<IWorkflowChatRunInteractionPort>(sp =>
             new WorkflowChatRunInteractionService(
                 sp.GetRequiredService<IWorkflowRunActorResolver>(),
                 sp.GetRequiredService<IWorkflowExecutionProjectionPort>(),
                 sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
-                sp.GetRequiredService<IWorkflowChatRunObservationScopeActivationPort>(),
                 sp.GetRequiredService<DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>>(),
                 sp.GetRequiredService<WorkflowDirectFallbackPolicy>()));
         services.TryAddSingleton<IWorkflowRunReportExportPort, NoopWorkflowRunReportExporter>();
@@ -111,6 +142,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowSignalCommand>, WorkflowSignalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        services.TryAddSingleton<ICommandTargetResolver<WorkflowRetryCompensationCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, WorkflowRetryCompensationCommandTargetResolver>();
+        services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowRetryCompensationCommand>, WorkflowRetryCompensationCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandDispatchPipeline<WorkflowRetryCompensationCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowRetryCompensationCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
+        services.TryAddSingleton<ICommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
         services.TryAddSingleton<ICommandTargetResolver<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlStartError>, WorkflowStopCommandTargetResolver>();
         services.TryAddSingleton<ICommandEnvelopeFactory<WorkflowStopCommand>, WorkflowStopCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>, DefaultCommandDispatchPipeline<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>();
@@ -121,7 +156,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowCapabilitiesPort>(sp =>
             sp.GetRequiredService<RegistryBackedWorkflowCatalogPort>());
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
+        // 06-19-workflow-run-observatory (C2): scope-enforcement seam for the read-only run viewer.
+        // 06-20-observatory-admin-cross-scope (G3): one instance backs both the scope-bound reads and the
+        // separate cross-scope admin overview contract.
+        services.TryAddSingleton<WorkflowRunObservatoryQueryService>();
+        services.TryAddSingleton<IWorkflowRunObservatoryQueryService>(sp =>
+            sp.GetRequiredService<WorkflowRunObservatoryQueryService>());
+        services.TryAddSingleton<IWorkflowRunAdminOverviewQueryService>(sp =>
+            sp.GetRequiredService<WorkflowRunObservatoryQueryService>());
         services.TryAddSingleton<IWorkflowScheduleApplicationService, WorkflowScheduleApplicationService>();
+        services.TryAddSingleton<IWorkflowScheduleCommandPort, WorkflowScheduleCommandPort>();
         return services;
     }
 }

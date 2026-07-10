@@ -2,14 +2,40 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.CQRS.Projection.Core.Tests;
 
 public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 {
+    [Fact]
+    public void AddElasticsearchDocumentProjectionStore_ShouldRegisterIndexReconcileTarget()
+    {
+        var services = new ServiceCollection();
+
+        services.AddElasticsearchDocumentProjectionStore<TestStoreReadModel, string>(
+            _ => new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = true,
+                Endpoints = ["http://localhost:9200"],
+            },
+            _ => new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IProjectionIndexReconcileTarget) &&
+            descriptor.Lifetime == ServiceLifetime.Singleton);
+    }
+
     [Fact]
     public async Task GetAsync_WhenIndexMissingAndAutoCreateDisabled_ShouldThrowByDefault()
     {
@@ -217,7 +243,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task UpsertAsync_WhenDescriptorContainsOpenFields_ShouldNotInitializeStaticMappingsForThem()
+    public async Task UpsertAsync_WhenDescriptorContainsOpenFields_ShouldOnlySkipOpenMessagesAndRepeatedPrimitives()
     {
         var handler = CreateSuccessfulUpsertHandler();
         var options = new ElasticsearchProjectionDocumentStoreOptions
@@ -248,10 +274,138 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var properties = GetProperties(indexPayload);
         properties.Should().NotContainKey("fields_value");
         properties.Should().NotContainKey("open_payload");
-        properties.Should().NotContainKey("labels");
-        properties.Should().NotContainKey("entries");
         properties.Should().NotContainKey("tags");
+        GetMappingType(indexPayload, "labels").Should().Be("object");
+        GetFieldMapping(indexPayload, "labels").GetProperty("enabled").GetBoolean().Should().BeFalse();
         GetMappingType(indexPayload, "updated_at_utc_value").Should().Be("date");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenDescriptorContainsProtoMaps_ShouldDisableMapMappingsAndUseObjectParents()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexCreateRequest = GetIndexCreateRequest(handler);
+        var indexPayload = ParseJson(indexCreateRequest.Body);
+        var mappings = indexPayload.GetProperty("mappings");
+        mappings.TryGetProperty("dynamic", out _).Should().BeFalse();
+        indexCreateRequest.Body.Should().NotContain("\"nested\"");
+
+        GetMappingType(indexPayload, "labels").Should().Be("object");
+        GetFieldMapping(indexPayload, "labels").GetProperty("enabled").GetBoolean().Should().BeFalse();
+
+        GetMappingType(indexPayload, "primary_entry").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "entry_id").Should().Be("keyword");
+        GetMappingType(indexPayload, "primary_entry", "attributes").Should().Be("object");
+        GetFieldMapping(indexPayload, "primary_entry", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+        GetMappingType(indexPayload, "primary_entry", "leaf").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "leaf", "leaf_id").Should().Be("keyword");
+        GetFieldMapping(indexPayload, "primary_entry", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+
+        GetMappingType(indexPayload, "entries").Should().Be("object");
+        GetFieldMapping(indexPayload, "entries").TryGetProperty("properties", out _).Should().BeTrue();
+        GetFieldMapping(indexPayload, "entries", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+        GetMappingType(indexPayload, "child_entries").Should().Be("object");
+        GetFieldMapping(indexPayload, "child_entries", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenProviderDeclaresExplicitNestedMapMapping_ShouldPreserveExactPath()
+    {
+        var handler = CreateSuccessfulUpsertHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestRecursiveWellKnownReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["primary_entry"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new Dictionary<string, object?>
+                            {
+                                ["attributes"] = new Dictionary<string, object?>
+                                {
+                                    ["type"] = "object",
+                                    ["enabled"] = true,
+                                },
+                            },
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        await store.UpsertAsync(new TestRecursiveWellKnownReadModel
+        {
+            Id = "actor-1",
+            ActorId = "actor-1",
+            UpdatedAt = DateTimeOffset.Parse("2026-05-15T00:00:00Z"),
+        });
+
+        var indexPayload = ParseJson(GetIndexCreateRequest(handler).Body);
+        GetMappingType(indexPayload, "primary_entry").Should().Be("object");
+        GetMappingType(indexPayload, "primary_entry", "attributes").Should().Be("object");
+        GetFieldMapping(indexPayload, "primary_entry", "attributes")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeTrue();
+        GetFieldMapping(indexPayload, "primary_entry", "leaf", "annotations")
+            .GetProperty("enabled")
+            .GetBoolean()
+            .Should()
+            .BeFalse();
     }
 
     [Fact]
@@ -636,6 +790,43 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task UpsertAsync_WhenIncomingAuthoritativeVersionSkipsAhead_ShouldApply()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-gap","actor_id":"actor-gap","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-06-17T00:00:00Z","value":"v1"}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"result":"updated"}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        var result = await store.UpsertAsync(new TestStoreReadModel
+        {
+            Id = "actor-gap",
+            ActorId = "actor-gap",
+            StateVersion = 4,
+            LastEventId = "evt-4",
+            UpdatedAt = DateTimeOffset.Parse("2026-06-17T00:00:04Z"),
+            Value = "v4",
+        });
+
+        result.Disposition.Should().Be(ProjectionWriteDisposition.Applied);
+        handler.CapturedRequests.Should().HaveCount(2);
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_seq_no=7");
+        handler.CapturedRequests[1].PathAndQuery.Should().Contain("if_primary_term=3");
+        handler.CapturedRequests[1].Body.Should().Contain("\"state_version\":\"4\"");
+        handler.CapturedRequests[1].Body.Should().Contain("\"last_event_id\":\"evt-4\"");
+        handler.CapturedRequests[1].Body.Should().Contain("\"value\":\"v4\"");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenReadModelUsesDynamicIndexScope_ShouldTargetScopeSpecificIndices()
     {
         var handler = new ScriptedHttpMessageHandler();
@@ -905,7 +1096,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task UpsertAsync_WhenAliasFingerprintDrifts_ShouldThrowWithoutReindexing()
+    public async Task UpsertAsync_WhenAliasFingerprintDrifts_ShouldFailClosedWithoutLifecycleMutation()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(req =>
@@ -918,31 +1109,87 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
             handler);
 
-        // Refactor (iter98/cluster-743): Old pattern: drifted alias fingerprints
-        // triggered PUT physical + _reindex + _aliases repair. New principle:
-        // lifecycle drift is a configuration error and projection refuses writes.
         var act = () => store.UpsertAsync(new TestStoreReadModel { Id = "actor-1", ActorId = "actor-1" });
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*schema drift detected*");
-        handler.CapturedRequests.Should().ContainSingle();
+        var exception = await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
+        exception.Which.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        exception.Which.CurrentPhysicalIndex.Should().Be("aevatar-projection-core-tests-v00000000");
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
         handler.CapturedRequests
-            .Any(r => r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal))
-            .Should().BeFalse("drift must fail loud instead of repairing through reindex");
+            .Any(r => r.Method is "PUT" or "POST" or "DELETE")
+            .Should().BeFalse("projection writes must not repair fingerprint drift");
         handler.CapturedRequests
-            .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
-            .Should().BeFalse("drift must not swap aliases from the projection write path");
+            .Any(r => r.PathAndQuery.Contains("/_doc/", StringComparison.Ordinal))
+            .Should().BeFalse("document writes must not run while the index lifecycle is drifted");
+    }
+
+    [Fact]
+    public async Task CheckIndexConsistencyAsync_WhenAliasFingerprintDrifts_ShouldReportDriftWithoutLifecycleMutation()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK, $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var result = await store.CheckIndexConsistencyAsync();
+
+        result.Status.Should().Be(ProjectionIndexConsistencyStatus.Drifted);
+        result.Provider.Should().Be("Elasticsearch");
+        result.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        result.CurrentPhysicalIndex.Should().Be("aevatar-projection-core-tests-v00000000");
+        result.ExpectedPhysicalIndex.Should().StartWith("aevatar-projection-core-tests-v");
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+        handler.CapturedRequests
+            .Any(r => r.Method is "PUT" or "POST" or "DELETE")
+            .Should().BeFalse("the consistency probe must not mutate indices or aliases");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.Contains("_search", StringComparison.Ordinal))
+            .Should().BeFalse("the consistency probe must not query read models");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenAliasFingerprintDrifts_ShouldThrowTypedDriftWithoutLifecycleMutation()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK, $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        Func<Task> act = () => store.QueryAsync(new ProjectionDocumentQuery());
+
+        var exception = await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
+        exception.Which.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        exception.Which.CurrentPhysicalIndex.Should().Be("aevatar-projection-core-tests-v00000000");
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+        handler.CapturedRequests
+            .Any(r => r.Method is "PUT" or "POST" or "DELETE")
+            .Should().BeFalse("projection reads must not repair drift through lifecycle mutation");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.Contains("_search", StringComparison.Ordinal))
+            .Should().BeFalse("the drifted read path must fail before querying a stale read model");
     }
 
     [Fact]
     public async Task UpsertAsync_WhenBareIndexExistsWithoutAlias_ShouldWrapItIntoAliasedPhysical()
     {
-        // This is the exact prod scenario behind the Lark relay outage on 2026-05-20:
-        // `aevatar-mainnet-channel-bot-registrations` existed as a bare index from
-        // 2026-04-22 with dynamic mappings, never wrapped into an alias. The lifecycle
-        // manager must detect this and migrate: create v<fingerprint> with the
-        // explicit augmented mapping, reindex from bare → physical, atomically
-        // (add alias + remove_index bare) in one _aliases call.
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{}"""));  // GET _alias/<name>
         handler.EnqueueResponse(_ => new HttpResponseMessage(HttpStatusCode.OK));              // HEAD <name>: bare exists
@@ -974,6 +1221,200 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task UpsertAsync_WhenAliasHasMultipleBackings_ShouldFailClosedWithoutReindexing()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK,
+                $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}},\"{alias}-v11111111\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var act = () => store.UpsertAsync(new TestStoreReadModel { Id = "actor-1", ActorId = "actor-1" });
+
+        var exception = await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
+        exception.Which.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        exception.Which.CurrentPhysicalIndex.Should().Contain("aevatar-projection-core-tests-v00000000");
+        exception.Which.CurrentPhysicalIndex.Should().Contain("aevatar-projection-core-tests-v11111111");
+        handler.CapturedRequests.Should().ContainSingle();
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal))
+            .Should().BeFalse("ambiguous alias backing must fail before data copy");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
+            .Should().BeFalse("ambiguous alias backing must not be swapped automatically");
+    }
+
+    [Fact]
+    public async Task CheckIndexConsistencyAsync_WhenAliasHasMultipleBackings_ShouldReportDriftWithoutLifecycleMutation()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK,
+                $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}},\"{alias}-v11111111\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var result = await store.CheckIndexConsistencyAsync();
+
+        result.Status.Should().Be(ProjectionIndexConsistencyStatus.Drifted);
+        result.Provider.Should().Be("Elasticsearch");
+        result.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        result.CurrentPhysicalIndex.Should().Be(
+            "aevatar-projection-core-tests-v00000000,aevatar-projection-core-tests-v11111111");
+        result.ExpectedPhysicalIndex.Should().StartWith("aevatar-projection-core-tests-v");
+        result.Message.Should().Contain("multiple physical indices");
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+        handler.CapturedRequests
+            .Any(r => r.Method is "PUT" or "POST" or "DELETE")
+            .Should().BeFalse("the consistency probe must not mutate indices or aliases");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.Contains("_search", StringComparison.Ordinal))
+            .Should().BeFalse("the consistency probe must not query read models");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_WhenAliasFingerprintDrifts_ShouldFailBeforeReindexing()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK, $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var act = () => store.UpsertAsync(new TestStoreReadModel { Id = "actor-1", ActorId = "actor-1" });
+
+        await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal))
+            .Should().BeFalse("write-path drift must fail before any data copy");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
+            .Should().BeFalse("write-path drift must not swap aliases");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.Contains("/_doc/", StringComparison.Ordinal))
+            .Should().BeFalse("document writes must not run while the index lifecycle is drifted");
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenStaticAliasDrifts_ShouldUseDataSafeLifecycleMigration()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK, $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, "")); // HEAD expected -> missing
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK,
+            """{"took":3,"timed_out":false,"total":1,"updated":0,"created":1,"failures":[]}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        await store.ReconcileIndexAsync();
+
+        handler.CapturedRequests.Should().Contain(r =>
+            r.Method == "PUT" &&
+            r.PathAndQuery.Contains("/aevatar-projection-core-tests-v", StringComparison.Ordinal));
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal));
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.PathAndQuery == "/_aliases" && r.Method == "POST");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.Contains("/_doc/", StringComparison.Ordinal))
+            .Should().BeFalse("startup lifecycle must not read or write read-model documents");
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenAliasHasMultipleBackings_ShouldFailClosedWithoutReindexingOrAliasSwap()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(req =>
+        {
+            var alias = Uri.UnescapeDataString(req.RequestUri!.AbsolutePath.Substring("/_alias/".Length));
+            return CreateJsonResponse(HttpStatusCode.OK,
+                $"{{\"{alias}-v00000000\":{{\"aliases\":{{\"{alias}\":{{}}}}}},\"{alias}-v11111111\":{{\"aliases\":{{\"{alias}\":{{}}}}}}}}");
+        });
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+
+        var act = async () => await store.ReconcileIndexAsync();
+
+        var exception = await act.Should().ThrowAsync<ProjectionIndexSchemaDriftException>();
+        exception.Which.IndexAlias.Should().Be("aevatar-projection-core-tests");
+        exception.Which.CurrentPhysicalIndex.Should().Contain("aevatar-projection-core-tests-v00000000");
+        exception.Which.CurrentPhysicalIndex.Should().Contain("aevatar-projection-core-tests-v11111111");
+        handler.CapturedRequests.Should().ContainSingle(r =>
+            r.Method == "GET" &&
+            r.PathAndQuery.StartsWith("/_alias/", StringComparison.Ordinal));
+        handler.CapturedRequests
+            .Any(r => r.Method == "PUT")
+            .Should().BeFalse("ambiguous startup reconcile must not create a replacement physical index");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery.StartsWith("/_reindex", StringComparison.Ordinal))
+            .Should().BeFalse("ambiguous startup reconcile must fail before data copy");
+        handler.CapturedRequests
+            .Any(r => r.PathAndQuery == "/_aliases" && r.Method == "POST")
+            .Should().BeFalse("ambiguous startup reconcile must not swap aliases automatically");
+        handler.CapturedRequests
+            .Any(r =>
+                r.PathAndQuery.Contains("/_doc/", StringComparison.Ordinal) ||
+                r.PathAndQuery.Contains("/_create/", StringComparison.Ordinal))
+            .Should().BeFalse("startup reconcile must not touch read-model documents");
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenReadModelUsesDynamicIndexScope_ShouldSkipLifecycle()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = true,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestDynamicStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "script-native-read-models",
+                Mappings: new Dictionary<string, object?>(),
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            indexScopeSelector: model => model.DocumentIndexScope,
+            httpMessageHandler: handler);
+        await store.ReconcileIndexAsync();
+
+        handler.CapturedRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenSameMetadataReused_ShouldProduceSameFingerprint()
     {
         // Determinism check: two stores constructed with structurally identical
@@ -999,6 +1440,144 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         first.Should().Be(second, "fingerprint must be deterministic across constructions");
         first.Should().Contain("-v");
         first.Length.Should().BeGreaterThan("aevatar-projection-core-tests-v".Length);
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenDriftAndExpectedMissing_ShouldReindexForwardThenAtomicSwap()
+    {
+        const string oldPhysical = "aevatar-projection-core-tests-vstale01";
+        var handler = new ScriptedHttpMessageHandler();
+        // GET _alias -> alias points at a stale physical (schema drift).
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"aevatar-projection-core-tests-vstale01":{"aliases":{"aevatar-projection-core-tests":{}}}}"""));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, "")); // HEAD expected -> missing
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // PUT expected
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"failures":[],"timed_out":false}""")); // POST _reindex
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // POST _aliases
+
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        await store.ReconcileIndexAsync();
+
+        // Data copied forward via reindex (proves it is NOT an empty CreateFreshAliased shortcut).
+        var reindex = handler.CapturedRequests
+            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.Contains("/_reindex")).Subject;
+        reindex.Body.Should().Contain(oldPhysical);
+        // Atomic alias swap retains the old physical (remove, NOT remove_index).
+        var aliases = handler.CapturedRequests
+            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.EndsWith("/_aliases")).Subject;
+        aliases.Body.Should().Contain("\"add\"").And.Contain("\"remove\"");
+        aliases.Body.Should().NotContain("remove_index");
+        aliases.Body.Should().Contain(oldPhysical);
+        // Expected physical was created (PUT to a -v physical other than the stale one).
+        handler.CapturedRequests.Should().Contain(r =>
+            r.Method == "PUT"
+            && r.PathAndQuery.Contains("aevatar-projection-core-tests-v")
+            && !r.PathAndQuery.Contains(oldPhysical));
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenDriftAndExpectedExists_ShouldSwapAliasWithoutReindex()
+    {
+        const string oldPhysical = "aevatar-projection-core-tests-vstale01";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            $"{{\"{oldPhysical}\":{{\"aliases\":{{\"aevatar-projection-core-tests\":{{}}}}}}}}"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, "")); // HEAD expected -> exists
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // POST _aliases
+
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        await store.ReconcileIndexAsync();
+
+        handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.Contains("/_reindex"));
+        handler.CapturedRequests
+            .Should().ContainSingle(r => r.Method == "POST" && r.PathAndQuery.EndsWith("/_aliases")).Subject
+            .Body.Should().Contain("\"add\"").And.Contain("\"remove\"").And.Contain(oldPhysical).And.NotContain("remove_index");
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenReindexReportsFailures_ShouldThrowAndNotSwapAlias()
+    {
+        const string oldPhysical = "aevatar-projection-core-tests-vstale01";
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            $"{{\"{oldPhysical}\":{{\"aliases\":{{\"aevatar-projection-core-tests\":{{}}}}}}}}"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, "")); // HEAD expected -> missing
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // PUT expected
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"failures":[{"index":"x","cause":{"type":"version_conflict_engine_exception"}}]}""")); // POST _reindex with failures
+
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        var act = async () => await store.ReconcileIndexAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        // The alias was never swapped onto the partially-copied physical.
+        handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.EndsWith("/_aliases"));
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenAutoCreateDisabled_ShouldBeNoOp()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false }, handler);
+
+        await store.ReconcileIndexAsync();
+
+        handler.CapturedRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileIndexAsync_WhenGreenfield_ShouldCreateFreshAliasedWithoutReindex()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, "{}")); // GET _alias -> none
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, "")); // HEAD bare alias -> none
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"acknowledged":true}""")); // PUT fresh physical
+
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true }, handler);
+
+        await store.ReconcileIndexAsync();
+
+        handler.CapturedRequests.Should().NotContain(r => r.PathAndQuery.Contains("/_reindex"));
+        handler.CapturedRequests.Should().Contain(r =>
+            r.Method == "PUT" && r.PathAndQuery.Contains("aevatar-projection-core-tests-v"));
+    }
+
+    [Fact]
+    public void AddElasticsearchDocumentProjectionStore_ForMultipleReadModels_ShouldEnumerateDistinctReconcileTargets()
+    {
+        var services = new ServiceCollection();
+        RegisterStore<TestStoreReadModel>(services, "alias-a");
+        RegisterStore<TestRecursiveWellKnownReadModel>(services, "alias-b");
+
+        // Must not throw "indistinguishable ... IProjectionIndexReconcileTarget" at ValidateOnBuild —
+        // the regression that crash-looped the host when this used TryAddEnumerable with a factory.
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
+
+        var targets = provider.GetServices<IProjectionIndexReconcileTarget>().ToList();
+        targets.Should().HaveCount(2);
+        targets.Select(t => t.IndexAlias).Should().OnlyHaveUniqueItems();
+
+        static void RegisterStore<TReadModel>(IServiceCollection services, string indexName)
+            where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+        {
+            services.AddElasticsearchDocumentProjectionStore<TReadModel, string>(
+                optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions { Endpoints = ["http://localhost:9200"] },
+                metadataFactory: _ => new DocumentIndexMetadata(
+                    IndexName: indexName,
+                    Mappings: new Dictionary<string, object?>(),
+                    Settings: new Dictionary<string, object?>(),
+                    Aliases: new Dictionary<string, object?>()),
+                keySelector: static _ => string.Empty, // never invoked: this test only resolves, never upserts
+                keyFormatter: static key => key);
+        }
     }
 
     private static ElasticsearchProjectionDocumentStore<TestStoreReadModel, string> CreateStore(
@@ -1062,14 +1641,30 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             .ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
     }
 
-    private static JsonElement GetFieldMapping(JsonElement indexPayload, string fieldName)
+    private static JsonElement GetFieldMapping(JsonElement indexPayload, params string[] fieldPath)
     {
-        return GetProperties(indexPayload)[fieldName];
+        fieldPath.Should().NotBeEmpty();
+
+        IReadOnlyDictionary<string, JsonElement> properties = GetProperties(indexPayload);
+        JsonElement mapping = default;
+        for (var index = 0; index < fieldPath.Length; index++)
+        {
+            mapping = properties[fieldPath[index]];
+            if (index == fieldPath.Length - 1)
+                return mapping;
+
+            properties = mapping
+                .GetProperty("properties")
+                .EnumerateObject()
+                .ToDictionary(x => x.Name, x => x.Value.Clone(), StringComparer.Ordinal);
+        }
+
+        throw new InvalidOperationException("The field path must contain at least one segment.");
     }
 
-    private static string? GetMappingType(JsonElement indexPayload, string fieldName)
+    private static string? GetMappingType(JsonElement indexPayload, params string[] fieldPath)
     {
-        return GetFieldMapping(indexPayload, fieldName).GetProperty("type").GetString();
+        return GetFieldMapping(indexPayload, fieldPath).GetProperty("type").GetString();
     }
 
     private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, string json)

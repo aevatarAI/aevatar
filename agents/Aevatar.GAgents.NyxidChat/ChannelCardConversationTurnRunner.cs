@@ -10,8 +10,8 @@ namespace Aevatar.GAgents.NyxidChat;
 /// <summary>
 /// Production <see cref="IConversationCardTurnRunner"/> for the Lark CardKit streaming
 /// path. Composes <see cref="ILarkCardKitClient"/> (cardkit/v1/* endpoints) with
-/// <see cref="ILarkNyxClient.SendMessageAsync"/> (im/v1/messages with msg_type=interactive)
-/// to drive the create → send → stream → finalize lifecycle. Auth: bot owner's NyxID
+/// <see cref="ILarkNyxClient.SendMessageAsync"/> or <see cref="ILarkNyxClient.ReplyToMessageAsync"/>
+/// (im/v1/messages with msg_type=interactive) to drive the create → bind → stream → finalize lifecycle. Auth: bot owner's NyxID
 /// access token from <c>activity.TransportExtras.NyxUserAccessToken</c>; receive target:
 /// <c>nyx_lark_chat_id</c> for groups, falling back to <c>nyx_lark_union_id</c> for p2p
 /// DMs (cross-app safe per the proto's documented invariants).
@@ -22,16 +22,41 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
     private readonly ILarkCardKitClient _cardKit;
     private readonly ILarkNyxClient _larkClient;
+    private readonly ILarkOutboundClientFactory? _outboundClientFactory;
     private readonly ILogger<ChannelCardConversationTurnRunner> _logger;
 
     public ChannelCardConversationTurnRunner(
         ILarkCardKitClient cardKit,
         ILarkNyxClient larkClient,
         ILogger<ChannelCardConversationTurnRunner> logger)
+        : this(cardKit, larkClient, outboundClientFactory: null, logger)
+    {
+    }
+
+    public ChannelCardConversationTurnRunner(
+        ILarkCardKitClient cardKit,
+        ILarkNyxClient larkClient,
+        ILarkOutboundClientFactory? outboundClientFactory,
+        ILogger<ChannelCardConversationTurnRunner> logger)
     {
         _cardKit = cardKit ?? throw new ArgumentNullException(nameof(cardKit));
         _larkClient = larkClient ?? throw new ArgumentNullException(nameof(larkClient));
+        _outboundClientFactory = outboundClientFactory;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    // Resolves the CardKit/im clients bound to the inbound bot's outbound proxy slug (carried on the
+    // reply activity's TransportExtras). Falls back to the configured-default singletons when no
+    // factory is wired or the activity has no slug. This is what makes a card reply proxy through the
+    // bot that received the inbound turn instead of the process-wide default `api-lark-bot`.
+    private (ILarkCardKitClient CardKit, ILarkNyxClient Lark) ResolveOutboundClients(ChatActivity? activity)
+    {
+        var slug = activity?.TransportExtras?.NyxProviderSlug?.Trim();
+        if (_outboundClientFactory is null || string.IsNullOrEmpty(slug))
+            return (_cardKit, _larkClient);
+
+        return (_outboundClientFactory.ResolveCardKitClient(slug),
+                _outboundClientFactory.ResolveNyxClient(slug));
     }
 
     public async Task<ConversationCardCreateResult> RunCardCreateAsync(
@@ -48,9 +73,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         if (token is null)
             return ConversationCardCreateResult.Failed("token_missing", "NyxID user access token is missing on the activity's TransportExtras.");
 
-        var receiveTarget = ResolveReceiveTarget(chunk.Activity);
-        if (receiveTarget is null)
-            return ConversationCardCreateResult.Failed("receive_target_missing", "Lark chat_id and union_id are both missing on TransportExtras.");
+        var (cardKit, larkClient) = ResolveOutboundClients(chunk.Activity);
 
         // 1. Allocate a CardKit entity holding an empty streaming element. The first chunk's
         //    text lands via StreamElementContentAsync (step 3) so the card_json schema and
@@ -59,7 +82,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         string createResponse;
         try
         {
-            createResponse = await _cardKit.CreateCardAsync(
+            createResponse = await cardKit.CreateCardAsync(
                 token,
                 new LarkCardKitCreateRequest("card_json", initialCardJson),
                 ct);
@@ -77,34 +100,16 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         if (string.IsNullOrWhiteSpace(cardId))
             return ConversationCardCreateResult.Failed("card_id_missing", "card.create response did not include data.card_id.");
 
-        // 2. Bind the card to the chat by sending an interactive message that references it.
+        // 2. Bind the card to the chat by sending or replying with an interactive message
+        //    that references it.
         var contentJson = JsonSerializer.Serialize(
             new { type = "card", data = new { card_id = cardId } },
             JsonOptions);
-        string sendResponse;
-        try
-        {
-            sendResponse = await _larkClient.SendMessageAsync(
-                token,
-                new LarkSendMessageRequest(
-                    TargetType: receiveTarget.Value.ReceiveIdType,
-                    TargetId: receiveTarget.Value.ReceiveId,
-                    MessageType: "interactive",
-                    ContentJson: contentJson,
-                    IdempotencyKey: chunk.CorrelationId),
-                ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Card send-to-chat threw for correlation={CorrelationId}, card_id={CardId}", chunk.CorrelationId, cardId);
-            return ConversationCardCreateResult.Failed("card_send_threw", ex.Message);
-        }
+        var bindResult = await BindCardToConversationAsync(larkClient, token, chunk, cardId, contentJson, ct);
+        if (!bindResult.Success)
+            return bindResult;
 
-        if (LarkProxyResponseParser.TryParseError(sendResponse, out var sendError))
-            return ClassifyCreateFailure("card_send_failed", sendError);
-
-        var cardMessageId = LarkProxyResponseParser.ParseSendSuccess(sendResponse).MessageId
-            ?? string.Empty;
+        var cardMessageId = bindResult.CardMessageId ?? string.Empty;
 
         // 3. Write the first chunk's text into the streaming element. Sequence = 1 (the
         //    grain pre-allocates this value; subsequent chunks pass sequence+1 each call).
@@ -115,7 +120,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         string firstStreamResponse;
         try
         {
-            firstStreamResponse = await _cardKit.StreamElementContentAsync(
+            firstStreamResponse = await cardKit.StreamElementContentAsync(
                 token,
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
@@ -128,7 +133,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "CardKit first stream threw for correlation={CorrelationId}, card_id={CardId}", chunk.CorrelationId, cardId);
-            await TryBestEffortCloseStreamingAsync(token, cardId, sequence: 2, ct).ConfigureAwait(false);
+            await TryBestEffortCloseStreamingAsync(cardKit, token, cardId, sequence: 2, ct).ConfigureAwait(false);
             return ConversationCardCreateResult.PostSendFailed(
                 cardId,
                 cardMessageId,
@@ -138,7 +143,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
 
         if (LarkProxyResponseParser.TryParseError(firstStreamResponse, out var firstStreamError))
         {
-            await TryBestEffortCloseStreamingAsync(token, cardId, sequence: 2, ct).ConfigureAwait(false);
+            await TryBestEffortCloseStreamingAsync(cardKit, token, cardId, sequence: 2, ct).ConfigureAwait(false);
             return ClassifyPostSendFailure(cardId, cardMessageId, "card_first_stream_failed", firstStreamError);
         }
 
@@ -151,11 +156,11 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
     /// chat does not show a perpetually-loading bubble. Failures are logged and swallowed —
     /// the parent operation has already failed; this is a UX cleanup, not a correctness gate.
     /// </summary>
-    private async Task TryBestEffortCloseStreamingAsync(string token, string cardId, long sequence, CancellationToken ct)
+    private async Task TryBestEffortCloseStreamingAsync(ILarkCardKitClient cardKit, string token, string cardId, long sequence, CancellationToken ct)
     {
         try
         {
-            await _cardKit.SetCardSettingsAsync(
+            await cardKit.SetCardSettingsAsync(
                 token,
                 new LarkCardKitSettingsRequest(
                     CardId: cardId,
@@ -186,10 +191,12 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         if (token is null)
             return ConversationCardStreamResult.Failed("token_missing", "NyxID user access token is missing on the activity's TransportExtras.");
 
+        var (cardKit, _) = ResolveOutboundClients(chunk.Activity);
+
         string response;
         try
         {
-            response = await _cardKit.StreamElementContentAsync(
+            response = await cardKit.StreamElementContentAsync(
                 token,
                 new LarkCardKitStreamElementContentRequest(
                     CardId: cardId,
@@ -227,6 +234,8 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         if (token is null)
             return ConversationCardFinalizeResult.Failed("token_missing", "NyxID user access token is missing on the reference activity's TransportExtras.");
 
+        var (cardKit, _) = ResolveOutboundClients(referenceActivity);
+
         // 1. If final text drifted from the last flushed interim, write it before closing
         //    streaming mode. Order matters: closing streaming first would freeze the cursor
         //    on the stale text. Track whether the trailing write actually landed so the
@@ -237,7 +246,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         {
             try
             {
-                var streamFinalResponse = await _cardKit.StreamElementContentAsync(
+                var streamFinalResponse = await cardKit.StreamElementContentAsync(
                     token,
                     new LarkCardKitStreamElementContentRequest(
                         CardId: cardId,
@@ -261,7 +270,7 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
         // 2. Close the card's streaming mode so the typewriter cursor disappears.
         try
         {
-            var settingsResponse = await _cardKit.SetCardSettingsAsync(
+            var settingsResponse = await cardKit.SetCardSettingsAsync(
                 token,
                 new LarkCardKitSettingsRequest(
                     CardId: cardId,
@@ -316,6 +325,77 @@ public sealed class ChannelCardConversationTurnRunner : IConversationCardTurnRun
             return ("chat_id", chatId);
 
         return null;
+    }
+
+    private async Task<ConversationCardCreateResult> BindCardToConversationAsync(
+        ILarkNyxClient larkClient,
+        string token,
+        LlmReplyCardStreamChunkEvent chunk,
+        string cardId,
+        string contentJson,
+        CancellationToken ct)
+    {
+        var inboundMessageId = ResolveInboundMessageId(chunk.Activity);
+        var isGroupLike = chunk.Activity?.Conversation?.Scope is ConversationScope.Group
+                                                        or ConversationScope.Channel
+                                                        or ConversationScope.Thread;
+        var shouldReplyInThread = isGroupLike && !string.IsNullOrWhiteSpace(inboundMessageId);
+        string response;
+        try
+        {
+            if (shouldReplyInThread)
+            {
+                response = await larkClient.ReplyToMessageAsync(
+                    token,
+                    new LarkReplyMessageRequest(
+                        MessageId: inboundMessageId!,
+                        MessageType: "interactive",
+                        ContentJson: contentJson,
+                        ReplyInThread: true,
+                        IdempotencyKey: chunk.CorrelationId),
+                    ct);
+            }
+            else
+            {
+                var receiveTarget = ResolveReceiveTarget(chunk.Activity!);
+                if (receiveTarget is null)
+                    return ConversationCardCreateResult.Failed("receive_target_missing", "Lark chat_id and union_id are both missing on TransportExtras.");
+
+                response = await larkClient.SendMessageAsync(
+                    token,
+                    new LarkSendMessageRequest(
+                        TargetType: receiveTarget.Value.ReceiveIdType,
+                        TargetId: receiveTarget.Value.ReceiveId,
+                        MessageType: "interactive",
+                        ContentJson: contentJson,
+                        IdempotencyKey: chunk.CorrelationId),
+                    ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Card bind-to-chat threw for correlation={CorrelationId}, card_id={CardId}", chunk.CorrelationId, cardId);
+            return ConversationCardCreateResult.Failed("card_send_threw", ex.Message);
+        }
+
+        if (LarkProxyResponseParser.TryParseError(response, out var sendError))
+            return ClassifyCreateFailure("card_send_failed", sendError);
+
+        var cardMessageId = LarkProxyResponseParser.ParseSendSuccess(response).MessageId
+            ?? string.Empty;
+        return ConversationCardCreateResult.Succeeded(cardId, cardMessageId);
+    }
+
+    private static string? ResolveInboundMessageId(ChatActivity? activity)
+    {
+        var platformMessageId = activity?.TransportExtras?.NyxPlatformMessageId?.Trim();
+        if (string.IsNullOrWhiteSpace(platformMessageId) ||
+            !platformMessageId.StartsWith("om_", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return platformMessageId;
     }
 
     /// <summary>

@@ -49,22 +49,33 @@ public class WorkflowExecutionProjectionRegistrationTests
         await using var provider = services.BuildServiceProvider();
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
         var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
+        var continuationStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
+        var continuationDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExternalApprovalContinuationDocument>>();
         var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
         currentStateStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
+        continuationStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
+        continuationDispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
         currentStateMaterializers.Should().ContainSingle();
-        artifactMaterializers.Should().ContainSingle();
+        artifactMaterializers.Should().HaveCount(2);
         provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowExternalApprovalContinuationProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
+
+        // The binding write path is decorated with the heal/guard dispatcher (Definition supersedes a
+        // clobbered Run-kind slot) and the binding projector consumes it.
+        provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowActorBindingDocument>>()
+            .Should().BeOfType<Aevatar.Workflow.Projection.Orchestration.WorkflowActorBindingHealingWriteDispatcher>();
+        provider.GetRequiredService<WorkflowActorBindingProjector>().Should().NotBeNull();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -131,6 +142,16 @@ public class WorkflowExecutionProjectionRegistrationTests
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
             queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowExternalApprovalContinuationDocument, string>(
+            keySelector: document => document.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowActorBindingDocument, string>(
+            keySelector: document => document.Id,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 200);
         services.AddInMemoryGraphProjectionStore();
     }
 
@@ -167,7 +188,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddSingleton<NoOpActorRuntime>();
         services.AddSingleton<IActorRuntime>(sp => sp.GetRequiredService<NoOpActorRuntime>());
         services.AddSingleton<IActorDispatchPort>(sp => sp.GetRequiredService<NoOpActorRuntime>());
-        services.AddSingleton<IAgentTypeVerifier, AlwaysTrueTypeVerifier>();
+        services.AddSingleton<IAgentKindVerifier, AlwaysTrueKindVerifier>();
     }
 
     private sealed class NoOpActorRuntime : IActorRuntime, IActorDispatchPort
@@ -199,9 +220,9 @@ public class WorkflowExecutionProjectionRegistrationTests
 
     }
 
-    private sealed class AlwaysTrueTypeVerifier : IAgentTypeVerifier
+    private sealed class AlwaysTrueKindVerifier : IAgentKindVerifier
     {
-        public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
+        public Task<bool> IsExpectedKindAsync(string actorId, string expectedKind, CancellationToken ct = default) =>
             Task.FromResult(true);
     }
     private sealed class EnvironmentVariableScope : IDisposable

@@ -81,6 +81,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxChannelBotId = "bot-1",
             NyxAgentApiKeyId = "key-1",
             NyxConversationRouteId = "route-1",
+            NyxReplyCredentialRef = "secrets://channel/nyxid/lark/reg-1/reply-api-key",
         });
 
         _agent.State.Registrations.Should().ContainSingle();
@@ -93,7 +94,44 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.NyxChannelBotId.Should().Be("bot-1");
         entry.NyxAgentApiKeyId.Should().Be("key-1");
         entry.NyxConversationRouteId.Should().Be("route-1");
+        entry.NyxReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/reg-1/reply-api-key");
         entry.Tombstoned.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleRecordInbound_SetsActivationOnce_AndIsIdempotent()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            RequestedId = "reg-1",
+            NyxChannelBotId = "bot-1",
+            NyxAgentApiKeyId = "key-1",
+        });
+
+        var first = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 24, 10, 0, 0, TimeSpan.Zero));
+        await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand { RegistrationId = "reg-1", ObservedAtUtc = first });
+        _agent.State.Registrations.Single(r => r.Id == "reg-1").LastInboundAtUtc.Should().Be(first);
+
+        // Activation is set once — a later inbound must NOT overwrite it (bounds the
+        // single store actor's event log; we don't persist an event per message).
+        var second = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 24, 11, 0, 0, TimeSpan.Zero));
+        await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand { RegistrationId = "reg-1", ObservedAtUtc = second });
+        _agent.State.Registrations.Single(r => r.Id == "reg-1").LastInboundAtUtc.Should().Be(first);
+    }
+
+    [Fact]
+    public async Task HandleRecordInbound_NoopForUnknownRegistration()
+    {
+        await _agent.HandleRecordInbound(new ChannelBotRecordInboundCommand
+        {
+            RegistrationId = "does-not-exist",
+            ObservedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        _agent.State.Registrations.Should().BeEmpty();
     }
 
     [Fact]

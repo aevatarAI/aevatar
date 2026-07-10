@@ -208,11 +208,74 @@ public class VoicePresenceEventInjectionTests
         provider.InjectedEvents.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task Configured_direct_external_event_with_active_session_should_inject()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(
+            provider,
+            timeProvider: timeProvider,
+            directExternalEventTypeUrls: ["type.googleapis.com/google.protobuf.StringValue"]);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        roleAgent.VoicePresence["voice_presence"] = CreateActiveSessionState();
+        var ctx = new StubEventHandlerContext(roleAgent);
+        var envelope = CreateDirectExternalEnvelope(
+            "device-events.callback",
+            "voice-agent",
+            "doorbell",
+            timeProvider.GetUtcNow());
+
+        await module.InitializeAsync(CancellationToken.None);
+
+        module.CanHandle(envelope).ShouldBeTrue();
+        await module.HandleAsync(envelope, ctx, CancellationToken.None);
+
+        provider.InjectedEvents.ShouldHaveSingleItem();
+        provider.InjectedEvents[0].PublisherActorId.ShouldBe("device-events.callback");
+        provider.InjectedEvents[0].EventType.ShouldBe("type.googleapis.com/google.protobuf.StringValue");
+        provider.InjectedEvents[0].PayloadJson.ShouldBe("\"doorbell\"");
+    }
+
+    [Fact]
+    public async Task Direct_external_event_should_require_configured_type_publisher_target_and_active_session()
+    {
+        var timeProvider = new ManualTimeProvider(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero));
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(
+            provider,
+            timeProvider: timeProvider,
+            directExternalEventTypeUrls: ["type.googleapis.com/google.protobuf.StringValue"]);
+        var roleAgent = new RecordingRoleAgent("voice-agent");
+        roleAgent.VoicePresence["voice_presence"] = CreateActiveSessionState();
+        var ctx = new StubEventHandlerContext(roleAgent);
+
+        await module.InitializeAsync(CancellationToken.None);
+
+        await module.HandleAsync(
+            CreateDirectExternalEnvelope("untrusted", "voice-agent", "ignored", timeProvider.GetUtcNow()),
+            ctx,
+            CancellationToken.None);
+        await module.HandleAsync(
+            CreateDirectExternalEnvelope("device-events.callback", "other-agent", "ignored", timeProvider.GetUtcNow()),
+            ctx,
+            CancellationToken.None);
+
+        roleAgent.VoicePresence["voice_presence"] = new VoicePresenceRuntimeState();
+        await module.HandleAsync(
+            CreateDirectExternalEnvelope("device-events.callback", "voice-agent", "ignored", timeProvider.GetUtcNow()),
+            ctx,
+            CancellationToken.None);
+
+        provider.InjectedEvents.ShouldBeEmpty();
+    }
+
     private static VoicePresenceModule CreateModule(
         RecordingVoiceProvider provider,
         TimeProvider? timeProvider = null,
         TimeSpan? staleAfter = null,
-        int pendingInjectionCapacity = 16) =>
+        int pendingInjectionCapacity = 16,
+        IReadOnlyList<string>? directExternalEventTypeUrls = null) =>
         new(
             provider,
             new VoiceProviderConfig
@@ -234,6 +297,7 @@ public class VoicePresenceEventInjectionTests
                 DedupeWindow = TimeSpan.FromSeconds(2),
                 PendingInjectionCapacity = pendingInjectionCapacity,
                 TimeProvider = timeProvider ?? TimeProvider.System,
+                DirectExternalEventTypeUrls = directExternalEventTypeUrls ?? [],
             });
 
     private static EventEnvelope CreateExternalEnvelope(
@@ -246,6 +310,29 @@ public class VoicePresenceEventInjectionTests
             Timestamp = Timestamp.FromDateTimeOffset(observedAt),
             Payload = Any.Pack(new StringValue { Value = value }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherActorId, TopologyAudience.Children),
+        };
+
+    private static EventEnvelope CreateDirectExternalEnvelope(
+        string publisherActorId,
+        string targetActorId,
+        string value,
+        DateTimeOffset observedAt) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(observedAt),
+            Payload = Any.Pack(new StringValue { Value = value }),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, targetActorId),
+        };
+
+    private static VoicePresenceRuntimeState CreateActiveSessionState() =>
+        new()
+        {
+            ActiveSessionId = "lease-1",
+            Status = VoicePresenceRuntimeStatus.Idle,
+            LastDrainAckResponseId = -1,
+            LastDrainAckPlayoutSequence = -1,
+            NextResponseId = 1,
         };
 
     private static EventEnvelope CreateVoiceEnvelope(IMessage payload) =>
@@ -265,11 +352,13 @@ public class VoicePresenceEventInjectionTests
             VoiceProviderSessionKey sessionKey,
             VoiceProviderConfig config,
             Func<VoiceProviderSessionKey, VoiceProviderEvent, CancellationToken, Task> eventSink,
+            Func<VoiceProviderSessionKey, VoiceProviderAudioFrame, CancellationToken, Task> audioSink,
             CancellationToken ct)
         {
             _ = sessionKey;
             _ = config;
             _ = eventSink;
+            _ = audioSink;
             _ = ct;
             return Task.FromResult<RealtimeVoiceProviderSession>(new RecordingProviderSession(this));
         }
@@ -279,6 +368,7 @@ public class VoicePresenceEventInjectionTests
         private sealed class RecordingProviderSession(RecordingVoiceProvider provider) : RealtimeVoiceProviderSession
         {
             public override Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) => Task.CompletedTask;
+            public override Task SendInputImageAsync(VoiceInputImage inputImage, CancellationToken ct) => Task.CompletedTask;
             public override Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
             public override Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
             {
@@ -388,6 +478,13 @@ public class VoicePresenceEventInjectionTests
             }
 
             runtimeState = new VoicePresenceRuntimeState();
+            return false;
+        }
+
+        public bool TryGetVoiceSessionDefaults(string moduleName, out VoiceSessionDefaults defaults)
+        {
+            _ = moduleName;
+            defaults = new VoiceSessionDefaults();
             return false;
         }
 

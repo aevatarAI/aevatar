@@ -14,6 +14,10 @@ GAgent scope membership has one authoritative owner.
 
 For the current architecture, the authority is the per-scope `GAgentRegistryGAgent` state reached through the registry command/admission contract. A future implementation may replace this with an explicitly modeled distributed authoritative ownership index, but it must still be a single authority.
 
+Registry and admission membership is keyed by canonical `AgentKind`. Runtime implementation shape is diagnostic only. `ImplementationClrTypeName`, local class names, actor proxy types, and legacy `GAgentType` spellings must not be used as registry keys, admission keys, or draft-run target identity.
+
+Legacy registry rows that were persisted under CLR type names are canonicalized only by the registry authority. The registry may ask an actor-owned kind probe for the actor's canonical kind and then commit a single canonicalization event for that actor. If a legacy row cannot be mapped by that actor-owned contract, it is quarantined for diagnostics and must not be admitted through a CLR-name fallback.
+
 The registry current-state read model is a query replica. It is useful for list/search/display flows, but it is eventually consistent and must not be used as command admission or security-sensitive target authorization.
 
 Target actors may own their capability-local business facts. They must not independently own the same `scope_id -> resource` membership fact that the registry owns. If a target actor stores a scope-shaped value for validation, diagnostics, or event payload completeness, that value is a derived mirror and cannot override or contradict registry ownership.
@@ -77,6 +81,8 @@ Admission freshness is separate from list freshness. Admission may be stronger t
 - query-time projection priming, replay, or readmodel refresh before admission
 - direct reads of actor state, event store, snapshots, or state mirror payloads in application query or admission paths
 - implementing admission by side-reading `GAgentRegistryGAgent` state, registry actor snapshots, event-store history, or state mirror payloads
+- mapping `AgentKind` back to `ImplementationClrTypeName` or a CLR class name for registry/admission identity
+- accepting request or tool identity aliases such as `actorTypeName`, `gagentType`, `gagent_type`, or Aevatar invocation `actor_name`
 - generic actor query/reply or request/reply RPC as a fallback read path
 - implicit actor activation or get-or-create runtime lookup as ownership evidence
 - process-local dictionaries, caches, or registries as scope membership fact state
@@ -93,3 +99,6 @@ Changes in this area must cover:
 - missing route-supplied targets return `NotFound` without creating a target
 - production code no longer depends on `IGAgentActorStore`
 - architecture guards prevent new production references to `IGAgentActorStore` after removal
+- registry, admission, draft-run, tool, and frontend runtime paths use `AgentKind`/`agent_kind`
+- legacy identity aliases are absent from positive request schemas and are rejected at HTTP/tool boundaries
+- old CLR-keyed rows are canonicalized only through actor-owned kind facts, and unmappable rows are not admitted

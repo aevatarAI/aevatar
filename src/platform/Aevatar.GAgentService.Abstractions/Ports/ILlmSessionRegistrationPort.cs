@@ -17,6 +17,12 @@ public interface ILlmSessionRegistrationPort
         LlmSessionStatus status,
         CancellationToken ct = default);
 
+    Task CancelRunAsync(
+        string sessionActorId,
+        string responseId,
+        string runId,
+        CancellationToken ct = default);
+
     Task RecordForwardedToolCallAsync(
         string sessionActorId,
         string responseId,

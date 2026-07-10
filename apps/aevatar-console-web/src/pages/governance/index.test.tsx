@@ -117,7 +117,7 @@ describe('GovernanceIndexPage', () => {
   it('renders the platform governance product framing', async () => {
     renderWithQueryClient(React.createElement(GovernanceIndexPage));
 
-    expect(await screen.findByText('Aevatar / Platform')).toBeTruthy();
+    expect(await screen.findByText('Platform')).toBeTruthy();
     expect(screen.getAllByText('Governance').length).toBeGreaterThan(0);
   });
 
@@ -207,8 +207,8 @@ describe('GovernanceIndexPage', () => {
       expect(governanceApi.updateEndpointCatalog).toHaveBeenCalled();
     });
     expect(await screen.findByText('治理命令已接收')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Endpoint invoke was accepted for update.*暂不能当作已观察/),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Endpoint was accepted for update.')).toBeInTheDocument();
+    expect(screen.getByText(/Endpoint catalog/)).toBeInTheDocument();
+    expect(screen.queryByText('已观察')).toBeNull();
   });
 });

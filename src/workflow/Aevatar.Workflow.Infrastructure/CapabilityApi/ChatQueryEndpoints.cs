@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -11,7 +14,8 @@ public static class ChatQueryEndpoints
     {
         group.MapGet("/agents", ListAgents)
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
-            .Produces(StatusCodes.Status200OK);
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status503ServiceUnavailable);
 
         group.MapGet("/primitives", ListPrimitives)
             .Produces(StatusCodes.Status200OK);
@@ -57,8 +61,18 @@ public static class ChatQueryEndpoints
         IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default)
     {
-        var agents = await queryService.ListAgentsAsync(ct);
-        return Results.Ok(agents);
+        try
+        {
+            var agents = await queryService.ListAgentsAsync(ct);
+            return Results.Ok(agents);
+        }
+        catch (ProjectionIndexSchemaDriftException exception)
+        {
+            return ProjectionIndexDiagnostics.ToServiceUnavailableResult(
+                "workflow_execution_current_state_projection_index_drift",
+                "Workflow execution current-state projection index schema drift detected.",
+                exception);
+        }
     }
 
     internal static async Task<IResult> ListPrimitives(
@@ -222,10 +236,23 @@ public static class ChatQueryEndpoints
             snapshot.LastSuccess,
             snapshot.LastOutput,
             snapshot.LastError,
+            snapshot.SagaStatus,
+            MapDeadLetter(snapshot),
             snapshot.TotalSteps,
             snapshot.RequestedSteps,
             snapshot.CompletedSteps,
             snapshot.RoleReplyCount);
+
+    private static WorkflowCompensationDeadLetterHttpResponse? MapDeadLetter(WorkflowActorSnapshot snapshot)
+    {
+        if (snapshot.SagaStatus != WorkflowSagaStatus.CompensationDeadLetter)
+            return null;
+
+        return new WorkflowCompensationDeadLetterHttpResponse(
+            snapshot.DeadLetterFailedCompensationStepId,
+            snapshot.DeadLetterRemainingUncompensated,
+            snapshot.DeadLetterError);
+    }
 
     private static WorkflowRunTimelineExportItemHttpResponse MapTimelineItem(WorkflowRunTimelineExportItem item) =>
         new(
@@ -306,10 +333,18 @@ public sealed record WorkflowActorCurrentStateHttpResponse(
     bool? LastSuccess,
     string LastOutput,
     string LastError,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
+    WorkflowSagaStatus SagaStatus,
+    WorkflowCompensationDeadLetterHttpResponse? DeadLetter,
     int TotalSteps,
     int RequestedSteps,
     int CompletedSteps,
     int RoleReplyCount);
+
+public sealed record WorkflowCompensationDeadLetterHttpResponse(
+    string FailedCompensationStepId,
+    int RemainingUncompensated,
+    string Error);
 
 // Refactor (iter29/cluster-029-workflow-history-artifact):
 //   Old pattern: HTTP timeline responses exposed actor timeline readmodel names.

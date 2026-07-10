@@ -76,4 +76,39 @@ public sealed class ResponsesRequestNormalizerTests
         invalidTokens.Succeeded.Should().BeFalse();
         invalidTokens.ErrorCode.Should().Be("invalid_max_output_tokens");
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Normalize_ShouldApplyDefaultModel_WhenCallerOmitsModel(string? callerModel)
+    {
+        var result = ResponsesRequestNormalizer.Normalize(
+            new ResponsesCommandRequest(callerModel!, "hello", [], false, null, null, null, []),
+            defaultModel: "chrono-llm-public/gpt-5.5");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Model.Should().Be("chrono-llm-public/gpt-5.5");
+    }
+
+    [Fact]
+    public void Normalize_ShouldPreferExplicitModel_OverDefault()
+    {
+        var result = ResponsesRequestNormalizer.Normalize(
+            new ResponsesCommandRequest(" openai/gpt-5 ", "hello", [], false, null, null, null, []),
+            defaultModel: "chrono-llm-public/gpt-5.5");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Model.Should().Be("openai/gpt-5");
+    }
+
+    [Fact]
+    public void Normalize_ShouldRequireModel_WhenOmittedAndNoDefaultConfigured()
+    {
+        var result = ResponsesRequestNormalizer.Normalize(
+            new ResponsesCommandRequest("  ", "hello", [], false, null, null, null, []));
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("model_required");
+    }
 }

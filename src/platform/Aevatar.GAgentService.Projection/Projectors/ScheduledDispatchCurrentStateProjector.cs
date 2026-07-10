@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
@@ -74,10 +75,13 @@ public sealed class ScheduledDispatchCurrentStateProjector
             LastError = state.LastError ?? string.Empty,
             FireCount = state.FireCount,
             FailureCount = state.FailureCount,
-            ServiceKey = serviceIdentity == null ? string.Empty : ServiceKeys.Build(serviceIdentity),
+            OverdueFireDetectedCount = state.OverdueFireDetectedCount,
+            ServiceKey = BuildServiceKey(serviceIdentity),
             ServiceId = serviceIdentity?.ServiceId ?? string.Empty,
             ServiceEndpointId = target.ServiceInvocation?.EndpointId ?? string.Empty,
+            Prompt = ExtractPrompt(target.ServiceInvocation?.Payload, state.TriggerEnvelope),
             TargetActorId = state.TargetActorId ?? string.Empty,
+            Deleted = state.Deleted,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -87,10 +91,50 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
         document.NextFireAt = state.NextFireAt;
         document.LastFireAt = state.LastFireAt;
+        document.LastOverdueFireAt = state.LastOverdueFireAt;
+        document.DeletedAt = state.DeletedAt;
         document.Headers = state.Headers
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
+    }
+
+    private static string ExtractPrompt(Any? serviceInvocationPayload, EventEnvelope? triggerEnvelope)
+    {
+        var prompt = ExtractPrompt(serviceInvocationPayload);
+        return string.IsNullOrEmpty(prompt)
+            ? ExtractPromptFromTriggerEnvelope(triggerEnvelope)
+            : prompt;
+    }
+
+    private static string ExtractPromptFromTriggerEnvelope(EventEnvelope? triggerEnvelope)
+    {
+        if (triggerEnvelope?.Payload == null || !triggerEnvelope.Payload.Is(ServiceInvocationRequest.Descriptor))
+            return string.Empty;
+
+        return ExtractPrompt(triggerEnvelope.Payload.Unpack<ServiceInvocationRequest>().Payload);
+    }
+
+    private static string ExtractPrompt(Any? payload)
+    {
+        if (payload == null || !payload.Is(ChatRequestEvent.Descriptor))
+            return string.Empty;
+
+        return payload.Unpack<ChatRequestEvent>().Prompt ?? string.Empty;
+    }
+
+    private static string BuildServiceKey(ServiceIdentity? serviceIdentity)
+    {
+        if (serviceIdentity == null ||
+            string.IsNullOrWhiteSpace(serviceIdentity.TenantId) ||
+            string.IsNullOrWhiteSpace(serviceIdentity.AppId) ||
+            string.IsNullOrWhiteSpace(serviceIdentity.Namespace) ||
+            string.IsNullOrWhiteSpace(serviceIdentity.ServiceId))
+        {
+            return string.Empty;
+        }
+
+        return ServiceKeys.Build(serviceIdentity);
     }
 
     private static ScheduledDispatchFireRecordDocument[] CreateFireRecords(ScheduledDispatchState state) =>
@@ -122,6 +166,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
         stateKind switch
         {
             ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
 

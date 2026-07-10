@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { history } from "@/shared/navigation/history";
 import {
-  buildScopeHref,
+  buildTeamWorkspaceRoute,
   readScopeQueryDraft,
 } from "./components/scopeQuery";
 
@@ -30,13 +30,8 @@ const ScopeOverviewPage: React.FC = () => {
     const pathname = typeof window === "undefined" ? "" : window.location.pathname;
     const search = typeof window === "undefined" ? "" : window.location.search;
 
-    history.replace(
-      buildScopeHref(
-        "/teams",
-        readScopeQueryDraft(search, pathname),
-        readLegacyOverviewExtras(search),
-      ),
-    );
+    const scopeDraft = readScopeQueryDraft(search, pathname);
+    history.replace(buildTeamWorkspaceRoute(scopeDraft.scopeId, readLegacyOverviewExtras(search)));
   }, []);
 
   return null;

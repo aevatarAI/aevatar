@@ -16,9 +16,30 @@ namespace Aevatar.AI.LLMProviders.NyxId;
 public sealed class NyxIdLLMProvider : ILLMProvider
 {
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1/";
+    private static readonly LLMProviderCapabilities ProviderCapabilities = new()
+    {
+        SupportedInputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+            ContentPartKind.Image,
+            ContentPartKind.Audio,
+            ContentPartKind.Video,
+        },
+        SupportedOutputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+            ContentPartKind.Image,
+            ContentPartKind.Audio,
+            ContentPartKind.Video,
+        },
+        SupportsStreaming = true,
+        SupportsToolCalls = true,
+        SupportsReasoningDeltas = true,
+    };
 
     private readonly string _defaultModel;
     private readonly Uri _defaultNyxEndpoint;
+    private readonly string _defaultRoutePreference;
     private readonly Uri _authorityBase;
     private readonly Func<string?> _accessTokenAccessor;
     private readonly ILogger _logger;
@@ -28,6 +49,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         string defaultModel,
         string nyxEndpoint,
         Func<string?> accessTokenAccessor,
+        string? defaultRoutePreference = null,
         ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -40,12 +62,19 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         Name = name.Trim();
         _defaultModel = defaultModel.Trim();
         _defaultNyxEndpoint = NormalizeNyxEndpoint(nyxEndpoint);
+        // When a request carries no route override (the server-default path nulls it), prefer
+        // this configured default route over the bare NyxID gateway. The gateway forwards to the
+        // OpenAI provider, which fails closed for deployments that have not connected OpenAI;
+        // the default route (e.g. the public chrono-llm route) is the connected fallback.
+        _defaultRoutePreference = NormalizeRoutePreference(defaultRoutePreference);
         _authorityBase = ResolveAuthorityBase(_defaultNyxEndpoint);
         _accessTokenAccessor = accessTokenAccessor ?? throw new ArgumentNullException(nameof(accessTokenAccessor));
         _logger = logger ?? NullLogger.Instance;
     }
 
     public string Name { get; }
+
+    public LLMProviderCapabilities Capabilities => ProviderCapabilities;
 
     // Refactor (iter18/cluster-001):
     //   Old pattern: ILLMProvider 仍暴露 ChatAsync 非流式入口,provider/failover 可绕过流式链路
@@ -231,15 +260,18 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     {
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
-        var accessToken = ResolveAccessToken(normalizedRequest);
+        var (accessToken, tokenSource) = ResolveAccessTokenWithSource(normalizedRequest);
         var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
         var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
 
-        _logger.LogDebug(
-            "Resolved NyxID LLM route '{RouteName}' to {Endpoint} for model {Model}",
+        // Credential-source probe for the 2026-06-12 empty-reply incident: source + length only.
+        _logger.LogInformation(
+            "Resolved NyxID LLM route '{RouteName}' to {Endpoint} for model {Model}: tokenSource={TokenSource} tokenLength={TokenLength}",
             route.RouteName,
             route.Endpoint,
-            route.Request.Model);
+            route.Request.Model,
+            tokenSource,
+            accessToken.Length);
 
         return Task.FromResult(route);
     }
@@ -250,7 +282,15 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         string routePreference)
     {
         if (string.IsNullOrWhiteSpace(routePreference))
+        {
+            if (!string.IsNullOrWhiteSpace(_defaultRoutePreference))
+            {
+                var defaultEndpoint = new Uri(_authorityBase, _defaultRoutePreference.TrimStart('/'));
+                return new NyxIdResolvedRoute(_defaultRoutePreference, defaultEndpoint, request, accessToken);
+            }
+
             return new NyxIdResolvedRoute(Name, _defaultNyxEndpoint, request, accessToken);
+        }
 
         var endpoint = new Uri(_authorityBase, routePreference.TrimStart('/'));
         return new NyxIdResolvedRoute(routePreference, endpoint, request, accessToken);
@@ -348,17 +388,23 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveAccessToken(LLMRequest request)
     {
+        var (token, _) = ResolveAccessTokenWithSource(request);
+        return token;
+    }
+
+    private (string Token, string Source) ResolveAccessTokenWithSource(LLMRequest request)
+    {
         var typedToken = request.CallerContext?.Credentials?.NyxIdBearer?.Trim();
         if (!string.IsNullOrWhiteSpace(typedToken))
-            return typedToken;
+            return (typedToken, "caller-typed");
 
         var controlToken = request.LlmControl?.NyxIdAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(controlToken))
-            return controlToken;
+            return (controlToken, "llm-control");
 
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
-            return configuredToken;
+            return (configuredToken, "host-accessor");
 
         throw new NyxIdAuthenticationRequiredException(Name);
     }

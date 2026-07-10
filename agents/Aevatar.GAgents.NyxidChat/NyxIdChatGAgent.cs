@@ -9,6 +9,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -30,10 +31,15 @@ namespace Aevatar.GAgents.NyxidChat;
 // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
 //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
 //   New principle: 删 SkillRegistry + TTL tests + 5min cache;新建 local-only LocalSkillCatalog;remote skill 每次 use_skill 调用 IRemoteSkillFetcher.FetchSkillAsync(currentToken, ...) 不缓存;docs/canon factual sync
+[GAgent(NyxIdChatServiceDefaults.GAgentKind)]
 public sealed class NyxIdChatGAgent : RoleGAgent
 {
+    private const int SystemSkillOverlayPromptLogSampleRate = 64;
+
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly NyxIdRelayOptions? _relayOptions;
+    private readonly TimeProvider _timeProvider;
+    private int _systemSkillOverlayPromptLogCounter;
 
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -44,13 +50,16 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<IAgentToolSource>? toolSources = null,
         LocalSkillCatalog? localSkillCatalog = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
-        NyxIdRelayOptions? relayOptions = null)
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
+        NyxIdRelayOptions? relayOptions = null,
+        TimeProvider? timeProvider = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
-               approvalHandler: new YieldApprovalHandler(),
-               remoteToolApprovalPort: remoteToolApprovalPort)
+               remoteToolApprovalPort: remoteToolApprovalPort,
+               remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
         _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
@@ -68,7 +77,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             await registryCommandPort.UnregisterActorAsync(
                 new GAgentActorRegistration(
                     command.ScopeId,
-                    NyxIdChatServiceDefaults.GAgentTypeName,
+                    NyxIdChatServiceDefaults.GAgentKind,
                     command.ActorId),
                 CancellationToken.None);
         }
@@ -125,7 +134,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         try
         {
             var receipt = await registryCommandPort.RegisterActorAsync(
-                new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentTypeName, Id),
+                new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentKind, Id),
                 CancellationToken.None);
             if (receipt.IsAdmissionVisible)
             {
@@ -182,7 +191,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         });
 
         await registryCommandPort.UnregisterActorAsync(
-            new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentTypeName, command.ActorId),
+            new GAgentActorRegistration(command.ScopeId, NyxIdChatServiceDefaults.GAgentKind, command.ActorId),
             CancellationToken.None);
         await PersistDomainEventAsync(new NyxIdChatConversationUnregisteredEvent
         {
@@ -238,7 +247,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 .RegisterActorAsync(
                     new GAgentActorRegistration(
                         command.ScopeId,
-                        NyxIdChatServiceDefaults.GAgentTypeName,
+                        NyxIdChatServiceDefaults.GAgentKind,
                         command.ActorId),
                     CancellationToken.None);
         }
@@ -271,7 +280,12 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     protected override string DecorateSystemPrompt(string basePrompt)
     {
-        var prompt = basePrompt;
+        // Direct-chat seam of the System Skill Overlay (issue #2498). The overlay is injected HERE,
+        // on the chartered direct-chat actor — not in RoleGAgent — so non-channel RoleGAgent
+        // subclasses (classifier, workflow roles) never receive channel capability how-to in their
+        // system prompt (#2586). Relay + local-skill sections follow the overlay (kernel > overlay >
+        // runtime facts), matching the channel seam ordering.
+        var prompt = AppendSystemSkillOverlay(base.DecorateSystemPrompt(basePrompt));
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
@@ -285,6 +299,50 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
 
         return prompt;
+    }
+
+    public override async Task HandleChatRequest(ChatRequestEvent request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        await base.HandleChatRequest(request);
+        await SaveDirectChatCompletionAsync(request, CancellationToken.None);
+    }
+
+    // Direct-chat seam overlay source (issue #2498): the host-level, context-aware overlay provider,
+    // resolved for a dm turn (global-scope members only). The per-turn token lets the provider refresh
+    // the public Ornn set out of band; the provider degrades to the built-in default when the set is
+    // unreachable or empty. Both reply seams read this same host-level source.
+    private string AppendSystemSkillOverlay(string decorated)
+    {
+        var overlay = Services.GetService<ISystemSkillOverlayProvider>()
+            ?.GetCurrent(SystemSkillOverlayRequest.DirectChat(CurrentTurnNyxIdAccessToken));
+        var overlayMarkdown = overlay?.OverlayMarkdown;
+        if (string.IsNullOrWhiteSpace(overlayMarkdown))
+            return decorated;
+
+        if (_systemSkillOverlayPromptLogCounter++ % SystemSkillOverlayPromptLogSampleRate == 0)
+        {
+            Logger.LogInformation(
+                "[{Role}] System skill overlay prompt: source_watermark={SourceWatermark}, kernel_tokens_estimate={KernelTokensEstimate}, overlay_tokens_estimate={OverlayTokensEstimate}",
+                RoleName,
+                overlay?.SourceWatermark ?? string.Empty,
+                EstimatePromptTokens(decorated),
+                EstimatePromptTokens(overlayMarkdown));
+        }
+
+        if (string.IsNullOrWhiteSpace(decorated))
+            return overlayMarkdown.Trim();
+
+        return $"{decorated.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
+    }
+
+    private static int EstimatePromptTokens(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+
+        return Math.Max(1, (System.Text.Encoding.UTF8.GetByteCount(text) + 3) / 4);
     }
 
     private bool RequiresNyxIdProviderMigration()
@@ -354,5 +412,66 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             DestroyActor = destroyActor,
             Reason = reason,
         });
+    }
+
+    private async Task SaveDirectChatCompletionAsync(ChatRequestEvent request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.SessionId) ||
+            !State.Sessions.TryGetValue(request.SessionId, out var completedSession) ||
+            !completedSession.Completed)
+        {
+            return;
+        }
+
+        var prompt = request.Prompt ?? completedSession.Prompt ?? string.Empty;
+        var completion = completedSession.FinalContent ?? string.Empty;
+        var completedAt = _timeProvider.GetUtcNow();
+        var timestamp = completedAt.ToUnixTimeMilliseconds();
+        var messages = new[]
+        {
+            new StoredChatMessage(
+                Id: $"{request.SessionId}-user",
+                Role: "user",
+                Content: prompt,
+                Timestamp: timestamp,
+                Status: "completed"),
+            new StoredChatMessage(
+                Id: $"{request.SessionId}-assistant",
+                Role: "assistant",
+                Content: completion,
+                Timestamp: timestamp,
+                Status: "completed",
+                Thinking: string.IsNullOrWhiteSpace(completedSession.FinalReasoningContent)
+                    ? null
+                    : completedSession.FinalReasoningContent),
+        };
+        var meta = new ConversationMeta(
+            Id: Id,
+            Title: BuildConversationTitle(prompt, completion, Id),
+            ServiceId: Id,
+            ServiceKind: NyxIdChatServiceDefaults.GAgentKind,
+            CreatedAt: completedAt,
+            UpdatedAt: completedAt,
+            MessageCount: messages.Length,
+            LlmRoute: NyxIdChatServiceDefaults.ProviderName,
+            LlmModel: string.IsNullOrWhiteSpace(completedSession.Model) ? null : completedSession.Model);
+
+        await Services.GetRequiredService<IChatHistoryCommandPort>()
+            .SaveMessagesAsync(request.ScopeId, Id, meta, messages, ct)
+            .ConfigureAwait(false);
+    }
+
+    private static string BuildConversationTitle(string prompt, string completion, string fallback)
+    {
+        var source = string.IsNullOrWhiteSpace(prompt) ? completion : prompt;
+        source = source.Trim();
+        if (string.IsNullOrWhiteSpace(source))
+            return fallback;
+
+        const int maxTitleLength = 80;
+        return source.Length <= maxTitleLength
+            ? source
+            : source[..maxTitleLength].TrimEnd();
     }
 }

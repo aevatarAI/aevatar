@@ -1,5 +1,7 @@
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// Wire-format implementation kind for HTTP/JSON. Uses lowercase strings so
 /// Studio's HTTP surface stays member-centric and frontend-friendly. Mapped
@@ -38,6 +40,37 @@ public static class StudioMemberBindingRunStatusNames
     public const string Unknown = "unknown";
 }
 
+public static class StudioMemberBindingAckStageNames
+{
+    public const string DispatchAccepted = "dispatch_accepted";
+}
+
+public static class StudioMemberBindingRunRoleNames
+{
+    public const string Candidate = "candidate";
+}
+
+public static class StudioMemberInvocationReadinessStatusNames
+{
+    public const string Ready = "ready";
+    public const string ServiceCatalogMissing = "service_catalog_missing";
+    public const string ServingSetMissing = "serving_set_missing";
+    public const string EligibleServingTargetMissing = "eligible_serving_target_missing";
+    public const string ServiceCatalogTargetMissing = "service_catalog_target_missing";
+    public const string TrafficViewTargetMissing = "traffic_view_target_missing";
+    public const string PreparedArtifactMissing = "prepared_artifact_missing";
+    public const string Unknown = "unknown";
+}
+
+public sealed record StudioMemberInvocationReadinessResponse(
+    bool CanInvoke,
+    string Status,
+    string ReasonCode,
+    string Message,
+    string? RevisionId = null,
+    string? DeploymentId = null,
+    DateTimeOffset? ObservedAtUtc = null);
+
 /// <summary>
 /// Wire-format status values returned in
 /// <see cref="StudioMemberBindingRevisionActionResponse.Status"/>. Centralizing
@@ -61,7 +94,7 @@ public sealed record StudioMemberImplementationRefResponse(
     string? WorkflowRevision = null,
     string? ScriptId = null,
     string? ScriptRevision = null,
-    string? ActorTypeName = null);
+    string? DiagnosticActorTypeName = null);
 
 public sealed record StudioMemberSummaryResponse(
     string MemberId,
@@ -83,6 +116,13 @@ public sealed record StudioMemberSummaryResponse(
     /// the create/patch flows pass it through unchanged.
     /// </summary>
     public string? TeamId { get; init; }
+
+    /// <summary>
+    /// Typed implementation identity shared by scope and team roster
+    /// summaries. Null means the member read model has not yet observed an
+    /// implementation reference.
+    /// </summary>
+    public StudioMemberImplementationRefResponse? ImplementationRef { get; init; }
 }
 
 public sealed record StudioMemberDetailResponse(
@@ -97,7 +137,8 @@ public sealed record StudioMemberBindingContractResponse(
     string PublishedServiceId,
     string RevisionId,
     string ImplementationKind,
-    DateTimeOffset BoundAt);
+    DateTimeOffset BoundAt,
+    string? ExpectedActorId = null);
 
 /// <summary>
 /// Wrapper returned from <c>GET /members/{memberId}/binding</c> so the
@@ -116,6 +157,12 @@ public sealed record StudioMemberBindingFailureResponse(
     string Message,
     DateTimeOffset FailedAt);
 
+public sealed record StudioMemberBindingRunResultResponse(
+    string PublishedServiceId,
+    string RevisionId,
+    string ImplementationKind,
+    string? ExpectedActorId = null);
+
 // Refactor (iter159/cluster-594-first):
 //   Old pattern: Studio member binding-run status response 未暴露 StateVersion
 //   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
@@ -129,6 +176,8 @@ public sealed record StudioMemberBindingRunStatusResponse(
     DateTimeOffset? UpdatedAt = null)
 {
     public string? PlatformBindingCommandId { get; init; }
+
+    public StudioMemberBindingRunResultResponse? Result { get; init; }
 }
 
 public sealed record StudioMemberRosterResponse(
@@ -151,7 +200,28 @@ public sealed record CreateStudioMemberRequest(
     string? MemberId = null,
     // Optional initial team assignment (ADR-0017). Empty string is rejected
     // at the application boundary; null / absent means "do not assign".
-    string? TeamId = null);
+    string? TeamId = null,
+    StudioMemberImplementationRefResponse? ImplementationRef = null);
+
+public sealed class StudioMemberCreateImplementationRefNotAllowedException : InvalidOperationException
+{
+    public const string ErrorCode = "STUDIO_MEMBER_CREATE_IMPLEMENTATION_REF_NOT_ALLOWED";
+    public const string FieldName = "implementationRef";
+    public const string BindingRouteTemplate = "PUT /api/scopes/{scopeId}/members/{memberId}/binding";
+
+    public StudioMemberCreateImplementationRefNotAllowedException(string scopeId)
+        : base(
+            "implementationRef is not accepted when creating a studio member. " +
+            "Omit implementationRef, create the member shell, then bind the implementation through " +
+            BindingRouteTemplate + ".")
+    {
+        ScopeId = scopeId;
+    }
+
+    public string ScopeId { get; }
+
+    public string Field => FieldName;
+}
 
 /// <summary>
 /// Wire body for <c>PATCH /api/scopes/{scopeId}/members/{memberId}</c> when
@@ -161,7 +231,21 @@ public sealed record CreateStudioMemberRequest(
 /// empty-string value reaching the actor.
 /// </summary>
 public sealed record UpdateStudioMemberRequest(
-    PatchValue<string> TeamId = default);
+    PatchValue<string> DisplayName = default,
+    PatchValue<string> TeamId = default,
+    PatchValue<StudioMemberImplementationRefResponse> ImplementationRef = default);
+
+public static class StudioMemberCommandStatusNames
+{
+    public const string Accepted = "accepted";
+    public const string NoChange = "no_change";
+}
+
+public sealed record StudioMemberCommandResponse(
+    string Status,
+    string ScopeId,
+    string MemberId,
+    DateTimeOffset? AckedAt = null);
 
 /// <summary>
 /// Centralized input bounds applied at the create boundary so a single
@@ -186,8 +270,26 @@ public sealed record UpdateStudioMemberBindingRequest(
     StudioMemberScriptBindingSpec? Script = null,
     StudioMemberGAgentBindingSpec? GAgent = null);
 
-public sealed record StudioMemberWorkflowBindingSpec(
-    IReadOnlyList<string> WorkflowYamls);
+public sealed record StudioMemberWorkflowBindingSpec
+{
+    [JsonConstructor]
+    public StudioMemberWorkflowBindingSpec(
+        string WorkflowId,
+        IReadOnlyList<string> WorkflowYamls)
+    {
+        this.WorkflowId = WorkflowId;
+        this.WorkflowYamls = WorkflowYamls;
+    }
+
+    public StudioMemberWorkflowBindingSpec(IReadOnlyList<string> WorkflowYamls)
+        : this(string.Empty, WorkflowYamls)
+    {
+    }
+
+    public string WorkflowId { get; init; }
+
+    public IReadOnlyList<string> WorkflowYamls { get; init; }
+}
 
 public sealed record StudioMemberScriptBindingSpec(
     string ScriptId,
@@ -202,14 +304,19 @@ public sealed record StudioMemberGAgentEndpointSpec(
     string? Description = null);
 
 public sealed record StudioMemberGAgentBindingSpec(
-    string ActorTypeName,
+    string AgentKind,
     IReadOnlyList<StudioMemberGAgentEndpointSpec>? Endpoints = null);
 
 public sealed record StudioMemberBindingAcceptedResponse(
     string Status,
     string BindingRunId,
     string ScopeId,
-    string MemberId);
+    string MemberId)
+{
+    public string AckStage { get; init; } = StudioMemberBindingAckStageNames.DispatchAccepted;
+
+    public string BindingRunRole { get; init; } = StudioMemberBindingRunRoleNames.Candidate;
+}
 
 public sealed record StudioMemberBindingRunStartRequest(
     string BindingRunId,
@@ -247,6 +354,7 @@ public sealed record StudioMemberEndpointContractResponse(
     string? SampleRequestJson,
     string DeploymentStatus,
     string RevisionId,
+    StudioMemberInvocationReadinessResponse InvocationReadiness,
     string? CurlExample = null,
     string? FetchExample = null);
 

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
@@ -156,6 +157,52 @@ public class MultimodalPipelineTests
         chunks.Should().Contain(c => c.DeltaContent == "Hello world");
     }
 
+    [Fact]
+    public async Task ChatRuntime_WhenToolVisibilityRestricted_ShouldOnlyExposeAllowedToolsToProvider()
+    {
+        var provider = new RecordingProvider();
+        var toolManager = new ToolManager();
+        toolManager.Register(new NamedTool("search"));
+        toolManager.Register(new NamedTool("calendar"));
+        var runtime = CreateRuntime(
+            provider,
+            toolManager,
+            AgentToolExecutionContext.Empty with
+            {
+                ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["search"]),
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        {
+        }
+
+        provider.Requests.Should().ContainSingle();
+        provider.Requests[0].Tools.Should().NotBeNull();
+        provider.Requests[0].Tools!.Select(static tool => tool.Name).Should().Equal("search");
+    }
+
+    [Fact]
+    public async Task ChatRuntime_WhenToolVisibilityPresentEmpty_ShouldExposeNoToolsToProvider()
+    {
+        var provider = new RecordingProvider();
+        var toolManager = new ToolManager();
+        toolManager.Register(new NamedTool("search"));
+        var runtime = CreateRuntime(
+            provider,
+            toolManager,
+            AgentToolExecutionContext.Empty with
+            {
+                ToolVisibility = AgentToolVisibilityScope.Empty,
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        {
+        }
+
+        provider.Requests.Should().ContainSingle();
+        provider.Requests[0].Tools.Should().BeNull();
+    }
+
     // ─── Helpers ───
 
     private static ChatRuntime CreateRuntime(ILLMProvider provider)
@@ -174,6 +221,26 @@ public class MultimodalPipelineTests
             });
     }
 
+    private static ChatRuntime CreateRuntime(
+        ILLMProvider provider,
+        ToolManager toolManager,
+        AgentToolExecutionContext toolContext)
+    {
+        var history = new ChatHistory();
+        var toolLoop = new ToolCallLoop(toolManager);
+        return new ChatRuntime(
+            providerFactory: () => provider,
+            history: history,
+            toolLoop: toolLoop,
+            hooks: null,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = history.BuildMessages("You are a helpful assistant."),
+                Tools = toolManager.GetAll(),
+                ToolContext = toolContext,
+            });
+    }
+
     private sealed class StreamingProvider : ILLMProvider
     {
         private readonly IReadOnlyList<LLMStreamChunk> _chunks;
@@ -189,5 +256,32 @@ public class MultimodalPipelineTests
                 yield return chunk;
             }
         }
+    }
+
+    private sealed class RecordingProvider : ILLMProvider
+    {
+        public string Name => "recording-test";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            await Task.Yield();
+            yield return new LLMStreamChunk { DeltaContent = "ok" };
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class NamedTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 }

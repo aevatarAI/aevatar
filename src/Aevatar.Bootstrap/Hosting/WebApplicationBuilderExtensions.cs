@@ -1,10 +1,11 @@
 using Aevatar.Configuration;
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Bootstrap.Hosting;
 
@@ -66,6 +67,12 @@ public static class WebApplicationBuilderExtensions
         var hostOptions = new AevatarDefaultHostOptions();
         configureHost?.Invoke(hostOptions);
 
+        // Suppress ASP.NET Core's built-in request logging: it writes the raw request
+        // URL (including secret query params such as /ws/voice?access_token=<JWT>) to
+        // stdout -> Elasticsearch. RedactingRequestLoggingMiddleware emits a redacted
+        // equivalent instead. Warning+ (e.g. unhandled-exception) is preserved.
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
+
         AddApplicationBaseConfiguration(builder);
         builder.Configuration.AddAevatarConfig(allowLocalFileStore: hostOptions.AllowLocalFileSecretsStore);
         builder.Services.AddAevatarBootstrap(
@@ -121,6 +128,12 @@ public static class WebApplicationBuilderExtensions
         ArgumentNullException.ThrowIfNull(app);
 
         var options = app.Services.GetRequiredService<AevatarDefaultHostOptions>();
+
+        // Redacted request logging replaces the framework's raw-URL request logging
+        // (suppressed in AddAevatarDefaultHost). Registered first so it wraps the
+        // whole pipeline and never emits a secret-bearing query string.
+        app.UseMiddleware<RedactingRequestLoggingMiddleware>();
+
         if (options.EnableCors)
             app.UseCors(options.CorsPolicyName);
 

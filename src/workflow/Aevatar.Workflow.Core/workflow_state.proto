@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.Workflow.Core";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "workflow_execution_messages.proto";
 
 message WorkflowState
 {
@@ -32,6 +33,8 @@ message WorkflowState
     string definition_yaml = 12;
     string scope_id = 13;
     map<string, string> inline_workflow_yamls = 14;
+    string root_run_id = 15;
+    int32 depth = 16;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -46,6 +49,8 @@ message WorkflowState
     WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
     string timeout_callback_id = 9;
     int32 timeout_ms = 10;
+    string root_run_id = 11;
+    int32 requested_depth = 12;
   }
 
   message ChildRunIdSet
@@ -69,6 +74,8 @@ message WorkflowState
   map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 13;
   string scope_id = 14;
   string source_kind = 15;
+  int32 max_sub_workflow_depth = 16;
+  int32 max_active_sub_workflows = 17;
 }
 
 message WorkflowRunState
@@ -98,6 +105,8 @@ message WorkflowRunState
     string definition_yaml = 12;
     string scope_id = 13;
     map<string, string> inline_workflow_yamls = 14;
+    string root_run_id = 15;
+    int32 depth = 16;
   }
 
   message PendingSubWorkflowDefinitionResolution
@@ -112,6 +121,8 @@ message WorkflowRunState
     WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
     string timeout_callback_id = 9;
     int32 timeout_ms = 10;
+    string root_run_id = 11;
+    int32 requested_depth = 12;
   }
 
   message ChildRunIdSet
@@ -141,12 +152,34 @@ message WorkflowRunState
   repeated PendingSubWorkflowDefinitionResolution pending_sub_workflow_definition_resolutions = 19;
   map<string, int32> pending_sub_workflow_definition_resolution_index_by_invocation_id = 20;
   WorkflowRunExecutionContextState execution_context = 21;
+  int32 fork_attempt = 22;
+  int32 max_sub_workflow_depth = 23;
+  int32 max_active_sub_workflows = 24;
+  repeated CompletedStepLedgerEntry compensable_ledger = 25;
+  int32 compensation_cursor = 26;
+  WorkflowSagaStatus saga_status = 27;
+  string compensation_execution_id = 28;
+  string dead_letter_failed_compensation_step_id = 29;
+  int32 dead_letter_remaining_uncompensated = 30;
+  string dead_letter_error = 31;
+  string compensation_origin_failed_step_id = 32;
+  bool terminal_workflow_completion_recorded = 33;
+  google.protobuf.Timestamp started_at_utc = 34;
+  // Canonical run origin/type stamped at bind by the creating ingress. Observatory filter
+  // dimension; empty for legacy/unstamped runs. See WorkflowRunOrigins for the canonical set.
+  string run_origin = 35;
+  // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
+  // non-scheduled runs. Observatory filter dimension for "this schedule's runs".
+  string schedule_id = 36;
 }
 
 message WorkflowRunExecutionContextState
 {
   WorkflowLlmExecutionContextState llm = 1;
-  WorkflowConnectorExecutionContextState connector = 2;
+  reserved 2;
+  reserved "connector";
+  WorkflowCallerCredentialState caller_credential = 3;
+  WorkflowToolRuntimeContextState workflow_runtime = 4;
 }
 
 message WorkflowLlmExecutionContextState
@@ -156,11 +189,21 @@ message WorkflowLlmExecutionContextState
   string model_override = 2;
   optional int32 max_tool_rounds_override = 4;
   string user_memory_prompt = 5;
+  string route_preference = 6;
 }
 
-message WorkflowConnectorExecutionContextState
+message WorkflowCallerCredentialState
 {
-  string http_authorization = 1;
+  string bearer_token = 1;
+}
+
+message WorkflowToolRuntimeContextState
+{
+  string parent_actor_id = 1;
+  string parent_run_id = 2;
+  string parent_step_id = 3;
+  string root_run_id = 4;
+  int32 depth = 5;
 }
 
 enum WorkflowRuntimeCallbackBackendState
@@ -186,6 +229,13 @@ enum SubWorkflowInvocationHandoffPhase
   SUB_WORKFLOW_INVOCATION_HANDOFF_PHASE_START_DISPATCHED = 6;
 }
 
+enum CompensableLedgerEntryStatus
+{
+  COMPENSABLE_LEDGER_ENTRY_STATUS_UNSPECIFIED = 0;
+  COMPENSABLE_LEDGER_ENTRY_STATUS_CONFIRMED = 1;
+  COMPENSABLE_LEDGER_ENTRY_STATUS_PROVISIONAL = 2;
+}
+
 message WorkflowRuntimeCallbackLeaseState
 {
   string actor_id = 1;
@@ -193,6 +243,55 @@ message WorkflowRuntimeCallbackLeaseState
   int64 generation = 3;
   WorkflowRuntimeCallbackBackendState backend = 4;
   int32 slot_epoch = 5;
+}
+
+message WorkflowLeaseWaiterState
+{
+  string request_id = 1;
+  string requester_run_id = 2;
+  string requester_actor_id = 3;
+  string requester_step_id = 4;
+  int32 ttl_ms = 5;
+  int32 wait_timeout_ms = 6;
+  int64 enqueued_at_unix_ms = 7;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+  string timeout_callback_id = 9;
+}
+
+message WorkflowLeaseState
+{
+  string lease_key = 1;
+  string holder_run_id = 2;
+  string holder_actor_id = 3;
+  string holder_step_id = 4;
+  string holder_token = 5;
+  int64 generation = 6;
+  int64 expires_at_unix_ms = 7;
+  WorkflowRuntimeCallbackLeaseState expiration_lease = 8;
+  string expiration_callback_id = 9;
+  repeated WorkflowLeaseWaiterState waiters = 10;
+}
+
+message WorkflowLeaseStateUpsertedEvent
+{
+  WorkflowLeaseState state = 1;
+}
+
+message PendingWorkflowLeaseOperationState
+{
+  string request_id = 1;
+  string run_id = 2;
+  string step_id = 3;
+  string lease_key = 4;
+  string lease_actor_id = 5;
+  string action = 6;
+  string input = 7;
+  string holder_token_variable = 8;
+}
+
+message WorkflowLeaseModuleState
+{
+  map<string, PendingWorkflowLeaseOperationState> pending = 1;
 }
 
 message RetryBackoffState
@@ -217,6 +316,23 @@ message WorkflowExecutionKernelState
   bool current_step_dispatch_pending = 9;
   string current_step_timeout_callback_id = 10;
   map<string, string> execution_ids_by_step_id = 11;
+  WorkflowUsageMetricsState usage = 12;
+  repeated WorkflowFileRef input_file_refs = 13;
+  repeated WorkflowFileRef current_step_input_file_refs = 14;
+  map<string, WorkflowStepIdempotencyState> idempotency_by_step_id = 15;
+  map<string, string> compensation_execution_ids_by_step_id = 16;
+  WorkflowRuntimeCallbackLeaseState compensation_phase_deadline_lease = 17;
+  string compensation_phase_deadline_callback_id = 18;
+}
+
+message WorkflowUsageMetricsState
+{
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+  int32 total_tokens = 3;
+  string model = 4;
+  double cost = 5;
+  int64 latency_ms = 6;
 }
 
 message PendingDelayState
@@ -239,6 +355,16 @@ message PendingSignalState
   string signal_name = 4;
   WorkflowRuntimeCallbackLeaseState timeout_lease = 5;
   string timeout_callback_id = 6;
+  PendingExternalApprovalContinuationState external_approval = 7;
+}
+
+message PendingExternalApprovalContinuationState
+{
+  string source_id = 1;
+  string external_id_kind = 2;
+  string external_id = 3;
+  string callback_idempotency_key = 4;
+  string request_id = 5;
 }
 
 message WaitSignalModuleState
@@ -301,6 +427,8 @@ message PendingToolCallApprovalState
   string approval_request_id = 6;
   string arguments_json = 7;
   string input = 8;
+  repeated WorkflowFileRef input_file_refs = 9;
+  string idempotency_key = 10;
 }
 
 message ToolCallModuleState
@@ -315,6 +443,10 @@ message PendingApprovalState
   string input = 3;
   string on_reject = 4;
   string delivery_target_id = 5;
+  WorkflowHumanApprovalTimeoutDefaultDecision timeout_default_decision = 6;
+  int32 timeout_seconds = 7;
+  WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+  string timeout_callback_id = 9;
 }
 
 message HumanApprovalModuleState
@@ -356,6 +488,7 @@ message VoteConfigState
 {
   string step_type = 1;
   map<string, string> parameters = 2;
+  aevatar.workflow.VoteAgreementRule vote_rule = 3;
 }
 
 message ParallelParentState
@@ -378,6 +511,9 @@ message ForEachItemResult
 {
   bool success = 1;
   string output = 2;
+  int32 index = 3;
+  WorkflowFileRef file_ref = 4;
+  string error = 5;
 }
 
 message ForEachParentState
@@ -385,6 +521,8 @@ message ForEachParentState
   int32 expected = 1;
   repeated ForEachItemResult collected = 2;
   repeated string collected_step_ids = 3;
+  repeated WorkflowFileRef item_file_refs = 4;
+  string items_source = 5;
 }
 
 message ForEachModuleState
@@ -469,6 +607,7 @@ message PendingConnectorCallState
   map<string, string> parameters = 14;
   bool secure_step = 15;
   string connector_type = 16;
+  string idempotency_key = 17;
 }
 
 message ConnectorCallModuleState
@@ -548,6 +687,7 @@ message BackpressureQueueEntry
   string input = 4;
   string target_role = 5;
   map<string, string> parameters = 6;
+  repeated WorkflowFileRef input_file_refs = 7;
 }
 
 message BackpressureQueueState
@@ -556,4 +696,16 @@ message BackpressureQueueState
   int32 active_workers = 2;
   int32 max_concurrent_workers = 3;
   int32 head_index = 4;
+  int32 min_concurrent_workers = 5;
+}
+
+message CompletedStepLedgerEntry
+{
+  reserved 5;
+  reserved "committed_at_unix_ms";
+  string step_id = 1;
+  string compensation_step_id = 2;
+  string idempotency_key = 3;
+  string captured_output = 4;
+  CompensableLedgerEntryStatus ledger_status = 6;
 }

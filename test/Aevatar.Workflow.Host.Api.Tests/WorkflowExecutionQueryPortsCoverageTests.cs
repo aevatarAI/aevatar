@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Projection.Configuration;
@@ -32,12 +33,66 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             Status = status,
             FinalOutput = "done",
             FinalError = "err",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
+            DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
             UpdatedAt = DateTimeOffset.Parse("2026-03-17T08:00:00+00:00"),
         });
 
         snapshot.CompletionStatus.Should().Be(expected);
         snapshot.LastOutput.Should().Be("done");
         snapshot.LastError.Should().Be("err");
+        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        snapshot.DeadLetterRemainingUncompensated.Should().Be(2); snapshot.DeadLetterError.Should().Be("refund failed");
+    }
+
+    [Fact]
+    public void WorkflowExecutionReadModelMapper_ShouldExposeCurrentStateInputFileDescriptors()
+    {
+        var mapper = new WorkflowExecutionReadModelMapper();
+        var snapshot = mapper.ToActorSnapshot(new WorkflowExecutionCurrentStateDocument
+        {
+            RootActorId = "actor-1",
+            WorkflowName = "wf",
+            Status = "running",
+            InputFileRefs =
+            {
+                new WorkflowExecutionInputFileRefReadModel
+                {
+                    FileId = "file-1",
+                    ArtifactId = "workflow-file://file-1",
+                    SourceKindValue = (int)Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                    SourceMessageId = "om_1",
+                    SourceResourceKey = "file_key_1",
+                    FileName = "invoice.pdf",
+                    MediaType = "application/pdf",
+                    SizeBytes = 2048,
+                    Sha256 = "sha-file-1",
+                    CreatedAtUnixMs = 1710000000000,
+                    ExpiresAtUnixMs = 1710003600000,
+                    OwnerRunId = "run-owner",
+                    OwnerScopeId = "scope-owner",
+                },
+            },
+        });
+
+        var fileRef = snapshot.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-1");
+        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_1");
+        fileRef.SourceResourceKey.Should().Be("file_key_1");
+        fileRef.FileName.Should().Be("invoice.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(2048);
+        fileRef.Sha256.Should().Be("sha-file-1");
+        fileRef.OwnerRunId.Should().Be("run-owner");
+        fileRef.OwnerScopeId.Should().Be("scope-owner");
+        fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        WorkflowRunFileRef.Descriptor.Fields.InDeclarationOrder()
+            .Should()
+            .NotContain(field => field.Name.Contains("base64", StringComparison.OrdinalIgnoreCase));
     }
 
     [Theory]
@@ -242,6 +297,8 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                     WorkflowName = "wf",
                     StateVersion = 12,
                     LastEventId = "evt-12",
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
+                    DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
                     UpdatedAt = now,
                 },
                 Items =
@@ -253,6 +310,8 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                         WorkflowName = "wf",
                         StateVersion = 12,
                         LastEventId = "evt-12",
+                        SagaStatus = WorkflowSagaStatus.CompensationDeadLetter, DeadLetterFailedCompensationStepId = "refund_payment",
+                        DeadLetterRemainingUncompensated = 2, DeadLetterError = "refund failed",
                         UpdatedAt = now,
                     },
                 ],
@@ -265,6 +324,9 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         snapshot.Should().NotBeNull();
         snapshot!.ActorId.Should().Be("actor-1");
         snapshot.StateVersion.Should().Be(12);
+        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        snapshot.DeadLetterRemainingUncompensated.Should().Be(2); snapshot.DeadLetterError.Should().Be("refund failed");
         snapshots.Should().ContainSingle();
         projectionState.Should().NotBeNull();
         projectionState!.ActorId.Should().Be("actor-1");
@@ -530,25 +592,17 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             Primitives = ["assign"],
             Roles =
             [
-                new WorkflowCatalogRoleReadModel
+                new()
                 {
-                    Id = "operator",
-                    Name = "Operator",
-                    SystemPrompt = "Operate.",
-                    Provider = "openai",
-                    Model = "gpt-test",
-                    Temperature = 0.1f,
-                    MaxTokens = 512,
-                    MaxToolRounds = 2,
-                    MaxHistoryMessages = 3,
-                    EventModules = ["audit", "trace"],
-                    EventRoutes = "route:*",
+                    Id = "operator", Name = "Operator", SystemPrompt = "Operate.", Provider = "openai",
+                    Model = "gpt-test", Temperature = 0.1f, MaxTokens = 512, MaxToolRounds = 2,
+                    MaxHistoryMessages = 3, EventModules = ["audit", "trace"], EventRoutes = "route:*",
                     Connectors = ["aevatar_cli"],
                 },
             ],
             Steps =
             [
-                new WorkflowCatalogStepReadModel
+                new()
                 {
                     Id = "start",
                     Type = "assign",
@@ -557,23 +611,13 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                     Branches = { ["done"] = "child" },
                     Children =
                     [
-                        new WorkflowCatalogChildStepReadModel
-                        {
-                            Id = "child",
-                            Type = "assign",
-                            TargetRole = "operator",
-                        },
+                        new() { Id = "child", Type = "assign", TargetRole = "operator" },
                     ],
                 },
             ],
             Edges =
             [
-                new WorkflowCatalogEdgeReadModel
-                {
-                    From = "start",
-                    To = "child",
-                    Label = "child",
-                },
+                new() { From = "start", To = "child", Label = "child" },
             ],
             RequiredConnectors = ["aevatar_cli"],
             WorkflowCalls = ["child_workflow"],
@@ -588,25 +632,12 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         public IReadOnlyList<TReadModel> Items { get; init; } = [];
 
         public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
-        {
-            _ = key;
-            ct.ThrowIfCancellationRequested();
-            GetCalls++;
-            return Task.FromResult(Item);
-        }
+        { _ = key; ct.ThrowIfCancellationRequested(); GetCalls++; return Task.FromResult(Item); }
 
         public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default)
-        {
-            _ = query;
-            ct.ThrowIfCancellationRequested();
-            QueryCalls++;
-            return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel>
-            {
-                Items = Items,
-            });
-        }
+        { _ = query; ct.ThrowIfCancellationRequested(); QueryCalls++; return Task.FromResult(new ProjectionDocumentQueryResult<TReadModel> { Items = Items }); }
     }
 
     private sealed class DeferredQueryDocumentReader<TReadModel> : IProjectionDocumentReader<TReadModel, string>
@@ -616,34 +647,18 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly IReadOnlyList<TReadModel> _items;
 
-        public DeferredQueryDocumentReader(IReadOnlyList<TReadModel> items)
-        {
-            _items = items;
-        }
+        public DeferredQueryDocumentReader(IReadOnlyList<TReadModel> items) => _items = items;
 
         public Task<TReadModel?> GetAsync(string key, CancellationToken ct = default)
-        {
-            _ = key;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<TReadModel?>(null);
-        }
+        { _ = key; ct.ThrowIfCancellationRequested(); return Task.FromResult<TReadModel?>(null); }
 
         public Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default)
-        {
-            _ = query;
-            ct.ThrowIfCancellationRequested();
-            return _query.Task;
-        }
+        { _ = query; ct.ThrowIfCancellationRequested(); return _query.Task; }
 
-        public void CompleteQuery()
-        {
-            _query.SetResult(new ProjectionDocumentQueryResult<TReadModel>
-            {
-                Items = _items,
-            });
-        }
+        public void CompleteQuery() =>
+            _query.SetResult(new ProjectionDocumentQueryResult<TReadModel> { Items = _items });
     }
 
     private sealed class RecordingProjectionGraphStore : IProjectionGraphStore

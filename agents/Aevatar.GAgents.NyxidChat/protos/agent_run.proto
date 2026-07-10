@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "chat_activity.proto";
 import "conversation_events.proto";
+import "delivery_ledger.proto";
 import "ai_messages.proto";
 
 enum AgentRunStatus {
@@ -78,6 +79,86 @@ message AgentRunGAgentState {
   // Immutable history entries produced by the LLM run. Output-dispatch retries
   // re-deliver these entries without re-running the LLM/tool chain.
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry produced_appended_history = 23;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 24;
+  AgentRunLarkCardDeliveryState lark_card_delivery = 25;
+  AgentRunLarkCardDeliveryCompletion pending_card_delivery_completion = 26;
+  repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 27;
+  aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 28;
+}
+
+enum AgentRunLarkCardDeliveryPhase {
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_UNSPECIFIED = 0;
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_IDLE = 1;
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_CREATING = 2;
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_STREAMING = 3;
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_COMPLETED = 4;
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_ABORTED = 5;
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_TERMINATED = 6;
+  AGENT_RUN_LARK_CARD_DELIVERY_PHASE_CREATION_FAILED = 7;
+}
+
+message AgentRunLarkCardDeliveryState {
+  AgentRunLarkCardDeliveryPhase phase = 1;
+  string card_id = 2;
+  string card_message_id = 3;
+  string original_card_id = 4;
+  string last_flushed_text = 5;
+  int64 sequence = 6;
+  string streaming_element_id = 7;
+  string terminal_reason = 8;
+  aevatar.gagents.channel.runtime.LarkCardOperationPhase in_flight_operation = 9;
+  int64 in_flight_sequence = 10;
+  int64 operation_generation = 11;
+  string pending_accumulated_text = 12;
+  string pending_finalize_text = 13;
+  string pending_finalize_command_id = 14;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry pending_appended_history = 15;
+}
+
+message AgentRunLarkCardDeliveryChangedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  int64 changed_at_unix_ms = 3;
+  AgentRunLarkCardDeliveryPhase previous_phase = 4;
+  AgentRunLarkCardDeliveryPhase phase = 5;
+  optional aevatar.gagents.channel.runtime.LarkCardOperationPhase in_flight_operation = 6;
+  optional int64 operation_sequence = 7;
+  optional int64 operation_generation = 8;
+  optional string card_id_assigned = 9;
+  optional string card_message_id_assigned = 10;
+  optional string original_card_id_assigned = 11;
+  optional string flushed_text = 12;
+  optional int64 sequence = 13;
+  optional string streaming_element_id = 14;
+  optional string terminal_reason = 15;
+  optional string queued_accumulated_text = 16;
+  optional string finalize_text = 17;
+  optional string finalize_command_id = 18;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 19;
+}
+
+message AgentRunLarkCardDeliveryCompletion {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string command_id = 4;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 5;
+  string card_message_id = 6;
+  string outbound_text = 7;
+  int64 completed_at_unix_ms = 8;
+  aevatar.gagents.channel.runtime.LlmReplyDeliveryFailedEvent delivery_failure = 9;
+  repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
+  AgentRunLarkCardDeliveryCompletionOutcome outcome = 11;
+}
+
+message AgentRunCardDeliveryCompletionPreparedEvent {
+  AgentRunLarkCardDeliveryCompletion completion = 1;
+}
+
+enum AgentRunLarkCardDeliveryCompletionOutcome {
+  AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_UNSPECIFIED = 0;
+  AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_COMPLETED = 1;
+  AGENT_RUN_LARK_CARD_DELIVERY_COMPLETION_OUTCOME_FAILED = 2;
 }
 
 enum AgentRunReplyStepKind {
@@ -129,6 +210,13 @@ message AgentRunReplyStepState {
   map<string, string> external_metadata = 19;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 20;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 21;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 22;
+  aevatar.ai.LLMControlContextPayload owner_fallback_llm_control = 23;
+  aevatar.ai.AgentToolExecutionContextPayload owner_fallback_tool_context = 24;
+  // One-shot empty-reply recovery marker. Gates re-recovery (recover at most once) WITHOUT the
+  // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
+  // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
+  bool empty_reply_retry = 25;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -150,6 +238,12 @@ message AgentRunLlmStepResult {
 message AgentRunToolStepResult {
   repeated AgentRunChatMessage result_messages = 1;
   bool advance_round = 2;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 3;
+  // Interactive reply intent captured while the tool step executed (for example
+  // reply_with_interaction). Tools run during the tool step, not the LLM step,
+  // so the executor surfaces the captured intent here for the run actor to
+  // merge into AgentRunReplyStepState.outbound_intent.
+  aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -217,6 +311,7 @@ message AgentRunReplyProducedEvent {
   string reply_text = 8;
   aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
+  repeated aevatar.ai.AgentToolReceipt tool_receipts = 11;
 }
 
 // Persisted after admission gates pass and before the transient generation
@@ -282,6 +377,20 @@ message AgentRunReplyGenerationFailed {
   aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 8;
 }
 
+// Transient self-message used when a sender-owned LLM/tool-enabled attempt is
+// rejected before it produces a useful reply. The actor converts it into a
+// persisted AgentRunReplyStepStateUpdatedEvent that clears sender binding and
+// disables tools, then continues through the normal LLM-step chain.
+message AgentRunOwnerFallbackStepRequested {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int32 attempt = 4;
+  int32 step_index = 5;
+  string reason = 6;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 7;
+}
+
 // Transient timeout signal emitted by the callback scheduler. It carries only
 // stable identifiers so runtime-only credentials are never written into the
 // scheduler backend.
@@ -337,6 +446,209 @@ message AgentRunCleanupCompletedEvent {
   string run_id = 1;
   string correlation_id = 2;
   int64 completed_at_unix_ms = 3;
+}
+
+enum ChannelWorkflowDraftRunStatus {
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_STARTED = 1;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_REPLY_HANDED_OFF = 2;
+  CHANNEL_WORKFLOW_DRAFT_RUN_STATUS_FAILED = 3;
+}
+
+message ChannelWorkflowDraftRunGAgentState {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  ChannelWorkflowDraftRunStatus status = 4;
+  int64 started_at_unix_ms = 5;
+  int64 completed_at_unix_ms = 6;
+  string error_code = 7;
+  string error_summary = 8;
+  string accumulated_text = 9;
+}
+
+message ChannelWorkflowDraftRunStartRequested {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  string run_id = 2;
+}
+
+message ChannelWorkflowDraftRunStartedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 started_at_unix_ms = 4;
+}
+
+message ChannelWorkflowDraftRunFrame {
+  oneof frame {
+    ChannelWorkflowDraftRunTextMessageContentFrame text_message_content = 1;
+    ChannelWorkflowDraftRunFinishedFrame run_finished = 2;
+    ChannelWorkflowDraftRunErrorFrame run_error = 3;
+    ChannelWorkflowDraftRunStoppedFrame run_stopped = 4;
+  }
+}
+
+message ChannelWorkflowDraftRunTextMessageContentFrame {
+  string delta = 1;
+}
+
+message ChannelWorkflowDraftRunFinishedFrame {
+  string result_output = 1;
+}
+
+message ChannelWorkflowDraftRunErrorFrame {
+  string message = 1;
+  string code = 2;
+}
+
+message ChannelWorkflowDraftRunStoppedFrame {
+  string reason = 1;
+}
+
+message ChannelWorkflowDraftRunFrameObserved {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  ChannelWorkflowDraftRunFrame frame = 2;
+  int64 observed_at_unix_ms = 3;
+}
+
+message ChannelWorkflowDraftRunInteractionCompleted {
+  aevatar.gagents.channel.runtime.NeedsWorkflowDraftRunEvent request = 1;
+  bool succeeded = 2;
+  bool completed = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 completed_at_unix_ms = 6;
+}
+
+message ChannelWorkflowDraftRunFrameRenderedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string accumulated_text = 4;
+  int64 rendered_at_unix_ms = 5;
+}
+
+message ChannelWorkflowDraftRunReplyHandedOffEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  int64 handed_off_at_unix_ms = 4;
+}
+
+message ChannelWorkflowDraftRunFailedEvent {
+  string run_id = 1;
+  string correlation_id = 2;
+  string target_actor_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int64 failed_at_unix_ms = 6;
+}
+
+enum WorkflowRunDeliveryStatus {
+  WORKFLOW_RUN_DELIVERY_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_RUN_DELIVERY_STATUS_STARTED = 1;
+  WORKFLOW_RUN_DELIVERY_STATUS_DELIVERED = 2;
+  WORKFLOW_RUN_DELIVERY_STATUS_FAILED = 3;
+}
+
+message WorkflowRunDeliveryGAgentState {
+  reserved 10;
+  reserved "bot_agent_key_id";
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string stream_topic = 6;
+  string channel_platform = 7;
+  string reply_message_id = 8;
+  string platform_message_id = 9;
+  string registration_scope_id = 11;
+  WorkflowRunDeliveryStatus status = 12;
+  int64 started_at_unix_ms = 13;
+  int64 completed_at_unix_ms = 14;
+  int32 delivery_attempt = 15;
+  int64 last_attempt_at_unix_ms = 16;
+  string delivered_activity_id = 17;
+  string delivered_platform_message_id = 18;
+  string error_code = 19;
+  string error_summary = 20;
+  string terminal_status = 21;
+  string terminal_text = 22;
+  string terminal_error_code = 23;
+  int64 terminal_observed_at_unix_ms = 24;
+  string durable_reply_credential_ref = 25;
+}
+
+message WorkflowRunDeliveryStartRequested {
+  reserved 10;
+  reserved "bot_agent_key_id";
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string stream_topic = 6;
+  string channel_platform = 7;
+  string reply_message_id = 8;
+  string platform_message_id = 9;
+  string registration_scope_id = 11;
+  string durable_reply_credential_ref = 12;
+}
+
+message WorkflowRunDeliveryStartedEvent {
+  reserved 10;
+  reserved "bot_agent_key_id";
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  string stream_topic = 6;
+  string channel_platform = 7;
+  string reply_message_id = 8;
+  string platform_message_id = 9;
+  string registration_scope_id = 11;
+  int64 started_at_unix_ms = 12;
+  string durable_reply_credential_ref = 13;
+}
+
+message WorkflowRunDeliveryTerminalFrameObserved {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string status = 4;
+  string text = 5;
+  string error_code = 6;
+  int64 observed_at_unix_ms = 7;
+}
+
+message WorkflowRunDeliverySucceededEvent {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string sent_activity_id = 4;
+  string platform_message_id = 5;
+  int32 attempt = 6;
+  int64 delivered_at_unix_ms = 7;
+  string terminal_status = 8;
+  string terminal_text = 9;
+  string terminal_error_code = 10;
+  int64 terminal_observed_at_unix_ms = 11;
+}
+
+message WorkflowRunDeliveryFailedEvent {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string error_code = 4;
+  string error_summary = 5;
+  int32 attempt = 6;
+  int64 failed_at_unix_ms = 7;
+  string terminal_status = 8;
+  string terminal_text = 9;
+  string terminal_error_code = 10;
+  int64 terminal_observed_at_unix_ms = 11;
 }
 
 message NyxIdChatConversationCreationCompensationRequested {

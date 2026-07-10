@@ -1,4 +1,6 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -10,6 +12,7 @@ namespace Aevatar.GAgents.Scheduled;
 // Refactor (iter1/cluster-001):
 //   Old pattern: UserAgentCatalogGAgent owned both catalog membership and per-runner execution summaries.
 //   New principle: Catalog actor owns membership only; execution facts remain runner-owned.
+[GAgent("scheduled.user-agent-catalog")]
 public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
     public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
@@ -20,6 +23,8 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
             .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
             .On<UserAgentCatalogTombstonesCompactedEvent>(ApplyTombstonesCompacted)
+            .On<UserAgentCatalogSharedEvent>(ApplyShared)
+            .On<UserAgentCatalogUnsharedEvent>(ApplyUnshared)
             .OrCurrent();
 
     [EventHandler]
@@ -32,6 +37,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         }
 
         var existing = State.Entries.FirstOrDefault(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
+        if (existing is { Tombstoned: false } && !SameOwner(existing, command))
+        {
+            Logger.LogWarning(
+                "Cannot upsert user agent catalog entry owned by another caller: {AgentId}",
+                command.AgentId.Trim());
+            return;
+        }
+
         var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
         var entry = new UserAgentCatalogEntry
         {
@@ -54,6 +67,11 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
             LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
             LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
+            SharingGrant = existing?.SharingGrant?.Clone(),
+            TargetPlatform = MergeNonEmpty(command.TargetPlatform, existing?.TargetPlatform),
+            OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
+                ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
+                : command.OutputFormat,
         };
 
         // Issue #466 critical: copy OwnerScope from the command (or inherit existing on
@@ -84,6 +102,23 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         });
     }
 
+    private static bool SameOwner(UserAgentCatalogEntry existing, UserAgentCatalogUpsertCommand command)
+    {
+        var existingScope = existing.OwnerScope ?? OwnerScope.FromLegacyFields(
+#pragma warning disable CS0612 // legacy field read for cross-owner overwrite guard
+            existing.OwnerNyxUserId,
+            existing.Platform);
+#pragma warning restore CS0612
+
+        var commandScope = command.OwnerScope ?? OwnerScope.FromLegacyFields(
+#pragma warning disable CS0612 // legacy command shape remains supported
+            command.OwnerNyxUserId,
+            command.Platform);
+#pragma warning restore CS0612
+
+        return existingScope is null || commandScope is null || existingScope.MatchesStrictly(commandScope);
+    }
+
     [EventHandler]
     public async Task HandleTombstoneAsync(UserAgentCatalogTombstoneCommand command)
     {
@@ -103,6 +138,66 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         {
             AgentId = command.AgentId.Trim(),
             TombstoneStateVersion = NextCommittedVersion(),
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleShareAsync(UserAgentCatalogShareCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.AgentId))
+        {
+            Logger.LogWarning("Cannot share user agent catalog entry with empty agent id");
+            return;
+        }
+
+        var entry = FindOwnedLiveEntry(command.AgentId, command.OwnerScope);
+        if (entry is null)
+        {
+            Logger.LogWarning("Cannot share missing or non-owned user agent catalog entry: {AgentId}", command.AgentId);
+            return;
+        }
+
+        if (!UserAgentCatalogSharingAudience.TryBuildKey(entry.OwnerScope, out _))
+        {
+            Logger.LogWarning("Cannot share user agent catalog entry without a channel owner registration scope: {AgentId}", command.AgentId);
+            return;
+        }
+
+        await PersistDomainEventAsync(new UserAgentCatalogSharedEvent
+        {
+            AgentId = entry.AgentId,
+            SharingGrant = new ScheduledAgentSharingGrant
+            {
+                SharedWithRegistrationScope = entry.OwnerScope.RegistrationScopeId.Trim(),
+                AllowTrigger = command.AllowTrigger,
+                GrantedBy = command.OwnerScope.SenderId ?? string.Empty,
+                GrantedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleUnshareAsync(UserAgentCatalogUnshareCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.AgentId))
+        {
+            Logger.LogWarning("Cannot unshare user agent catalog entry with empty agent id");
+            return;
+        }
+
+        var entry = FindOwnedLiveEntry(command.AgentId, command.OwnerScope);
+        if (entry is null)
+        {
+            Logger.LogWarning("Cannot unshare missing or non-owned user agent catalog entry: {AgentId}", command.AgentId);
+            return;
+        }
+
+        if (entry.SharingGrant is null)
+            return;
+
+        await PersistDomainEventAsync(new UserAgentCatalogUnsharedEvent
+        {
+            AgentId = entry.AgentId,
         });
     }
 
@@ -174,6 +269,42 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         foreach (var entry in removable)
             next.Entries.Remove(entry);
         return next;
+    }
+
+    private static UserAgentCatalogState ApplyShared(UserAgentCatalogState current, UserAgentCatalogSharedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));
+        if (existing is null || existing.Tombstoned)
+            return next;
+
+        existing.SharingGrant = evt.SharingGrant?.Clone();
+        existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        return next;
+    }
+
+    private static UserAgentCatalogState ApplyUnshared(UserAgentCatalogState current, UserAgentCatalogUnsharedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = next.Entries.FirstOrDefault(x => string.Equals(x.AgentId, evt.AgentId, StringComparison.Ordinal));
+        if (existing is null)
+            return next;
+
+        existing.SharingGrant = null;
+        existing.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        return next;
+    }
+
+    private UserAgentCatalogEntry? FindOwnedLiveEntry(string agentId, OwnerScope? ownerScope)
+    {
+        if (ownerScope is null)
+            return null;
+
+        var normalizedAgentId = agentId.Trim();
+        return State.Entries.FirstOrDefault(entry =>
+            !entry.Tombstoned &&
+            string.Equals(entry.AgentId, normalizedAgentId, StringComparison.Ordinal) &&
+            ownerScope.MatchesStrictly(entry.OwnerScope));
     }
 
     private long NextCommittedVersion() =>

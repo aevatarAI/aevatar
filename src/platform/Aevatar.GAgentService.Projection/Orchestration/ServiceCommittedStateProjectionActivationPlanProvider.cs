@@ -34,6 +34,7 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             var type when type == typeof(ServiceDeploymentManagerGAgent) => DeploymentPlans(context.ActorId, payload),
             var type when type == typeof(ServiceServingSetManagerGAgent) => ServingSetPlans(context.ActorId, payload),
             var type when type == typeof(ServiceRolloutManagerGAgent) => RolloutPlans(context.ActorId),
+            var type when type == typeof(ServiceInvocationCatalogGAgent) => InvocationCatalogPlans(context.ActorId),
             var type when type == typeof(ServiceRunGAgent) => ServiceRunPlans(context.ActorId),
             _ when payload.Is(RoleChatSessionCompletedEvent.Descriptor) => GAgentRunTerminalPlans(context),
             var type when type == typeof(LlmSessionGAgent) => LlmSessionPlans(context.ActorId),
@@ -47,6 +48,11 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
     {
         if (!payload.Is(ServiceDefinitionCreatedEvent.Descriptor) &&
             !payload.Is(ServiceDefinitionUpdatedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationRequestedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationAttemptStartedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationSucceededEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationFailedEvent.Descriptor) &&
+            !payload.Is(ServiceRegistrationRetiredEvent.Descriptor) &&
             !payload.Is(DefaultServingRevisionChangedEvent.Descriptor))
         {
             return [];
@@ -115,6 +121,13 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
         DurablePlan<ServiceRolloutProjectionContext>(
             actorId,
             ServiceProjectionKinds.Rollouts),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> InvocationCatalogPlans(string actorId) =>
+    [
+        DurablePlan<ServiceInvocationCatalogProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.InvocationCatalog),
     ];
 
     private static IEnumerable<ProjectionActivationPlan> ServiceRunPlans(string actorId) =>

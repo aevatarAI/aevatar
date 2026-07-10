@@ -1,7 +1,7 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
@@ -12,10 +12,19 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgentService.Core.Schedules;
 
+[GAgent("gagent.service.scheduled-dispatch")]
 public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const int MaxFireRecordCount = 128;
+    // How overdue an armed occurrence must be, when the actor reactivates, before it counts as
+    // a detected miss. Wide enough that routine reactivation catch-up (pod churn at the boundary
+    // is seconds-to-minutes late) is not flagged, tight enough that genuine drops (production
+    // misses run 90+ minutes) always are.
+    private static readonly TimeSpan OverdueFireGracePeriod = TimeSpan.FromMinutes(10);
+    private const string LegacyDurableSenderBearerBlockedError =
+        "Scheduled service invocation contains legacy durable bearer auth; reconfigure the schedule with senderNyxId or scopeOwnerNyxId.";
+    private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
 
@@ -33,11 +42,23 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         await base.OnActivateAsync(ct);
         if (State.Enabled && !string.IsNullOrWhiteSpace(State.CronExpression))
         {
+            await DetectOverdueArmedFireAsync(DateTimeOffset.UtcNow, ct);
             if (State.PendingNextFireAt != null)
             {
                 var pendingNextFireAt = State.PendingNextFireAt.ToDateTimeOffset();
                 var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
                 await ActivateNextFireIntentAsync(pendingNextFireAt, previousLease, ct);
+            }
+            else if (State.NextFireAt != null)
+            {
+                // A fire is already armed for State.NextFireAt. Re-arm for that exact time
+                // instead of computing from now: if reactivation happens at or after the armed
+                // time (pod churn at the boundary), recomputing from now would silently skip the
+                // due occurrence. Re-arming a past armed time fires it immediately (catch-up); the
+                // fire handler then advances to the next occurrence normally.
+                var armedNextFireAt = State.NextFireAt.Value;
+                var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+                await ActivateNextFireIntentAsync(armedNextFireAt, previousLease, ct);
             }
             else
             {
@@ -59,11 +80,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             .On<ScheduledDispatchConfiguredEvent>(ApplyConfigured)
             .On<ScheduledDispatchEnabledEvent>(ApplyEnabled)
             .On<ScheduledDispatchDisabledEvent>(ApplyDisabled)
+            .On<ScheduledDispatchDeletedEvent>(ApplyDeleted)
             .On<ScheduledDispatchNextFireIntentRecordedEvent>(ApplyNextFireIntentRecorded)
             .On<ScheduledDispatchNextFireScheduledEvent>(ApplyNextFireScheduled)
             .On<ScheduledDispatchFireStartedEvent>(ApplyFireStarted)
             .On<ScheduledDispatchFireDispatchedEvent>(ApplyFireDispatched)
             .On<ScheduledDispatchFireFailedEvent>(ApplyFireFailed)
+            .On<ScheduledDispatchFireOverdueDetectedEvent>(ApplyFireOverdueDetected)
             .OrCurrent();
 
     [EventHandler]
@@ -98,6 +121,51 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleKind,
             isCreate: false);
 
+    [EventHandler]
+    public async Task HandleEnsureAsync(ScheduledDispatchEnsureCommand command)
+    {
+        if (!IsConfigured())
+        {
+            await HandleConfigureAsync(
+                command,
+                command.ScheduleId,
+                command.DisplayName,
+                command.TargetActorId,
+                command.TriggerEnvelope,
+                command.CronExpression,
+                command.Timezone,
+                command.Enabled,
+                command.Headers,
+                command.Target,
+                command.ScheduleKind,
+                isCreate: true);
+            return;
+        }
+
+        EnsureValidDefinition(
+            command.TargetActorId,
+            command.Target,
+            command.TriggerEnvelope,
+            command.CronExpression,
+            command.Timezone);
+        if (MatchesConfiguredDefinition(command))
+            return;
+
+        await HandleConfigureAsync(
+            command,
+            command.ScheduleId,
+            command.DisplayName,
+            command.TargetActorId,
+            command.TriggerEnvelope,
+            command.CronExpression,
+            command.Timezone,
+            command.Enabled,
+            command.Headers,
+            command.Target,
+            command.ScheduleKind,
+            isCreate: false);
+    }
+
     private async Task HandleConfigureAsync(
         IMessage command,
         string scheduleId,
@@ -113,6 +181,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (State.Deleted)
+            throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is deleted.");
         if (isCreate && IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
@@ -120,6 +190,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone);
 
         var now = DateTimeOffset.UtcNow;
+        var configuredTarget = PreserveExistingServiceInvocationAuth(
+            NormalizeTarget(target),
+            isCreate);
+        Logger.LogInformation(
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
+            NormalizeRequired(scheduleId, nameof(scheduleId)),
+            isCreate,
+            configuredTarget.Kind,
+            scheduleKind,
+            HasServiceInvocationAuth(configuredTarget),
+            HasScopeOwnerNyxId(configuredTarget),
+            HasSenderNyxId(configuredTarget),
+            HasLegacyDurableSenderBearerBlocked(configuredTarget));
         var configured = new ScheduledDispatchConfiguredEvent
         {
             ScheduleId = NormalizeRequired(scheduleId, nameof(scheduleId)),
@@ -131,7 +214,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Enabled = enabled,
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
             PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
-            Target = NormalizeTarget(target),
+            Target = configuredTarget,
             ScheduleKind = scheduleKind,
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
@@ -172,6 +255,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
 
+    [EventHandler]
+    public async Task HandleDeleteAsync(ScheduledDispatchDeleteCommand command)
+    {
+        EnsureConfiguredForWrite("delete");
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        await PersistDomainEventAsync(new ScheduledDispatchDeletedEvent
+        {
+            Reason = NormalizeOptional(command.Reason),
+            DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
+    }
+
     [EventHandler(AllowSelfHandling = true)]
     public Task HandleFireAsync(ScheduledDispatchFireCommand command) =>
         HandleFireAsync(command, ActiveInboundEnvelope, CancellationToken.None);
@@ -182,6 +278,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (!command.Manual && State.Deleted)
+        {
+            Logger.LogInformation("Scheduled dispatch {ActorId} ignored fire because it is deleted.", Id);
+            return;
+        }
+
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
         if (!command.Manual && !State.Enabled)
         {
@@ -189,23 +291,71 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return;
         }
 
+        var scheduledFireAt = ResolveScheduledFireAt(command);
+        var callbackFiredAt = command.Manual ? (DateTimeOffset?)null : ResolveCallbackFiredAt(inboundEnvelope);
+
         if (!command.Manual && !MatchesNextFireLease(inboundEnvelope))
         {
-            Logger.LogInformation("Scheduled dispatch {ActorId} ignored stale fire callback.", Id);
+            Logger.LogInformation(
+                "Scheduled dispatch {ActorId} ignored stale fire callback scheduleId={ScheduleId} scheduledFireAt={ScheduledFireAt} leaseGeneration={LeaseGeneration}.",
+                Id,
+                ResolveScheduleId(),
+                scheduledFireAt,
+                State.NextFireLease?.Generation);
             return;
         }
 
-        var scheduledFireAt = ResolveScheduledFireAt(command);
+        if (!command.Manual && callbackFiredAt < scheduledFireAt)
+        {
+            Logger.LogInformation(
+                "Scheduled dispatch {ActorId} re-armed early fire callback scheduleId={ScheduleId} scheduledFireAt={ScheduledFireAt} callbackFiredAt={CallbackFiredAt}.",
+                Id,
+                ResolveScheduleId(),
+                scheduledFireAt,
+                callbackFiredAt);
+            var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+            await RecordNextFireIntentAsync(scheduledFireAt, ct);
+            await ActivateNextFireIntentAsync(scheduledFireAt, previousLease, ct);
+            return;
+        }
+
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
         if (HasTerminalFireRecord(idempotencyKey))
         {
-            Logger.LogInformation(
-                "Scheduled dispatch {ActorId} ignored duplicate fire {IdempotencyKey}.",
+            State.FireRecords.TryGetValue(idempotencyKey, out var priorRecord);
+            // A suppressed fire was previously an Information no-op, so #2366-style silent skips
+            // left no signal for ops post-mortems. Elevate to Warning with the full decision
+            // context: the stale-lease guard above already absorbs superseded re-deliveries, so a
+            // duplicate that reaches here is an unexpected same-occurrence collision worth seeing.
+            Logger.LogWarning(
+                "Scheduled dispatch {ActorId} suppressed duplicate fire scheduleId={ScheduleId} idempotencyKey={IdempotencyKey} scheduledFireAt={ScheduledFireAt} nextFireAt={NextFireAt} callbackFiredAt={CallbackFiredAt} leaseGeneration={LeaseGeneration} priorStatus={PriorStatus} manual={Manual}.",
                 Id,
-                idempotencyKey);
+                ResolveScheduleId(),
+                idempotencyKey,
+                scheduledFireAt,
+                State.NextFireAt,
+                callbackFiredAt,
+                State.NextFireLease?.Generation,
+                priorRecord?.Status,
+                command.Manual);
             if (!command.Manual)
                 await EnsureNextFireScheduledAsync(scheduledFireAt, ct);
             return;
+        }
+
+        if (callbackFiredAt is { } firedAt && firedAt - scheduledFireAt > OverdueFireGracePeriod)
+        {
+            // The callback reached the handler well after its scheduled time (late delivery while
+            // the grain stayed active, so OnActivate never re-ran). The fire still dispatches; the
+            // Warning makes the lateness observable even though it is not counted as an overdue
+            // detection.
+            Logger.LogWarning(
+                "Scheduled dispatch {ActorId} dispatching overdue fire scheduleId={ScheduleId} scheduledFireAt={ScheduledFireAt} callbackFiredAt={CallbackFiredAt} overdueSeconds={OverdueSeconds}.",
+                Id,
+                ResolveScheduleId(),
+                scheduledFireAt,
+                firedAt,
+                (long)(firedAt - scheduledFireAt).TotalSeconds);
         }
 
         await PersistDomainEventAsync(new ScheduledDispatchFireStartedEvent
@@ -267,7 +417,38 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             if (prepared.Envelope.Payload?.TryUnpack<ServiceInvocationRequest>(out var request) != true)
                 throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
 
-            var receipt = await _serviceInvocationDispatchPort.DispatchAsync(request, ct);
+            var stateTarget = State.Target;
+            Logger.LogInformation(
+                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
+                ResolveScheduleId(),
+                State.ScheduleKind,
+                HasServiceInvocationAuth(stateTarget),
+                HasScopeOwnerNyxId(stateTarget),
+                HasSenderNyxId(stateTarget),
+                HasLegacyDurableSenderBearerBlocked(stateTarget),
+                State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
+            if (HasLegacyDurableSenderBearerBlocked(stateTarget))
+            {
+                // Ops-grade transition signal (#2586): a schedule provisioned before the durable-bearer
+                // removal is permanently blocked until reconfigured — every fire lands here, so alert on
+                // this message pattern instead of letting per-fire Warning + FailureCount accumulate as
+                // the only trace of a schedule that "looks alive" but never dispatches.
+                Logger.LogError(
+                    "Scheduled dispatch {ActorId} is blocked by legacy durable bearer auth and will never fire until reconfigured. scheduleId={ScheduleId} remediation=recreate the schedule with senderNyxId or scopeOwnerNyxId",
+                    Id,
+                    ResolveScheduleId());
+                throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
+            }
+
+            var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
+                new ScheduledServiceInvocationDispatchRequest(
+                    request,
+                    ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
+                    ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
+                    ProjectNyxIdAccessTokenToWorkflowCallerCredential:
+                        State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
+                    ScheduleId: ResolveScheduleId()),
+                ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
                 receipt.CommandId,
@@ -307,7 +488,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         var headers = BuildFireHeaders(scheduledFireAtUtc, idempotencyKey);
         if (ResolveTargetKind() == ScheduledDispatchTargetKindState.ServiceInvocation)
-            return BuildServiceInvocationDispatchEnvelope(headers, idempotencyKey);
+            return await BuildServiceInvocationDispatchEnvelopeAsync(headers, idempotencyKey, ct);
 
         var envelope = State.TriggerEnvelope?.Clone()
             ?? throw new InvalidOperationException("Scheduled dispatch trigger envelope is not configured.");
@@ -335,34 +516,30 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 envelope);
         }
 
-        if (envelope.Payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
-        {
-            chatRequest.SessionId = idempotencyKey;
-            foreach (var (key, value) in headers)
-                chatRequest.Metadata[key] = value;
-            envelope.Payload = Any.Pack(chatRequest);
-        }
-
         return new ScheduledDispatchEnvelope(
             ResolveDispatchTargetActorId(),
             ResolveTargetKind(),
             envelope);
     }
 
-    private ScheduledDispatchEnvelope BuildServiceInvocationDispatchEnvelope(
+    private Task<ScheduledDispatchEnvelope> BuildServiceInvocationDispatchEnvelopeAsync(
         IReadOnlyDictionary<string, string> headers,
-        string idempotencyKey)
+        string idempotencyKey,
+        CancellationToken ct)
     {
         var target = State.Target?.ServiceInvocation
             ?? throw new InvalidOperationException("Scheduled service invocation target is not configured.");
+        ct.ThrowIfCancellationRequested();
         var request = new ServiceInvocationRequest
         {
             Identity = target.Identity?.Clone(),
             EndpointId = target.EndpointId ?? string.Empty,
-            Payload = EnrichServiceInvocationPayload(target.Payload, headers),
+            Payload = target.Payload?.Clone()
+                ?? throw new InvalidOperationException("Scheduled service invocation payload is not configured."),
             CommandId = idempotencyKey,
             CorrelationId = idempotencyKey,
             RevisionId = target.RevisionId ?? string.Empty,
+            ScheduleId = ResolveScheduleId(),
         };
         if (target.Caller != null)
             request.Caller = target.Caller.Clone();
@@ -383,23 +560,59 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         foreach (var (key, value) in headers)
             envelope.Propagation.Baggage[key] = value;
 
-        return new ScheduledDispatchEnvelope(
+        return Task.FromResult(new ScheduledDispatchEnvelope(
             ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
             ScheduledDispatchTargetKindState.ServiceInvocation,
-            envelope);
+            envelope,
+            ReadOnlyCopy(headers)));
     }
 
-    private static Any EnrichServiceInvocationPayload(Any? payload, IReadOnlyDictionary<string, string> headers)
+    private static ScheduledServiceInvocationAuth? ToRuntimeAuth(ScheduledServiceInvocationAuthState? auth)
     {
-        if (payload == null)
-            throw new InvalidOperationException("Scheduled service invocation payload is not configured.");
-        if (!payload.TryUnpack<ChatRequestEvent>(out var chatRequest))
-            return payload.Clone();
+        if (auth == null)
+            return null;
 
-        foreach (var (key, value) in headers)
-            chatRequest.Metadata[key] = value;
-        return Any.Pack(chatRequest);
+        if (auth.LegacyDurableSenderBearerBlocked ||
+            !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken))
+        {
+            throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
+        }
+
+        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null)
+            return null;
+
+        var senderNyxId = auth.SenderNyxId == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdCredentialSource(
+                ToRuntimeSubject(auth.SenderNyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
+                    string.Empty,
+                    string.Empty,
+                    string.Empty),
+                auth.SenderNyxId.Scope ?? string.Empty);
+
+        var scopeOwnerNyxId = auth.ScopeOwnerNyxId == null
+            ? null
+            : new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                auth.ScopeOwnerNyxId.Scope ?? string.Empty,
+                ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
+
+        return new ScheduledServiceInvocationAuth(senderNyxId, null, scopeOwnerNyxId);
     }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRef(
+                subject.Platform ?? string.Empty,
+                subject.Tenant ?? string.Empty,
+                subject.ExternalUserId ?? string.Empty);
+
+    private static IReadOnlyDictionary<string, string> ReadOnlyCopy(IReadOnlyDictionary<string, string> headers) =>
+        new Dictionary<string, string>(headers, StringComparer.Ordinal);
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyHeaders =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     private IReadOnlyDictionary<string, string> BuildFireHeaders(
         DateTimeOffset scheduledFireAtUtc,
@@ -414,7 +627,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private sealed record ScheduledDispatchEnvelope(
         string TargetActorId,
         ScheduledDispatchTargetKindState TargetKind,
-        EventEnvelope Envelope);
+        EventEnvelope Envelope,
+        IReadOnlyDictionary<string, string>? Headers = null);
 
     private sealed record ScheduledDispatchReceipt(
         bool Accepted,
@@ -442,15 +656,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         var pendingNextFireAt = State.PendingNextFireAt?.ToDateTimeOffset();
         if (pendingNextFireAt != nextFireAtUtc)
-        {
-            await PersistDomainEventAsync(new ScheduledDispatchNextFireIntentRecordedEvent
-            {
-                NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
-                RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            }, ct);
-        }
+            await RecordNextFireIntentAsync(nextFireAtUtc, ct);
 
         await ActivateNextFireIntentAsync(nextFireAtUtc, previousLease, ct);
+    }
+
+    private async Task RecordNextFireIntentAsync(DateTimeOffset nextFireAtUtc, CancellationToken ct)
+    {
+        await PersistDomainEventAsync(new ScheduledDispatchNextFireIntentRecordedEvent
+        {
+            NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
+            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }, ct);
     }
 
     private async Task ActivateNextFireIntentAsync(
@@ -458,7 +675,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         RuntimeCallbackLease? previousLease,
         CancellationToken ct)
     {
-        var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
+        var dueTime = ComputeNextFireCallbackDueTime(nextFireAtUtc, DateTimeOffset.UtcNow);
         var lease = await ScheduleSelfDurableTimeoutAsync(
             NextFireCallbackId,
             dueTime,
@@ -487,6 +704,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
 
+    private static TimeSpan ComputeNextFireCallbackDueTime(
+        DateTimeOffset nextFireAtUtc,
+        DateTimeOffset nowUtc)
+    {
+        var dueTime = ScheduledDispatchCalculator.ComputeDueTime(nextFireAtUtc, nowUtc);
+        return dueTime <= MaxNextFireCallbackHop ? dueTime : MaxNextFireCallbackHop;
+    }
+
     private async Task CancelNextFireLeaseAsync(CancellationToken ct)
     {
         var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
@@ -510,6 +735,44 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
     }
 
+    private async Task DetectOverdueArmedFireAsync(DateTimeOffset nowUtc, CancellationToken ct)
+    {
+        // The occurrence the actor is about to (re-)arm: a pending intent that never armed, or the
+        // steady-state armed NextFireAt. When it is overdue past the grace window with no terminal
+        // record, the tick that should have fired was silently dropped (a dead reminder or a
+        // callback that never reached this handler) and we only notice now, on reactivation.
+        var candidate = State.PendingNextFireAt?.ToDateTimeOffset() ?? State.NextFireAt;
+        if (candidate == null)
+            return;
+
+        var overdue = nowUtc - candidate.Value;
+        if (overdue <= OverdueFireGracePeriod)
+            return;
+
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), candidate.Value);
+        if (HasTerminalFireRecord(idempotencyKey))
+            return;
+
+        // Once-per-occurrence: LastOverdueFireAt is persisted state, so repeated reactivations
+        // against the same still-overdue armed occurrence do not inflate the counter.
+        if (State.LastOverdueFireAt == candidate.Value)
+            return;
+
+        Logger.LogWarning(
+            "Scheduled dispatch {ActorId} detected overdue armed fire scheduleId={ScheduleId} scheduledFireAt={ScheduledFireAt} overdueSeconds={OverdueSeconds} with no terminal record; re-arming as catch-up.",
+            Id,
+            ResolveScheduleId(),
+            candidate.Value,
+            (long)overdue.TotalSeconds);
+
+        await PersistDomainEventAsync(new ScheduledDispatchFireOverdueDetectedEvent
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(candidate.Value),
+            DetectedAt = Timestamp.FromDateTimeOffset(nowUtc),
+            OverdueSeconds = (long)overdue.TotalSeconds,
+        }, ct);
+    }
+
     private bool HasTerminalFireRecord(string idempotencyKey)
     {
         if (!State.FireRecords.TryGetValue(idempotencyKey, out var record))
@@ -522,6 +785,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (command.ScheduledFireAt != null)
             return command.ScheduledFireAt.ToDateTimeOffset().ToUniversalTime();
+
+        return DateTimeOffset.UtcNow;
+    }
+
+    private static DateTimeOffset ResolveCallbackFiredAt(EventEnvelope? envelope)
+    {
+        if (envelope != null &&
+            RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var state) &&
+            state.FiredAtUnixTimeMs > 0)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(state.FiredAtUnixTimeMs);
+        }
 
         return DateTimeOffset.UtcNow;
     }
@@ -540,9 +815,35 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             : ScheduledDispatchTargetKindState.Envelope;
 
     private bool IsConfigured() =>
+        !State.Deleted &&
         !string.IsNullOrWhiteSpace(State.ScheduleId) &&
         !string.IsNullOrWhiteSpace(State.CronExpression) &&
         State.TriggerEnvelope?.Payload != null;
+
+    private bool MatchesConfiguredDefinition(ScheduledDispatchEnsureCommand command)
+    {
+        var normalizedTarget = PreserveExistingServiceInvocationAuth(
+            NormalizeTarget(command.Target),
+            isCreate: false);
+        var normalizedHeaders = NormalizeHeaders(command.Headers);
+        var normalizedScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
+        var normalizedDisplayName = NormalizeOptional(command.DisplayName);
+        var normalizedTargetActorId = NormalizeOptional(command.TargetActorId);
+        var normalizedCronExpression = NormalizeRequired(command.CronExpression, nameof(command.CronExpression));
+        var normalizedTimezone = ScheduledDispatchCalculator.NormalizeTimezone(command.Timezone);
+
+        return string.Equals(State.ScheduleId, normalizedScheduleId, StringComparison.Ordinal) &&
+               string.Equals(State.DisplayName, normalizedDisplayName, StringComparison.Ordinal) &&
+               string.Equals(State.TargetActorId, normalizedTargetActorId, StringComparison.Ordinal) &&
+               string.Equals(State.CronExpression, normalizedCronExpression, StringComparison.Ordinal) &&
+               string.Equals(State.Timezone, normalizedTimezone, StringComparison.Ordinal) &&
+               string.Equals(State.PayloadTypeUrl, ResolvePayloadTypeUrl(command.TriggerEnvelope), StringComparison.Ordinal) &&
+               State.Enabled == command.Enabled &&
+               State.ScheduleKind == command.ScheduleKind &&
+               DictionaryEquals(State.Headers, normalizedHeaders) &&
+               EnvelopePayloadEquals(State.TriggerEnvelope, command.TriggerEnvelope) &&
+               TargetEquals(NormalizeTarget(State.Target), normalizedTarget);
+    }
 
     private void EnsureConfiguredForWrite(string operation)
     {
@@ -615,8 +916,89 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Payload = serviceInvocation.Payload?.Clone(),
             RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
             Caller = serviceInvocation.Caller?.Clone(),
+            Auth = NormalizeServiceInvocationAuth(serviceInvocation.Auth),
         };
     }
+
+    private ScheduledDispatchTargetState PreserveExistingServiceInvocationAuth(
+        ScheduledDispatchTargetState normalizedTarget,
+        bool isCreate)
+    {
+        if (isCreate || normalizedTarget.Kind != ScheduledDispatchTargetKindState.ServiceInvocation)
+            return normalizedTarget;
+        if (normalizedTarget.ServiceInvocation?.Auth != null)
+            return normalizedTarget;
+
+        var existingAuth = NormalizeServiceInvocationAuth(State.Target?.ServiceInvocation?.Auth);
+        if (existingAuth == null)
+            return normalizedTarget;
+
+        var preserved = normalizedTarget.Clone();
+        preserved.ServiceInvocation ??= new ScheduledServiceInvocationTargetState();
+        preserved.ServiceInvocation.Auth = existingAuth;
+        return preserved;
+    }
+
+    private static ScheduledServiceInvocationAuthState? NormalizeServiceInvocationAuth(
+        ScheduledServiceInvocationAuthState? auth)
+    {
+        if (auth == null)
+            return null;
+
+        var hasLegacyDurableToken = !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken) ||
+                                    auth.LegacyDurableSenderBearerBlocked;
+        if (auth.SenderNyxId == null && !hasLegacyDurableToken && auth.ScopeOwnerNyxId == null)
+            return null;
+
+        var normalized = new ScheduledServiceInvocationAuthState
+        {
+            LegacyDurableSenderBearerBlocked = hasLegacyDurableToken,
+        };
+
+        if (auth.SenderNyxId != null)
+        {
+            normalized.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = NormalizeSubject(auth.SenderNyxId.Subject),
+                Scope = NormalizeOptional(auth.SenderNyxId.Scope),
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            normalized.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = NormalizeOptional(auth.ScopeOwnerNyxId.Scope),
+                OwnerSubject = NormalizeSubject(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        return normalized;
+    }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRefState? NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRefState
+            {
+                Platform = NormalizeOptional(subject.Platform),
+                Tenant = NormalizeOptional(subject.Tenant),
+                ExternalUserId = NormalizeOptional(subject.ExternalUserId),
+            };
+
+    private static bool HasServiceInvocationAuth(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth != null;
+
+    private static bool HasScopeOwnerNyxId(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.ScopeOwnerNyxId != null;
+
+    private static bool HasSenderNyxId(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.SenderNyxId != null;
+
+    private static bool HasLegacyDurableSenderBearerBlocked(ScheduledDispatchTargetState? target) =>
+        target?.ServiceInvocation?.Auth?.LegacyDurableSenderBearerBlocked == true ||
+        !string.IsNullOrWhiteSpace(target?.ServiceInvocation?.Auth?.DurableSenderBearerToken);
 
     private ScheduledDispatchState ApplyConfigured(
         ScheduledDispatchState current,
@@ -673,6 +1055,20 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.PendingNextFireAt = null;
         next.PendingNextFireRequestedAt = null;
         next.UpdatedAt = evt.DisabledAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private ScheduledDispatchState ApplyDeleted(ScheduledDispatchState current, ScheduledDispatchDeletedEvent evt)
+    {
+        var next = ApplyDisabled(current, new ScheduledDispatchDisabledEvent
+        {
+            Reason = evt.Reason ?? string.Empty,
+            DisabledAt = evt.DeletedAt?.Clone(),
+        });
+        var deletedAt = evt.DeletedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        next.Deleted = true;
+        next.DeletedAt = deletedAt;
+        next.UpdatedAt = deletedAt;
         return next;
     }
 
@@ -773,6 +1169,20 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         return next;
     }
 
+    private static ScheduledDispatchState ApplyFireOverdueDetected(
+        ScheduledDispatchState current,
+        ScheduledDispatchFireOverdueDetectedEvent evt)
+    {
+        var next = current.Clone();
+        next.OverdueFireDetectedCount++;
+        next.LastOverdueFireAt = evt.ScheduledFireAt?.ToDateTimeOffset();
+        next.UpdatedAt =
+            evt.DetectedAt?.ToDateTimeOffset() ??
+            evt.ScheduledFireAt?.ToDateTimeOffset() ??
+            DateTimeOffset.UtcNow;
+        return next;
+    }
+
     private static void UpsertFireRecord(
         ScheduledDispatchState state,
         string idempotencyKey,
@@ -831,6 +1241,37 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         return normalized;
     }
+
+    private static bool DictionaryEquals(
+        IReadOnlyDictionary<string, string> left,
+        IReadOnlyDictionary<string, string> right)
+    {
+        if (left.Count != right.Count)
+            return false;
+
+        foreach (var (key, value) in left)
+        {
+            if (!right.TryGetValue(key, out var other) ||
+                !string.Equals(value, other, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool EnvelopePayloadEquals(EventEnvelope? left, EventEnvelope? right)
+    {
+        if (left?.Payload == null || right?.Payload == null)
+            return left?.Payload == null && right?.Payload == null;
+
+        return string.Equals(left.Payload.TypeUrl, right.Payload.TypeUrl, StringComparison.Ordinal) &&
+               left.Payload.Value.Equals(right.Payload.Value);
+    }
+
+    private static bool TargetEquals(ScheduledDispatchTargetState? left, ScheduledDispatchTargetState? right) =>
+        Equals(left, right);
 
     private static string ResolvePayloadTypeUrl(EventEnvelope? envelope) =>
         envelope?.Payload?.TypeUrl ?? string.Empty;

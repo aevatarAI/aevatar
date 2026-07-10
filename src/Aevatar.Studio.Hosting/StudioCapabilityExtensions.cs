@@ -1,4 +1,4 @@
-using Aevatar.Hosting;
+using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Endpoints;
 using Microsoft.AspNetCore.Builder;
@@ -59,9 +59,11 @@ public static class StudioCapabilityExtensions
             {
                 app.MapControllers();
                 StudioEndpoints.Map(app, embeddedWorkflowMode: true);
+                WorkflowBoardSnapshotEndpoints.Map(app);
                 StudioMemberEndpoints.Map(app);
+                StudioProvisioningEndpoints.Map(app);
                 StudioTeamEndpoints.Map(app);
-                StudioWorkflowDraftMemberRepairEndpoints.Map(app);
+                NyxIdLoginFinalizationEndpoints.Map(app);
                 Controllers.ChatHistoryEndpoints.MapChatHistoryEndpoints(app);
                 app.MapExplorerEndpoints();
             });

@@ -52,6 +52,7 @@ import type {
 } from '@/shared/models/services';
 import {
   AevatarContextDrawer,
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
 } from '@/shared/ui/aevatarPageShells';
 import {
@@ -60,6 +61,7 @@ import {
   aevatarMonoFontFamily,
   truncateMiddle,
 } from '@/shared/ui/compactText';
+import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 import InventoryReadinessState from '@/shared/ui/InventoryReadinessState';
 import {
   aevatarDrawerBodyStyle,
@@ -171,6 +173,42 @@ type DeploymentTrafficRow = {
 
 const defaultScopeServiceAppId = 'default';
 const defaultScopeServiceNamespace = 'default';
+
+function formatVersionVisibilityLabel(value: string | null | undefined): string {
+  return value?.trim()
+    ? t("pages.deployments.index.version.ready", "Version ready")
+    : t("pages.deployments.index.no.version.information.yet", "No version information yet");
+}
+
+function formatDeploymentVisibilityLabel(value: string | null | undefined): string {
+  return value?.trim()
+    ? t("pages.deployments.index.deployment.attached", "Deployment attached")
+    : t("pages.deployments.index.not.bound", "Not bound");
+}
+
+function formatActorVisibilityLabel(value: string | null | undefined): string {
+  return value?.trim()
+    ? t("pages.deployments.index.actor.available", "Actor available")
+    : t("pages.deployments.index.none.yet", "None yet");
+}
+
+function formatTrafficTargetLabel(index: number): string {
+  return t("pages.deployments.index.traffic.target.number", "Target {value1}", {
+    value1: index + 1,
+  });
+}
+
+function formatTrafficTargetSummary(
+  target:
+    | ServiceServingTargetSnapshot
+    | ServiceTrafficEndpointSnapshot['targets'][number],
+): string {
+  return t("pages.deployments.index.copy.2", "{value1}% · {value2} · {value3}", {
+    value1: target.allocationWeight,
+    value2: formatAevatarStatusLabel(target.servingState || 'unknown'),
+    value3: formatActorVisibilityLabel(target.primaryActorId),
+  });
+}
 const tableHeaderCellStyle: React.CSSProperties = {
   background: 'var(--ant-color-fill-alter)',
   borderBottom: '1px solid var(--ant-color-border-secondary)',
@@ -193,6 +231,15 @@ const compactHintTagStyle: React.CSSProperties = {
   fontWeight: 600,
   marginInlineEnd: 0,
 };
+const platformBreadcrumbItems: AevatarBreadcrumbItem[] = [
+  {
+    title: 'Platform',
+  },
+  {
+    current: true,
+    title: 'Deployments',
+  },
+];
 const compactMonoValueStyle: React.CSSProperties = {
   color: 'var(--ant-color-text-secondary)',
   fontFamily: aevatarMonoFontFamily,
@@ -361,7 +408,7 @@ function buildRevisionSummary(
   return [
     {
       label: t("pages.deployments.index.version.4", "Version"),
-      value: revision.revisionId,
+      value: formatVersionVisibilityLabel(revision.revisionId),
     },
     {
       label: t("pages.deployments.index.state.5", "state"),
@@ -373,7 +420,9 @@ function buildRevisionSummary(
     },
     {
       label: t("pages.deployments.index.products.2", "Products"),
-      value: revision.artifactHash || 'n/a',
+      value: revision.artifactHash
+        ? t("pages.deployments.index.artifact.ready", "Artifact ready")
+        : 'n/a',
     },
     {
       label: t("pages.deployments.index.ready.to.complete.2", "Ready to complete"),
@@ -410,7 +459,12 @@ function buildTrafficRows(
     key: endpoint.endpointId,
     splitSummary:
       endpoint.targets
-        .map((target) => `${target.revisionId} ${target.allocationWeight}%`)
+        .map((target) =>
+          t("pages.deployments.index.traffic.target.summary", "{value1}% {value2}", {
+            value1: target.allocationWeight,
+            value2: formatAevatarStatusLabel(target.servingState || 'unknown'),
+          }),
+        )
         .join(' · ') || t("pages.deployments.index.no.traffic.target.yet.2", "No traffic target yet"),
     targetCount: endpoint.targets.length,
     targets: endpoint.targets,
@@ -433,9 +487,10 @@ function describeTargets(
   return targets
     .map(
       (target) =>
-        `${target.revisionId} · ${target.allocationWeight}% · ${formatAevatarStatusLabel(
-          target.servingState || 'unknown',
-        )}`,
+        t("pages.deployments.index.traffic.target.summary", "{value1}% {value2}", {
+          value1: target.allocationWeight,
+          value2: formatAevatarStatusLabel(target.servingState || 'unknown'),
+        }),
     )
     .join(' / ');
 }
@@ -854,7 +909,7 @@ const RevisionSummaryCard: React.FC<{
         <>
           <Space wrap size={[8, 8]}>
             <DeploymentStatusTag status={revision.status} />
-            <CompactIdentifierTag value={revision.revisionId} />
+            <Tag>{formatVersionVisibilityLabel(revision.revisionId)}</Tag>
           </Space>
           <div
             style={{
@@ -915,20 +970,13 @@ const TargetGroupCard: React.FC<{
             }}
           >
             <Space wrap size={[8, 8]}>
-              <CompactIdentifierTag value={target.revisionId} />
-              <CompactIdentifierTag value={target.deploymentId} />
+              <Tag>{formatVersionVisibilityLabel(target.revisionId)}</Tag>
+              <Tag>{formatDeploymentVisibilityLabel(target.deploymentId)}</Tag>
               <DeploymentStatusTag status={target.servingState || 'unknown'} />
               <Tag>{target.allocationWeight}%</Tag>
             </Space>
             <div style={{ color: surfaceToken.colorTextSecondary }}>
-              {target.primaryActorId ? (
-                <CompactIdentifierText
-                  color="var(--ant-color-text-secondary)"
-                  value={target.primaryActorId}
-                />
-              ) : (
-                t("pages.deployments.index.no.actor.yet.2", "No actor yet")
-              )}{' '}
+              {formatActorVisibilityLabel(target.primaryActorId)}{' '}
               · {target.enabledEndpointIds.join(', ') || t("pages.deployments.index.all.entrances.5", "All entrances")}
             </div>
           </div>
@@ -1775,23 +1823,12 @@ const DeploymentsPage: React.FC = () => {
         title: 'Revision',
         render: (value: string, record) => (
           <Space orientation="vertical" size={4}>
-            <CompactIdentifierText
-              maxWidth={220}
-              singleLine
-              strong
-              value={value}
-            />
-            {record.deploymentId ? (
-              <CompactIdentifierText
-                color="var(--ant-color-text-secondary)"
-                maxWidth={220}
-                singleLine
-                value={record.deploymentId}
-              />
-            ) : (
-              <Typography.Text type="secondary">
-                {t("pages.deployments.index.unbound.deployment.2", "Unbound deployment")}</Typography.Text>
-            )}
+            <Typography.Text strong>
+              {formatVersionVisibilityLabel(value)}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {formatDeploymentVisibilityLabel(record.deploymentId)}
+            </Typography.Text>
           </Space>
         ),
       },
@@ -1800,11 +1837,7 @@ const DeploymentsPage: React.FC = () => {
         key: 'primaryActorId',
         title: t("pages.deployments.index.main.actor.6", "Main actor"),
         render: (value: string) =>
-          value ? (
-            <CompactIdentifierText maxWidth={160} singleLine value={value} />
-          ) : (
-            t("pages.deployments.index.none.yet.11", "None yet")
-          ),
+          formatActorVisibilityLabel(value),
       },
       {
         dataIndex: 'allocationWeight',
@@ -1935,18 +1968,12 @@ const DeploymentsPage: React.FC = () => {
         width: 220,
         render: (value: string, record) => (
           <Space orientation="vertical" size={2}>
-            <CompactIdentifierText
-              maxWidth={180}
-              singleLine
-              strong
-              value={value}
-            />
-            <CompactIdentifierText
-              color="var(--ant-color-text-secondary)"
-              maxWidth={180}
-              singleLine
-              value={record.revisionId}
-            />
+            <Typography.Text strong>
+              {formatDeploymentVisibilityLabel(value)}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {formatVersionVisibilityLabel(record.revisionId)}
+            </Typography.Text>
           </Space>
         ),
       },
@@ -1956,11 +1983,7 @@ const DeploymentsPage: React.FC = () => {
         title: t("pages.deployments.index.main.actor.7", "Main actor"),
         width: 150,
         render: (value: string) =>
-          value ? (
-            <CompactIdentifierText maxWidth={116} singleLine value={value} />
-          ) : (
-            t("pages.deployments.index.none.yet.12", "None yet")
-          ),
+          formatActorVisibilityLabel(value),
       },
       {
         dataIndex: 'status',
@@ -2088,7 +2111,7 @@ const DeploymentsPage: React.FC = () => {
 
   return (
     <ConsoleMenuPageShell
-      breadcrumb="Aevatar / Platform"
+      breadcrumbItems={platformBreadcrumbItems}
       description={t("pages.deployments.index.deployments.is.platform.release.2", "Deployments is Platform's release workbench, focusing on current serving, rollout progress and traffic distribution.")}
       title="Deployments"
     >
@@ -2295,17 +2318,11 @@ const DeploymentsPage: React.FC = () => {
                             <CompactLabelText
                               maxWidth={120}
                               strong
-                              value={service.displayName || service.serviceId}
+                              value={getUserFacingIdentifierLabel(
+                                service.displayName || service.serviceId,
+                                t("pages.deployments.index.service", "Service"),
+                              )}
                             />
-                            {service.displayName &&
-                            service.displayName !== service.serviceId ? (
-                              <AevatarCompactText
-                                maxWidth={120}
-                                monospace
-                                style={compactMonoValueStyle}
-                                value={service.serviceId}
-                              />
-                            ) : null}
                           </div>
                         </td>
                         <td style={tableCellStyle}>
@@ -2329,15 +2346,12 @@ const DeploymentsPage: React.FC = () => {
                         <td style={tableCellStyle}>
                           {service.activeServingRevisionId ||
                           service.defaultServingRevisionId ? (
-                            <CompactIdentifierText
-                              maxWidth={168}
-                              singleLine
-                              strong
-                              value={
+                            <Typography.Text strong>
+                              {formatVersionVisibilityLabel(
                                 service.activeServingRevisionId ||
-                                service.defaultServingRevisionId
-                              }
-                            />
+                                  service.defaultServingRevisionId,
+                              )}
+                            </Typography.Text>
                           ) : (
                             <Typography.Text
                               style={{
@@ -2350,11 +2364,9 @@ const DeploymentsPage: React.FC = () => {
                         </td>
                         <td style={tableCellStyle}>
                           {service.deploymentId ? (
-                            <CompactIdentifierTag
-                              color="blue"
-                              style={compactHintTagStyle}
-                              value={service.deploymentId}
-                            />
+                            <Tag color="blue" style={compactHintTagStyle}>
+                              {formatDeploymentVisibilityLabel(service.deploymentId)}
+                            </Tag>
                           ) : (
                             <Tag color="default" style={compactHintTagStyle}>
                               {t("pages.deployments.index.not.hung.serving.3", "Not hung serving")}</Tag>
@@ -2480,15 +2492,10 @@ const DeploymentsPage: React.FC = () => {
                     status={selectedService.deploymentStatus || 'pending'}
                   />
                   {focusDeployment?.deploymentId ? (
-                    <CompactIdentifierTag
-                      value={focusDeployment.deploymentId}
-                    />
+                    <Tag>{formatDeploymentVisibilityLabel(focusDeployment.deploymentId)}</Tag>
                   ) : null}
                   {rolloutQuery.data?.rolloutId ? (
-                    <CompactIdentifierTag
-                      color="blue"
-                      value={rolloutQuery.data.rolloutId}
-                    />
+                    <Tag color="blue">{t("pages.deployments.index.rollout.active", "Rollout active")}</Tag>
                   ) : null}
                   <Tag
                     color={
@@ -2509,43 +2516,25 @@ const DeploymentsPage: React.FC = () => {
                   <DetailFieldCard
                     label={t("pages.deployments.index.currently.serving.2", "currently serving")}
                     value={
-                      activeRevisionId ? (
-                        <CompactIdentifierText
-                          maxWidth="100%"
-                          singleLine
-                          value={activeRevisionId}
-                        />
-                      ) : (
-                        t("pages.deployments.index.no.serving.version.yet.2", "No serving version yet")
-                      )
+                      activeRevisionId
+                        ? formatVersionVisibilityLabel(activeRevisionId)
+                        : t("pages.deployments.index.no.serving.version.yet.2", "No serving version yet")
                     }
                   />
                   <DetailFieldCard
                     label={t("pages.deployments.index.current.deployment.4", "current deployment")}
                     value={
-                      focusDeployment?.deploymentId ? (
-                        <CompactIdentifierText
-                          maxWidth="100%"
-                          singleLine
-                          value={focusDeployment.deploymentId}
-                        />
-                      ) : (
-                        t("pages.deployments.index.not.hung.serving.4", "Not hung serving")
-                      )
+                      focusDeployment?.deploymentId
+                        ? formatDeploymentVisibilityLabel(focusDeployment.deploymentId)
+                        : t("pages.deployments.index.not.hung.serving.4", "Not hung serving")
                     }
                   />
                   <DetailFieldCard
                     label={t("pages.deployments.index.main.actor.8", "Main actor")}
                     value={
-                      selectedService.primaryActorId ? (
-                        <CompactIdentifierText
-                          maxWidth="100%"
-                          singleLine
-                          value={selectedService.primaryActorId}
-                        />
-                      ) : (
-                        t("pages.deployments.index.not.declared.2", "Not declared")
-                      )
+                      selectedService.primaryActorId
+                        ? formatActorVisibilityLabel(selectedService.primaryActorId)
+                        : t("pages.deployments.index.not.declared.2", "Not declared")
                     }
                   />
                   <DetailFieldCard
@@ -2635,7 +2624,7 @@ const DeploymentsPage: React.FC = () => {
                             </Tag>
                             {servingQuery.data?.activeRolloutId ? (
                               <Tag color="blue">
-                                {servingQuery.data.activeRolloutId}
+                                {t("pages.deployments.index.rollout.active", "Rollout active")}
                               </Tag>
                             ) : null}
                             <Tooltip title={servingEntryAvailability.reason}>
@@ -2739,9 +2728,6 @@ const DeploymentsPage: React.FC = () => {
                               <DeploymentStatusTag
                                 status={rolloutQuery.data.status}
                               />
-                              <CompactIdentifierTag
-                                value={rolloutQuery.data.rolloutId}
-                              />
                               <Button
                                 icon={<RollbackOutlined />}
                                 onClick={() => openDrawer('control')}
@@ -2761,8 +2747,11 @@ const DeploymentsPage: React.FC = () => {
                             <DetailFieldCard
                               label="Rollout"
                               value={
-                                rolloutQuery.data.displayName ||
-                                rolloutQuery.data.rolloutId
+                                getUserFacingIdentifierLabel(
+                                  rolloutQuery.data.displayName ||
+                                    rolloutQuery.data.rolloutId,
+                                  t("pages.deployments.index.rollout.active", "Rollout active"),
+                                )
                               }
                             />
                             <DetailFieldCard
@@ -2878,16 +2867,13 @@ const DeploymentsPage: React.FC = () => {
                 status={serviceDetailQuery.data?.deploymentStatus || 'pending'}
               />
               {rolloutQuery.data?.rolloutId ? (
-                <CompactIdentifierTag
-                  color="blue"
-                  value={rolloutQuery.data.rolloutId}
-                />
+                <Tag color="blue">{t("pages.deployments.index.rollout.active", "Rollout active")}</Tag>
               ) : null}
               {focusDeployment?.deploymentId ? (
-                <CompactIdentifierTag value={focusDeployment.deploymentId} />
+                <Tag>{formatDeploymentVisibilityLabel(focusDeployment.deploymentId)}</Tag>
               ) : null}
               {focusDeployment?.revisionId ? (
-                <CompactIdentifierTag value={focusDeployment.revisionId} />
+                <Tag>{formatVersionVisibilityLabel(focusDeployment.revisionId)}</Tag>
               ) : null}
             </Space>
           </div>
@@ -2921,9 +2907,10 @@ const DeploymentsPage: React.FC = () => {
                           <Select
                             options={(revisionsQuery.data?.revisions ?? []).map(
                               (revision) => ({
-                                label: t("pages.deployments.index.copy.3", "{value1} · {value2}", { value1: revision.revisionId, value2: formatAevatarStatusLabel(
-                                  revision.status,
-                                ) }),
+                                label: t("pages.deployments.index.copy.3", "{value1} · {value2}", {
+                                  value1: formatVersionVisibilityLabel(revision.revisionId),
+                                  value2: formatAevatarStatusLabel(revision.status),
+                                }),
                                 value: revision.revisionId,
                               }),
                             )}
@@ -3003,12 +2990,9 @@ const DeploymentsPage: React.FC = () => {
                           }}
                         >
                           <div>
-                            <CompactIdentifierText
-                              maxWidth={240}
-                              singleLine
-                              strong
-                              value={target.revisionId}
-                            />
+                            <Typography.Text strong>
+                              {formatVersionVisibilityLabel(target.revisionId)}
+                            </Typography.Text>
                             <Typography.Paragraph
                               style={{
                                 color: surfaceToken.colorTextSecondary,
@@ -3106,7 +3090,11 @@ const DeploymentsPage: React.FC = () => {
                     <MetricCard
                       label={t("pages.deployments.index.current.rollout.2", "current rollout")}
                       tone="warning"
-                      value={rolloutQuery.data?.rolloutId || t("pages.deployments.index.no.activity.yet.rollout.2", "No activity yet rollout")}
+                      value={
+                        rolloutQuery.data?.rolloutId
+                          ? t("pages.deployments.index.rollout.active", "Rollout active")
+                          : t("pages.deployments.index.no.activity.yet.rollout.2", "No activity yet rollout")
+                      }
                     />
                     <Input.TextArea
                       placeholder={t("pages.deployments.index.explain.the.reason.for.4", "Explain the reason for this pause, resume or rollback")}
@@ -3210,41 +3198,19 @@ const DeploymentsPage: React.FC = () => {
                   >
                     <DetailFieldCard
                       label="Revision"
-                      value={
-                        <CompactIdentifierText
-                          maxWidth="100%"
-                          singleLine
-                          value={selectedServingTarget.revisionId}
-                        />
-                      }
+                      value={formatVersionVisibilityLabel(selectedServingTarget.revisionId)}
                     />
                     <DetailFieldCard
                       label="Deployment"
                       value={
-                        selectedServingTarget.deploymentId ? (
-                          <CompactIdentifierText
-                            maxWidth="100%"
-                            singleLine
-                            value={selectedServingTarget.deploymentId}
-                          />
-                        ) : (
-                          t("pages.deployments.index.not.bound.2", "Not bound")
-                        )
+                        selectedServingTarget.deploymentId
+                          ? formatDeploymentVisibilityLabel(selectedServingTarget.deploymentId)
+                          : t("pages.deployments.index.not.bound.2", "Not bound")
                       }
                     />
                     <DetailFieldCard
                       label={t("pages.deployments.index.main.actor.9", "Main actor")}
-                      value={
-                        selectedServingTarget.primaryActorId ? (
-                          <CompactIdentifierText
-                            maxWidth="100%"
-                            singleLine
-                            value={selectedServingTarget.primaryActorId}
-                          />
-                        ) : (
-                          t("pages.deployments.index.none.yet.14", "None yet")
-                        )
-                      }
+                      value={formatActorVisibilityLabel(selectedServingTarget.primaryActorId)}
                     />
                     <DetailFieldCard
                       label={t("pages.deployments.index.serving.status.6", "serving status")}
@@ -3308,13 +3274,7 @@ const DeploymentsPage: React.FC = () => {
                   >
                     <DetailFieldCard
                       label="Endpoint"
-                      value={
-                        <CompactIdentifierText
-                          maxWidth="100%"
-                          singleLine
-                          value={selectedTrafficRow.endpointId}
-                        />
-                      }
+                      value={t("pages.deployments.index.endpoint.ready", "Endpoint ready")}
                     />
                     <DetailFieldCard
                       label={t("pages.deployments.index.number.of.targets.4", "number of targets")}
@@ -3326,7 +3286,11 @@ const DeploymentsPage: React.FC = () => {
                     />
                     <DetailFieldCard
                       label={t("pages.deployments.index.activity.rollout.2", "Activity rollout")}
-                      value={trafficQuery.data?.activeRolloutId || t("pages.deployments.index.none.yet.15", "None yet")}
+                      value={
+                        trafficQuery.data?.activeRolloutId
+                          ? t("pages.deployments.index.rollout.active", "Rollout active")
+                          : t("pages.deployments.index.none.yet.15", "None yet")
+                      }
                     />
                   </div>
                 </DrawerSection>
@@ -3338,11 +3302,11 @@ const DeploymentsPage: React.FC = () => {
                       gap: 12,
                     }}
                   >
-                    {selectedTrafficRow.targets.map((target) => (
+                    {selectedTrafficRow.targets.map((target, index) => (
                       <DetailFieldCard
                         key={`${target.deploymentId}-${target.revisionId}`}
-                        label={`${target.revisionId} · ${target.deploymentId}`}
-                        value={t("pages.deployments.index.copy.2", "{value1}% · {value2} · {value3}", { value1: target.allocationWeight, value2: formatAevatarStatusLabel(target.servingState || 'unknown'), value3: target.primaryActorId || t("pages.deployments.index.actor", "No Actor yet") })}
+                        label={formatTrafficTargetLabel(index)}
+                        value={formatTrafficTargetSummary(target)}
                       />
                     ))}
                   </div>
@@ -3370,23 +3334,11 @@ const DeploymentsPage: React.FC = () => {
                   >
                     <DetailFieldCard
                       label="Deployment"
-                      value={
-                        <CompactIdentifierText
-                          maxWidth="100%"
-                          singleLine
-                          value={inspectedDeployment.deploymentId}
-                        />
-                      }
+                      value={formatDeploymentVisibilityLabel(inspectedDeployment.deploymentId)}
                     />
                     <DetailFieldCard
                       label="Revision"
-                      value={
-                        <CompactIdentifierText
-                          maxWidth="100%"
-                          singleLine
-                          value={inspectedDeployment.revisionId}
-                        />
-                      }
+                      value={formatVersionVisibilityLabel(inspectedDeployment.revisionId)}
                     />
                     <DetailFieldCard
                       label={t("pages.deployments.index.state.8", "state")}
@@ -3396,17 +3348,7 @@ const DeploymentsPage: React.FC = () => {
                     />
                     <DetailFieldCard
                       label={t("pages.deployments.index.main.actor.10", "Main actor")}
-                      value={
-                        inspectedDeployment.primaryActorId ? (
-                          <CompactIdentifierText
-                            maxWidth="100%"
-                            singleLine
-                            value={inspectedDeployment.primaryActorId}
-                          />
-                        ) : (
-                          t("pages.deployments.index.none.yet.16", "None yet")
-                        )
-                      }
+                      value={formatActorVisibilityLabel(inspectedDeployment.primaryActorId)}
                     />
                     <DetailFieldCard
                       label={t("pages.deployments.index.activation.time.4", "activation time")}

@@ -135,6 +135,50 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRefreshBinding_ReplacesActiveBinding()
+    {
+        var subject = SampleSubject();
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_first",
+        });
+
+        await _agent.HandleRefreshBinding(new RefreshBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_second",
+            Reason = "nyxid_login_refresh",
+        });
+
+        _agent.State.BindingId.Should().Be("bnd_second");
+        _agent.State.BoundAt.Should().NotBeNull();
+        _agent.State.RevokedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRefreshBinding_IsNoOpWhenBindingIdIsUnchanged()
+    {
+        var subject = SampleSubject();
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_first",
+        });
+        var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRefreshBinding(new RefreshBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_first",
+            Reason = "nyxid_login_refresh",
+        });
+
+        _agent.State.BindingId.Should().Be("bnd_first");
+        _agent.EventSourcing!.CurrentVersion.Should().Be(afterFirstVersion);
+    }
+
+    [Fact]
     public async Task HandleRevokeBinding_IgnoresNullExternalSubject()
     {
         // Seed an existing binding first so we can verify revoke is a no-op.

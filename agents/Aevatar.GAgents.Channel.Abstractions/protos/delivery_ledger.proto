@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.abstractions;
+
+option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
+
+import "chat_activity.proto";
+
+enum DeliveryKind {
+  DELIVERY_KIND_UNSPECIFIED = 0;
+  DELIVERY_KIND_TEXT_MESSAGE = 1;
+  DELIVERY_KIND_STREAMING_CARD = 2;
+  DELIVERY_KIND_INTERACTIVE_CARD = 3;
+  DELIVERY_KIND_FAILURE_NOTIFICATION = 4;
+}
+
+enum DeliveryStatus {
+  DELIVERY_STATUS_UNSPECIFIED = 0;
+  DELIVERY_STATUS_SUCCEEDED = 1;
+  DELIVERY_STATUS_FAILED_PRE_SEND = 2;
+  DELIVERY_STATUS_FAILED_POST_SEND = 3;
+}
+
+message DeliveryTarget {
+  ChannelId channel = 1;
+  string conversation_key = 2;
+  string platform = 3;
+  string receive_id = 4;
+  string receive_id_type = 5;
+  string conversation_id = 6;
+  string reply_message_id = 7;
+}
+
+message DeliveryProducedEvent {
+  string run_id = 1;
+  string turn_id = 2;
+  DeliveryKind delivery_kind = 3;
+  DeliveryTarget target = 4;
+  DeliveryStatus status = 5;
+  string lark_message_id = 6;
+  string card_id = 7;
+  string request_id = 8;
+  string source_event_id = 9;
+  int64 produced_at_version = 10;
+}
+
+message DeliveryLedgerEntry {
+  DeliveryKind delivery_kind = 1;
+  DeliveryStatus status = 2;
+  DeliveryTarget target = 3;
+  string lark_message_id = 4;
+  string card_id = 5;
+  string request_id = 6;
+  string source_event_id = 7;
+  int64 produced_at_version = 8;
+}

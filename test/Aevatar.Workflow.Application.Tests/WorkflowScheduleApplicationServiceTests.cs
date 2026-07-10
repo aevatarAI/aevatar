@@ -20,7 +20,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task CreateAsync_ShouldNormalizeConfigurationAndDispatchConfigure()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
         var preparation = new FakeScheduledDispatchPreparationService();
         var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort(), preparation);
 
@@ -58,6 +61,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         });
         configured.Configuration.Target.ServiceInvocation.EndpointId.Should().Be("chat");
         configured.Configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
+        configured.Configuration.Target.ServiceInvocation.Auth.Should().BeNull();
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
@@ -69,6 +73,214 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.Dispatch.Descriptor.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
         preparation.Configurations.Should().ContainSingle()
             .Which.ScheduleId.Should().Be("daily-report");
+    }
+
+    [Fact]
+    public async Task WorkflowScheduleCommandPort_EnsureAsync_ShouldMapWorkflowScheduleAndDispatchEnsure()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort();
+        var queryPort = new FakeWorkflowScheduleQueryPort();
+        var scheduledDispatches = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new FakeScheduledDispatchPreparationService());
+        var port = new WorkflowScheduleCommandPort(scheduledDispatches);
+
+        var receipt = await port.EnsureAsync(new WorkflowScheduleConfiguration(
+            ScheduleId: " daily-report ",
+            DisplayName: " Daily report ",
+            WorkflowName: " direct ",
+            Prompt: " summarize status ",
+            CronExpression: "*/15 * * * *",
+            Timezone: " UTC ",
+            Enabled: true,
+            Headers: new Dictionary<string, string> { [" trace "] = " enabled " },
+            ScopeId: " scope-1 "));
+
+        receipt.ScheduleId.Should().Be("daily-report");
+        actorPort.EnsureScheduleIds.Should().Equal("daily-report");
+        actorPort.Ensured.Should().ContainSingle();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        var ensured = actorPort.Ensured.Single();
+        ensured.Configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        ensured.Configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        ensured.Configuration.Target.ServiceInvocation.Should().NotBeNull();
+        var invocation = ensured.Configuration.Target.ServiceInvocation!;
+        invocation.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-1",
+            AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+            Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+            ServiceId = "direct",
+        });
+        invocation.EndpointId.Should().Be("chat");
+        invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
+        invocation.Payload.Unpack<ChatRequestEvent>().Metadata.Should().Contain("trace", "enabled");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowScheduleAuthToServiceInvocationAuth()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(new WorkflowScheduleConfiguration(
+            ScheduleId: "auth-schedule",
+            DisplayName: "Auth schedule",
+            WorkflowName: "direct",
+            Prompt: "summarize status",
+            CronExpression: "*/15 * * * *",
+            Timezone: "UTC",
+            Enabled: true,
+            Headers: new Dictionary<string, string>(),
+            ScopeId: "scope-1",
+            Auth: new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef(" lark ", " tenant-1 ", " ou-user-1 "),
+                " proxy "))));
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
+        invocation.Auth.SenderNyxId!.Subject.Platform.Should().Be("lark");
+        invocation.Auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
+        invocation.Auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
+        invocation.Auth.SenderNyxId.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldMapTenantlessWorkflowScheduleAuthToEmptyTenant()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef("lark", " ", "ou-user-1"),
+                "proxy")),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth!.SenderNyxId!.Subject.Tenant.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldMapWorkflowScheduleScopeOwnerAuthToServiceInvocationAuth()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+
+        await service.CreateAsync(CreateConfiguration("owner-auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " owner-proxy ",
+                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+        });
+
+        var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithBothNyxIdSources()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                new WorkflowScheduleNyxIdCredentialSource(
+                    new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                    "proxy"),
+                new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    "owner-proxy",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Exactly one workflow schedule NyxID credential source*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleScopeOwnerAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(
+                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                    " ",
+                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Scope*required*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectEmptyWorkflowScheduleAuth()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithoutSubject()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(null!, "proxy")),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*subject is required*");
+    }
+
+    [Theory]
+    [InlineData("", "tenant-1", "ou-user-1", "proxy")]
+    [InlineData("lark", "tenant-1", "", "proxy")]
+    [InlineData("lark", "tenant-1", "ou-user-1", "")]
+    public async Task CreateAsync_ShouldRejectInvalidWorkflowScheduleAuth(
+        string platform,
+        string tenant,
+        string externalUserId,
+        string scope)
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
+        {
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef(platform, tenant, externalUserId),
+                scope)),
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
     }
 
     [Fact]
@@ -100,7 +312,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var act = () => service.CreateAsync(CreateConfiguration(scheduleId));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*letters, digits, '.', '_', ':', and '-'*");
+            .WithMessage("*letters, digits, '.', '_', and '-'*");
     }
 
     [Fact]
@@ -204,6 +416,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     {
         var actorPort = new FakeWorkflowScheduleActorPort
         {
+            ResolveActorId = string.Empty,
             AdmissionFactory = (actorId, envelope) => new DispatchAdmission(
                 Accepted: false,
                 CommandId: envelope.Id,
@@ -501,6 +714,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var detail = await service.GetAsync(" schedule-1 ");
 
         detail.Should().NotBeNull();
+        detail!.Schedule.Prompt.Should().Be("saved prompt");
         queryPort.GetScheduleIds.Should().Equal("schedule-1");
     }
 
@@ -537,8 +751,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var result = await service.ListAsync(25, "cursor", includeTotalCount: true);
 
-        result.Items.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("workflow-1");
+        var summary = result.Items.Should().ContainSingle().Subject;
+        summary.ScheduleId.Should().Be("workflow-1");
+        summary.Prompt.Should().Be("saved prompt");
         result.NextCursor.Should().Be("next-workflow");
         result.TotalCount.Should().Be(1);
         queryPort.LastQuery.Should().Be(new ScheduledDispatchListQuery(
@@ -582,7 +797,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
     [Fact]
     public async Task CreateAsync_ShouldKeepHeadersAsDispatchExtensionsOnly()
     {
-        var actorPort = new FakeWorkflowScheduleActorPort();
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
         var preparation = new FakeScheduledDispatchPreparationService();
         var service = CreateService(actorPort, new FakeWorkflowScheduleQueryPort(), preparation);
 
@@ -617,8 +835,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public List<string> ResolveScheduleIds { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Created { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Updated { get; } = [];
+        public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Ensured { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
+        public List<(string ActorId, string Reason)> Deleted { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNowRequests { get; } = [];
         public string? ResolveActorId { get; set; }
         public Func<string, EventEnvelope, DispatchAdmission> AdmissionFactory { get; set; } =
@@ -656,6 +876,16 @@ public sealed class WorkflowScheduleApplicationServiceTests
             return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
         }
 
+        public Task<DispatchAdmission> DispatchEnsureAsync(
+            string actorId,
+            ScheduledDispatchConfiguration configuration,
+            PreparedScheduledDispatchTarget dispatch,
+            CancellationToken ct = default)
+        {
+            Ensured.Add((actorId, configuration, dispatch));
+            return Task.FromResult(AdmissionFactory(actorId, dispatch.TriggerEnvelope));
+        }
+
         public Task<DispatchAdmission> DispatchEnableAsync(
             string actorId,
             string reason,
@@ -671,6 +901,15 @@ public sealed class WorkflowScheduleApplicationServiceTests
             CancellationToken ct = default)
         {
             Disabled.Add((actorId, reason));
+            return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
+        }
+
+        public Task<DispatchAdmission> DispatchDeleteAsync(
+            string actorId,
+            string reason,
+            CancellationToken ct = default)
+        {
+            Deleted.Add((actorId, reason));
             return Task.FromResult(AdmissionFactory(actorId, CreateAdmissionEnvelope()));
         }
 
@@ -864,6 +1103,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 FailureCount: 0,
                 Headers: new Dictionary<string, string>(),
                 ScheduleActorId: string.Empty,
+                Prompt: "saved prompt",
                 ScheduleKind: ScheduledDispatchScheduleKind.Workflow),
             []);
 }

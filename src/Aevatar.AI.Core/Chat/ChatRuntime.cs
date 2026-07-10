@@ -4,9 +4,12 @@
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Tools;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -47,6 +50,7 @@ public sealed class ChatRuntime
     private readonly string? _agentName;
     private readonly ContextCompressionConfig _compressionConfig;
     private readonly bool _suppressToolCallRoundText;
+    private readonly ILogger _logger;
 
     public ChatRuntime(
         Func<ILLMProvider> providerFactory,
@@ -59,7 +63,8 @@ public sealed class ChatRuntime
         string? agentId = null,
         string? agentName = null,
         ContextCompressionConfig? compressionConfig = null,
-        bool suppressToolCallRoundText = false)
+        bool suppressToolCallRoundText = false,
+        ILogger? logger = null)
     {
         _providerFactory = providerFactory;
         _history = history;
@@ -72,6 +77,7 @@ public sealed class ChatRuntime
         _agentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName;
         _compressionConfig = compressionConfig ?? new ContextCompressionConfig();
         _suppressToolCallRoundText = suppressToolCallRoundText;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     public ChatRuntimeStepExecutor CreateStepExecutor() =>
@@ -311,6 +317,7 @@ public sealed class ChatRuntime
         var lengthRecoveryCount = 0;
         var hasStreamedTextContent = false;
         var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest);
+        var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
 
         if (skillRecovery.RequiresInitialSearch)
         {
@@ -491,7 +498,10 @@ public sealed class ChatRuntime
                             textToolExecutor.AddTool(textToolState, tc);
                         await foreach (var result in textToolExecutor.GetRemainingResultsAsync(textToolState, runToken))
                         {
-                            var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                            executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, parsed.ToolCalls));
+                            if (result.Receipt is not null)
+                                yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
+                            var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                             messages.Add(toolMsg);
                             pendingHistoryMessages.Add(toolMsg);
                         }
@@ -568,7 +578,10 @@ public sealed class ChatRuntime
 
             await foreach (var result in streamingExecutor.GetRemainingResultsAsync(streamingToolState, runToken))
             {
-                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, roundResult.ToolCalls));
+                if (result.Receipt is not null)
+                    yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
+                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
             }
@@ -584,7 +597,7 @@ public sealed class ChatRuntime
 
             var finalRequest = new LLMRequest
             {
-                Messages = [..messages],
+                Messages = BuildFinalNoToolsMessages(messages, executedToolOutcomes, toolReceipts: null),
                 RequestId = baseRequest.RequestId,
                 Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
                 CallerContext = baseRequest.CallerContext,
@@ -627,14 +640,17 @@ public sealed class ChatRuntime
                     finalToolExecutor.AddTool(finalToolState, tc);
                 await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(finalToolState, runToken))
                 {
-                    var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                    executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, finalParsed.ToolCalls));
+                    if (result.Receipt is not null)
+                        yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
+                    var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
                     messages.Add(toolMsg);
                     pendingHistoryMessages.Add(toolMsg);
                 }
 
                 var summaryRequest = new LLMRequest
                 {
-                    Messages = [..messages],
+                    Messages = BuildFinalNoToolsMessages(messages, executedToolOutcomes, toolReceipts: null),
                     RequestId = finalRequest.RequestId,
                     Metadata = finalRequest.Metadata,
                     CallerContext = finalRequest.CallerContext,
@@ -666,8 +682,7 @@ public sealed class ChatRuntime
         }
 
         runContext.Result = finalContent;
-        foreach (var msg in pendingHistoryMessages)
-            _history.Add(msg);
+        _history.AddRange(pendingHistoryMessages);
 
         await RunStopHookAsync(runContext.Result, pendingHistoryMessages, runToken);
 
@@ -685,6 +700,34 @@ public sealed class ChatRuntime
                 requestMetadata: baseRequest.Metadata,
                 toolContext: toolContext ?? AgentToolExecutionContextMapper.FromRequest(baseRequest)));
 
+    private List<ChatMessage> BuildFinalNoToolsMessages(
+        IReadOnlyList<ChatMessage> messages,
+        IReadOnlyList<ToolOutcomeReplyFact> toolOutcomes,
+        IReadOnlyList<AgentToolReceipt>? toolReceipts)
+    {
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(toolOutcomes, toolReceipts);
+        if (constraints.Count == 0)
+            return [.. messages];
+
+        return [.. messages, .. constraints];
+    }
+
+    private ToolOutcomeReplyFact BuildToolOutcomeReplyFact(
+        ToolExecutionResult result,
+        IReadOnlyList<ToolCall>? toolCalls)
+    {
+        var matchingCall = toolCalls?.FirstOrDefault(call =>
+            string.Equals(call.Id, result.CallId, StringComparison.Ordinal) ||
+            string.Equals(call.Name, result.ToolName, StringComparison.OrdinalIgnoreCase));
+        var tool = _toolLoop.Tools.Get(result.ToolName)
+                   ?? (matchingCall is null ? null : _toolLoop.Tools.Get(matchingCall.Name));
+        return new ToolOutcomeReplyFact(
+            tool,
+            matchingCall?.ArgumentsJson,
+            Succeeded: !result.IsError,
+            result.Receipt?.Clone());
+    }
+
     private async Task RunStopHookAsync(
         string? finalContent,
         IReadOnlyList<ChatMessage> pendingHistoryMessages,
@@ -698,7 +741,13 @@ public sealed class ChatRuntime
         stopCtx.Items["total_rounds"] = pendingHistoryMessages
             .Count(m => m.Role == "assistant" && m.ToolCalls is { Count: > 0 });
         try { await _hooks.RunStopAsync(stopCtx, ct); }
-        catch { /* best-effort */ }
+        catch (Exception hookException)
+        {
+            _logger.LogWarning(
+                hookException,
+                "Stop hook failed for agent {AgentId}; continuing because hooks are best-effort.",
+                _agentId);
+        }
     }
 
     private async Task RunStopFailureHookAsync(Exception ex)
@@ -711,7 +760,13 @@ public sealed class ChatRuntime
         failCtx.Items["error_message"] = ex.Message;
         failCtx.Items["error_phase"] = "streaming_llm_or_tool_execution";
         try { await _hooks.RunStopFailureAsync(failCtx, CancellationToken.None); }
-        catch { /* best-effort */ }
+        catch (Exception hookException)
+        {
+            _logger.LogWarning(
+                hookException,
+                "Stop-failure hook failed for agent {AgentId}; continuing because hooks are best-effort.",
+                _agentId);
+        }
     }
 
     private async IAsyncEnumerable<LLMStreamChunk> StreamLlmRoundAsync(
@@ -921,7 +976,7 @@ public sealed class ChatRuntime
         var messages = new List<ChatMessage>();
         if (!string.IsNullOrEmpty(systemPrompt))
             messages.Add(ChatMessage.System(systemPrompt));
-        messages.AddRange(_history.Messages);
+        messages.AddRange(ChatMessageToolCallTranscript.WithoutInvalidToolCallPairs(_history.Messages));
         messages.Add(pendingUserMessage);
         return messages;
     }
@@ -957,12 +1012,26 @@ public sealed class ChatRuntime
             ToolContext = effectiveToolContext,
             RoutingContext = effectiveLlmControl?.ToRoutingContext(baseRequest.RoutingContext) ?? baseRequest.RoutingContext,
             LlmControl = effectiveLlmControl,
-            Tools = baseRequest.Tools,
+            Tools = FilterVisibleTools(baseRequest.Tools, effectiveToolContext.ToolVisibility),
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
             ResponseFormat = baseRequest.ResponseFormat,
         };
+    }
+
+    private static IReadOnlyList<IAgentTool>? FilterVisibleTools(
+        IReadOnlyList<IAgentTool>? tools,
+        AgentToolVisibilityScope visibility)
+    {
+        if (tools is not { Count: > 0 })
+            return null;
+
+        if (!visibility.IsRestricted)
+            return tools;
+
+        var visibleTools = tools.Where(tool => visibility.Allows(tool.Name)).ToList();
+        return visibleTools.Count > 0 ? visibleTools : null;
     }
 
     private static IReadOnlyDictionary<string, string>? MergeMetadata(
@@ -1032,7 +1101,8 @@ public sealed class ChatRuntime
             chunk.DeltaContentPart == null &&
             normalizedToolCall == null &&
             !chunk.IsLast &&
-            chunk.Usage == null)
+            chunk.Usage == null &&
+            chunk.ToolReceipt == null)
         {
             return null;
         }
@@ -1045,6 +1115,7 @@ public sealed class ChatRuntime
             DeltaToolCall = normalizedToolCall,
             Usage = chunk.Usage,
             IsLast = chunk.IsLast,
+            ToolReceipt = chunk.ToolReceipt?.Clone(),
             // Field-level patch (ADR-0021 §6 / canon §8): forward FinishReason so
             // the actor-edge closeout in ConversationReplyGenerator can observe
             // it. ChatRuntime itself remains transitional per aevatar#596 Phase A;

@@ -25,7 +25,9 @@ public sealed record WorkflowDefinitionBinding(
     string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
-    string ScopeId = "");
+    string ScopeId = "",
+    string RunOrigin = "",
+    string ScheduleId = "");
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
@@ -80,6 +82,60 @@ public sealed record WorkflowRunBindingQuery(
     IReadOnlyList<string> DefinitionActorIds,
     int Take = 50);
 
+public sealed record WorkflowRunForkSeedView(
+    string SourceRunId,
+    string Status,
+    string WorkflowYaml,
+    IReadOnlyDictionary<string, string> InlineWorkflowYamls,
+    IReadOnlyDictionary<string, string> Variables,
+    IReadOnlyList<string> CompletedStepIds,
+    string LastFailedStepId,
+    string FinalError,
+    string ScopeId = "",
+    IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null)
+{
+    public WorkflowRunForkSeedView()
+        : this(
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            [],
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal))
+    {
+    }
+}
+
+public sealed record WorkflowStepIdempotencyView(
+    string LogicalRunId,
+    string StepId,
+    int LogicalAttempt,
+    string IdempotencyKey)
+{
+    public WorkflowStepIdempotencyView()
+        : this(string.Empty, string.Empty, 0, string.Empty)
+    {
+    }
+}
+
+public sealed record WorkflowExternalApprovalContinuation(
+    string ActorId,
+    string RunId,
+    string StepId,
+    string SignalName,
+    string SourceId,
+    string ExternalIdKind,
+    string ExternalId,
+    string CallbackIdempotencyKey,
+    string RequestId,
+    long SourceVersion,
+    string SourceEventId,
+    DateTimeOffset UpdatedAt);
+
 /// <summary>
 /// Narrow read contract for resolving workflow actor bindings without exposing raw actor state.
 /// </summary>
@@ -100,6 +156,35 @@ public interface IWorkflowRunBindingReader
 
     Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
         WorkflowRunBindingQuery query,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowRunForkSeedQueryPort
+{
+    Task<WorkflowRunForkSeedView?> GetForkSeedAsync(
+        string runId,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowExternalApprovalContinuationLookupPort
+{
+    Task<WorkflowExternalApprovalContinuation?> FindActiveAsync(
+        string sourceId,
+        string externalIdKind,
+        string externalId,
+        CancellationToken ct = default);
+}
+
+public interface IWorkflowWebhookReplayAdmissionPort
+{
+    bool IsAvailable { get; }
+
+    ValueTask<WorkflowWebhookReplayAdmission> AdmitAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
+        CancellationToken ct = default);
+
+    ValueTask ReleaseAsync(
+        WorkflowWebhookReplayAdmissionRequest request,
         CancellationToken ct = default);
 }
 

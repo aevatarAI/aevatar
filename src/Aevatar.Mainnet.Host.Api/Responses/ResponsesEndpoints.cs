@@ -86,15 +86,6 @@ internal static partial class ResponsesApiEndpoints
             return Results.Empty;
         }
 
-        if (result.Accepted is not null)
-        {
-            return Results.Json(
-                BuildAcceptedResponse(
-                    result.Accepted.Normalized,
-                    result.Accepted.CreatedAt),
-                statusCode: StatusCodes.Status200OK);
-        }
-
         if (result.Completed is not null)
         {
             return Results.Json(
@@ -224,21 +215,6 @@ internal static partial class ResponsesApiEndpoints
             return;
         }
 
-        if (completion.Accepted is not null)
-        {
-            await WriteSseFrameAsync(
-                response,
-                "response.in_progress",
-                new
-                {
-                    type = "response.in_progress",
-                    response = BuildAcceptedResponse(normalized, createdAt),
-                    sequence_number = ++sequenceNumber,
-                },
-                CancellationToken.None);
-            return;
-        }
-
         var sessionCompletion = completion.Completion!;
         var completedText = sessionCompletion.OutputText;
         await WriteSseFrameAsync(
@@ -331,32 +307,6 @@ internal static partial class ResponsesApiEndpoints
             MaxOutputTokens = normalized.MaxOutputTokens,
             Model = normalized.Model,
             Output = [],
-            PreviousResponseId = normalized.PreviousResponseId,
-            ParallelToolCalls = true,
-            Reasoning = new ResponsesReasoningSettings(),
-            Store = false,
-            Temperature = normalized.Temperature,
-            ToolChoice = "auto",
-            Tools = [],
-            Truncation = "disabled",
-            Usage = null,
-            Metadata = new Dictionary<string, string>(StringComparer.Ordinal),
-        };
-    }
-
-    private static ResponsesResponseSnapshot BuildAcceptedResponse(
-        NormalizedResponsesRequest normalized,
-        long createdAt)
-    {
-        return new ResponsesResponseSnapshot
-        {
-            Id = normalized.ResponseId,
-            CreatedAt = createdAt,
-            Status = "in_progress",
-            Input = [BuildInputMessage(normalized.Prompt)],
-            MaxOutputTokens = normalized.MaxOutputTokens,
-            Model = normalized.Model,
-            Output = [BuildOutputMessage(normalized.MessageItemId, "in_progress", text: null)],
             PreviousResponseId = normalized.PreviousResponseId,
             ParallelToolCalls = true,
             Reasoning = new ResponsesReasoningSettings(),
@@ -599,17 +549,14 @@ internal static partial class ResponsesApiEndpoints
     internal static async Task<ChatRouteDecision> ResolveResponsesChatRouteAsync(
         IChatRoutePolicyQueryPort queryPort,
         ChatRouteResolver resolver,
-        ResponsesCallerScope callerScope,
-        string model,
-        ToolMode toolMode,
-        string contentHint,
+        ResponsesChatRouteDecisionRequest request,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(queryPort);
         ArgumentNullException.ThrowIfNull(resolver);
-        ArgumentNullException.ThrowIfNull(callerScope);
+        ArgumentNullException.ThrowIfNull(request);
 
-        var ownerScope = OwnerScope.ForNyxIdNative(callerScope.ScopeId);
+        var ownerScope = OwnerScope.ForNyxIdNative(request.CallerScope.ScopeId);
         var snapshot = await queryPort.LookupForCallerAsync(ownerScope, ct);
         return resolver.Resolve(snapshot, new ChatRouteInput
         {
@@ -622,10 +569,10 @@ internal static partial class ResponsesApiEndpoints
                 SenderId = ownerScope.SenderId,
             },
             Channel = string.Empty,
-            CommandName = string.Empty,
-            ContentHint = contentHint,
-            ToolMode = toolMode,
-            Model = model,
+            CommandName = request.CommandName,
+            ContentHint = request.ContentHint,
+            ToolMode = request.ToolMode,
+            Model = request.Model,
         });
     }
 
@@ -635,34 +582,6 @@ internal static partial class ResponsesApiEndpoints
             return ToolMode.Inline;
         return declaredToolCount > 0 ? ToolMode.Declared : ToolMode.None;
     }
-
-    internal static void ApplyChatRouteDeprecationHeaders(HttpResponse response, ChatRouteDecision decision)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-        ArgumentNullException.ThrowIfNull(decision);
-        if (decision.Deprecations.Count == 0)
-            return;
-
-        response.Headers["Deprecation"] = "true";
-        foreach (var deprecation in decision.Deprecations)
-        {
-            response.Headers.Append(
-                "Warning",
-                $"299 - \"chat_route_legacy_action_used: {EscapeWarningText(BuildWarningDetail(deprecation))}\"");
-        }
-    }
-
-    private static string BuildWarningDetail(ChatRouteDeprecation deprecation)
-    {
-        var matchedRuleId = string.IsNullOrWhiteSpace(deprecation.MatchedRuleId)
-            ? "default_target"
-            : deprecation.MatchedRuleId;
-        return $"{deprecation.Code}; matched_rule_id={matchedRuleId}; action_kind={deprecation.ActionKind}; translated_target={deprecation.TranslatedTarget}; use_tool_first_route_policy=true";
-    }
-
-    private static string EscapeWarningText(string value) =>
-        value.Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     internal static string BuildContentHint(string? content)
     {

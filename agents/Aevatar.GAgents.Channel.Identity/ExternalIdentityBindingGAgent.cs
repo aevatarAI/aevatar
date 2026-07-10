@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -16,6 +17,7 @@ namespace Aevatar.GAgents.Channel.Identity;
 /// external subject (ADR-0018 §Implementation Notes #2). State holds no
 /// refresh_token or any user secret material (ADR-0018 §Storage Boundary).
 /// </summary>
+[GAgent("channel.identity.external-identity-binding")]
 public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalIdentityBindingState>
 {
     // Refactor (iter71/cluster-071-identity-projection-rebuild-events):
@@ -102,6 +104,63 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             cmd.ExternalSubject.Tenant,
             cmd.ExternalSubject.ExternalUserId,
             cmd.BindingId);
+    }
+
+    /// <summary>
+    /// Replaces a stale local binding after NyxID has proven the previous binding
+    /// unusable and authorization-code exchange has returned a new binding id.
+    /// </summary>
+    [EventHandler]
+    public async Task HandleRefreshBinding(RefreshBindingCommand cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+
+        if (cmd.ExternalSubject is null)
+        {
+            Logger.LogWarning("RefreshBinding rejected: external_subject is required.");
+            return;
+        }
+
+        if (!IsCommandSubjectMatchingActor(cmd.ExternalSubject))
+            return;
+
+        if (string.IsNullOrEmpty(cmd.BindingId))
+        {
+            Logger.LogWarning(
+                "RefreshBinding rejected: binding_id is required for {Platform}:{Tenant}:{User}",
+                cmd.ExternalSubject.Platform,
+                cmd.ExternalSubject.Tenant,
+                cmd.ExternalSubject.ExternalUserId);
+            return;
+        }
+
+        var previousBindingId = State.BindingId;
+        if (string.Equals(previousBindingId, cmd.BindingId, StringComparison.Ordinal))
+        {
+            Logger.LogInformation(
+                "RefreshBinding skipped: binding unchanged for {Platform}:{Tenant}:{User} (binding_id={BindingId})",
+                cmd.ExternalSubject.Platform,
+                cmd.ExternalSubject.Tenant,
+                cmd.ExternalSubject.ExternalUserId,
+                cmd.BindingId);
+            return;
+        }
+
+        await PersistDomainEventAsync(new ExternalIdentityBoundEvent
+        {
+            ExternalSubject = cmd.ExternalSubject.Clone(),
+            BindingId = cmd.BindingId,
+            BoundAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        Logger.LogInformation(
+            "Refreshed external identity binding: {Platform}:{Tenant}:{User} (previous={PreviousBindingId}, current={BindingId}, reason={Reason})",
+            cmd.ExternalSubject.Platform,
+            cmd.ExternalSubject.Tenant,
+            cmd.ExternalSubject.ExternalUserId,
+            previousBindingId,
+            cmd.BindingId,
+            string.IsNullOrWhiteSpace(cmd.Reason) ? "unspecified" : cmd.Reason);
     }
 
     /// <summary>

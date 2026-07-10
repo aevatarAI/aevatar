@@ -9,7 +9,7 @@ namespace Aevatar.GAgentService.Abstractions.ScopeGAgents;
 // New principle: requests preserve typed ToolContext and LlmControl through the application hop.
 public sealed record GAgentDraftRunInteractionRequest(
     string ScopeId,
-    string ActorTypeName,
+    string AgentKind,
     string Prompt,
     string? PreferredActorId = null,
     string? SessionId = null,
@@ -20,12 +20,11 @@ public sealed record GAgentDraftRunInteractionRequest(
     IReadOnlyList<GAgentDraftRunInputPart>? InputParts = null,
     AgentToolExecutionContext? ToolContext = null,
     LLMControlContext? LlmControl = null,
-    bool UseCorrelationIdAsFallbackSessionId = true,
-    string? AgentKind = null);
+    bool UseCorrelationIdAsFallbackSessionId = true);
 
 public sealed record GAgentDraftRunPreparedActor(
     string ScopeId,
-    string ActorTypeName,
+    string AgentKind,
     string ActorId,
     bool RequiresRollbackOnFailure);
 

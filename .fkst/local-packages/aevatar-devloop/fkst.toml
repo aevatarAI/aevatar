@@ -1,0 +1,12 @@
+kind = "package"
+name = "aevatar-devloop"
+persistence_class = "stateless_adapter"
+
+[code]
+root = "."
+
+[event_deps]
+packages = ["github-devloop", "github-devloop-pr"]
+
+[conformance]
+pack = "conformance/pack.toml"

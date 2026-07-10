@@ -50,8 +50,6 @@ public sealed class LarkAgentToolSource : IAgentToolSource
             tools.Add(new LarkMessagesReactionsListTool(_client));
         if (_options.EnableMessageReactionDelete)
             tools.Add(new LarkMessagesReactionsDeleteTool(_client));
-        if (_options.EnableMessageSearch)
-            tools.Add(new LarkMessagesSearchTool(_client));
         if (_options.EnableMessageBatchGet)
             tools.Add(new LarkMessagesBatchGetTool(_client));
         if (_options.EnableChatLookup)
@@ -60,8 +58,16 @@ public sealed class LarkAgentToolSource : IAgentToolSource
             tools.Add(new LarkSheetsAppendRowsTool(_client));
         if (_options.EnableApprovalsList)
             tools.Add(new LarkApprovalsListTool(_client));
+        if (_options.EnableApprovalsGet)
+            tools.Add(new LarkApprovalsGetTool(_client));
         if (_options.EnableApprovalsAct)
             tools.Add(new LarkApprovalsActTool(_client));
+        if (_options.EnableDocxCreate)
+            tools.Add(new LarkDocxCreateTool(_client));
+        if (_options.EnableBaseCreate)
+            tools.Add(new LarkBaseCreateTool(_client));
+        if (_options.EnableResourceGrant)
+            tools.Add(new LarkResourceGrantTool(_client));
 
         return Task.FromResult<IReadOnlyList<IAgentTool>>(tools);
     }

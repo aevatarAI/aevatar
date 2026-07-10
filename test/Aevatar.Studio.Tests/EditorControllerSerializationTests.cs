@@ -25,11 +25,17 @@ public sealed class EditorControllerSerializationTests
     [Fact]
     public void EditorWorkflowHttpRequests_ShouldUseScopedWorkflowDocumentInputConverter()
     {
+        typeof(ParseYamlHttpResponse).GetProperty(nameof(ParseYamlHttpResponse.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
+        typeof(SerializeYamlHttpResponse).GetProperty(nameof(SerializeYamlHttpResponse.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
         typeof(SerializeYamlHttpRequest).GetProperty(nameof(SerializeYamlHttpRequest.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
         typeof(ValidateWorkflowHttpRequest).GetProperty(nameof(ValidateWorkflowHttpRequest.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
         typeof(NormalizeWorkflowHttpRequest).GetProperty(nameof(NormalizeWorkflowHttpRequest.Document))!
+            .ShouldUseWorkflowDocumentInputConverter();
+        typeof(NormalizeWorkflowHttpResponse).GetProperty(nameof(NormalizeWorkflowHttpResponse.Document))!
             .ShouldUseWorkflowDocumentInputConverter();
 
         typeof(SerializeYamlHttpRequest).Assembly
@@ -57,6 +63,53 @@ public sealed class EditorControllerSerializationTests
         body.Should().Contain("- one");
         body.Should().Contain("nested:");
         body.Should().Contain("inner: value");
+    }
+
+    [Theory]
+    [InlineData("/api/editor/serialize-yaml")]
+    [InlineData("/api/editor/normalize")]
+    public async Task DocumentEditorResponses_ShouldReturnPlainJsonStepParameters(string path)
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var response = await client.PostAsJsonAsync(path, BuildPlainParameterRequest());
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("\"target\":\"result\"");
+        body.Should().Contain("\"value\":\"$input\"");
+        body.Should().Contain("\"enabled\":\"true\"");
+        body.Should().Contain("\"limit\":\"3\"");
+        body.Should().Contain("\"items\":[\"one\",\"2\",null]");
+        body.Should().Contain("\"nested\":{\"inner\":\"value\"}");
+        body.Should().NotContain("\"target\":{}");
+        body.Should().NotContain("\"value\":{}");
+    }
+
+    [Fact]
+    public async Task SerializeYaml_ShouldPreserveResponseDocumentScalarsOnSecondRoundTrip()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+
+        using var firstResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", BuildPlainParameterRequest());
+        var firstJson = await firstResponse.Content.ReadAsStringAsync();
+        using var firstDocument = JsonDocument.Parse(firstJson);
+        var document = firstDocument.RootElement.GetProperty("document").Clone();
+
+        using var secondResponse = await client.PostAsJsonAsync("/api/editor/serialize-yaml", new
+        {
+            document,
+            availableStepTypes = new[] { "assign" },
+        });
+
+        var body = await secondResponse.Content.ReadAsStringAsync();
+        secondResponse.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("target: result");
+        body.Should().Contain("value: $input");
+        body.Should().NotContain("target: {}");
+        body.Should().NotContain("value: {}");
     }
 
     [Theory]
@@ -138,6 +191,44 @@ public sealed class EditorControllerSerializationTests
         var body = await response.Content.ReadAsStringAsync();
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         body.Should().NotContain("target_role: writer");
+    }
+
+    [Fact]
+    public async Task ParseYaml_ShouldReturnPlainJsonStepParameters()
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+        using var response = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = """
+                   name: draft
+                   steps:
+                     - id: clean
+                       type: tool_call
+                       parameters:
+                         tool: code_execute
+                         arguments:
+                           language: javascript
+                           code: |
+                             console.log("ok");
+                       next: capture
+                     - id: capture
+                       type: assign
+                       parameters:
+                         target: result
+                         value: "$input"
+                   """,
+            availableStepTypes = new[] { "tool_call", "assign" },
+        });
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        body.Should().Contain("\"tool\":\"code_execute\"");
+        body.Should().Contain("\"arguments\":{\"language\":\"javascript\",\"code\":\"console.log(\\\"ok\\\");\\n\"}");
+        body.Should().Contain("\"target\":\"result\"");
+        body.Should().Contain("\"value\":\"$input\"");
+        body.Should().NotContain("\"tool\":{}");
+        body.Should().NotContain("\"arguments\":{}");
     }
 
     private static object BuildPlainParameterRequest() => new

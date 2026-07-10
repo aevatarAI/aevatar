@@ -5,11 +5,15 @@ namespace Aevatar.GAgentService.Application.Responses;
 //   New principle: Host owns protocol JSON conversion; Application normalizes a typed command shape before session/routing/LLM orchestration.
 public static class ResponsesRequestNormalizer
 {
-    public static ResponsesRequestNormalizationResult Normalize(ResponsesCommandRequest request)
+    public static ResponsesRequestNormalizationResult Normalize(
+        ResponsesCommandRequest request,
+        string? defaultModel = null)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         var model = request.Model?.Trim();
+        if (string.IsNullOrWhiteSpace(model))
+            model = defaultModel?.Trim();
         if (string.IsNullOrWhiteSpace(model))
             return ResponsesRequestNormalizationResult.Failed("model_required", "model is required.");
 

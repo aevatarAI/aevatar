@@ -11,18 +11,26 @@ public sealed class WorkflowExecutionReadModelMapper
         {
             ActorId = source.RootActorId,
             WorkflowName = source.WorkflowName,
+            ScopeId = source.ScopeId,
+            RunOrigin = source.RunOrigin,
             LastCommandId = source.CommandId,
             CompletionStatus = MapCompletionStatus(source.Status),
             StateVersion = source.StateVersion,
             LastEventId = source.LastEventId,
             LastUpdatedAt = source.UpdatedAt,
+            StartedAtUtc = source.StartedAtUtcValue,
             LastSuccess = source.Success,
             LastOutput = source.FinalOutput,
             LastError = source.FinalError,
+            SagaStatus = source.SagaStatus,
+            DeadLetterFailedCompensationStepId = source.DeadLetterFailedCompensationStepId,
+            DeadLetterRemainingUncompensated = source.DeadLetterRemainingUncompensated,
+            DeadLetterError = source.DeadLetterError,
             TotalSteps = 0,
             RequestedSteps = 0,
             CompletedSteps = 0,
             RoleReplyCount = 0,
+            InputFileRefs = { source.InputFileRefs.Select(MapInputFileRef) },
         };
     }
 
@@ -68,6 +76,7 @@ public sealed class WorkflowExecutionReadModelMapper
             Steps = source.Steps.Select(MapStepTrace).ToList(),
             RoleReplies = source.RoleReplies.Select(MapRoleReply).ToList(),
             Timeline = source.Timeline.Select(MapTimelineEvent).ToList(),
+            Usage = MapUsage(source.Usage),
             Summary = MapSummary(source.Summary),
         };
     }
@@ -152,6 +161,25 @@ public sealed class WorkflowExecutionReadModelMapper
             _ => WorkflowRunCompletionStatus.Unknown,
         };
     }
+
+    private static WorkflowRunFileRef MapInputFileRef(WorkflowExecutionInputFileRefReadModel source) =>
+        new()
+        {
+            FileId = source.FileId,
+            ArtifactId = source.ArtifactId,
+            SourceKindValue = source.SourceKindValue,
+            SourceMessageId = source.SourceMessageId,
+            SourceResourceKey = source.SourceResourceKey,
+            FileName = source.FileName,
+            MediaType = source.MediaType,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId,
+            OwnerScopeId = source.OwnerScopeId,
+        };
+
     private static WorkflowRunCompletionStatus MapCompletionStatus(
         WorkflowExecutionCompletionStatus status)
     {
@@ -205,6 +233,7 @@ public sealed class WorkflowExecutionReadModelMapper
             SuspensionPrompt = source.SuspensionPrompt,
             SuspensionTimeoutSeconds = source.SuspensionTimeoutSecondsValue == 0 ? null : source.SuspensionTimeoutSecondsValue,
             RequestedVariableName = source.RequestedVariableName,
+            Usage = MapUsage(source.Usage),
         };
 
     private static WorkflowRunRoleReply MapRoleReply(WorkflowExecutionRoleReply source) =>
@@ -240,5 +269,18 @@ public sealed class WorkflowExecutionReadModelMapper
                 CompletedSteps = source.CompletedSteps,
                 RoleReplyCount = source.RoleReplyCount,
                 StepTypeCounts = source.StepTypeCountsMap.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            };
+
+    private static WorkflowRunUsageMetrics MapUsage(WorkflowUsageMetricsReadModel? source) =>
+        source == null
+            ? new WorkflowRunUsageMetrics()
+            : new WorkflowRunUsageMetrics
+            {
+                PromptTokens = source.PromptTokens,
+                CompletionTokens = source.CompletionTokens,
+                TotalTokens = source.TotalTokens,
+                Model = source.Model,
+                Cost = source.Cost,
+                LatencyMs = source.LatencyMs,
             };
 }

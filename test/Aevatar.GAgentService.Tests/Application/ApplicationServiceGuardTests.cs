@@ -40,14 +40,14 @@ public sealed class ApplicationServiceGuardTests
         Action nullAuthorizer = () => new ServiceInvocationApplicationService(
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
-                new NoOpTrafficViewQueryReader(),
+                new NoOpInvocationCatalogQueryReader(),
                 new FakeServiceRevisionCatalogQueryReader()),
             null!,
             new NoOpInvocationDispatcher());
         Action nullDispatcher = () => new ServiceInvocationApplicationService(
             new ServiceInvocationResolutionService(
                 new NoOpCatalogQueryReader(),
-                new NoOpTrafficViewQueryReader(),
+                new NoOpInvocationCatalogQueryReader(),
                 new FakeServiceRevisionCatalogQueryReader()),
             new NoOpInvokeAdmissionAuthorizer(),
             null!);
@@ -107,12 +107,26 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutQueryReader(),
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
+            new NoOpRevisionCatalogQueryReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullServingPort = () => new ScopeBindingReadinessQueryService(
             new ServiceLifecycleQueryApplicationService(
                 new NoOpCatalogQueryReader(),
                 new NoOpRevisionCatalogQueryReader(),
                 new NoOpDeploymentCatalogQueryReader()),
+            null!,
+            new NoOpRevisionCatalogQueryReader(),
+            Options.Create(new ScopeWorkflowCapabilityOptions()));
+        Action nullRevisionCatalogReader = () => new ScopeBindingReadinessQueryService(
+            new ServiceLifecycleQueryApplicationService(
+                new NoOpCatalogQueryReader(),
+                new NoOpRevisionCatalogQueryReader(),
+                new NoOpDeploymentCatalogQueryReader()),
+            new ServiceServingQueryApplicationService(
+                new NoOpServingSetQueryReader(),
+                new NoOpRolloutQueryReader(),
+                new NoOpRolloutCommandObservationQueryReader(),
+                new NoOpTrafficViewQueryReader()),
             null!,
             Options.Create(new ScopeWorkflowCapabilityOptions()));
         Action nullOptions = () => new ScopeBindingReadinessQueryService(
@@ -125,10 +139,12 @@ public sealed class ApplicationServiceGuardTests
                 new NoOpRolloutQueryReader(),
                 new NoOpRolloutCommandObservationQueryReader(),
                 new NoOpTrafficViewQueryReader()),
+            new NoOpRevisionCatalogQueryReader(),
             null!);
 
         nullLifecyclePort.Should().Throw<ArgumentNullException>();
         nullServingPort.Should().Throw<ArgumentNullException>();
+        nullRevisionCatalogReader.Should().Throw<ArgumentNullException>();
         nullOptions.Should().Throw<ArgumentNullException>();
     }
 
@@ -241,6 +257,7 @@ public sealed class ApplicationServiceGuardTests
         public Task<string> EnsureDeploymentTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("deployment");
         public Task<string> EnsureServingSetTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("serving");
         public Task<string> EnsureRolloutTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("rollout");
+        public Task<string> EnsureInvocationCatalogTargetAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult("invocation");
     }
 
     private sealed class NoOpGovernanceCommandTargetProvisioner : IServiceGovernanceCommandTargetProvisioner
@@ -288,6 +305,12 @@ public sealed class ApplicationServiceGuardTests
     {
         public Task<ServiceTrafficViewSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+    }
+
+    private sealed class NoOpInvocationCatalogQueryReader : IServiceInvocationCatalogQueryReader
+    {
+        public Task<ServiceInvocationCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceInvocationCatalogSnapshot?>(null);
     }
 
     private sealed class NoOpRolloutCommandObservationQueryReader : IServiceRolloutCommandObservationQueryReader

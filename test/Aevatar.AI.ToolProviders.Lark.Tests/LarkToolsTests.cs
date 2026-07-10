@@ -6,7 +6,9 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Lark.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Aevatar.AI.ToolProviders.Lark.Tests;
@@ -42,6 +44,369 @@ public class LarkToolsTests
         finally
         {
             AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldCreateAppendPermission_AndReturnLink()
+    {
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{"children":[]}}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_readable"}}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.lark.receive_id"] = "oc_chat_1",
+                ["channel.lark.receive_id_type"] = "chat_id",
+            });
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"# Daily\n\nFull text","visibility":"readable"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("document_token").GetString().Should().Be("doccn_123");
+        document.RootElement.GetProperty("document_url").GetString().Should().Be("https://example.feishu.cn/docx/doccn_123");
+        document.RootElement.GetProperty("visibility_applied").GetBoolean().Should().BeTrue();
+        client.LastDocxCreateToken.Should().Be("token-123");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().Be(new LarkDocxAppendBlocksRequest("doccn_123", "# Daily\n\nFull text"));
+        client.LastDrivePermissionRequest.Should().Be(new LarkDrivePermissionRequest("doccn_123", LarkDocxVisibility.Readable, "oc_chat_1", "chat_id"));
+    }
+
+    [Fact]
+    public async Task LarkBaseCreateTool_ShouldGrantSenderFullAccess_AndNotCallPublic()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableCreateResponse = """{"code":0,"data":{"app":{"app_token":"bascn_123","url":"https://example.feishu.cn/base/bascn_123","default_table_id":"tbl_1"}}}""",
+            GrantResourceMemberResponse = """{"code":0,"data":{"member":{"member_id":"ou_req","perm":"full_access"}}}""",
+        };
+        var tool = new LarkBaseCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["channel.sender_id"] = "ou_req",
+            });
+
+        var result = await tool.ExecuteAsync("""{"name":"项目跟踪"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("granted").GetBoolean().Should().BeTrue();
+        root.GetProperty("app_token").GetString().Should().Be("bascn_123");
+        root.GetProperty("grantee").GetString().Should().Be("ou_req");
+
+        client.LastBitableCreateRequest.Should().Be(new LarkBitableCreateRequest("项目跟踪"));
+        client.GrantCallCount.Should().Be(1);
+        client.LastGrantRequest.Should().Be(
+            new LarkResourceMemberGrantRequest("bascn_123", "bitable", "ou_req", "openid", "full_access"));
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkBaseCreateTool_ShouldFallBackToPublic_WhenMemberGrantFails()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableCreateResponse = """{"code":0,"data":{"app":{"app_token":"bascn_123","url":"https://example.feishu.cn/base/bascn_123"}}}""",
+            GrantResourceMemberResponse = """{"code":1254000,"msg":"grant failed"}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_editable"}}""",
+        };
+        var tool = new LarkBaseCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var result = await tool.ExecuteAsync("""{"name":"Tracker"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("granted").GetBoolean().Should().BeFalse();
+        root.GetProperty("fallback_to_public").GetBoolean().Should().BeTrue();
+        client.LastGrantRequest.Should().NotBeNull();
+        client.LastDrivePermissionRequest.Should().NotBeNull();
+        client.LastDrivePermissionRequest!.ObjType.Should().Be("bitable");
+    }
+
+    [Fact]
+    public async Task LarkBaseCreateTool_ShouldFallBackToPublic_WhenNoSender()
+    {
+        var client = new StubLarkNyxClient
+        {
+            BitableCreateResponse = """{"code":0,"data":{"app":{"app_token":"bascn_123","url":"https://example.feishu.cn/base/bascn_123"}}}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_editable"}}""",
+        };
+        var tool = new LarkBaseCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+
+        var result = await tool.ExecuteAsync("""{"name":"Tracker"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("granted").GetBoolean().Should().BeFalse();
+        root.GetProperty("fallback_to_public").GetBoolean().Should().BeTrue();
+        root.GetProperty("reason").GetString().Should().Be("no_sender");
+        client.GrantCallCount.Should().Be(0);
+        client.LastDrivePermissionRequest.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task LarkBaseCreateTool_ShouldFail_WhenNameMissing()
+    {
+        var tool = new LarkBaseCreateTool(new StubLarkNyxClient());
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+
+        var result = await tool.ExecuteAsync("""{"name":"  "}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("name is required");
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldAlsoGrantSender_AndKeepTenantShare()
+    {
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{"children":[]}}""",
+            DrivePermissionResponse = """{"code":0,"data":{"link_share_entity":"tenant_readable"}}""",
+            GrantResourceMemberResponse = """{"code":0,"data":{"member":{"member_id":"ou_req","perm":"full_access"}}}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var result = await tool.ExecuteAsync("""{"title":"Daily","markdown_text":"# Daily"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("granted_to_sender").GetBoolean().Should().BeTrue();
+        client.LastDrivePermissionRequest.Should().NotBeNull();
+        client.LastDrivePermissionRequest!.ObjType.Should().Be("docx");
+        client.GrantCallCount.Should().Be(1);
+        client.LastGrantRequest.Should().Be(
+            new LarkResourceMemberGrantRequest("doccn_123", "docx", "ou_req", "openid", "full_access"));
+    }
+
+    [Fact]
+    public async Task LarkResourceGrantTool_ShouldDefaultToSender_AndGrant()
+    {
+        var client = new StubLarkNyxClient
+        {
+            GrantResourceMemberResponse = """{"code":0,"data":{"member":{"member_id":"ou_req","perm":"full_access"}}}""",
+        };
+        var tool = new LarkResourceGrantTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var result = await tool.ExecuteAsync("""{"token":"bascn_123","obj_type":"bitable"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("member_id").GetString().Should().Be("ou_req");
+        client.LastGrantRequest.Should().Be(
+            new LarkResourceMemberGrantRequest("bascn_123", "bitable", "ou_req", "openid", "full_access"));
+        tool.RequiresApproval("""{"token":"bascn_123","obj_type":"bitable"}""").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkResourceGrantTool_ShouldRejectMentionPlaceholderAndBadShape()
+    {
+        var client = new StubLarkNyxClient();
+        var tool = new LarkResourceGrantTool(client);
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+
+        var placeholder = await tool.ExecuteAsync("""{"token":"bascn_1","obj_type":"bitable","member_id":"@_user_1"}""");
+        placeholder.Should().Contain("\"success\":false");
+        placeholder.Should().Contain("@_user_N");
+
+        var displayName = await tool.ExecuteAsync("""{"token":"bascn_1","obj_type":"bitable","member_id":"Zhang San"}""");
+        displayName.Should().Contain("\"success\":false");
+
+        var notOpenId = await tool.ExecuteAsync("""{"token":"bascn_1","obj_type":"bitable","member_id":"abc123"}""");
+        notOpenId.Should().Contain("\"success\":false");
+        notOpenId.Should().Contain("ou_");
+
+        client.GrantCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void LarkResourceGrantTool_ShouldRequireApproval_ForNonSenderOrNonDefault()
+    {
+        var tool = new LarkResourceGrantTool(new StubLarkNyxClient());
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable","member_id":"ou_other"}""").Should().BeTrue();
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable","perm":"edit"}""").Should().BeTrue();
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable","member_type":"email"}""").Should().BeTrue();
+        tool.RequiresApproval("""{"token":"t","obj_type":"bitable"}""").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkResourceGrantTool_ShouldValidateObjTypeAndPerm()
+    {
+        var client = new StubLarkNyxClient();
+        var tool = new LarkResourceGrantTool(client);
+        using var _ = new AgentToolRequestMetadataScope(
+            "token-123",
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["channel.sender_id"] = "ou_req" });
+
+        var badObjType = await tool.ExecuteAsync("""{"token":"t","obj_type":"banana"}""");
+        badObjType.Should().Contain("\"success\":false");
+        badObjType.Should().Contain("obj_type");
+
+        var badPerm = await tool.ExecuteAsync("""{"token":"t","obj_type":"bitable","perm":"god_mode"}""");
+        badPerm.Should().Contain("\"success\":false");
+        badPerm.Should().Contain("perm");
+
+        client.GrantCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenPermissionOrUrlMissing()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var permissionFailure = new LarkDocxCreateTool(new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{}}""",
+            DrivePermissionResponse = """{"code":999,"msg":"permission denied"}""",
+        });
+
+        var permissionResult = await permissionFailure.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        permissionResult.Should().Contain("\"success\":false");
+        permissionResult.Should().Contain("\"visibility_applied\":false");
+        permissionResult.Should().Contain("lark_code=999");
+
+        var missingUrl = new LarkDocxCreateTool(new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123"}}}""",
+            DocxAppendResponse = """{"code":0,"data":{}}""",
+            DrivePermissionResponse = """{"code":0,"data":{}}""",
+        });
+
+        var missingUrlResult = await missingUrl.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        missingUrlResult.Should().Contain("\"success\":false");
+        missingUrlResult.Should().Contain("docx_create_missing_url");
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenCreateReturnsProxyError()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"error":true,"status":503,"message":"docx unavailable"}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("nyx_proxy_error status=503");
+        result.Should().Contain("docx unavailable");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().BeNull();
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenCreateOmitsDocumentToken()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"url":"https://example.feishu.cn/docx/missing-token"}}}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("docx_create_missing_token");
+        client.LastDocxCreateRequest.Should().Be(new LarkDocxCreateRequest("Daily report"));
+        client.LastDocxAppendRequest.Should().BeNull();
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldFail_WhenAppendReturnsProxyError()
+    {
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var client = new StubLarkNyxClient
+        {
+            DocxCreateResponse = """{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""",
+            DocxAppendResponse = """{"code":999,"msg":"append rejected"}""",
+        };
+        var tool = new LarkDocxCreateTool(client);
+
+        var result = await tool.ExecuteAsync(
+            """{"title":"Daily report","markdown_text":"full text"}""");
+
+        result.Should().Contain("\"success\":false");
+        result.Should().Contain("\"document_token\":\"doccn_123\"");
+        result.Should().Contain("\"document_url\":\"https://example.feishu.cn/docx/doccn_123\"");
+        result.Should().Contain("lark_code=999");
+        result.Should().Contain("append rejected");
+        client.LastDocxAppendRequest.Should().Be(new LarkDocxAppendBlocksRequest("doccn_123", "full text"));
+        client.LastDrivePermissionRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkDocxCreateTool_ShouldValidateInputs()
+    {
+        var tool = new LarkDocxCreateTool(new StubLarkNyxClient());
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{"markdown_text":"body"}"""))
+                .Should().Contain("title is required");
+            (await tool.ExecuteAsync(JsonSerializer.Serialize(new
+            {
+                title = new string('t', 201),
+                markdown_text = "body",
+            })))
+                .Should().Contain("title exceeds the maximum of 200 characters");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":" "}"""))
+                .Should().Contain("markdown_text is required");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body","visibility":"public"}"""))
+                .Should().Contain("visibility must be one of");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body","receive_id":"oc_1"}"""))
+                .Should().Contain("receive_id and receive_id_type must be provided together");
+            (await tool.ExecuteAsync("""{"title":"t","markdown_text":"body","receive_id":"oc_1","receive_id_type":"email"}"""))
+                .Should().Contain("receive_id_type must be one of");
         }
     }
 
@@ -245,6 +610,83 @@ public class LarkToolsTests
             result.Should().Contain("nyx_proxy_error status=500");
             result.Should().Contain("\"message_id\":\"om_1\"");
         }
+    }
+
+    [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldMapWorkflowRouteToBinaryDownload()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessageResourceResponse = new LarkMessageResourceDownloadResult(
+                Succeeded: true,
+                Content: Encoding.UTF8.GetBytes("downloaded"),
+                ContentType: "image/png",
+                FileName: "picture.png"),
+        };
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        var result = await adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "image"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "img_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123")));
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("downloaded"));
+        result.MediaType.Should().Be("image/png");
+        result.FileName.Should().Be("picture.png");
+        client.LastMessageResourceToken.Should().Be("token-123");
+        client.LastMessageResourceRequest.Should().Be(new LarkMessageResourceDownloadRequest(
+            "om_123",
+            "img_v3_456",
+            LarkMessageResourceKind.Image));
+    }
+
+    [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldMapFileRouteToBinaryDownload()
+    {
+        var client = new StubLarkNyxClient
+        {
+            MessageResourceResponse = new LarkMessageResourceDownloadResult(
+                Succeeded: true,
+                Content: Encoding.UTF8.GetBytes("downloaded-file"),
+                ContentType: "application/pdf",
+                FileName: "receipt.pdf"),
+        };
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        var result = await adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("lark", "message_resource_download", "file"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "file_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123")));
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("downloaded-file"));
+        result.MediaType.Should().Be("application/pdf");
+        result.FileName.Should().Be("receipt.pdf");
+        client.LastMessageResourceToken.Should().Be("token-123");
+        client.LastMessageResourceRequest.Should().Be(new LarkMessageResourceDownloadRequest(
+            "om_123",
+            "file_v3_456",
+            LarkMessageResourceKind.File));
+    }
+
+    [Fact]
+    public async Task LarkMessageResourceFetchAdapter_ShouldFailClosedForWrongRoute()
+    {
+        var client = new StubLarkNyxClient();
+        var adapter = new LarkMessageResourceFetchAdapter(client);
+
+        Func<Task> act = () => adapter.FetchAsync(new WorkflowConnectedServiceResourceFetchRequest(
+            Route: new WorkflowConnectedServiceResourceFetchRoute("nyxid", "message_resource_download", "image"),
+            SourceMessageId: "om_123",
+            SourceResourceKey: "img_v3_456",
+            CallerCredential: new WorkflowCallerCredential("token-123"))).AsTask();
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*lark/message_resource_download/image*");
+        client.LastMessageResourceRequest.Should().BeNull();
     }
 
     [Fact]
@@ -575,106 +1017,6 @@ public class LarkToolsTests
     }
 
     [Fact]
-    public async Task LarkMessagesSearchTool_ShouldSearchAndHydrateMessages()
-    {
-        var client = new StubLarkNyxClient
-        {
-            MessageSearchResponse =
-                """
-                {
-                  "code": 0,
-                  "data": {
-                    "items": [
-                      { "meta_data": { "message_id": "om_1" } }
-                    ],
-                    "has_more": true,
-                    "page_token": "page-2"
-                  }
-                }
-                """,
-            MessagesBatchGetResponse =
-                """
-                {
-                  "code": 0,
-                  "data": {
-                    "items": [
-                      {
-                        "message_id": "om_1",
-                        "msg_type": "text",
-                        "create_time": "1710000000",
-                        "chat_id": "oc_1",
-                        "sender": {
-                          "id": "ou_sender",
-                          "name": "Alice",
-                          "sender_type": "user"
-                        },
-                        "body": {
-                          "content": "{\"text\":\"incident handled\"}"
-                        }
-                      }
-                    ]
-                  }
-                }
-                """,
-        };
-        var tool = new LarkMessagesSearchTool(client);
-
-        using var _ = new AgentToolRequestMetadataScope("token-123");
-        var result = await tool.ExecuteAsync("""{"query":"incident","chat_ids":["oc_1"],"start_time":"2026-04-20T00:00:00+08:00","end_time":"2026-04-23T23:59:59+08:00"}""");
-
-        using var document = JsonDocument.Parse(result);
-        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("has_more").GetBoolean().Should().BeTrue();
-        document.RootElement.GetProperty("page_token").GetString().Should().Be("page-2");
-        document.RootElement.GetProperty("message_ids")[0].GetString().Should().Be("om_1");
-        document.RootElement.GetProperty("messages")[0].GetProperty("content").GetString().Should().Be("incident handled");
-        client.LastMessageSearchRequest.Should().NotBeNull();
-        client.LastMessageSearchRequest!.Query.Should().Be("incident");
-    }
-
-    [Fact]
-    public async Task LarkMessagesSearchTool_ShouldValidateInputs_AndDegradeWhenHydrationFails()
-    {
-        var tool = new LarkMessagesSearchTool(new StubLarkNyxClient());
-
-        using (new AgentToolRequestMetadataScope())
-        {
-            (await tool.ExecuteAsync("""{"query":"incident"}"""))
-                .Should().Contain("No NyxID access token available");
-        }
-
-        using (new AgentToolRequestMetadataScope("token-123"))
-        {
-            (await tool.ExecuteAsync("""{}"""))
-                .Should().Contain("At least one search filter is required");
-            (await tool.ExecuteAsync("""{"query":"incident","include_attachment_type":"doc"}"""))
-                .Should().Contain("include_attachment_type must be one of");
-            (await tool.ExecuteAsync("""{"query":"incident","chat_type":"channel"}"""))
-                .Should().Contain("chat_type must be one of");
-            (await tool.ExecuteAsync("""{"query":"incident","sender_type":"app"}"""))
-                .Should().Contain("sender_type must be one of");
-            (await tool.ExecuteAsync("""{"query":"incident","sender_type":"bot","exclude_sender_type":"bot"}"""))
-                .Should().Contain("sender_type and exclude_sender_type cannot be the same");
-            (await tool.ExecuteAsync("""{"query":"incident","start_time":"bad-time"}"""))
-                .Should().Contain("start_time and end_time must be ISO 8601");
-            (await tool.ExecuteAsync("""{"query":"incident","page_size":51}"""))
-                .Should().Contain("page_size must be between 1 and 50");
-        }
-
-        var degradeTool = new LarkMessagesSearchTool(new StubLarkNyxClient
-        {
-            MessageSearchResponse = """{"code":0,"data":{"items":[{"meta_data":{"message_id":"om_1"}}]}}""",
-            MessagesBatchGetResponse = """{"error":true,"status":502,"message":"mget failed"}""",
-        });
-        using (new AgentToolRequestMetadataScope("token-123"))
-        {
-            var result = await degradeTool.ExecuteAsync("""{"query":"incident"}""");
-            result.Should().Contain("message hydration failed");
-            result.Should().Contain("\"message_ids\":[\"om_1\"]");
-        }
-    }
-
-    [Fact]
     public async Task LarkChatsLookupTool_ReturnsNormalizedCandidates()
     {
         var client = new StubLarkNyxClient
@@ -868,25 +1210,24 @@ public class LarkToolsTests
                 {
                   "code": 0,
                   "data": {
-                    "count": 1,
+                    "count": { "total": 1, "has_more": false },
                     "has_more": false,
+                    "page_token": "pt-1",
                     "tasks": [
                       {
                         "task_id": "task_1",
-                        "instance_code": "inst_1",
+                        "process_id": "1214564545474",
+                        "process_code": "inst_1",
                         "title": "Expense Approval",
                         "status": "1",
+                        "process_status": "1",
                         "topic": "1",
-                        "support_api_operate": true,
                         "definition_code": "def_1",
                         "definition_name": "Expense",
-                        "initiator": "ou_init",
-                        "initiator_name": "Alice",
+                        "initiators": ["ou_init"],
+                        "initiator_names": ["Alice"],
                         "user_id": "ou_owner",
-                        "instance_status": "1",
-                        "summaries": [
-                          { "key": "amount", "value": "100" }
-                        ]
+                        "urls": { "pc": "https://applink.example/pc", "mobile": "https://applink.example/mobile" }
                       }
                     ]
                   }
@@ -897,6 +1238,7 @@ public class LarkToolsTests
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "token-123",
+            ["channel.lark.operator_user_id"] = "lark-user-1",
         });
 
         try
@@ -905,12 +1247,22 @@ public class LarkToolsTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+            document.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+            document.RootElement.GetProperty("page_token").GetString().Should().Be("pt-1");
             var tasks = document.RootElement.GetProperty("tasks");
             tasks.GetArrayLength().Should().Be(1);
             tasks[0].GetProperty("topic").GetString().Should().Be("todo");
             tasks[0].GetProperty("status").GetString().Should().Be("todo");
+            tasks[0].GetProperty("process_status").GetString().Should().Be("running");
+            tasks[0].GetProperty("instance_code").GetString().Should().Be("inst_1");
+            tasks[0].GetProperty("definition_code").GetString().Should().Be("def_1");
+            tasks[0].GetProperty("initiators")[0].GetString().Should().Be("ou_init");
+            tasks[0].GetProperty("initiator_names")[0].GetString().Should().Be("Alice");
+            tasks[0].GetProperty("link").GetString().Should().Be("https://applink.example/pc");
             client.LastApprovalQueryRequest.Should().NotBeNull();
             client.LastApprovalQueryRequest!.Topic.Should().Be("1");
+            client.LastApprovalQueryRequest.UserId.Should().Be("lark-user-1");
+            client.LastApprovalQueryRequest.UserIdType.Should().Be("user_id");
         }
         finally
         {
@@ -919,9 +1271,56 @@ public class LarkToolsTests
     }
 
     [Fact]
+    public async Task LarkApprovalsListTool_PinsUserIdFromChannelContext_IgnoringToolArguments()
+    {
+        var client = new StubLarkNyxClient();
+        var tool = new LarkApprovalsListTool(client);
+
+        // Without any channel sender identity the tool must fail closed: api-lark-bot is an
+        // org-shared tenant credential, so a caller-supplied user_id would let any org member
+        // list anyone's approval tasks.
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await tool.ExecuteAsync("""{"topic":"todo","user_id":"ou_someone_else"}""");
+            result.Should().Contain("\"success\":false");
+            result.Should().Contain("operator identity");
+            client.LastApprovalQueryRequest.Should().BeNull();
+        }
+
+        // Lark sender open_id from the typed channel context is an acceptable identity source.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_sender_1",
+        }))
+        {
+            var result = await tool.ExecuteAsync("""{"topic":"todo","user_id":"ou_someone_else"}""");
+            result.Should().Contain("\"success\":true");
+            client.LastApprovalQueryRequest!.UserId.Should().Be("ou_sender_1");
+            client.LastApprovalQueryRequest.UserIdType.Should().Be("open_id");
+        }
+
+        // A non-Lark platform sender id must NOT be treated as a Lark user id.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.platform"] = "telegram",
+            ["channel.sender_id"] = "tg-sender-1",
+        }))
+        {
+            var result = await tool.ExecuteAsync("""{"topic":"todo"}""");
+            result.Should().Contain("\"success\":false");
+            result.Should().Contain("operator identity");
+        }
+    }
+
+    [Fact]
     public async Task LarkApprovalsListTool_ShouldValidateInputs_AndNormalizeAdditionalStatuses()
     {
         var tool = new LarkApprovalsListTool(new StubLarkNyxClient());
+        var operatorMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+        };
 
         using (new AgentToolRequestMetadataScope())
         {
@@ -929,14 +1328,10 @@ public class LarkToolsTests
                 .Should().Contain("No NyxID access token available");
         }
 
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             (await tool.ExecuteAsync("""{"topic":"unknown"}"""))
                 .Should().Contain("topic must be one of");
-            (await tool.ExecuteAsync("""{"topic":"todo","locale":"fr-FR"}"""))
-                .Should().Contain("locale must be one of");
-            (await tool.ExecuteAsync("""{"topic":"todo","user_id_type":"email"}"""))
-                .Should().Contain("user_id_type must be one of");
             (await tool.ExecuteAsync("""{"topic":"todo","page_size":101}"""))
                 .Should().Contain("page_size must be between 1 and 100");
         }
@@ -945,7 +1340,7 @@ public class LarkToolsTests
         {
             ApprovalListResponse = """{"error":true,"status":504,"message":"timeout"}""",
         });
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             (await errorTool.ExecuteAsync("""{"topic":"todo"}"""))
                 .Should().Contain("nyx_proxy_error status=504");
@@ -958,20 +1353,20 @@ public class LarkToolsTests
                 {
                   "code": 0,
                   "data": {
-                    "count": 5,
+                    "count": { "total": 5, "has_more": false },
                     "has_more": false,
                     "tasks": [
-                      { "task_id": "task_2", "instance_code": "inst_2", "status": "2", "topic": "2", "instance_status": "2", "summaries": [] },
-                      { "task_id": "task_3", "instance_code": "inst_3", "status": "17", "topic": "3", "instance_status": "3", "summaries": [] },
-                      { "task_id": "task_4", "instance_code": "inst_4", "status": "18", "topic": "17", "instance_status": "4", "summaries": [] },
-                      { "task_id": "task_5", "instance_code": "inst_5", "status": "33", "topic": "18", "instance_status": "5", "summaries": [] },
-                      { "task_id": "task_6", "instance_code": "inst_6", "status": "34", "topic": "99", "instance_status": "0", "summaries": [] }
+                      { "task_id": "task_2", "process_code": "inst_2", "status": "2", "topic": "2", "process_status": "2" },
+                      { "task_id": "task_3", "process_code": "inst_3", "status": "17", "topic": "3", "process_status": "3" },
+                      { "task_id": "task_4", "process_code": "inst_4", "status": "18", "topic": "17", "process_status": "4" },
+                      { "task_id": "task_5", "process_code": "inst_5", "status": "33", "topic": "18", "process_status": "5" },
+                      { "task_id": "task_6", "process_code": "inst_6", "status": "34", "topic": "99", "process_status": "0" }
                     ]
                   }
                 }
                 """,
         });
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             var result = await successTool.ExecuteAsync("""{"topic":"done"}""");
 
@@ -979,19 +1374,160 @@ public class LarkToolsTests
             var tasks = document.RootElement.GetProperty("tasks");
             tasks[0].GetProperty("topic").GetString().Should().Be("done");
             tasks[0].GetProperty("status").GetString().Should().Be("done");
-            tasks[0].GetProperty("instance_status").GetString().Should().Be("approved");
+            tasks[0].GetProperty("process_status").GetString().Should().Be("approved");
             tasks[1].GetProperty("topic").GetString().Should().Be("initiated");
             tasks[1].GetProperty("status").GetString().Should().Be("unread");
-            tasks[1].GetProperty("instance_status").GetString().Should().Be("rejected");
+            tasks[1].GetProperty("process_status").GetString().Should().Be("rejected");
             tasks[2].GetProperty("topic").GetString().Should().Be("cc_unread");
             tasks[2].GetProperty("status").GetString().Should().Be("read");
-            tasks[2].GetProperty("instance_status").GetString().Should().Be("withdrawn");
+            tasks[2].GetProperty("process_status").GetString().Should().Be("withdrawn");
             tasks[3].GetProperty("topic").GetString().Should().Be("cc_read");
             tasks[3].GetProperty("status").GetString().Should().Be("processing");
-            tasks[3].GetProperty("instance_status").GetString().Should().Be("terminated");
+            tasks[3].GetProperty("process_status").GetString().Should().Be("terminated");
             tasks[4].GetProperty("topic").GetString().Should().Be("99");
             tasks[4].GetProperty("status").GetString().Should().Be("withdrawn");
-            tasks[4].GetProperty("instance_status").GetString().Should().Be("none");
+            tasks[4].GetProperty("process_status").GetString().Should().Be("none");
+        }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsGetTool_ReturnsControlFlowFields()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ApprovalGetResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "instance": {
+                      "instance_code": "inst_1",
+                      "approval_code": "def_1",
+                      "approval_name": "Expense",
+                      "status": "2",
+                      "start_time": "1710000000",
+                      "end_time": "1710000300",
+                      "serial_number": "SN-1",
+                      "user_id": "ou_init",
+                      "user_name": "Alice",
+                      "department_id": "od_1",
+                      "department_name": "Finance",
+                      "uuid": "uuid-1",
+                      "task_list": [
+                        {
+                          "task_id": "task_1",
+                          "user_id": "ou_approver",
+                          "user_name": "Bob",
+                          "status": "2",
+                          "start_time": "1710000100",
+                          "end_time": "1710000200"
+                        }
+                      ],
+                      "form": [
+                        { "id": "field_1", "name": "Amount", "type": "input", "value": "100", "ext": "{}" }
+                      ]
+                    }
+                  }
+                }
+                """,
+        };
+        var tool = new LarkApprovalsGetTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var result = await tool.ExecuteAsync("""{"instance_code":"inst_1","locale":"en-US","user_id_type":"open_id"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("instance_code").GetString().Should().Be("inst_1");
+        root.GetProperty("approval_code").GetString().Should().Be("def_1");
+        root.GetProperty("status").GetString().Should().Be("approved");
+        root.GetProperty("raw_status").GetString().Should().Be("2");
+        root.GetProperty("is_terminal").GetBoolean().Should().BeTrue();
+        root.GetProperty("terminal_status").GetString().Should().Be("approved");
+        root.GetProperty("should_continue_waiting").GetBoolean().Should().BeFalse();
+        root.GetProperty("approved").GetBoolean().Should().BeTrue();
+        root.GetProperty("rejected").GetBoolean().Should().BeFalse();
+        root.GetProperty("task_count").GetInt32().Should().Be(1);
+        root.GetProperty("tasks")[0].GetProperty("status").GetString().Should().Be("done");
+        root.GetProperty("form")[0].GetProperty("name").GetString().Should().Be("Amount");
+        client.LastApprovalGetRequest.Should().Be(new LarkApprovalInstanceGetRequest("inst_1", "en-US", "open_id"));
+    }
+
+    [Fact]
+    public async Task LarkApprovalsGetTool_ShouldParseEncodedFormPayload()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ApprovalGetResponse =
+                """
+                {
+                  "code": 0,
+                  "data": {
+                    "instance_code": "inst_1",
+                    "status": "1",
+                    "form": "[{\"id\":\"field_1\",\"name\":\"Amount\",\"type\":\"input\",\"value\":\"100\",\"ext\":\"{}\"}]"
+                  }
+                }
+                """,
+        };
+        var tool = new LarkApprovalsGetTool(client);
+
+        using var _ = new AgentToolRequestMetadataScope("token-123");
+        var result = await tool.ExecuteAsync("""{"instance_code":"inst_1"}""");
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("status").GetString().Should().Be("running");
+        root.GetProperty("form").GetArrayLength().Should().Be(1);
+        root.GetProperty("form")[0].GetProperty("id").GetString().Should().Be("field_1");
+        root.GetProperty("form")[0].GetProperty("value").GetString().Should().Be("100");
+    }
+
+    [Fact]
+    public async Task LarkApprovalsGetTool_ShouldValidateInputs_AndSurfaceProxyErrors()
+    {
+        var tool = new LarkApprovalsGetTool(new StubLarkNyxClient());
+
+        using (new AgentToolRequestMetadataScope())
+        {
+            (await tool.ExecuteAsync("""{"instance_code":"inst_1"}"""))
+                .Should().Contain("No NyxID access token available");
+        }
+
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            (await tool.ExecuteAsync("""{}"""))
+                .Should().Contain("instance_code is required");
+            (await tool.ExecuteAsync("""{"instance_code":"inst_1","locale":"fr-FR"}"""))
+                .Should().Contain("locale must be one of");
+            (await tool.ExecuteAsync("""{"instance_code":"inst_1","user_id_type":"email"}"""))
+                .Should().Contain("user_id_type must be one of");
+        }
+
+        var runningTool = new LarkApprovalsGetTool(new StubLarkNyxClient
+        {
+            ApprovalGetResponse = """{"code":0,"data":{"instance_code":"inst_2","status":"1"}}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await runningTool.ExecuteAsync("""{"instance_code":"inst_2"}""");
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("running");
+            document.RootElement.GetProperty("is_terminal").GetBoolean().Should().BeFalse();
+            document.RootElement.GetProperty("should_continue_waiting").GetBoolean().Should().BeTrue();
+        }
+
+        var errorTool = new LarkApprovalsGetTool(new StubLarkNyxClient
+        {
+            ApprovalGetResponse = """{"error":true,"status":504,"message":"timeout"}""",
+        });
+        using (new AgentToolRequestMetadataScope("token-123"))
+        {
+            var result = await errorTool.ExecuteAsync("""{"instance_code":"inst_3"}""");
+            result.Should().Contain("nyx_proxy_error status=504");
+            result.Should().Contain("\"instance_code\":\"inst_3\"");
         }
     }
 
@@ -1004,7 +1540,7 @@ public class LarkToolsTests
             ["channel.lark.operator_user_id"] = "lark-user-1",
         }))
         {
-            var result = await tool.ExecuteAsync("""{"action":"transfer","instance_code":"inst_1","task_id":"task_1"}""");
+            var result = await tool.ExecuteAsync("""{"action":"transfer","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}""");
             result.Should().Contain("transfer_user_id is required");
         }
     }
@@ -1023,19 +1559,21 @@ public class LarkToolsTests
         }))
         {
             var result = await tool.ExecuteAsync(
-                """{"action":"approve","instance_code":"inst_1","task_id":"task_1","comment":"LGTM","form_json":"[{\"id\":\"field_1\",\"type\":\"input\",\"value\":\"ok\"}]"}""");
+                """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","comment":"LGTM","form_json":"[{\"id\":\"field_1\",\"type\":\"input\",\"value\":\"ok\"}]"}""");
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             client.LastApprovalActionRequest.Should().NotBeNull();
             client.LastApprovalActionRequest!.Action.Should().Be("approve");
+            client.LastApprovalActionRequest.ApprovalCode.Should().Be("def_1");
             client.LastApprovalActionRequest.UserId.Should().Be("lark-user-1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("user_id");
             client.LastApprovalActionRequest.FormJson.Should().Contain("\"field_1\"");
         }
     }
 
     [Fact]
-    public async Task LarkApprovalsActTool_UsesLarkOperatorUserIdFromTurnMetadataOverToolArgument()
+    public async Task LarkApprovalsActTool_IgnoresCallerSuppliedUserId_AndPinsOperatorIdentity()
     {
         var client = new StubLarkNyxClient
         {
@@ -1049,14 +1587,66 @@ public class LarkToolsTests
             ["channel.lark.operator_open_id"] = "ou_4159cd4d1af9b836b0fb2dc05ef52efe",
         }))
         {
+            // user_id/user_id_type are no longer tool parameters; a model-supplied value must
+            // never reach the Lark request (org-shared credential + self-reported user_id would
+            // let any caller approve on behalf of anyone).
             var result = await tool.ExecuteAsync(
-                """{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"ou_4159cd4d1af9b836b0fb2dc05ef52efe","comment":"LGTM"}""");
+                """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","user_id":"ou_someone_else","user_id_type":"open_id","comment":"LGTM"}""");
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
             client.LastApprovalActionRequest.Should().NotBeNull();
             client.LastApprovalActionRequest!.UserId.Should().Be("lark-user-1");
-            client.LastApprovalActionRequest.UserId.Should().NotBe("ou_4159cd4d1af9b836b0fb2dc05ef52efe");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("user_id");
+        }
+    }
+
+    [Fact]
+    public async Task LarkApprovalsActTool_ResolvesOperatorIdentityByPriority()
+    {
+        var client = new StubLarkNyxClient
+        {
+            ApprovalActionResponse = """{"code":0,"data":{}}""",
+        };
+        var tool = new LarkApprovalsActTool(client);
+        const string args =
+            """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}""";
+
+        // union_id is tenant-stable and cross-app safe, so it wins over user_id/open_id.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_union_id"] = "on_union_1",
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+            ["channel.lark.operator_open_id"] = "ou_operator_1",
+        }))
+        {
+            (await tool.ExecuteAsync(args)).Should().Contain("\"success\":true");
+            client.LastApprovalActionRequest!.UserId.Should().Be("on_union_1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("union_id");
+        }
+
+        // Card-operator open_id is used when no union_id/user_id is available.
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_open_id"] = "ou_operator_1",
+        }))
+        {
+            (await tool.ExecuteAsync(args)).Should().Contain("\"success\":true");
+            client.LastApprovalActionRequest!.UserId.Should().Be("ou_operator_1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("open_id");
+        }
+
+        // Plain chat turns fall back to the inbound Lark sender (union_id over open_id).
+        using (new AgentToolRequestMetadataScope("token-123", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.platform"] = "lark",
+            ["channel.sender_id"] = "ou_sender_1",
+            ["channel.lark.union_id"] = "on_sender_union_1",
+        }))
+        {
+            (await tool.ExecuteAsync(args)).Should().Contain("\"success\":true");
+            client.LastApprovalActionRequest!.UserId.Should().Be("on_sender_union_1");
+            client.LastApprovalActionRequest.UserIdType.Should().Be("union_id");
         }
     }
 
@@ -1079,7 +1669,7 @@ public class LarkToolsTests
                     {
                         Id = "tc-lark-approval",
                         Name = "lark_approvals_act",
-                        ArgumentsJson = """{"action":"approve","instance_code":"inst_1","task_id":"task_1","comment":"LGTM"}""",
+                        ArgumentsJson = """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","comment":"LGTM"}""",
                     },
                 ],
             },
@@ -1116,41 +1706,52 @@ public class LarkToolsTests
     public async Task LarkApprovalsActTool_ShouldValidateInputs_AndSurfaceProxyErrors()
     {
         var tool = new LarkApprovalsActTool(new StubLarkNyxClient());
+        var operatorMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["channel.lark.operator_user_id"] = "lark-user-1",
+        };
 
         using (new AgentToolRequestMetadataScope())
         {
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}"""))
                 .Should().Contain("No NyxID access token available");
         }
 
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
+        {
+            (await tool.ExecuteAsync("""{"action":"pause","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1"}"""))
+                .Should().Contain("action must be one of");
+            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
+                .Should().Contain("approval_code is required");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","task_id":"task_1"}"""))
+                .Should().Contain("instance_code is required");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1"}"""))
+                .Should().Contain("task_id is required");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","transfer_user_id":"ou_1"}"""))
+                .Should().Contain("transfer_user_id is only allowed when action=transfer");
+            (await tool.ExecuteAsync("""{"action":"reject","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","form_json":"{}"}"""))
+                .Should().Contain("form_json is only supported when action=approve");
+            (await tool.ExecuteAsync("""{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","form_json":"{bad json}"}"""))
+                .Should().Contain("form_json is not valid JSON");
+        }
+
+        // No channel operator identity → fail closed instead of trusting any caller-supplied id.
         using (new AgentToolRequestMetadataScope("token-123"))
         {
-            (await tool.ExecuteAsync("""{"action":"pause","instance_code":"inst_1","task_id":"task_1"}"""))
-                .Should().Contain("action must be one of");
-            (await tool.ExecuteAsync("""{"action":"approve","task_id":"task_1"}"""))
-                .Should().Contain("instance_code is required");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1"}"""))
-                .Should().Contain("task_id is required");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1"}"""))
-                .Should().Contain("user_id is required");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id_type":"email"}"""))
-                .Should().Contain("user_id_type must be one of");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","transfer_user_id":"ou_1"}"""))
-                .Should().Contain("transfer_user_id is only allowed when action=transfer");
-            (await tool.ExecuteAsync("""{"action":"reject","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","form_json":"{}"}"""))
-                .Should().Contain("form_json is only supported when action=approve");
-            (await tool.ExecuteAsync("""{"action":"approve","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","form_json":"{bad json}"}"""))
-                .Should().Contain("form_json is not valid JSON");
+            var result = await tool.ExecuteAsync(
+                """{"action":"approve","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","user_id":"ou_spoofed"}""");
+            result.Should().Contain("\"success\":false");
+            result.Should().Contain("operator identity");
         }
 
         var errorTool = new LarkApprovalsActTool(new StubLarkNyxClient
         {
             ApprovalActionResponse = """{"error":true,"status":409,"message":"already processed"}""",
         });
-        using (new AgentToolRequestMetadataScope("token-123"))
+        using (new AgentToolRequestMetadataScope("token-123", operatorMetadata))
         {
             var result = await errorTool.ExecuteAsync(
-                """{"action":"reject","instance_code":"inst_1","task_id":"task_1","user_id":"lark-user-1","comment":"nope"}""");
+                """{"action":"reject","approval_code":"def_1","instance_code":"inst_1","task_id":"task_1","comment":"nope"}""");
 
             result.Should().Contain("nyx_proxy_error status=409");
             result.Should().Contain("\"action\":\"reject\"");
@@ -1169,18 +1770,22 @@ public class LarkToolsTests
 
         var tools = await source.DiscoverToolsAsync();
 
-        tools.Should().HaveCount(11);
+        tools.Should().HaveCount(14);
         tools.Should().Contain(tool => tool is LarkMessagesSendTool);
         tools.Should().Contain(tool => tool is LarkMessagesReplyTool);
         tools.Should().Contain(tool => tool is LarkMessagesReactTool);
         tools.Should().Contain(tool => tool is LarkMessagesReactionsListTool);
         tools.Should().Contain(tool => tool is LarkMessagesReactionsDeleteTool);
-        tools.Should().Contain(tool => tool is LarkMessagesSearchTool);
+        tools.Should().NotContain(tool => tool.Name == "lark_messages_search");
         tools.Should().Contain(tool => tool is LarkMessagesBatchGetTool);
         tools.Should().Contain(tool => tool is LarkChatsLookupTool);
         tools.Should().Contain(tool => tool is LarkSheetsAppendRowsTool);
         tools.Should().Contain(tool => tool is LarkApprovalsListTool);
+        tools.Should().Contain(tool => tool is LarkApprovalsGetTool);
         tools.Should().Contain(tool => tool is LarkApprovalsActTool);
+        tools.Should().Contain(tool => tool is LarkDocxCreateTool);
+        tools.Should().Contain(tool => tool is LarkBaseCreateTool);
+        tools.Should().Contain(tool => tool is LarkResourceGrantTool);
     }
 
     [Fact]
@@ -1188,7 +1793,7 @@ public class LarkToolsTests
     {
         var source = new LarkAgentToolSource(
             new LarkToolOptions(),
-            new NyxIdToolOptions(),
+            new NyxIdToolOptions { BaseUrl = null },
             new StubLarkNyxClient());
 
         var tools = await source.DiscoverToolsAsync();
@@ -1311,7 +1916,7 @@ public class LarkToolsTests
     }
 
     [Fact]
-    public async Task LarkNyxClient_SearchAndBatchGetMessages_ShapesProxyRequest()
+    public async Task LarkNyxClient_BatchGetMessages_ShapesProxyRequest()
     {
         var handler = new RecordingHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
@@ -1324,39 +1929,105 @@ public class LarkToolsTests
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)));
 
-        await client.SearchMessagesAsync(
-            "token-123",
-            new LarkMessageSearchRequest(
-                Query: "incident",
-                ChatIds: ["oc_1"],
-                SenderIds: ["ou_1"],
-                IncludeAttachmentType: "file",
-                ChatType: "group",
-                SenderType: "user",
-                ExcludeSenderType: "bot",
-                IsAtMe: true,
-                StartTime: "2026-04-20T00:00:00+08:00",
-                EndTime: "2026-04-23T23:59:59+08:00",
-                PageSize: 20,
-                PageToken: "page-2"),
-            CancellationToken.None);
-
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.RequestUri!.ToString()
-            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/search?page_size=20&page_token=page-2");
-        handler.LastBody.Should().Contain("\"query\":\"incident\"");
-        handler.LastBody.Should().Contain("\"chat_ids\"");
-        handler.LastBody.Should().Contain("\"from_ids\"");
-        handler.LastBody.Should().Contain("\"include_attachment_types\"");
-        handler.LastBody.Should().Contain("\"time_range\"");
-
         await client.BatchGetMessagesAsync(
             "token-123",
             new LarkMessagesBatchGetRequest(["om_1", "om_2"]),
             CancellationToken.None);
 
+        handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.RequestUri!.ToString()
             .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/mget?card_msg_content_type=raw_card_content&message_ids=om_1&message_ids=om_2");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_DownloadMessageResource_ShouldShapeImageResourceProxyRequest()
+    {
+        var payload = new byte[] { 1, 2, 3, 4 };
+        var handler = new RecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payload),
+            };
+            response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+            response.Content.Headers.ContentDisposition =
+                System.Net.Http.Headers.ContentDispositionHeaderValue.Parse("attachment; filename=\"receipt.png\"");
+            return response;
+        });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        var result = await client.DownloadMessageResourceAsync(
+            "token-123",
+            new LarkMessageResourceDownloadRequest("om_123", "img_v3_abc", LarkMessageResourceKind.Image),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Content.Should().Equal(payload);
+        result.ContentType.Should().Be("image/png");
+        result.FileName.Should().Be("receipt.png");
+        result.HttpStatus.Should().Be(200);
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/resources/img_v3_abc?type=image");
+        handler.LastBody.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_DownloadMessageResource_ShouldShapeFileResourceProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([9, 8, 7]),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.DownloadMessageResourceAsync(
+            "token-123",
+            new LarkMessageResourceDownloadRequest("om_123", "file_v3_abc", LarkMessageResourceKind.File),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_123/resources/file_v3_abc?type=file");
+    }
+
+    [Theory]
+    [InlineData("", "img_v3_abc", LarkMessageResourceKind.Image)]
+    [InlineData("msg_123", "img_v3_abc", LarkMessageResourceKind.Image)]
+    [InlineData("om_123", "", LarkMessageResourceKind.Image)]
+    [InlineData("om_123", "img_v3_abc", (LarkMessageResourceKind)99)]
+    public async Task LarkNyxClient_DownloadMessageResource_ShouldValidateInputs(
+        string messageId,
+        string resourceKey,
+        LarkMessageResourceKind kind)
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent([]),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await FluentActions.Invoking(() => client.DownloadMessageResourceAsync(
+                "token-123",
+                new LarkMessageResourceDownloadRequest(messageId, resourceKey, kind),
+                CancellationToken.None))
+            .Should().ThrowAsync<ArgumentException>();
+        handler.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1426,7 +2097,7 @@ public class LarkToolsTests
         var handler = new RecordingHandler(_ =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"code":0,"data":{"tasks":[],"count":0}}""", Encoding.UTF8, "application/json"),
+                Content = new StringContent("""{"code":0,"data":{"tasks":[],"count":{"total":0,"has_more":false}}}""", Encoding.UTF8, "application/json"),
             });
         var client = new LarkNyxClient(
             new LarkToolOptions { ProviderSlug = "api-lark-bot" },
@@ -1436,12 +2107,64 @@ public class LarkToolsTests
 
         await client.ListApprovalTasksAsync(
             "token-123",
-            new LarkApprovalTaskQueryRequest("1", "def_1", "zh-CN", 10, "page-1", "open_id"),
+            new LarkApprovalTaskQueryRequest("1", "ou_operator_1", 10, "page-1", "open_id"),
             CancellationToken.None);
 
         handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        // Official endpoint is GET /approval/v4/tasks/query with user_id REQUIRED; the bare
+        // /approval/v4/tasks path does not exist (Lark answers it with a misleading 99991663).
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/query?user_id=ou_operator_1&topic=1&page_size=10&page_token=page-1&user_id_type=open_id");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_ListApprovalTasks_OmitsOptionalQueryParameters()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"tasks":[],"count":{"total":0,"has_more":false}}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.ListApprovalTasksAsync(
+            "token-123",
+            new LarkApprovalTaskQueryRequest("1", "ou_operator_1", 20, null, null),
+            CancellationToken.None);
+
         handler.LastRequest!.RequestUri!.ToString()
-            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks?topic=1&page_size=10&definition_code=def_1&locale=zh-CN&page_token=page-1&user_id_type=open_id");
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/query?user_id=ou_operator_1&topic=1&page_size=20");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_GetApprovalInstance_ShapesProxyRequest()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{"instance_code":"inst_1","status":"1"}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.GetApprovalInstanceAsync(
+            "token-123",
+            new LarkApprovalInstanceGetRequest("inst_1", "zh-CN", "open_id"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/instances/inst_1?locale=zh-CN&user_id_type=open_id");
+        handler.LastBody.Should().BeNull();
     }
 
     [Fact]
@@ -1460,14 +2183,75 @@ public class LarkToolsTests
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("transfer", "inst_1", "task_1", "lark-user-1", "reassign", null, "ou_target", "open_id"),
+            new LarkApprovalTaskActionRequest("transfer", "approval_def_1", "inst_1", "task_1", "lark-user-1", "reassign", null, "ou_target", "open_id"),
+            CancellationToken.None);
+
+        handler.LastRequest.Should().NotBeNull();
+        // Official endpoint is /tasks/transfer; /tasks/forward does not exist on the Lark side.
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/transfer?user_id_type=open_id");
+        handler.LastBody.Should().Contain("\"approval_code\":\"approval_def_1\"");
+        handler.LastBody.Should().Contain("\"user_id\":\"lark-user-1\"");
+        handler.LastBody.Should().Contain("\"transfer_user_id\":\"ou_target\"");
+    }
+
+    [Fact]
+    public async Task LarkNyxClient_DocxCreateAppendPermission_ShapesProxyRequests()
+    {
+        var handler = new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"code":0,"data":{}}""", Encoding.UTF8, "application/json"),
+            });
+        var client = new LarkNyxClient(
+            new LarkToolOptions { ProviderSlug = "api-lark-bot" },
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)));
+
+        await client.CreateDocxDocumentAsync(
+            "token-123",
+            new LarkDocxCreateRequest("Daily report"),
             CancellationToken.None);
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.RequestUri!.ToString()
-            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/forward?user_id_type=open_id");
-        handler.LastBody.Should().Contain("\"user_id\":\"lark-user-1\"");
-        handler.LastBody.Should().Contain("\"transfer_user_id\":\"ou_target\"");
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/docx/v1/documents");
+        handler.LastBody.Should().Contain("\"title\":\"Daily report\"");
+
+        const int ExpectedDocxBlockTextLength = 2_000;
+        var longText = new string('x', ExpectedDocxBlockTextLength + 5);
+        await client.AppendDocxTextBlocksAsync(
+            "token-123",
+            new LarkDocxAppendBlocksRequest("doccn_123", longText),
+            CancellationToken.None);
+
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/docx/v1/documents/doccn_123/blocks/doccn_123/children");
+        using (var appendBody = JsonDocument.Parse(handler.LastBody!))
+        {
+            var children = appendBody.RootElement.GetProperty("children");
+            children.GetArrayLength().Should().Be(2);
+            children[0].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString()!
+                .Length.Should().Be(ExpectedDocxBlockTextLength);
+            children[1].GetProperty("text").GetProperty("elements")[0].GetProperty("text_run").GetProperty("content").GetString()!
+                .Length.Should().Be(5);
+        }
+
+        await client.SetDrivePermissionAsync(
+            "token-123",
+            new LarkDrivePermissionRequest("doccn_123", LarkDocxVisibility.Editable, "oc_chat_1", "chat_id"),
+            CancellationToken.None);
+
+        handler.LastRequest!.Method.Method.Should().Be("PATCH");
+        handler.LastRequest.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/drive/v1/permissions/doccn_123/public?type=docx");
+        handler.LastBody.Should().Contain("\"link_share_entity\":\"tenant_editable\"");
+        handler.LastBody.Should().Contain("\"receive_id\":\"oc_chat_1\"");
+        // share_entity must use Lark's enum (anyone | same_tenant | only_full_access), never the
+        // security/comment "anyone_can_view" value which Lark rejects with a 400 param error.
+        handler.LastBody.Should().Contain("\"share_entity\":\"same_tenant\"");
+        handler.LastBody.Should().NotContain("\"share_entity\":\"anyone_can_view\"");
     }
 
     [Fact]
@@ -1489,25 +2273,51 @@ public class LarkToolsTests
         public string ReactionCreateResponse { get; set; } = """{"code":0,"data":{}}""";
         public string ReactionListResponse { get; set; } = """{"code":0,"data":{"items":[]}}""";
         public string ReactionDeleteResponse { get; set; } = """{"code":0,"data":{}}""";
-        public string MessageSearchResponse { get; set; } = """{"code":0,"data":{"items":[],"count":0}}""";
         public string MessagesBatchGetResponse { get; set; } = """{"code":0,"data":{"items":[]}}""";
+        public LarkMessageResourceDownloadResult MessageResourceResponse { get; set; } = new(
+            true,
+            [],
+            "application/octet-stream");
         public string SearchResponse { get; set; } = """{"code":0,"data":{"items":[],"total":0}}""";
         public string AppendSheetResponse { get; set; } = """{"code":0,"data":{"updates":{}}}""";
-        public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":0}}""";
+        public string ApprovalListResponse { get; set; } = """{"code":0,"data":{"tasks":[],"count":{"total":0,"has_more":false}}}""";
+        public string ApprovalGetResponse { get; set; } = """{"code":0,"data":{"instance_code":"inst_default","status":"1"}}""";
         public string ApprovalActionResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string DocxCreateResponse { get; set; } = """{"code":0,"data":{"document":{"document_id":"doccn_default","url":"https://example.feishu.cn/docx/doccn_default"}}}""";
+        public string DocxAppendResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string DrivePermissionResponse { get; set; } = """{"code":0,"data":{}}""";
+        public string DriveMediaUploadResponse { get; set; } = """{"code":0,"data":{"file_token":"file_default"}}""";
+        public string ApprovalFileUploadResponse { get; set; } = """{"code":0,"data":{"code":"approval_file_default"}}""";
+        public string BitableCreateResponse { get; set; } = """{"code":0,"data":{"app":{"app_token":"bascn_default","url":"https://example.feishu.cn/base/bascn_default","default_table_id":"tbl_default"}}}""";
+        public string GrantResourceMemberResponse { get; set; } = """{"code":0,"data":{"member":{"member_id":"ou_default","perm":"full_access"}}}""";
+        public Exception? DriveMediaUploadException { get; set; }
+        public Exception? ApprovalFileUploadException { get; set; }
 
         public string? LastSendToken { get; private set; }
+        public string? LastDocxCreateToken { get; private set; }
+        public string? LastMessageResourceToken { get; private set; }
         public LarkSendMessageRequest? LastSendRequest { get; private set; }
         public LarkReplyMessageRequest? LastReplyRequest { get; private set; }
         public LarkMessageReactionRequest? LastReactionRequest { get; private set; }
         public LarkMessageReactionListRequest? LastReactionListRequest { get; private set; }
         public LarkMessageReactionDeleteRequest? LastReactionDeleteRequest { get; private set; }
-        public LarkMessageSearchRequest? LastMessageSearchRequest { get; private set; }
         public LarkMessagesBatchGetRequest? LastBatchGetRequest { get; private set; }
+        public LarkMessageResourceDownloadRequest? LastMessageResourceRequest { get; private set; }
         public LarkChatSearchRequest? LastSearchRequest { get; private set; }
         public LarkSheetAppendRowsRequest? LastSheetAppendRequest { get; private set; }
         public LarkApprovalTaskQueryRequest? LastApprovalQueryRequest { get; private set; }
+        public LarkApprovalInstanceGetRequest? LastApprovalGetRequest { get; private set; }
         public LarkApprovalTaskActionRequest? LastApprovalActionRequest { get; private set; }
+        public LarkDocxCreateRequest? LastDocxCreateRequest { get; private set; }
+        public LarkDocxAppendBlocksRequest? LastDocxAppendRequest { get; private set; }
+        public LarkDrivePermissionRequest? LastDrivePermissionRequest { get; private set; }
+        public LarkDriveMediaUploadRequest? LastDriveMediaUploadRequest { get; private set; }
+        public LarkApprovalFileUploadRequest? LastApprovalFileUploadRequest { get; private set; }
+        public string? LastBitableCreateToken { get; private set; }
+        public LarkBitableCreateRequest? LastBitableCreateRequest { get; private set; }
+        public string? LastGrantToken { get; private set; }
+        public LarkResourceMemberGrantRequest? LastGrantRequest { get; private set; }
+        public int GrantCallCount { get; private set; }
 
         public Task<string> SendMessageAsync(string token, LarkSendMessageRequest request, CancellationToken ct)
         {
@@ -1540,16 +2350,20 @@ public class LarkToolsTests
             return Task.FromResult(ReactionDeleteResponse);
         }
 
-        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
-        {
-            LastMessageSearchRequest = request;
-            return Task.FromResult(MessageSearchResponse);
-        }
-
         public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
         {
             LastBatchGetRequest = request;
             return Task.FromResult(MessagesBatchGetResponse);
+        }
+
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct)
+        {
+            LastMessageResourceToken = token;
+            LastMessageResourceRequest = request;
+            return Task.FromResult(MessageResourceResponse);
         }
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
@@ -1570,10 +2384,66 @@ public class LarkToolsTests
             return Task.FromResult(ApprovalListResponse);
         }
 
+        public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct)
+        {
+            LastApprovalGetRequest = request;
+            return Task.FromResult(ApprovalGetResponse);
+        }
+
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
         {
             LastApprovalActionRequest = request;
             return Task.FromResult(ApprovalActionResponse);
+        }
+
+        public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct)
+        {
+            LastDocxCreateToken = token;
+            LastDocxCreateRequest = request;
+            return Task.FromResult(DocxCreateResponse);
+        }
+
+        public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct)
+        {
+            LastDocxAppendRequest = request;
+            return Task.FromResult(DocxAppendResponse);
+        }
+
+        public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct)
+        {
+            LastDrivePermissionRequest = request;
+            return Task.FromResult(DrivePermissionResponse);
+        }
+
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct)
+        {
+            LastBitableCreateToken = token;
+            LastBitableCreateRequest = request;
+            return Task.FromResult(BitableCreateResponse);
+        }
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct)
+        {
+            LastGrantToken = token;
+            LastGrantRequest = request;
+            GrantCallCount++;
+            return Task.FromResult(GrantResourceMemberResponse);
+        }
+
+        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
+        {
+            LastDriveMediaUploadRequest = request;
+            if (DriveMediaUploadException != null)
+                throw DriveMediaUploadException;
+            return Task.FromResult(DriveMediaUploadResponse);
+        }
+
+        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
+        {
+            LastApprovalFileUploadRequest = request;
+            if (ApprovalFileUploadException != null)
+                throw ApprovalFileUploadException;
+            return Task.FromResult(ApprovalFileUploadResponse);
         }
     }
 

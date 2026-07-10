@@ -10,6 +10,8 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
+using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
@@ -35,10 +37,19 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionRuntimeOptions>(sp =>
             sp.GetRequiredService<WorkflowExecutionProjectionOptions>());
         services.AddProjectionReadModelRuntime();
+        // Heal/guard the workflow binding write path so a definition actor's binding slot can never
+        // stay Run-kind (a relayed run-bind clobber frozen at a high run version). Scoped to
+        // WorkflowActorBindingDocument only; the generic ProjectionWriteResultEvaluator is untouched.
+        services.AddSingleton<ObservedProjectionWriteDispatcher<WorkflowActorBindingDocument>>();
+        services.AddSingleton<IProjectionWriteDispatcher<WorkflowActorBindingDocument>>(sp =>
+            new WorkflowActorBindingHealingWriteDispatcher(
+                sp.GetRequiredService<ObservedProjectionWriteDispatcher<WorkflowActorBindingDocument>>(),
+                sp.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>()));
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>, WorkflowExecutionCurrentStateDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>, WorkflowRunInsightReportDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowActorBindingDocument>, WorkflowActorBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowCatalogCurrentStateDocument>, WorkflowCatalogCurrentStateDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<WorkflowExternalApprovalContinuationDocument>, WorkflowExternalApprovalContinuationDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
         services.TryAddSingleton<WorkflowExecutionReadModelMapper>();
         services.TryAddSingleton<WorkflowCatalogReadModelMapper>();
@@ -80,6 +91,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionSessionEventHub<WorkflowRunEventEnvelope>, ProjectionSessionEventHub<WorkflowRunEventEnvelope>>();
         services.TryAddSingleton<WorkflowExecutionCurrentStateQueryPort>();
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
+        services.TryAddSingleton<WorkflowRunForkSeedReadModelMapper>();
+        services.TryAddSingleton<WorkflowRunForkSeedQueryPort>();
+        services.TryAddSingleton<WorkflowExternalApprovalContinuationLookupPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
@@ -97,9 +111,13 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowExecutionProjectionPort>());
         services.TryAddSingleton<IWorkflowExecutionCurrentStateQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionCurrentStateQueryPort>());
+        services.TryAddSingleton<IWorkflowRunForkSeedQueryPort>(sp =>
+            sp.GetRequiredService<WorkflowRunForkSeedQueryPort>());
+        services.TryAddSingleton<IWorkflowExternalApprovalContinuationLookupPort>(sp =>
+            sp.GetRequiredService<WorkflowExternalApprovalContinuationLookupPort>());
         services.TryAddSingleton<IWorkflowExecutionArtifactQueryPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionArtifactQueryPort>());
-        services.TryAddSingleton<IWorkflowChatRunObservationScopeActivationPort, WorkflowChatRunObservationScopeActivationPort>();
+        services.TryAddSingleton<IWorkflowChatRunObservationScopeLeasePreparationPort, WorkflowChatRunObservationScopeLeasePreparationPort>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowReadModelStartupValidationHostedService>());
         services.AddProjectionArtifactMaterializer<
             WorkflowBindingProjectionContext,
@@ -110,6 +128,9 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowExecutionCurrentStateProjector>();
+        services.AddProjectionArtifactMaterializer<
+            WorkflowExecutionMaterializationContext,
+            WorkflowExternalApprovalContinuationProjector>();
         services.AddProjectionArtifactMaterializer<
             WorkflowExecutionMaterializationContext,
             WorkflowRunInsightReportArtifactProjector>();

@@ -36,13 +36,13 @@ import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
 import {
-  buildRuntimeGAgentAssemblyQualifiedName,
-  buildRuntimeGAgentTypeLabel,
+  buildRuntimeGAgentKindValue,
+  buildRuntimeGAgentKindLabel,
   collectRuntimeGAgentActorIds,
   describeRuntimeGAgentBindingRevisionTarget,
   formatRuntimeGAgentBindingImplementationKind,
   getRuntimeGAgentCurrentBindingRevision,
-  matchesRuntimeGAgentTypeDescriptor,
+  matchesRuntimeGAgentKindDescriptor,
   type RuntimeGAgentBindingEndpointInput,
   type RuntimeGAgentBindingRevision,
 } from '@/shared/models/runtime/gagents';
@@ -52,19 +52,20 @@ import { saveRecentRun } from '@/shared/runs/recentRuns';
 import { studioApi } from '@/shared/studio/api';
 import {
   AevatarContextDrawer,
+  type AevatarBreadcrumbItem,
   AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarStatusTag,
   AevatarWorkbenchLayout,
 } from '@/shared/ui/aevatarPageShells';
 import { describeError } from '@/shared/ui/errorText';
+import { getUserFacingIdentifierLabel } from '@/shared/ui/userFacingIdentifiers';
 import { resolveStudioScopeContext } from '@/pages/scopes/components/resolvedScope';
 import { t } from "@/shared/i18n/messages";
 
 type ActorReuseMode = 'new' | 'existing';
 const GAGENT_DRAFT_RUN_TIMEOUT_MS = 30_000;
 const GAGENT_DRAFT_RUN_CLIENT_TIMEOUT_MS = GAGENT_DRAFT_RUN_TIMEOUT_MS + 5_000;
-
 type NoticeState = {
   message: string;
   type: 'success' | 'error';
@@ -403,7 +404,7 @@ const GAgentsPage: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [scopeId, setScopeId] = useState(() => readQueryValue('scopeId'));
   const [typeFilter, setTypeFilter] = useState('');
-  const [selectedActorTypeName, setSelectedActorTypeName] = useState(() =>
+  const [selectedAgentKind, setSelectedAgentKind] = useState(() =>
     readQueryValue('type'),
   );
   const [actorReuseMode, setActorReuseMode] = useState<ActorReuseMode>(() =>
@@ -446,9 +447,9 @@ const GAgentsPage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data],
   );
-  const gAgentTypesQuery = useQuery({
-    queryKey: ['runtime-gagents', 'types'],
-    queryFn: () => runtimeGAgentApi.listTypes(),
+  const gAgentKindsQuery = useQuery({
+    queryKey: ['runtime-gagents', 'kinds'],
+    queryFn: () => runtimeGAgentApi.listKinds(),
     retry: false,
   });
   const gAgentActorsQuery = useQuery({
@@ -470,32 +471,32 @@ const GAgentsPage: React.FC = () => {
     }
   }, [resolvedScope?.scopeId, scopeId]);
 
-  const selectedType = useMemo(
+  const selectedKindDescriptor = useMemo(
     () =>
-      (gAgentTypesQuery.data ?? []).find((descriptor) =>
-        matchesRuntimeGAgentTypeDescriptor(selectedActorTypeName, descriptor),
+      (gAgentKindsQuery.data ?? []).find((descriptor) =>
+        matchesRuntimeGAgentKindDescriptor(selectedAgentKind, descriptor),
       ) || null,
-    [gAgentTypesQuery.data, selectedActorTypeName],
+    [gAgentKindsQuery.data, selectedAgentKind],
   );
 
   useEffect(() => {
-    if (selectedType || !gAgentTypesQuery.data?.length) {
+    if (selectedKindDescriptor || !gAgentKindsQuery.data?.length) {
       return;
     }
 
-    const defaultType = gAgentTypesQuery.data[0];
-    setSelectedActorTypeName(
-      buildRuntimeGAgentAssemblyQualifiedName(defaultType),
+    const defaultType = gAgentKindsQuery.data[0];
+    setSelectedAgentKind(
+      buildRuntimeGAgentKindValue(defaultType),
     );
     setBindingDraft((current) =>
       current.displayName.trim()
         ? current
         : {
             ...current,
-            displayName: defaultType.typeName,
+            displayName: buildRuntimeGAgentKindLabel(defaultType),
           },
     );
-  }, [gAgentTypesQuery.data, selectedType]);
+  }, [gAgentKindsQuery.data, selectedKindDescriptor]);
 
   const currentBindingRevision = useMemo(
     () => getRuntimeGAgentCurrentBindingRevision(bindingQuery.data),
@@ -535,54 +536,54 @@ const GAgentsPage: React.FC = () => {
     [bindingQuery.data?.revisions, currentBindingRevision, selectedRevisionId],
   );
 
-  const filteredTypes = useMemo(() => {
+  const filteredKinds = useMemo(() => {
     const normalizedKeyword = typeFilter.trim().toLowerCase();
-    const descriptors = gAgentTypesQuery.data ?? [];
+    const descriptors = gAgentKindsQuery.data ?? [];
     if (!normalizedKeyword) {
       return descriptors;
     }
 
     return descriptors.filter((descriptor) =>
-      [descriptor.typeName, descriptor.fullName, descriptor.assemblyName]
+      [descriptor.displayName, descriptor.agentKind, descriptor.diagnosticClrTypeName]
         .join(' ')
         .toLowerCase()
         .includes(normalizedKeyword),
     );
-  }, [gAgentTypesQuery.data, typeFilter]);
+  }, [gAgentKindsQuery.data, typeFilter]);
 
   const savedActorIds = useMemo(
     () =>
       collectRuntimeGAgentActorIds(
-        selectedActorTypeName,
+        selectedAgentKind,
         gAgentActorsQuery.data ?? [],
-        selectedType,
+        selectedKindDescriptor,
       ),
-    [gAgentActorsQuery.data, selectedActorTypeName, selectedType],
+    [gAgentActorsQuery.data, selectedAgentKind, selectedKindDescriptor],
   );
 
-  const selectedActorStoreTypeName =
-    selectedType?.fullName || selectedActorTypeName.split(',')[0]?.trim() || '';
+  const selectedActorStoreAgentKind =
+    selectedKindDescriptor?.agentKind || selectedAgentKind.split(',')[0]?.trim() || '';
 
   const actorGroups = useMemo(() => {
-    const descriptors = gAgentTypesQuery.data ?? [];
+    const descriptors = gAgentKindsQuery.data ?? [];
     return [...(gAgentActorsQuery.data ?? [])].sort((left, right) => {
       const leftSelected = descriptors.some(
         (descriptor) =>
-          matchesRuntimeGAgentTypeDescriptor(left.gAgentType, descriptor) &&
-          matchesRuntimeGAgentTypeDescriptor(selectedActorTypeName, descriptor),
+          matchesRuntimeGAgentKindDescriptor(left.agentKind, descriptor) &&
+          matchesRuntimeGAgentKindDescriptor(selectedAgentKind, descriptor),
       );
       const rightSelected = descriptors.some(
         (descriptor) =>
-          matchesRuntimeGAgentTypeDescriptor(right.gAgentType, descriptor) &&
-          matchesRuntimeGAgentTypeDescriptor(selectedActorTypeName, descriptor),
+          matchesRuntimeGAgentKindDescriptor(right.agentKind, descriptor) &&
+          matchesRuntimeGAgentKindDescriptor(selectedAgentKind, descriptor),
       );
       if (leftSelected !== rightSelected) {
         return leftSelected ? -1 : 1;
       }
 
-      return left.gAgentType.localeCompare(right.gAgentType);
+      return left.agentKind.localeCompare(right.agentKind);
     });
-  }, [gAgentActorsQuery.data, gAgentTypesQuery.data, selectedActorTypeName]);
+  }, [gAgentActorsQuery.data, gAgentKindsQuery.data, selectedAgentKind]);
 
   const totalSavedActors = useMemo(
     () =>
@@ -623,18 +624,18 @@ const GAgentsPage: React.FC = () => {
 
   const currentBindingMatchesSelectedType = useMemo(
     () =>
-      selectedType
-        ? matchesRuntimeGAgentTypeDescriptor(
-            currentBindingRevision?.staticActorTypeName ?? '',
-            selectedType,
+      selectedKindDescriptor
+        ? matchesRuntimeGAgentKindDescriptor(
+            currentBindingRevision?.staticAgentKind ?? '',
+            selectedKindDescriptor,
           )
         : false,
-    [currentBindingRevision?.staticActorTypeName, selectedType],
+    [currentBindingRevision?.staticAgentKind, selectedKindDescriptor],
   );
 
   const bindingImpactMessage = useMemo(() => {
-    if (!selectedType) {
-      return 'Select a discovered GAgent type to prepare a published binding.';
+    if (!selectedKindDescriptor) {
+      return 'Select a discovered GAgent kind to prepare a published binding.';
     }
 
     if (!bindingQuery.data?.available || !currentBindingRevision) {
@@ -645,19 +646,19 @@ const GAgentsPage: React.FC = () => {
       return 'This will publish a new revision for the current GAgent service without changing the product surface.';
     }
 
-    return `This will replace the current default service (${formatRuntimeGAgentBindingImplementationKind(currentBindingRevision.implementationKind)} · ${describeRuntimeGAgentBindingRevisionTarget(currentBindingRevision)}) with the selected GAgent type.`;
+    return `This will replace the current default service (${formatRuntimeGAgentBindingImplementationKind(currentBindingRevision.implementationKind)} · ${describeRuntimeGAgentBindingRevisionTarget(currentBindingRevision)}) with the selected GAgent kind.`;
   }, [
     bindingQuery.data?.available,
     currentBindingMatchesSelectedType,
     currentBindingRevision,
-    selectedType,
+    selectedKindDescriptor,
   ]);
 
   useEffect(() => {
     history.replace(
       buildRuntimeGAgentsHref({
         scopeId: normalizedScopeId || undefined,
-        actorTypeName: selectedActorTypeName.trim() || undefined,
+        agentKind: selectedAgentKind.trim() || undefined,
         actorId:
           actorReuseMode === 'existing'
             ? preferredActorId.trim() || undefined
@@ -668,15 +669,15 @@ const GAgentsPage: React.FC = () => {
     actorReuseMode,
     normalizedScopeId,
     preferredActorId,
-    selectedActorTypeName,
+    selectedAgentKind,
   ]);
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
 
   useEffect(() => {
     const routeName =
-      selectedType?.typeName ||
-      selectedActorTypeName.split(',')[0]?.trim() ||
+      selectedKindDescriptor?.displayName ||
+      selectedAgentKind.split(',')[0]?.trim() ||
       '';
     const candidateId =
       runState.commandId ||
@@ -715,8 +716,8 @@ const GAgentsPage: React.FC = () => {
     runState.runId,
     runState.status,
     normalizedScopeId,
-    selectedActorTypeName,
-    selectedType?.typeName,
+    selectedAgentKind,
+    selectedKindDescriptor?.displayName,
   ]);
 
   const invalidateActorQueries = async (targetScopeId: string) => {
@@ -754,32 +755,32 @@ const GAgentsPage: React.FC = () => {
     ]);
   };
 
-  const resolveActorTypeSelection = (actorTypeName: string): string => {
-    const descriptor = (gAgentTypesQuery.data ?? []).find((entry) =>
-      matchesRuntimeGAgentTypeDescriptor(actorTypeName, entry),
+  const resolveAgentKindSelection = (agentKind: string): string => {
+    const descriptor = (gAgentKindsQuery.data ?? []).find((entry) =>
+      matchesRuntimeGAgentKindDescriptor(agentKind, entry),
     );
     return descriptor
-      ? buildRuntimeGAgentAssemblyQualifiedName(descriptor)
-      : actorTypeName.trim();
+      ? buildRuntimeGAgentKindValue(descriptor)
+      : agentKind.trim();
   };
 
-  const handleSelectType = (actorTypeName: string) => {
-    const descriptor = (gAgentTypesQuery.data ?? []).find((entry) =>
-      matchesRuntimeGAgentTypeDescriptor(actorTypeName, entry),
+  const handleSelectKind = (agentKind: string) => {
+    const descriptor = (gAgentKindsQuery.data ?? []).find((entry) =>
+      matchesRuntimeGAgentKindDescriptor(agentKind, entry),
     );
-    const nextTypeName = descriptor
-      ? buildRuntimeGAgentAssemblyQualifiedName(descriptor)
-      : actorTypeName.trim();
+    const nextAgentKind = descriptor
+      ? buildRuntimeGAgentKindValue(descriptor)
+      : agentKind.trim();
 
-    setSelectedActorTypeName(nextTypeName);
+    setSelectedAgentKind(nextAgentKind);
     setBindingNotice(null);
     setPublishAcknowledged(false);
     setBindingDraft((current) => {
       const currentDisplayName = current.displayName.trim();
-      const selectedTypeName = selectedType?.typeName.trim() || '';
+      const selectedKindLabel = selectedKindDescriptor?.displayName.trim() || '';
       const nextDisplayName =
-        !currentDisplayName || currentDisplayName === selectedTypeName
-          ? descriptor?.typeName || current.displayName
+        !currentDisplayName || currentDisplayName === selectedKindLabel
+          ? descriptor?.displayName || current.displayName
           : current.displayName;
       return {
         ...current,
@@ -790,7 +791,7 @@ const GAgentsPage: React.FC = () => {
     if (actorReuseMode === 'existing' && !preferredActorId.trim()) {
       const nextActorId =
         collectRuntimeGAgentActorIds(
-          nextTypeName,
+          nextAgentKind,
           gAgentActorsQuery.data ?? [],
           descriptor,
         )[0] || '';
@@ -803,7 +804,7 @@ const GAgentsPage: React.FC = () => {
     ) {
       const nextBindingActorId =
         collectRuntimeGAgentActorIds(
-          nextTypeName,
+          nextAgentKind,
           gAgentActorsQuery.data ?? [],
           descriptor,
         )[0] || '';
@@ -814,20 +815,20 @@ const GAgentsPage: React.FC = () => {
     }
   };
 
-  const handleUseRegistryActor = (actorTypeName: string, actorId: string) => {
-    handleSelectType(actorTypeName);
+  const handleUseRegistryActor = (agentKind: string, actorId: string) => {
+    handleSelectKind(agentKind);
     setActorReuseMode('existing');
     setPreferredActorId(actorId);
     setActiveWorkbenchTab('draft');
     setIsActorRegistryDrawerOpen(false);
     setRegistryNotice({
       type: 'success',
-      message: t('pages.gagents.index.prepared.actor.for.next', 'Prepared {actorId} for the next draft run.', { actorId }),
+      message: t('pages.gagents.index.prepared.actor.for.next', 'Saved actor is ready for the next draft run.'),
     });
   };
 
   const handleRemoveRegistryActor = async (
-    actorTypeName: string,
+    agentKind: string,
     actorId: string,
   ) => {
     if (!normalizedScopeId) {
@@ -838,12 +839,12 @@ const GAgentsPage: React.FC = () => {
       return;
     }
 
-    setRegistryPendingKey(`remove:${actorTypeName}:${actorId}`);
+    setRegistryPendingKey(`remove:${agentKind}:${actorId}`);
     setRegistryNotice(null);
     try {
       await runtimeGAgentApi.removeActor(
         normalizedScopeId,
-        actorTypeName,
+        agentKind,
         actorId,
       );
       await invalidateActorQueries(normalizedScopeId);
@@ -858,7 +859,7 @@ const GAgentsPage: React.FC = () => {
       }
       setRegistryNotice({
         type: 'success',
-        message: t('pages.gagents.index.removed.actor.from.registry', 'Removed {actorId} from the saved actor registry.', { actorId }),
+        message: t('pages.gagents.index.removed.actor.from.registry', 'Removed the saved actor from the registry.'),
       });
     } catch (error) {
       setRegistryNotice({
@@ -972,10 +973,10 @@ const GAgentsPage: React.FC = () => {
   };
 
   const handlePublishBinding = async (options?: { openRuns?: boolean }) => {
-    const actorTypeName =
-      selectedType != null
-        ? buildRuntimeGAgentAssemblyQualifiedName(selectedType)
-        : selectedActorTypeName.trim();
+    const agentKind =
+      selectedKindDescriptor != null
+        ? buildRuntimeGAgentKindValue(selectedKindDescriptor)
+        : selectedAgentKind.trim();
     const normalizedEndpoints = normalizeBindingEndpoints(
       bindingDraft.endpoints,
     );
@@ -999,10 +1000,10 @@ const GAgentsPage: React.FC = () => {
       return;
     }
 
-    if (!actorTypeName) {
+    if (!agentKind) {
       setBindingNotice({
         type: 'error',
-        message: t("pages.gagents.index.choose.discovered.gagent.type.before", "Choose a discovered GAgent type before publishing a binding."),
+        message: t("pages.gagents.index.choose.discovered.gagent.kind.before", "Choose a discovered GAgent kind before publishing a binding."),
       });
       return;
     }
@@ -1023,8 +1024,7 @@ const GAgentsPage: React.FC = () => {
         type: 'error',
         message: t(
           'pages.gagents.index.endpoint.id.duplicated',
-          'Endpoint id {endpointId} is duplicated. Published endpoints must be unique.',
-          { endpointId: duplicateEndpointId },
+          'Endpoint is duplicated. Published endpoints must be unique.',
         ),
       });
       return;
@@ -1056,9 +1056,9 @@ const GAgentsPage: React.FC = () => {
         scopeId: normalizedScopeId,
         displayName:
           bindingDraft.displayName.trim() ||
-          selectedType?.typeName ||
-          actorTypeName,
-        actorTypeName,
+          selectedKindDescriptor?.displayName ||
+          agentKind,
+        agentKind,
         preferredActorId: preferredActor || undefined,
         endpoints: normalizedEndpoints,
       });
@@ -1071,9 +1071,8 @@ const GAgentsPage: React.FC = () => {
         type: 'success',
         message: t(
           'pages.gagents.index.published.target.on.revision',
-          'Published {targetName} on revision {revisionId}.',
+          'Published {targetName}.',
           {
-            revisionId: result.revisionId,
             targetName: result.displayName || result.targetName,
           },
         ),
@@ -1112,11 +1111,7 @@ const GAgentsPage: React.FC = () => {
         type: 'success',
         message: t(
           'pages.gagents.index.workspace.serving.revision',
-          'Workspace {scopeId} is now serving revision {revisionId}.',
-          {
-            revisionId: result.revisionId,
-            scopeId: result.scopeId,
-          },
+          'Workspace is now serving the selected revision.',
         ),
       });
     } catch (error) {
@@ -1147,8 +1142,7 @@ const GAgentsPage: React.FC = () => {
         type: 'success',
         message: t(
           'pages.gagents.index.revision.accepted.for.retirement',
-          'Revision {revisionId} was accepted for retirement.',
-          { revisionId: result.revisionId },
+          'Revision was accepted for retirement.',
         ),
       });
     } catch (error) {
@@ -1162,19 +1156,19 @@ const GAgentsPage: React.FC = () => {
   };
 
   const handleRun = async () => {
-    const normalizedActorTypeName =
-      selectedActorTypeName.trim() ||
-      (selectedType
-        ? buildRuntimeGAgentAssemblyQualifiedName(selectedType)
+    const normalizedAgentKind =
+      selectedAgentKind.trim() ||
+      (selectedKindDescriptor
+        ? buildRuntimeGAgentKindValue(selectedKindDescriptor)
         : '');
     const normalizedPrompt = prompt.trim();
     const normalizedPreferredActorId =
       actorReuseMode === 'existing' ? preferredActorId.trim() : '';
 
-    if (!normalizedScopeId || !normalizedActorTypeName || !normalizedPrompt) {
+    if (!normalizedScopeId || !normalizedAgentKind || !normalizedPrompt) {
       setRunState((current) => ({
         ...current,
-        error: 'Workspace, GAgent type, and prompt are required before running.',
+        error: 'Workspace, GAgent kind, and prompt are required before running.',
         status: 'error',
       }));
       return;
@@ -1204,7 +1198,7 @@ const GAgentsPage: React.FC = () => {
       const response = await runtimeGAgentApi.streamDraftRun(
         normalizedScopeId,
         {
-          actorTypeName: normalizedActorTypeName,
+          agentKind: normalizedAgentKind,
           prompt: normalizedPrompt,
           preferredActorId: normalizedPreferredActorId || undefined,
           timeoutMs: GAGENT_DRAFT_RUN_TIMEOUT_MS,
@@ -1322,8 +1316,8 @@ const GAgentsPage: React.FC = () => {
         ? saveObservedRunSessionPayload({
             scopeId: normalizedScopeId,
             routeName:
-              selectedType?.typeName ||
-              selectedActorTypeName.split(',')[0]?.trim() ||
+              selectedKindDescriptor?.displayName ||
+              selectedAgentKind.split(',')[0]?.trim() ||
               undefined,
             endpointId: CHAT_ENDPOINT_ID,
             endpointKind: 'chat',
@@ -1338,8 +1332,8 @@ const GAgentsPage: React.FC = () => {
     history.push(
       buildRuntimeRunsHref({
         route:
-          selectedType?.typeName ||
-          selectedActorTypeName.split(',')[0]?.trim() ||
+          selectedKindDescriptor?.displayName ||
+          selectedAgentKind.split(',')[0]?.trim() ||
           undefined,
         scopeId: normalizedScopeId || undefined,
         endpointId: CHAT_ENDPOINT_ID,
@@ -1394,7 +1388,10 @@ const GAgentsPage: React.FC = () => {
             <Typography.Text style={cliFieldLabelStyle}>
               {t("pages.gagents.index.current.default", "Current default")}</Typography.Text>
             <Typography.Text strong style={{ overflowWrap: 'anywhere' }}>
-              {bindingQuery.data.displayName || bindingQuery.data.serviceId}
+              {getUserFacingIdentifierLabel(
+                bindingQuery.data.displayName || bindingQuery.data.serviceId,
+                t("pages.gagents.index.service", "Service"),
+              )}
             </Typography.Text>
             <Typography.Text style={cliCardDescriptionStyle}>
               {formatRuntimeGAgentBindingImplementationKind(
@@ -1427,37 +1424,37 @@ const GAgentsPage: React.FC = () => {
               justifyContent: 'space-between',
             }}
           >
-            <div style={cliCardLabelStyle}>{t("pages.gagents.index.gagent.types", "GAgent Types")}</div>
+            <div style={cliCardLabelStyle}>{t("pages.gagents.index.gagent.types", "GAgent Kinds")}</div>
             <Button
               icon={<ReloadOutlined />}
-              onClick={() => void gAgentTypesQuery.refetch()}
+              onClick={() => void gAgentKindsQuery.refetch()}
               size="small"
               type="text"
             >
               {t("pages.gagents.index.refresh", "Refresh")}</Button>
           </div>
           <Input
-            aria-label={t("pages.gagents.index.filter.gagent.types", "Filter GAgent types")}
+            aria-label={t("pages.gagents.index.filter.gagent.types", "Filter GAgent kinds")}
             onChange={(event) => setTypeFilter(event.target.value)}
-            placeholder={t("pages.gagents.index.filter.gagent.types.2", "Filter GAgent types")}
+            placeholder={t("pages.gagents.index.filter.gagent.types.2", "Filter GAgent kinds")}
             value={typeFilter}
           />
-          {gAgentTypesQuery.error ? (
+          {gAgentKindsQuery.error ? (
             <Alert
               showIcon
               type="error"
-              title={describeError(gAgentTypesQuery.error)}
+              title={describeError(gAgentKindsQuery.error)}
             />
           ) : null}
         </div>
 
-        {filteredTypes.length === 0 ? (
+        {filteredKinds.length === 0 ? (
           <div style={{ padding: 16 }}>
             <Empty
               description={
-                gAgentTypesQuery.isLoading
-                  ? 'Loading runtime GAgent types.'
-                  : 'No GAgent types matched the current filter.'
+                gAgentKindsQuery.isLoading
+                  ? 'Loading runtime GAgent kinds.'
+                  : 'No GAgent kinds matched the current filter.'
               }
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
@@ -1471,18 +1468,18 @@ const GAgentsPage: React.FC = () => {
               paddingRight: 0,
             }}
           >
-            {filteredTypes.map((descriptor) => {
-              const assemblyQualifiedName =
-                buildRuntimeGAgentAssemblyQualifiedName(descriptor);
+            {filteredKinds.map((descriptor) => {
+              const agentKindValue =
+                buildRuntimeGAgentKindValue(descriptor);
               const isSelected =
-                selectedType?.fullName === descriptor.fullName ||
-                selectedActorTypeName.trim() === assemblyQualifiedName;
-              const isActiveBindingType = matchesRuntimeGAgentTypeDescriptor(
-                currentBindingRevision?.staticActorTypeName ?? '',
+                selectedKindDescriptor?.agentKind === descriptor.agentKind ||
+                selectedAgentKind.trim() === agentKindValue;
+              const isActiveBindingType = matchesRuntimeGAgentKindDescriptor(
+                currentBindingRevision?.staticAgentKind ?? '',
                 descriptor,
               );
               const actorCount = collectRuntimeGAgentActorIds(
-                assemblyQualifiedName,
+                agentKindValue,
                 gAgentActorsQuery.data ?? [],
                 descriptor,
               ).length;
@@ -1490,8 +1487,8 @@ const GAgentsPage: React.FC = () => {
               return (
                 <button
                   className={AEVATAR_PRESSABLE_CARD_CLASS}
-                  key={assemblyQualifiedName}
-                  onClick={() => handleSelectType(assemblyQualifiedName)}
+                  key={agentKindValue}
+                  onClick={() => handleSelectKind(agentKindValue)}
                   style={{
                     background: isSelected ? '#eff6ff' : '#ffffff',
                     border: 'none',
@@ -1514,7 +1511,7 @@ const GAgentsPage: React.FC = () => {
                     <Space size={[8, 8]} wrap>
                       <RobotOutlined />
                       <Typography.Text strong>
-                        {buildRuntimeGAgentTypeLabel(descriptor)}
+                        {buildRuntimeGAgentKindLabel(descriptor)}
                       </Typography.Text>
                     </Space>
                     {isActiveBindingType ? <Tag color="success">{t("pages.gagents.index.serving", "Serving")}</Tag> : null}
@@ -1528,7 +1525,7 @@ const GAgentsPage: React.FC = () => {
                       wordBreak: 'break-word',
                     }}
                   >
-                    {descriptor.fullName}
+                    {descriptor.agentKind}
                   </Typography.Text>
                 </button>
               );
@@ -1541,17 +1538,17 @@ const GAgentsPage: React.FC = () => {
 
   const selectedTypePanel = (
     <WorkbenchCard
-      description={t("pages.gagents.index.current.type.selection.that.drives", "Current type selection that drives both draft runs and published bindings.")}
-      eyebrow="Selected Type"
+      description={t("pages.gagents.index.current.kind.selection.that.drives", "Current kind selection that drives both draft runs and published bindings.")}
+      eyebrow="Selected Kind"
       extra={
         <Space size={[8, 8]} wrap>
           <Button
-            disabled={!selectedType}
+            disabled={!selectedKindDescriptor}
             onClick={() => setIsActorRegistryDrawerOpen(true)}
             size="small"
           >
             {t("pages.gagents.index.manage.actors", "Manage actors")}</Button>
-          {selectedType ? (
+          {selectedKindDescriptor ? (
             <>
               {currentBindingMatchesSelectedType ? (
                 <Tag color="success">{t("pages.gagents.index.active.binding", "Active binding")}</Tag>
@@ -1561,13 +1558,13 @@ const GAgentsPage: React.FC = () => {
               ) : null}
             </>
           ) : (
-            <Tag>{t("pages.gagents.index.choose.type", "Choose a type")}</Tag>
+            <Tag>{t("pages.gagents.index.choose.kind", "Choose a kind")}</Tag>
           )}
         </Space>
       }
-      title={selectedType ? selectedType.typeName : 'No type selected'}
+      title={selectedKindDescriptor ? selectedKindDescriptor.displayName : 'No kind selected'}
     >
-      {selectedType ? (
+      {selectedKindDescriptor ? (
         <div
           style={{
             display: 'grid',
@@ -1576,15 +1573,15 @@ const GAgentsPage: React.FC = () => {
           }}
         >
           <div style={summaryMetricStyle}>
-            <Typography.Text type="secondary">{t("pages.gagents.index.type", "Type")}</Typography.Text>
+            <Typography.Text type="secondary">{t("pages.gagents.index.kind", "Kind")}</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
-              {selectedType.fullName}
+              {selectedKindDescriptor.agentKind}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
             <Typography.Text type="secondary">{t("pages.gagents.index.assembly", "Assembly")}</Typography.Text>
             <Typography.Paragraph style={wrappedTextStyle}>
-              {selectedType.assemblyName}
+              {selectedKindDescriptor.diagnosticClrTypeName}
             </Typography.Paragraph>
           </div>
           <div style={summaryMetricStyle}>
@@ -1600,12 +1597,12 @@ const GAgentsPage: React.FC = () => {
                 ? describeRuntimeGAgentBindingRevisionTarget(
                     currentBindingRevision,
                   )
-                : t("pages.gagents.index.not.serving.this.type.yet", "Not serving this type yet")}
+                : t("pages.gagents.index.not.serving.this.kind.yet", "Not serving this kind yet")}
             </Typography.Paragraph>
           </div>
         </div>
       ) : (
-        <AevatarInspectorEmpty description={t("pages.gagents.index.choose.discovered.gagent.type.from", "Choose a discovered GAgent type from the left rail to prepare draft runs or published bindings.")} />
+        <AevatarInspectorEmpty description={t("pages.gagents.index.choose.discovered.gagent.kind.from", "Choose a discovered GAgent kind from the left rail to prepare draft runs or published bindings.")} />
       )}
     </WorkbenchCard>
   );
@@ -1616,16 +1613,13 @@ const GAgentsPage: React.FC = () => {
       eyebrow={t("pages.gagents.index.selected.revision", "Selected Revision")}
       title={
         selectedRevision
-          ? selectedRevision.revisionId
+          ? t("pages.gagents.index.selected.revision", "Selected Revision")
           : t("pages.gagents.index.no.revision.selected", "No revision selected")
       }
     >
       {selectedRevision ? (
         <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Space size={[8, 8]} wrap>
-            <Typography.Text strong copyable>
-              {selectedRevision.revisionId}
-            </Typography.Text>
             <Tag color={getBindingTone(selectedRevision)}>
               {formatRuntimeGAgentBindingImplementationKind(
                 selectedRevision.implementationKind,
@@ -1642,19 +1636,25 @@ const GAgentsPage: React.FC = () => {
               <Typography.Text type="secondary">
                 {t("pages.gagents.index.preferred.actor", "Preferred actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {selectedRevision.staticPreferredActorId || 'n/a'}
+                {selectedRevision.staticPreferredActorId
+                  ? t("pages.gagents.index.configured", "Configured")
+                  : 'n/a'}
               </Typography.Paragraph>
             </div>
             <div>
               <Typography.Text type="secondary">{t("pages.gagents.index.primary.actor", "Primary actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {selectedRevision.primaryActorId || 'n/a'}
+                {selectedRevision.primaryActorId
+                  ? t("pages.gagents.index.available", "Available")
+                  : 'n/a'}
               </Typography.Paragraph>
             </div>
             <div>
               <Typography.Text type="secondary">{t("pages.gagents.index.deployment", "Deployment")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {selectedRevision.deploymentId || 'draft'}
+                {selectedRevision.deploymentId
+                  ? t("pages.gagents.index.attached", "Attached")
+                  : 'draft'}
               </Typography.Paragraph>
             </div>
             <div>
@@ -1675,13 +1675,7 @@ const GAgentsPage: React.FC = () => {
     <WorkbenchCard
       description={t("pages.gagents.index.transcript.and.runtime.events.from", "Transcript and runtime events from the most recent draft run.")}
       eyebrow="Run Output"
-      extra={
-        <Space size={[8, 8]} wrap>
-          {runState.actorId ? <Tag>{runState.actorId}</Tag> : null}
-          {runState.commandId ? <Tag>{runState.commandId}</Tag> : null}
-        </Space>
-      }
-      title={runState.runId ? `Run ${runState.runId}` : 'Run Output'}
+      title={runState.runId ? t("pages.gagents.index.latest.run.output", "Latest Run Output") : 'Run Output'}
     >
       <Tabs
         activeKey={activeRunOutputTab}
@@ -1725,11 +1719,6 @@ const GAgentsPage: React.FC = () => {
                     >
                       <Space size={[8, 8]} wrap>
                         <Tag>{event.type}</Tag>
-                        {readEventString(event, 'runId') ? (
-                          <Typography.Text type="secondary">
-                            {readEventString(event, 'runId')}
-                          </Typography.Text>
-                        ) : null}
                       </Space>
                       <Typography.Text
                         style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
@@ -1750,8 +1739,8 @@ const GAgentsPage: React.FC = () => {
   const actorRegistryPanel = (
     <WorkbenchCard
       description={
-        selectedType
-          ? `Reusable actor ids saved for ${selectedType.typeName} in this workspace.`
+        selectedKindDescriptor
+          ? `Reusable actor ids saved for ${selectedKindDescriptor.displayName} in this workspace.`
           : 'Reusable actor ids saved for this workspace.'
       }
       eyebrow="Actor Registry"
@@ -1796,25 +1785,25 @@ const GAgentsPage: React.FC = () => {
           <div style={compactListStyle}>
             <Typography.Text type="secondary">
               {totalSavedActors} {t("pages.gagents.index.saved.actor", "saved actor")}{totalSavedActors === 1 ? '' : 's'}{' '}
-              {t("pages.gagents.index.across", "across")}{actorGroups.length} {t("pages.gagents.index.type.2", "type")}{actorGroups.length === 1 ? '' : 's'}.
+              {t("pages.gagents.index.across", "across")}{actorGroups.length} {t("pages.gagents.index.kind.2", "kind")}{actorGroups.length === 1 ? '' : 's'}.
             </Typography.Text>
             {actorGroups.map((group) => {
-              const descriptor = (gAgentTypesQuery.data ?? []).find((entry) =>
-                matchesRuntimeGAgentTypeDescriptor(group.gAgentType, entry),
+              const descriptor = (gAgentKindsQuery.data ?? []).find((entry) =>
+                matchesRuntimeGAgentKindDescriptor(group.agentKind, entry),
               );
               const groupLabel = descriptor
-                ? buildRuntimeGAgentTypeLabel(descriptor)
-                : group.gAgentType.split('.').pop() || group.gAgentType;
+                ? buildRuntimeGAgentKindLabel(descriptor)
+                : group.agentKind.split('.').pop() || group.agentKind;
               const isSelectedGroup = descriptor
-                ? matchesRuntimeGAgentTypeDescriptor(
-                    selectedActorTypeName,
+                ? matchesRuntimeGAgentKindDescriptor(
+                    selectedAgentKind,
                     descriptor,
                   )
-                : selectedActorStoreTypeName === group.gAgentType;
+                : selectedActorStoreAgentKind === group.agentKind;
 
               return (
                 <div
-                  key={group.gAgentType}
+                  key={group.agentKind}
                   style={{
                     border: isSelectedGroup
                       ? '1px solid rgba(22, 119, 255, 0.35)'
@@ -1838,16 +1827,16 @@ const GAgentsPage: React.FC = () => {
                     }}
                     type="secondary"
                   >
-                    {group.gAgentType}
+                    {group.agentKind}
                   </Typography.Text>
                   <div
                     style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
                   >
                     {group.actorIds.map((actorId) => {
-                      const removeKey = `remove:${group.gAgentType}:${actorId}`;
+                      const removeKey = `remove:${group.agentKind}:${actorId}`;
                       return (
                         <div
-                          key={`${group.gAgentType}:${actorId}`}
+                          key={`${group.agentKind}:${actorId}`}
                           style={{
                             alignItems: screens.sm ? 'center' : 'flex-start',
                             display: 'flex',
@@ -1856,16 +1845,8 @@ const GAgentsPage: React.FC = () => {
                             justifyContent: 'space-between',
                           }}
                         >
-                          <Typography.Text
-                            code
-                            style={{
-                              flex: 1,
-                              minWidth: 0,
-                              overflowWrap: 'anywhere',
-                              wordBreak: 'break-word',
-                            }}
-                          >
-                            {actorId}
+                          <Typography.Text style={{ flex: 1, minWidth: 0 }}>
+                            {t("pages.gagents.index.saved.actor", "Saved actor")}
                           </Typography.Text>
                           <Space
                             size={[8, 8]}
@@ -1879,7 +1860,7 @@ const GAgentsPage: React.FC = () => {
                             <Button
                               onClick={() =>
                                 handleUseRegistryActor(
-                                  group.gAgentType,
+                                  group.agentKind,
                                   actorId,
                                 )
                               }
@@ -1891,7 +1872,7 @@ const GAgentsPage: React.FC = () => {
                               loading={registryPendingKey === removeKey}
                               onClick={() =>
                                 void handleRemoveRegistryActor(
-                                  group.gAgentType,
+                                  group.agentKind,
                                   actorId,
                                 )
                               }
@@ -1962,7 +1943,10 @@ const GAgentsPage: React.FC = () => {
               <div style={infoCardStyle}>
                 <Typography.Text type="secondary">{t("pages.gagents.index.display.name", "Display name")}</Typography.Text>
                 <Typography.Paragraph style={wrappedTextStyle}>
-                  {bindingQuery.data.displayName || bindingQuery.data.serviceId}
+                  {getUserFacingIdentifierLabel(
+                    bindingQuery.data.displayName || bindingQuery.data.serviceId,
+                    t("pages.gagents.index.service", "Service"),
+                  )}
                 </Typography.Paragraph>
               </div>
               <div style={infoCardStyle}>
@@ -2038,25 +2022,25 @@ const GAgentsPage: React.FC = () => {
 
   const publishBindingPanel = (
     <WorkbenchCard
-      description={t("pages.gagents.index.publish.the.selected.gagent.type", "Publish the selected GAgent type as this workspace's default service.")}
+      description={t("pages.gagents.index.publish.the.selected.gagent.kind", "Publish the selected GAgent kind as this workspace's default service.")}
       eyebrow="Publish Binding"
       extra={
         <Button
-          disabled={!selectedType}
+          disabled={!selectedKindDescriptor}
           onClick={() => setIsActorRegistryDrawerOpen(true)}
           size="small"
         >
           {t("pages.gagents.index.manage.actors.2", "Manage actors")}</Button>
       }
       title={
-        selectedType
-          ? `Publish ${selectedType.typeName}`
+        selectedKindDescriptor
+          ? `Publish ${selectedKindDescriptor.displayName}`
           : 'Publish GAgent Binding'
       }
     >
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-        {!selectedType ? (
-          <AevatarInspectorEmpty description={t("pages.gagents.index.choose.discovered.gagent.type.before.2", "Choose a discovered GAgent type before configuring a published binding.")} />
+        {!selectedKindDescriptor ? (
+          <AevatarInspectorEmpty description={t("pages.gagents.index.choose.discovered.gagent.kind.before.2", "Choose a discovered GAgent kind before configuring a published binding.")} />
         ) : (
           <>
             <Tabs
@@ -2077,15 +2061,15 @@ const GAgentsPage: React.FC = () => {
                       >
                         <div>
                           <Typography.Text type="secondary">
-                            {t("pages.gagents.index.selected.type", "Selected type")}</Typography.Text>
+                            {t("pages.gagents.index.selected.kind", "Selected kind")}</Typography.Text>
                           <Typography.Paragraph style={wrappedTextStyle}>
-                            {selectedType.fullName}
+                            {selectedKindDescriptor.agentKind}
                           </Typography.Paragraph>
                         </div>
                         <div>
                           <Typography.Text type="secondary">{t("pages.gagents.index.assembly.2", "Assembly")}</Typography.Text>
                           <Typography.Paragraph style={wrappedTextStyle}>
-                            {selectedType.assemblyName}
+                            {selectedKindDescriptor.diagnosticClrTypeName}
                           </Typography.Paragraph>
                         </div>
                       </div>
@@ -2269,23 +2253,23 @@ const GAgentsPage: React.FC = () => {
                                   value={endpoint.kind}
                                 />
                                 <Input
-                                  aria-label={`Binding endpoint request type ${index + 1}`}
+                                  aria-label={`Binding endpoint request kind ${index + 1}`}
                                   onChange={(event) =>
                                     updateBindingEndpointDraft(index, {
                                       requestTypeUrl: event.target.value,
                                     })
                                   }
-                                  placeholder={t("pages.gagents.index.request.type.url", "request type url")}
+                                  placeholder={t("pages.gagents.index.request.kind.url", "request kind url")}
                                   value={endpoint.requestTypeUrl}
                                 />
                                 <Input
-                                  aria-label={`Binding endpoint response type ${index + 1}`}
+                                  aria-label={`Binding endpoint response kind ${index + 1}`}
                                   onChange={(event) =>
                                     updateBindingEndpointDraft(index, {
                                       responseTypeUrl: event.target.value,
                                     })
                                   }
-                                  placeholder={t("pages.gagents.index.response.type.url", "response type url")}
+                                  placeholder={t("pages.gagents.index.response.kind.url", "response kind url")}
                                   value={endpoint.responseTypeUrl}
                                 />
                               </div>
@@ -2329,7 +2313,10 @@ const GAgentsPage: React.FC = () => {
                             }))
                           }
                           options={launchableBindingEndpoints.map((endpoint) => ({
-                            label: t("pages.gagents.index.copy", "{value1} ({value2})", { value1: endpoint.displayName, value2: endpoint.endpointId }),
+                            label: getUserFacingIdentifierLabel(
+                              endpoint.displayName || endpoint.endpointId,
+                              t("pages.gagents.index.endpoint", "Endpoint"),
+                            ),
                             value: endpoint.endpointId,
                           }))}
                           value={
@@ -2349,7 +2336,7 @@ const GAgentsPage: React.FC = () => {
               showIcon
               type={bindingQuery.data?.available ? 'warning' : 'info'}
               title={bindingImpactMessage}
-              description={t("pages.gagents.index.type.template.binding.published.default", "Type = template. Binding = published default service. Actor = runtime instance created by activation or invocation.")}
+              description={t("pages.gagents.index.kind.template.binding.published.default", "Kind = template. Binding = published default service. Actor = runtime instance created by activation or invocation.")}
             />
 
             <Checkbox
@@ -2360,7 +2347,7 @@ const GAgentsPage: React.FC = () => {
 
             <Space size={[8, 8]} wrap>
               <Button
-                disabled={!selectedType || !normalizedScopeId}
+                disabled={!selectedKindDescriptor || !normalizedScopeId}
                 loading={bindingPendingKey === 'publish'}
                 onClick={() => void handlePublishBinding()}
                 type="primary"
@@ -2368,7 +2355,7 @@ const GAgentsPage: React.FC = () => {
                 {t("pages.gagents.index.publish.binding", "Publish binding")}</Button>
               <Button
                 disabled={
-                  !selectedType || !normalizedScopeId || !selectedLaunchEndpoint
+                  !selectedKindDescriptor || !normalizedScopeId || !selectedLaunchEndpoint
                 }
                 loading={bindingPendingKey === 'publish:runs'}
                 onClick={() => void handlePublishBinding({ openRuns: true })}
@@ -2453,9 +2440,6 @@ const GAgentsPage: React.FC = () => {
                     }}
                   >
                     <Space size={[8, 8]} wrap>
-                      <Typography.Text strong copyable>
-                        {revision.revisionId}
-                      </Typography.Text>
                       <Tag color={getBindingTone(revision)}>
                         {formatRuntimeGAgentBindingImplementationKind(
                           revision.implementationKind,
@@ -2487,10 +2471,12 @@ const GAgentsPage: React.FC = () => {
                       }}
                       type="secondary"
                     >
-                      {t("pages.gagents.index.deployment.2", "Deployment")}{revision.deploymentId || 'draft'} {t("pages.gagents.index.actor", "· Actor")}{' '}
-                      {revision.primaryActorId ||
-                        revision.staticPreferredActorId ||
-                        'n/a'}{' '}
+                      {revision.deploymentId
+                        ? t("pages.gagents.index.deployment.ready", "Deployment ready")
+                        : t("pages.gagents.index.draft.deployment", "Draft deployment")}{' '}
+                      {revision.primaryActorId || revision.staticPreferredActorId
+                        ? t("pages.gagents.index.actor.ready", "· Actor ready")
+                        : t("pages.gagents.index.actor.not.assigned", "· Actor not assigned")}{' '}
                       {t("pages.gagents.index.updated", "· Updated")}{' '}
                       {formatTimestamp(
                         revision.publishedAt ||
@@ -2545,18 +2531,17 @@ const GAgentsPage: React.FC = () => {
 
   const draftRunPanel = (
     <WorkbenchCard
-      description={t("pages.gagents.index.test.the.selected.gagent.type", "Test the selected GAgent type before publishing.")}
+      description={t("pages.gagents.index.test.the.selected.gagent.kind", "Test the selected GAgent kind before publishing.")}
       eyebrow="Draft Run"
       extra={
         <Space size={[8, 8]} wrap>
           <AevatarStatusTag domain="run" status={runState.status} />
-          {runState.runId ? <Tag>{runState.runId}</Tag> : null}
         </Space>
       }
-      title={selectedType ? selectedType.typeName : 'GAgent Draft Run'}
+      title={selectedKindDescriptor ? selectedKindDescriptor.displayName : 'GAgent Draft Run'}
     >
       <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-        {selectedType ? (
+        {selectedKindDescriptor ? (
           <div
             style={{
               display: 'grid',
@@ -2565,9 +2550,9 @@ const GAgentsPage: React.FC = () => {
             }}
           >
             <div>
-              <Typography.Text type="secondary">{t("pages.gagents.index.type.3", "Type")}</Typography.Text>
+              <Typography.Text type="secondary">{t("pages.gagents.index.kind.3", "Kind")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {selectedType.fullName}
+                {selectedKindDescriptor.agentKind}
               </Typography.Paragraph>
             </div>
             <div>
@@ -2579,12 +2564,12 @@ const GAgentsPage: React.FC = () => {
             <div>
               <Typography.Text type="secondary">{t("pages.gagents.index.observed.actor", "Observed actor")}</Typography.Text>
               <Typography.Paragraph style={wrappedTextStyle}>
-                {runState.actorId || 'n/a'}
+                {runState.actorId ? t("pages.gagents.index.available", "Available") : 'n/a'}
               </Typography.Paragraph>
             </div>
           </div>
         ) : (
-          <AevatarInspectorEmpty description={t("pages.gagents.index.select.discovered.gagent.type.before", "Select a discovered GAgent type before drafting a direct run.")} />
+          <AevatarInspectorEmpty description={t("pages.gagents.index.select.discovered.gagent.kind.before", "Select a discovered GAgent kind before drafting a direct run.")} />
         )}
 
         <Select
@@ -2643,7 +2628,7 @@ const GAgentsPage: React.FC = () => {
           aria-label={t("pages.gagents.index.draft.prompt", "Draft prompt")}
           autoSize={{ minRows: 4, maxRows: 8 }}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder={t("pages.gagents.index.enter.direct.prompt.for.the", "Enter a direct prompt for the selected GAgent type")}
+          placeholder={t("pages.gagents.index.enter.direct.prompt.for.the", "Enter a direct prompt for the selected GAgent kind")}
           value={prompt}
         />
 
@@ -2735,9 +2720,19 @@ const GAgentsPage: React.FC = () => {
       />
     </div>
   );
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      title: t('pages.gagents.index.platformBreadcrumb', 'Platform'),
+    },
+    {
+      current: true,
+      title: t('pages.gagents.index.teamMembersBreadcrumb', 'Team members'),
+    },
+  ];
 
   return (
     <AevatarPageShell
+      breadcrumbItems={breadcrumbItems}
       layoutMode="document"
       extra={
         <Space size={[8, 8]} wrap>

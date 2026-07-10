@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn.Publishing;
+using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,7 +12,7 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 /// Ornn skill API client. Routes through NyxID's proxy so the Ornn upstream URL stays a
 /// runtime concern (resolved by NyxID from the user's bound <c>ornn-api</c> service) rather
 /// than a hardcoded constant. The public Ornn frontend URL only serves the SPA shell, so
-/// direct calls return HTML for any path — the NyxID-routed path is the canonical surface
+/// direct calls return HTML for any path; the NyxID-routed path is the canonical surface
 /// (issue #530 follow-up).
 /// </summary>
 public sealed class OrnnSkillClient
@@ -60,7 +62,15 @@ public sealed class OrnnSkillClient
         _logger = logger ?? NullLogger<OrnnSkillClient>.Instance;
     }
 
-    /// <summary>搜索技能。</summary>
+    /// <summary>Search skills.</summary>
+    /// <param name="scope">
+    /// Ornn API visibility scope (<c>public/private/mixed/shared-with-me/mine</c>). This is the
+    /// upstream query parameter, NOT a model-facing contract: the discovery tool
+    /// (<see cref="OrnnSearchSkillsTool"/>) deliberately does not expose it and always uses the
+    /// default <c>mixed</c> (the caller's full accessible set) so a model can't narrow visibility
+    /// and hide usable skills. Kept here as a faithful seam over the Ornn API for any future
+    /// non-discovery caller (e.g. a management tool).
+    /// </param>
     public async Task<OrnnSearchResult> SearchSkillsAsync(
         string accessToken,
         string query = "",
@@ -96,14 +106,14 @@ public sealed class OrnnSkillClient
                 ct: linkedCts.Token);
 
             if (TryUnwrapNyxIdProxyError(response, out var proxyError))
-                return new OrnnSearchResult { Items = [], Error = proxyError };
+                return new OrnnSearchResult { Items = [], Error = proxyError.Detail };
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSearchResult>>(response, JsonOptions);
             return envelope?.Data ?? new OrnnSearchResult { Items = [] };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Caller cancellation is a control-flow signal — let it propagate so the outer LLM
+            // Caller cancellation is a control-flow signal; let it propagate so the outer LLM
             // run can react instead of seeing a synthetic "no skills" result.
             throw;
         }
@@ -128,7 +138,7 @@ public sealed class OrnnSkillClient
         }
     }
 
-    /// <summary>获取技能 JSON（含文件内容）。</summary>
+    /// <summary>Fetch skill JSON including file contents.</summary>
     public async Task<OrnnSkillJson?> GetSkillJsonAsync(
         string accessToken,
         string idOrName,
@@ -150,15 +160,20 @@ public sealed class OrnnSkillClient
                 extraHeaders: null,
                 ct: linkedCts.Token);
 
-            if (TryUnwrapNyxIdProxyError(response, out _))
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+            {
+                if (proxyError.Status == 403)
+                    throw RemoteSkillFetchException.AccessDenied(idOrName, proxyError.Detail, proxyError.Status);
+
                 return null;
+            }
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillJson>>(response, JsonOptions);
             return envelope?.Data;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Caller cancellation is a control-flow signal — let it propagate so the outer LLM
+            // Caller cancellation is a control-flow signal; let it propagate so the outer LLM
             // run can react instead of seeing a synthetic "skill not found" result.
             throw;
         }
@@ -172,6 +187,10 @@ public sealed class OrnnSkillClient
                 idOrName);
             return null;
         }
+        catch (RemoteSkillFetchException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ornn get skill failed for '{IdOrName}'", idOrName);
@@ -180,13 +199,170 @@ public sealed class OrnnSkillClient
     }
 
     /// <summary>
+    /// Fetch a skillset (by stable guid or by name) including its member list. The overlay source
+    /// resolves the host-configured set name to its guid once and then reads members by that guid,
+    /// so a later same-named squatter set cannot hijack the overlay (issue #2498). Member bodies are
+    /// refs; callers fetch each member's SKILL.md and its <c>overlay-scope-*</c> tag via
+    /// <see cref="GetSkillJsonAsync"/>.
+    /// </summary>
+    public async Task<OrnnSkillSet?> GetSkillSetAsync(
+        string accessToken,
+        string idOrName,
+        CancellationToken ct = default)
+    {
+        var path = $"/api/v1/skillsets/{Uri.EscapeDataString(idOrName)}";
+
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "GET",
+                body: null,
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+            {
+                if (proxyError.Status == 403)
+                    throw RemoteSkillFetchException.AccessDenied(idOrName, proxyError.Detail, proxyError.Status);
+
+                return null;
+            }
+
+            var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillSet>>(response, JsonOptions);
+            return envelope?.Data;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn get skillset exceeded {TimeoutSeconds}s per-call budget for '{IdOrName}'",
+                (int)_perCallTimeout.TotalSeconds,
+                idOrName);
+            return null;
+        }
+        catch (RemoteSkillFetchException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn get skillset failed for '{IdOrName}'", idOrName);
+            return null;
+        }
+    }
+
+    public async Task<OrnnSkillPublishResponse> PublishSkillAsync(
+        string accessToken,
+        byte[] zipBytes,
+        CancellationToken ct = default)
+    {
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestBinaryAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: "/api/v1/skills",
+                method: "POST",
+                body: zipBytes,
+                contentType: "application/zip",
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return new OrnnSkillPublishResponse(false, response, proxyError.Detail);
+
+            return new OrnnSkillPublishResponse(true, response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn skill publish exceeded {TimeoutSeconds}s per-call budget",
+                (int)_perCallTimeout.TotalSeconds);
+            return new OrnnSkillPublishResponse(
+                false,
+                string.Empty,
+                $"Ornn skill publish exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn skill publish failed");
+            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
+        }
+    }
+
+    public async Task<OrnnSkillPublishResponse> UpdateSkillAsync(
+        string accessToken,
+        string skillId,
+        byte[] zipBytes,
+        CancellationToken ct = default)
+    {
+        var path = $"/api/v1/skills/{Uri.EscapeDataString(skillId)}";
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestBinaryAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "PUT",
+                body: zipBytes,
+                contentType: "application/zip",
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return new OrnnSkillPublishResponse(false, response, proxyError.Detail);
+
+            return new OrnnSkillPublishResponse(true, response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn skill update exceeded {TimeoutSeconds}s per-call budget for '{SkillId}'",
+                (int)_perCallTimeout.TotalSeconds,
+                skillId);
+            return new OrnnSkillPublishResponse(
+                false,
+                string.Empty,
+                $"Ornn skill update exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn skill update failed for '{SkillId}'", skillId);
+            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Detect the wrapped error envelope NyxIdApiClient.SendAsync emits when the upstream
     /// returns non-2xx (<c>{"error": true, "status": N, "body": "..."}</c>) so callers see a
     /// concise actionable message instead of a JsonException about the wrapper shape.
     /// </summary>
-    private bool TryUnwrapNyxIdProxyError(string response, out string detail)
+    private bool TryUnwrapNyxIdProxyError(string response, out NyxIdProxyError error)
     {
-        detail = string.Empty;
+        error = new NyxIdProxyError(0, string.Empty);
         if (string.IsNullOrWhiteSpace(response))
             return false;
 
@@ -205,17 +381,23 @@ public sealed class OrnnSkillClient
                          statusProp.ValueKind == JsonValueKind.Number
                 ? statusProp.GetInt32()
                 : 0;
+            var upstreamDetail = TryExtractUpstreamOrnnReason(root);
 
-            // 404 here means NyxID could not resolve `_options.NyxIdSlug` to an upstream — either
+            // 404 here means NyxID could not resolve `_options.NyxIdSlug` to an upstream: either
             // the user has not bound an Ornn service to this slug, or the deployment's NyxID
             // catalog uses a different slug name. The LLM can recover by guiding the user to
             // bind the service or by retrying with a different slug; surface that hint instead
             // of a bare "status=404".
-            detail = status == 404
-                ? $"Ornn skill API not reachable: NyxID has no service bound to slug '{_options.NyxIdSlug}'. " +
-                  "The user may need to connect their Ornn account via NyxID (nyxid_services action=create), " +
-                  "or the deployment may need to override Aevatar:Ornn:NyxIdSlug."
-                : $"NyxID proxy returned status={status}.";
+            var detail = status switch
+            {
+                403 when !string.IsNullOrWhiteSpace(upstreamDetail) => upstreamDetail,
+                403 => BuildProxyScopeAccessDeniedDetail(),
+                404 => $"Ornn skill API not reachable: NyxID has no service bound to slug '{_options.NyxIdSlug}'. " +
+                       "The user may need to connect their Ornn account via NyxID (nyxid_services action=create), " +
+                       "or the deployment may need to override Aevatar:Ornn:NyxIdSlug.",
+                _ => $"NyxID proxy returned status={status}.",
+            };
+            error = new NyxIdProxyError(status, detail);
             return true;
         }
         catch (JsonException)
@@ -223,9 +405,59 @@ public sealed class OrnnSkillClient
             return false;
         }
     }
+
+    private string BuildProxyScopeAccessDeniedDetail() =>
+        $"Ornn skill API access denied through NyxID proxy slug '{_options.NyxIdSlug}'. " +
+        "The API key is missing proxy scope or service authorization for the Ornn UserService. " +
+        "Reconnect the Ornn service in NyxID and recreate or rotate the scheduled agent key.";
+
+    private static string? TryExtractUpstreamOrnnReason(JsonElement root)
+    {
+        var body = root.TryGetProperty("body", out var bodyProp) && bodyProp.ValueKind == JsonValueKind.String
+            ? bodyProp.GetString()
+            : null;
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        var trimmed = body.Trim();
+        if (!trimmed.StartsWith('{'))
+            return trimmed;
+
+        try
+        {
+            using var bodyDocument = JsonDocument.Parse(trimmed);
+            var bodyRoot = bodyDocument.RootElement;
+            if (bodyRoot.ValueKind != JsonValueKind.Object)
+                return trimmed;
+
+            if (bodyRoot.TryGetProperty("error", out var errorProp) &&
+                errorProp.ValueKind == JsonValueKind.Object)
+            {
+                var code = TryReadString(errorProp, "code");
+                var message = TryReadString(errorProp, "message");
+                if (!string.IsNullOrWhiteSpace(message))
+                    return string.IsNullOrWhiteSpace(code) ? message : $"{code}: {message}";
+            }
+
+            return TryReadString(bodyRoot, "message") ??
+                   TryReadString(bodyRoot, "detail");
+        }
+        catch (JsonException)
+        {
+            return trimmed;
+        }
+    }
+
+    private static string? TryReadString(JsonElement root, string propertyName) =>
+        root.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(prop.GetString())
+            ? prop.GetString()
+            : null;
+
+    private sealed record NyxIdProxyError(int Status, string Detail);
 }
 
-// ─── DTOs ───
+// DTOs
 
 public sealed class OrnnApiResponse<T>
 {
@@ -268,4 +500,98 @@ public sealed class OrnnSkillJson
     public string? Description { get; set; }
     public OrnnSkillMetadata? Metadata { get; set; }
     public Dictionary<string, string>? Files { get; set; }
+}
+
+/// <summary>A curated Ornn skillset. Its <see cref="Members"/> are references; fetch each body via
+/// <see cref="OrnnSkillClient.GetSkillJsonAsync"/>.</summary>
+public sealed class OrnnSkillSet
+{
+    public string? Guid { get; set; }
+    public string? Name { get; set; }
+    /// <summary>Set-level master prompt authored on the skillset itself.</summary>
+    public string? Instructions { get; set; }
+    public bool IsPrivate { get; set; }
+    public List<OrnnSkillSetMember> Members { get; set; } = [];
+}
+
+/// <summary>
+/// One skillset member. The upstream serializes members either as <c>"name@version"</c> strings or as
+/// objects (<c>{ guid, name, version }</c>); <see cref="OrnnSkillSetMemberJsonConverter"/> accepts both.
+/// Only the fetch <see cref="Reference"/> is load-bearing — the member's overlay-scope tag and body are
+/// read from the fetched skill JSON, not from the set entry, so the set's member shape stays irrelevant.
+/// </summary>
+[JsonConverter(typeof(OrnnSkillSetMemberJsonConverter))]
+public sealed class OrnnSkillSetMember
+{
+    public string? Guid { get; init; }
+    public string? Name { get; init; }
+    public string? Version { get; init; }
+
+    /// <summary>The id or name to fetch this member's full skill JSON with (guid preferred).</summary>
+    public string? Reference =>
+        !string.IsNullOrWhiteSpace(Guid) ? Guid :
+        string.IsNullOrWhiteSpace(Name) ? null : Name;
+}
+
+/// <summary>Reads a skillset member from either a <c>"name@version"</c> string or a <c>{guid,name,version}</c> object.</summary>
+internal sealed class OrnnSkillSetMemberJsonConverter : JsonConverter<OrnnSkillSetMember>
+{
+    public override OrnnSkillSetMember? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.String:
+                return FromReferenceString(reader.GetString());
+            case JsonTokenType.StartObject:
+                using (var document = JsonDocument.ParseValue(ref reader))
+                {
+                    var root = document.RootElement;
+                    return new OrnnSkillSetMember
+                    {
+                        Guid = ReadString(root, "guid"),
+                        Name = ReadString(root, "name"),
+                        Version = ReadString(root, "version"),
+                    };
+                }
+            default:
+                reader.Skip();
+                return null;
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, OrnnSkillSetMember value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        if (value.Guid is not null) writer.WriteString("guid", value.Guid);
+        if (value.Name is not null) writer.WriteString("name", value.Name);
+        if (value.Version is not null) writer.WriteString("version", value.Version);
+        writer.WriteEndObject();
+    }
+
+    private static OrnnSkillSetMember? FromReferenceString(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        var trimmed = raw.Trim();
+        var at = trimmed.LastIndexOf('@');
+        return at > 0
+            ? new OrnnSkillSetMember { Name = trimmed[..at], Version = trimmed[(at + 1)..] }
+            : new OrnnSkillSetMember { Name = trimmed };
+    }
+
+    private static string? ReadString(JsonElement root, string propertyName)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.NameEquals(propertyName) &&
+                property.Value.ValueKind == JsonValueKind.String)
+            {
+                var value = property.Value.GetString();
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+
+        return null;
+    }
 }

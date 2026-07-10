@@ -299,6 +299,32 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
+    public async Task WaitSignalModule_ShouldScheduleTwentyFourHourTimeoutLease()
+    {
+        var module = new WaitSignalModule();
+        var ctx = new SchedulingContext();
+
+        await module.HandleAsync(
+            Wrap(new StepRequestEvent
+            {
+                StepId = "wait-24h",
+                StepType = "wait_signal",
+                RunId = "run-wait-24h",
+                Parameters =
+                {
+                    ["signal_name"] = "callback",
+                    ["timeout_seconds"] = "86400",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var scheduled = ctx.Scheduled.Single(x => x.Event is WaitSignalTimeoutFiredEvent);
+        scheduled.DueTime.Should().Be(TimeSpan.FromHours(24));
+        ((WaitSignalTimeoutFiredEvent)scheduled.Event).TimeoutMs.Should().Be(86_400_000);
+    }
+
+    [Fact]
     public async Task WorkflowLoop_ShouldReplayTimeoutCompletion_WhenPublishFailsTransiently()
     {
         var ctx = new SchedulingContext
@@ -904,7 +930,7 @@ public class RuntimeCallbackEventizationTests
     }
 
     [Fact]
-    public async Task WorkflowLoop_ShouldPublishCompletionToSelfAndParent_WhenRunTerminates()
+    public async Task WorkflowLoop_ShouldPublishCompletionOnlyToSelf_WhenRunTerminates()
     {
         var ctx = new SchedulingContext();
         var module = CreateKernel(new WorkflowDefinition
@@ -926,12 +952,8 @@ public class RuntimeCallbackEventizationTests
 
         var completions = WorkflowCompletions(ctx);
 
-        completions.Should().HaveCount(2);
-        completions.Select(x => x.Direction).Should().BeEquivalentTo(new[]
-        {
-            TopologyAudience.Self,
-            TopologyAudience.Parent,
-        });
+        completions.Should().ContainSingle()
+            .Which.Direction.Should().Be(TopologyAudience.Self);
         completions.Select(x => x.Event.RunId).Should().OnlyContain(runId => runId == "run-empty-directions");
         completions.Select(x => x.Event.Success).Should().OnlyContain(success => !success);
         completions.Select(x => x.Event.Error).Should().OnlyContain(error => error.Contains("无步骤", StringComparison.Ordinal));
@@ -1234,7 +1256,7 @@ public class RuntimeCallbackEventizationTests
 
     private static WorkflowCompletedEvent SingleWorkflowCompletion(
         SchedulingContext ctx,
-        TopologyAudience direction = TopologyAudience.Parent) =>
+        TopologyAudience direction = TopologyAudience.Self) =>
         ctx.Published
             .Where(x => x.Direction == direction)
             .Select(x => x.Event)
@@ -1370,12 +1392,11 @@ public class RuntimeCallbackEventizationTests
             EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default)
         {
-            _ = dueTime;
             _ = options;
             _ = ct;
             var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
             _generations[callbackId] = generation;
-            Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
+            Scheduled.Add(new ScheduledCallback(callbackId, generation, dueTime, evt));
             return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
         }
 
@@ -1385,17 +1406,8 @@ public class RuntimeCallbackEventizationTests
             TimeSpan period,
             IMessage evt,
             EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default)
-        {
-            _ = dueTime;
-            _ = period;
-            _ = options;
-            _ = ct;
-            var generation = _generations.GetValueOrDefault(callbackId, 0) + 1;
-            _generations[callbackId] = generation;
-            Scheduled.Add(new ScheduledCallback(callbackId, generation, evt));
-            return Task.FromResult(new RuntimeCallbackLease(AgentId, callbackId, generation, RuntimeCallbackBackend.InMemory));
-        }
+            CancellationToken ct = default) =>
+            ScheduleSelfDurableTimeoutAsync(callbackId, dueTime, evt, options, ct);
 
         public Task CancelDurableCallbackAsync(
             RuntimeCallbackLease lease,
@@ -1430,7 +1442,7 @@ public class RuntimeCallbackEventizationTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
 
@@ -1453,6 +1465,55 @@ public class RuntimeCallbackEventizationTests
             _executionStates.Remove(scopeKey);
             return Task.CompletedTask;
         }
+
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
 
@@ -1477,24 +1538,25 @@ public class RuntimeCallbackEventizationTests
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
                 ModelOverride = delta.Llm.ModelOverride,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+                RoutePreference = delta.Llm.RoutePreference,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }
@@ -1502,6 +1564,7 @@ public class RuntimeCallbackEventizationTests
     private sealed record ScheduledCallback(
         string CallbackId,
         long Generation,
+        TimeSpan DueTime,
         IMessage Event);
 
     private sealed record CanceledCallback(

@@ -990,6 +990,169 @@ public sealed class WorkflowLoopModuleCoverageTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenHostCallbackBranchMetadataProvided_ShouldRouteToSwitchBranch()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "connector_call",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["connector"] = "host-router",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "s2",
+                Type = "switch",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["on"] = "${steps.s1.annotations.host_callback.result.route}",
+                },
+                Branches = new Dictionary<string, string>
+                {
+                    ["phase9-router"] = "s3",
+                    ["_default"] = "s4",
+                },
+            },
+            new StepDefinition { Id = "s3", Type = "transform" },
+            new StepDefinition { Id = "s4", Type = "transform" }));
+        var ctx = CreateContext();
+        const string runId = "run-host-callback-switch";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "start" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = true,
+                Output = """{"route":"phase9-router","approved":true}""",
+                Annotations =
+                {
+                    ["host_callback.result.route"] = "phase9-router",
+                    ["host_callback.result.approved"] = "true",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var switchRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        switchRequest.StepId.Should().Be("s2");
+        switchRequest.Parameters["on"].Should().Be("phase9-router");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s2",
+                RunId = runId,
+                Success = true,
+                Output = """{"route":"phase9-router","approved":true}""",
+                BranchKey = "phase9-router",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var nextRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        nextRequest.StepId.Should().Be("s3");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenUsageMetricsAccumulated_ShouldExposeBudgetToConditionalAndGuardSteps()
+    {
+        var module = new WorkflowLoopModule();
+        module.SetWorkflow(BuildWorkflow(
+            new StepDefinition
+            {
+                Id = "s1",
+                Type = "llm_call",
+            },
+            new StepDefinition
+            {
+                Id = "s2",
+                Type = "conditional",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["condition"] = "${gt(workflow.usage.total_tokens, 100)}",
+                },
+                Branches = new Dictionary<string, string>
+                {
+                    ["true"] = "s3",
+                    ["false"] = "s4",
+                },
+            },
+            new StepDefinition
+            {
+                Id = "s3",
+                Type = "guard",
+                Parameters = new Dictionary<string, string>
+                {
+                    ["check"] = "max_length",
+                    ["max"] = "${workflow.usage.total_tokens}",
+                },
+            },
+            new StepDefinition { Id = "s4", Type = "transform" }));
+        var ctx = CreateContext();
+        const string runId = "run-usage-budget";
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent { RunId = runId, Input = "token budget" }),
+            ctx,
+            CancellationToken.None);
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s1",
+                RunId = runId,
+                Success = true,
+                Output = "token budget",
+                Usage = new WorkflowUsageMetrics
+                {
+                    PromptTokens = 60,
+                    CompletionTokens = 90,
+                    TotalTokens = 150,
+                    Model = "gpt-5.4",
+                    Cost = 0.12,
+                    LatencyMs = 320,
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var conditionalRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        conditionalRequest.StepId.Should().Be("s2");
+        conditionalRequest.Parameters["condition"].Should().Be("true");
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "s2",
+                RunId = runId,
+                Success = true,
+                Output = "token budget",
+                BranchKey = "true",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var guardRequest = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        guardRequest.StepId.Should().Be("s3");
+        guardRequest.Parameters["max"].Should().Be("150");
+        guardRequest.Input.Should().Be("token budget");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenClosedWorldModeEnabled_ShouldStillDispatchStep()
     {
         var module = new WorkflowLoopModule();
@@ -1048,7 +1211,7 @@ public sealed class WorkflowLoopModuleCoverageTests
 
     private static WorkflowCompletedEvent SingleWorkflowCompletion(
         TestEventHandlerContext ctx,
-        TopologyAudience direction = TopologyAudience.Parent) =>
+        TopologyAudience direction = TopologyAudience.Self) =>
         ctx.Published
             .Where(x => x.direction == direction)
             .Select(x => x.evt)

@@ -33,7 +33,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ["empty"] = " ",
             });
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
         host.ExecutionContextState.Llm.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().ContainKey("trace-id");
         host.RuntimeContext.RequestPassthroughMetadata.Values["trace-id"].Should().Be("abc");
@@ -56,18 +56,22 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 ModelOverride = " model ",
                 MaxToolRoundsOverride = 3,
                 UserMemoryPrompt = " memory ",
+                RoutePreference = " route-a ",
             });
 
         host.ExecutionContextState.Llm.ModelOverride.Should().Be("model");
         host.ExecutionContextState.Llm.MaxToolRoundsOverride.Should().Be(3);
         host.ExecutionContextState.Llm.UserMemoryPrompt.Should().Be("memory");
+        host.ExecutionContextState.Llm.RoutePreference.Should().Be("route-a");
     }
 
     [Fact]
     public async Task SetRequestMetadata_ShouldOnlyClearPassthroughWhenMetadataIsNullEmptyOrInvalid()
     {
         var host = new RecordingStateHost();
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer typed");
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = "typed" });
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
             host,
             new Dictionary<string, string>
@@ -78,7 +82,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(host, null);
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await WorkflowRequestMetadataRuntimeContextAccess.SetRequestMetadataAsync(
@@ -88,7 +92,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 [" "] = " ",
             });
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer typed");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("typed");
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
     }
 
@@ -142,7 +146,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         await WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(host);
 
         host.ExecutionContextState.Llm.Should().BeNull();
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
         host.RuntimeContext.RequestPassthroughMetadata.Values.Should().BeEmpty();
 
         await FluentActions.Awaiting(() => WorkflowRequestMetadataRuntimeContextAccess.RemoveRequestMetadataAsync(null!))
@@ -151,68 +155,98 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
-    public void BuildConnectorAuthorizationDelta_ShouldPromoteOnlyTypedConnectorAuthorization()
+    public void BuildCallerCredentialDelta_ShouldPromoteOnlyTypedCallerCredential()
     {
-        var delta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" Bearer secret ");
+        var delta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+            new WorkflowCallerCredential { BearerToken = " secret " });
 
-        delta.ClearConnector.Should().BeTrue();
-        delta.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        delta.ClearCallerCredential.Should().BeTrue();
+        delta.CallerCredential!.BearerToken.Should().Be("secret");
 
-        var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildConnectorAuthorizationDelta(" ");
-        emptyDelta.ClearConnector.Should().BeTrue();
-        emptyDelta.Connector.Should().BeNull();
+        var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+            new WorkflowCallerCredential { BearerToken = " " });
+        emptyDelta.ClearCallerCredential.Should().BeTrue();
+        emptyDelta.CallerCredential.Should().BeNull();
+
+        FluentActions.Invoking(() => WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+                new WorkflowCallerCredential { BearerToken = "Bearer secret" }))
+            .Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*caller credential*invalid*");
     }
 
     [Fact]
-    public async Task ConnectorAuthorizationRuntimeAccess_ShouldTrimSetAndClearTypedState()
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldTrimSetAndClearTypedState()
     {
         var host = new RecordingStateHost();
 
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, " Bearer secret ");
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = " secret " });
 
-        host.ExecutionContextState.Connector!.HttpAuthorization.Should().Be("Bearer secret");
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().Be("secret");
 
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, " ");
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = " " });
 
-        host.ExecutionContextState.Connector.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
 
-        await ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(host, "Bearer secret");
-        await ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorizationAsync(host);
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { BearerToken = "secret" });
+        await WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(host);
 
-        host.ExecutionContextState.Connector.Should().BeNull();
-        await FluentActions.Awaiting(() => ConnectorAuthorizationRuntimeContextAccess.SetAuthorizationAsync(null!, "secret"))
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
+
+        await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+                host,
+                new WorkflowCallerCredential { BearerToken = "Bearer secret" }))
+            .Should()
+            .ThrowAsync<ArgumentException>()
+            .WithMessage("*caller credential*invalid*");
+
+        await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+                null!,
+                new WorkflowCallerCredential { BearerToken = "secret" }))
             .Should()
             .ThrowAsync<ArgumentNullException>();
-        await FluentActions.Awaiting(() => ConnectorAuthorizationRuntimeContextAccess.RemoveAuthorizationAsync(null!))
+        await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(null!))
             .Should()
             .ThrowAsync<ArgumentNullException>();
     }
 
     [Fact]
-    public void ConnectorAuthorizationRuntimeAccess_ShouldReadFromTypedStateHost()
+    public void WorkflowCallerCredentialRuntimeAccess_ShouldReadFromTypedStateHost()
     {
         var context = new RecordingWorkflowExecutionContext();
-        context.ExecutionContextState.Connector = new WorkflowConnectorExecutionContextState
+        context.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
-            HttpAuthorization = " Bearer secret ",
+            BearerToken = " secret ",
         };
 
-        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(context, out var authorization)
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out var credential)
             .Should()
             .BeTrue();
-        authorization.Should().Be("Bearer secret");
+        credential.BearerToken.Should().Be("secret");
 
-        context.ExecutionContextState.Connector.HttpAuthorization = " ";
-        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(context, out authorization)
+        context.ExecutionContextState.CallerCredential.BearerToken = " ";
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out credential)
             .Should()
             .BeFalse();
-        authorization.Should().BeEmpty();
+        credential.BearerToken.Should().BeEmpty();
 
-        ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(new ContextWithoutRuntimeAccessor(), out authorization)
+        context.ExecutionContextState.CallerCredential.BearerToken = "Bearer secret";
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(context, out credential)
             .Should()
             .BeFalse();
-        authorization.Should().BeEmpty();
-        FluentActions.Invoking(() => ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(null!, out _))
+        credential.BearerToken.Should().BeEmpty();
+
+        WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(new ContextWithoutRuntimeAccessor(), out credential)
+            .Should()
+            .BeFalse();
+        credential.BearerToken.Should().BeEmpty();
+        FluentActions.Invoking(() => WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(null!, out _))
             .Should()
             .Throw<ArgumentNullException>();
     }
@@ -329,7 +363,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
 
@@ -349,6 +383,55 @@ public sealed class WorkflowExecutionRuntimeContextTests
             _states.Remove(scopeKey);
             return Task.CompletedTask;
         }
+
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
     }
 
     private sealed class RecordingWorkflowExecutionContext :
@@ -419,6 +502,55 @@ public sealed class WorkflowExecutionRuntimeContextTests
             return Task.CompletedTask;
         }
 
+        Task<WorkflowCompensationTransitionResult> IWorkflowExecutionStateHost.TryStartCompensationAsync(
+            WorkflowCompletedEvent terminalFailure,
+            StepCompletedEvent? terminalStep,
+            CancellationToken ct)
+        {
+            _ = terminalFailure;
+            _ = terminalStep;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        Task IWorkflowExecutionStateHost.RecordCompensableStepDispatchAsync(
+            CompensableStepDispatchedEvent evt,
+            CancellationToken ct)
+        {
+            _ = evt;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationStepCompletionAsync(
+            CompensationStepCompletedEvent completion,
+            CancellationToken ct = default)
+        {
+            _ = completion;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        public Task<WorkflowCompensationTransitionResult> RecordCompensationPhaseDeadlineExceededAsync(
+            string runId,
+            string error,
+            CancellationToken ct = default)
+        {
+            _ = runId;
+            _ = error;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(NoCompensableLedger());
+        }
+
+        private static WorkflowCompensationTransitionResult NoCompensableLedger() =>
+            new(
+                WorkflowCompensationTransitionStatus.NoCompensableLedger,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty);
+
         public Task UpdateExecutionContextAsync(
             WorkflowRunExecutionContextDelta delta,
             CancellationToken ct = default)
@@ -430,7 +562,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         public Task ClearExecutionContextAsync(CancellationToken ct = default)
         {
             ExecutionContextState.Llm = null;
-            ExecutionContextState.Connector = null;
+            ExecutionContextState.CallerCredential = null;
             return Task.CompletedTask;
         }
     }
@@ -441,24 +573,25 @@ public sealed class WorkflowExecutionRuntimeContextTests
     {
         if (delta.ClearLlm)
             state.Llm = null;
-        if (delta.ClearConnector)
-            state.Connector = null;
+        if (delta.ClearCallerCredential)
+            state.CallerCredential = null;
         if (delta.Llm != null)
         {
             state.Llm = new WorkflowLlmExecutionContextState
             {
                 ModelOverride = delta.Llm.ModelOverride,
                 UserMemoryPrompt = delta.Llm.UserMemoryPrompt,
+                RoutePreference = delta.Llm.RoutePreference,
             };
             if (delta.Llm.HasMaxToolRoundsOverride)
                 state.Llm.MaxToolRoundsOverride = delta.Llm.MaxToolRoundsOverride;
         }
 
-        if (delta.Connector != null)
+        if (delta.CallerCredential != null)
         {
-            state.Connector = new WorkflowConnectorExecutionContextState
+            state.CallerCredential = new WorkflowCallerCredentialState
             {
-                HttpAuthorization = delta.Connector.HttpAuthorization,
+                BearerToken = delta.CallerCredential.BearerToken,
             };
         }
     }
@@ -493,14 +626,6 @@ public sealed class WorkflowExecutionRuntimeContextTests
         public Task<RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
             string callbackId,
             TimeSpan dueTime,
-            IMessage evt,
-            EventEnvelopePublishOptions? options = null,
-            CancellationToken ct = default) => throw new NotSupportedException();
-
-        public Task<RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
-            string callbackId,
-            TimeSpan dueTime,
-            TimeSpan period,
             IMessage evt,
             EventEnvelopePublishOptions? options = null,
             CancellationToken ct = default) => throw new NotSupportedException();

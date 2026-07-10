@@ -8,6 +8,17 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdLLMProviderRoutingTests
 {
     [Fact]
+    public void Capabilities_ShouldExposeDelegateMultimodalInputs()
+    {
+        var provider = CreateProvider();
+
+        provider.Capabilities.SupportsInput(ContentPartKind.Text).Should().BeTrue();
+        provider.Capabilities.SupportsInput(ContentPartKind.Image).Should().BeTrue();
+        provider.Capabilities.SupportsToolCalls.Should().BeTrue();
+        provider.Capabilities.SupportsStreaming.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ResolveRouteAsync_ShouldUseDefaultGateway_WhenNoRoutePreference()
     {
         var provider = CreateProvider();
@@ -325,12 +336,56 @@ public sealed class NyxIdLLMProviderRoutingTests
         route.Endpoint.Should().Be(new Uri("https://nyx.example.com/custom/path"));
     }
 
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldUseDefaultRoutePreference_WhenConfiguredAndNoRequestPreference()
+    {
+        // When a default route is configured, the no-override (server-default / owner-fallback)
+        // path must resolve to it instead of the bare NyxID gateway — the gateway forwards to
+        // the OpenAI provider, which fails closed when OpenAI is not connected.
+        var provider = CreateProviderWithDefaultRoute("chrono-llm-public");
+
+        var route = await provider.ResolveRouteAsync(CreateRequest());
+
+        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm-public"));
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldUseDefaultRoutePreference_WhenRequestPreferenceIsGatewayAlias()
+    {
+        var provider = CreateProviderWithDefaultRoute("chrono-llm-public");
+
+        var route = await provider.ResolveRouteAsync(CreateRequest(routePreference: "gateway"));
+
+        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm-public"));
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldHonorExplicitRoutePreference_OverDefaultRoutePreference()
+    {
+        var provider = CreateProviderWithDefaultRoute("chrono-llm-public");
+
+        var route = await provider.ResolveRouteAsync(CreateRequest(routePreference: "chrono-llm"));
+
+        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm"));
+    }
+
     private static NyxIdLLMProvider CreateProvider() =>
         new(
             name: "nyxid",
             defaultModel: "gpt-5.4",
             nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
             accessTokenAccessor: static () => null);
+
+    private static NyxIdLLMProvider CreateProviderWithDefaultRoute(string defaultRoutePreference) =>
+        new(
+            name: "nyxid",
+            defaultModel: "gpt-5.5",
+            nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
+            accessTokenAccessor: static () => null,
+            defaultRoutePreference: defaultRoutePreference);
 
     private static LLMRequest CreateRequest(string? routePreference = null) =>
         new()

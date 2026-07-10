@@ -6,6 +6,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -74,6 +75,11 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
+            ctx,
+            ctx.AgentId ?? string.Empty,
+            parentRunId,
+            parentStepId);
         var invocation = new SubWorkflowInvokeRequestedEvent
         {
             InvocationId = WorkflowCallInvocationIdFactory.Build(parentRunId, parentStepId),
@@ -83,6 +89,8 @@ public sealed class WorkflowCallModule : IEventModule<IWorkflowExecutionContext>
             Input = request.Input ?? string.Empty,
             Lifecycle = WorkflowCallLifecycle.Normalize(lifecycleRaw),
             RequestedByActorId = ctx.AgentId,
+            RootRunId = runtimeContext.RootRunId,
+            RequestedDepth = Math.Max(0, runtimeContext.Depth) + 1,
         };
 
         await ctx.PublishAsync(invocation, TopologyAudience.Self, ct);

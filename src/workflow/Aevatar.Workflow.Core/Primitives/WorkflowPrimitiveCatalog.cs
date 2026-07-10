@@ -35,8 +35,9 @@ public static class WorkflowPrimitiveCatalog
             ["http_delete"] = "connector_call",
             ["secure_connector"] = "secure_connector_call",
             ["secret_input"] = "secure_input",
-            // Keep runtime module matching stable: VoteConsensusModule currently handles "vote".
             ["vote_consensus"] = "vote",
+            ["mutex"] = "lease",
+            ["schedule_workflow"] = "self_reschedule",
         };
 
     private static readonly string[] IdentityPrimitives =
@@ -51,7 +52,8 @@ public static class WorkflowPrimitiveCatalog
         "llm_call", "tool_call", "connector_call", "secure_connector_call",
         "evaluate", "reflect", "human_input", "secure_input",
         "human_approval", "wait_signal", "emit", "parallel", "race",
-        "map_reduce", "vote", "foreach", "dynamic_workflow",
+        "map_reduce", "vote", "foreach", "dynamic_workflow", "lease",
+        "notify",
     ];
 
     public static IReadOnlySet<string> BuiltInCanonicalTypes { get; } = DeriveBuiltInCanonicalTypes();
@@ -105,6 +107,15 @@ public static class WorkflowPrimitiveCatalog
         var canonical = ToCanonicalType(stepType);
         return !string.IsNullOrWhiteSpace(canonical) &&
                knownCanonicalStepTypes.Contains(canonical);
+    }
+
+    public static bool IsSideEffectingPrimitive(string stepType)
+    {
+        var canonical = ToCanonicalType(stepType);
+        // Saga v1.1 provisions only the current external-dispatch primitives; future primitives can opt in explicitly.
+        return string.Equals(canonical, "tool_call", StringComparison.Ordinal) ||
+               string.Equals(canonical, "connector_call", StringComparison.Ordinal) ||
+               string.Equals(canonical, "secure_connector_call", StringComparison.Ordinal);
     }
 
     public static Dictionary<string, string> CanonicalizeStepTypeParameters(

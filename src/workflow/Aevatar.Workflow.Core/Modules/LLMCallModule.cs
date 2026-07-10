@@ -13,9 +13,6 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.Workflow.Core.Modules;
 
 /// <summary>LLM call module. Sends <see cref="WorkflowLlmExecutionIntent"/> to a role actor.</summary>
-// Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-//   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-//   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
 // Refactor (iter85/cluster-085-workflow-raw-content-information-logs):
 //   Old pattern: Information log included raw value/prompt/input preview
 //   New principle: only stable id + length + status + redaction marker
@@ -175,6 +172,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
         }
 
+        if (evt.ManagedHandoff != null && !string.IsNullOrWhiteSpace(evt.ManagedHandoff.InvocationId))
+        {
+            await RemovePendingAsync(sessionId, pending, ctx, ct);
+            return;
+        }
+
         ctx.Logger.LogInformation(
             "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=completed output_len={OutputLen} output_redacted=true",
             pending.RunId,
@@ -190,6 +193,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 Success = true,
                 Output = evt.Content ?? string.Empty,
                 WorkerId = publisherActorId,
+                Usage = evt.Usage?.Clone(),
             },
             TopologyAudience.Self,
             ct);
@@ -277,9 +281,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         WorkflowLlmExecutionIntent intent,
         int timeoutMs)
     {
-        // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-        //   Old pattern: module helpers hid raw step agent_type/agent_id lifecycle parameters by filtering them before dispatch
-        //   New principle: validator rejects raw lifecycle input; helpers only copy already-valid chat metadata parameters
         foreach (var (key, value) in request.Parameters)
         {
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
@@ -385,14 +386,39 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
             RunId = WorkflowRunIdNormalizer.Normalize(request.RunId),
             StepId = stepId,
+            // Carry the owning run's authoritative scope to the role actor so its tool caller
+            // context can be scope-scoped on the channel-less Direct/studio path (no inbound
+            // channel stamps the caller scope there). Empty stays empty; the role actor only
+            // fills a caller scope that is otherwise unset.
+            ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+        };
+        intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
+        var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
+            ctx,
+            ctx.AgentId ?? string.Empty,
+            request.RunId ?? string.Empty,
+            stepId);
+        intent.WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
+        {
+            ParentActorId = runtimeContext.ParentActorId,
+            ParentRunId = runtimeContext.ParentRunId,
+            ParentStepId = runtimeContext.ParentStepId,
+            RootRunId = runtimeContext.RootRunId,
+            Depth = runtimeContext.Depth,
         };
         if (WorkflowRunExecutionContextStateAccess.TryGetLlm(ctx, out var llm))
         {
             intent.Model = Normalize(llm.ModelOverride) ?? string.Empty;
             intent.UserMemoryPrompt = Normalize(llm.UserMemoryPrompt) ?? string.Empty;
+            intent.RoutePreference = Normalize(llm.RoutePreference) ?? string.Empty;
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
+        intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
+            ? callerCredential
+            : new WorkflowCallerCredential();
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
@@ -480,6 +506,22 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static void CopyAgentToolScope(
+        WorkflowAgentToolScope? source,
+        WorkflowLlmExecutionIntent intent)
+    {
+        if (source == null)
+            return;
+
+        intent.AgentToolScope = new WorkflowAgentToolScope();
+        foreach (var toolName in source.AllowedToolNames)
+        {
+            var normalized = Normalize(toolName);
+            if (normalized is not null)
+                intent.AgentToolScope.AllowedToolNames.Add(normalized);
+        }
+    }
 
     private static bool TryResolvePending(
         LLMCallModuleState state,
@@ -575,21 +617,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (pending.WatchdogLease == null)
-            return;
-
-        try
-        {
-            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.WatchdogLease, ct);
-        }
-        catch (Exception ex)
-        {
-            ctx.Logger.LogDebug(
-                ex,
-                "LLMCallModule: failed to cancel watchdog callback={CallbackId} generation={Generation}",
-                pending.WatchdogLease.CallbackId,
-                pending.WatchdogLease.Generation);
-        }
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            pending.WatchdogLease,
+            "LLMCallModule watchdog cleanup",
+            ct);
     }
 
     private static Task SaveStateAsync(

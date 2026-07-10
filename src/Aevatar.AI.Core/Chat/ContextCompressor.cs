@@ -194,7 +194,7 @@ public static class ContextCompressor
         foreach (var idx in indicesToRemove.OrderByDescending(x => x))
             messages.RemoveAt(idx);
 
-        return indicesToRemove.Count;
+        return indicesToRemove.Count + ChatMessageToolCallTranscript.RemoveInvalidToolCallPairs(messages);
     }
 
     // ─── Level 3: LLM 摘要压缩 ───

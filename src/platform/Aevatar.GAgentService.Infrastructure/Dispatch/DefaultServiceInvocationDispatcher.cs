@@ -3,8 +3,11 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Infrastructure.Dispatch;
 
@@ -14,17 +17,20 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     private readonly IScriptRuntimeCommandPort _scriptRuntimeCommandPort;
     private readonly IWorkflowRunProvisioningPort _workflowRunProvisioningPort;
     private readonly IServiceRunRegistrationPort _serviceRunRegistrationPort;
+    private readonly ILogger<DefaultServiceInvocationDispatcher> _logger;
 
     public DefaultServiceInvocationDispatcher(
         IActorDispatchPort dispatchPort,
         IScriptRuntimeCommandPort scriptRuntimeCommandPort,
         IWorkflowRunProvisioningPort workflowRunProvisioningPort,
-        IServiceRunRegistrationPort serviceRunRegistrationPort)
+        IServiceRunRegistrationPort serviceRunRegistrationPort,
+        ILogger<DefaultServiceInvocationDispatcher>? logger = null)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _scriptRuntimeCommandPort = scriptRuntimeCommandPort ?? throw new ArgumentNullException(nameof(scriptRuntimeCommandPort));
         _workflowRunProvisioningPort = workflowRunProvisioningPort ?? throw new ArgumentNullException(nameof(workflowRunProvisioningPort));
         _serviceRunRegistrationPort = serviceRunRegistrationPort ?? throw new ArgumentNullException(nameof(serviceRunRegistrationPort));
+        _logger = logger ?? NullLogger<DefaultServiceInvocationDispatcher>.Instance;
     }
 
     public async Task<ServiceInvocationAcceptedReceipt> DispatchAsync(
@@ -89,21 +95,133 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
+        var definitionActorId = ResolveWorkflowServiceDefinitionActorId(target, plan);
         var run = await _workflowRunProvisioningPort.CreateRunAsync(
             new WorkflowDefinitionBinding(
-                target.Service.PrimaryActorId,
+                definitionActorId,
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
-                ResolveAuthoritativeScopeId(request, chatRequest)),
+                ResolveAuthoritativeScopeId(request, chatRequest),
+                string.IsNullOrWhiteSpace(request.RunOrigin)
+                    ? WorkflowRunOrigins.ServiceInvoke
+                    : request.RunOrigin.Trim(),
+                request.ScheduleId?.Trim() ?? string.Empty),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
-        var runId = ResolveRunId(request, commandId);
-        await RegisterRunAsync(target, request, runId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
-        var envelope = CreateEnvelope(run.ActorId, Any.Pack(chatRequest), commandId, correlationId);
+        var serviceRunId = run.ActorId;
+        await RegisterRunAsync(target, request, serviceRunId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
+        var workflowChatRequest = ToWorkflowChatRequest(chatRequest, request, target, run.ActorId);
+        var envelope = CreateEnvelope(run.ActorId, Any.Pack(workflowChatRequest), commandId, correlationId);
         await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
-        return CreateReceipt(target, run.ActorId, commandId, correlationId, runId);
+        return CreateReceipt(target, run.ActorId, commandId, correlationId, serviceRunId);
+    }
+
+    private static string ResolveWorkflowServiceDefinitionActorId(
+        ServiceInvocationResolvedTarget target,
+        WorkflowServiceDeploymentPlan plan)
+    {
+        var serviceDefinitionActorId = target.Service.PrimaryActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(serviceDefinitionActorId))
+            return serviceDefinitionActorId;
+
+        return plan.DefinitionActorId?.Trim() ?? string.Empty;
+    }
+
+    private WorkflowChatRequestEvent ToWorkflowChatRequest(
+        ChatRequestEvent source,
+        ServiceInvocationRequest invocationRequest,
+        ServiceInvocationResolvedTarget target,
+        string workflowRunActorId)
+    {
+        var callerCredential = BuildWorkflowCallerCredential(source);
+        _logger.LogInformation(
+            "Workflow service invocation caller credential prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} workflowRunActorId={WorkflowRunActorId} hasConnectorAuthorization={HasConnectorAuthorization} hasLlmOwnerToken={HasLlmOwnerToken} hasCallerBearerToken={HasCallerBearerToken}",
+            invocationRequest.ScheduleId ?? string.Empty,
+            target.Service.ServiceKey ?? string.Empty,
+            invocationRequest.EndpointId ?? string.Empty,
+            workflowRunActorId ?? string.Empty,
+            !string.IsNullOrWhiteSpace(source.ConnectorHttpAuthorization),
+            !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdAccessToken) ||
+            !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken),
+            !string.IsNullOrWhiteSpace(callerCredential.BearerToken));
+
+        var request = new WorkflowChatRequestEvent
+        {
+            Prompt = source.Prompt ?? string.Empty,
+            SessionId = source.SessionId ?? string.Empty,
+            TimeoutMs = source.TimeoutMs,
+            ScopeId = source.ScopeId ?? string.Empty,
+            CallerCredential = callerCredential,
+        };
+        foreach (var part in source.InputParts)
+        {
+            request.InputParts.Add(new WorkflowChatInputPartPayload
+            {
+                Kind = part.Kind switch
+                {
+                    ChatContentPartKind.Text => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Text,
+                    ChatContentPartKind.Image => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Image,
+                    ChatContentPartKind.Audio => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Audio,
+                    ChatContentPartKind.Video => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Video,
+                    _ => Aevatar.Workflow.Abstractions.WorkflowChatInputPartKind.Unspecified,
+                },
+                Text = part.Text ?? string.Empty,
+                DataBase64 = part.DataBase64 ?? string.Empty,
+                MediaType = part.MediaType ?? string.Empty,
+                Uri = part.Uri ?? string.Empty,
+                Name = part.Name ?? string.Empty,
+            });
+        }
+        foreach (var (key, value) in source.Headers)
+            request.Headers[key] = value;
+        foreach (var (key, value) in source.Metadata)
+            request.Metadata[key] = value;
+        request.LlmControl = new WorkflowLlmControlContext
+        {
+            ModelOverride = source.LlmControl?.ModelOverride ?? string.Empty,
+            UserMemoryPrompt = source.LlmControl?.UserMemoryPrompt ?? string.Empty,
+            RoutePreference = source.LlmControl?.NyxIdRoutePreference ?? string.Empty,
+            SenderNyxIdAccessToken = source.LlmControl?.SenderNyxIdAccessToken ?? string.Empty,
+        };
+        if (source.LlmControl?.HasMaxToolRoundsOverride == true)
+            request.LlmControl.MaxToolRoundsOverride = source.LlmControl.MaxToolRoundsOverride;
+        return request;
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(ChatRequestEvent source)
+    {
+        var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
+        if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
+            return connectorCredential;
+
+        return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromConnectorAuthorization(string? connectorHttpAuthorization)
+    {
+        if (string.IsNullOrWhiteSpace(connectorHttpAuthorization))
+            return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential();
+
+        const string bearerPrefix = "Bearer ";
+        var authorization = connectorHttpAuthorization.Trim();
+        if (!authorization.StartsWith(bearerPrefix, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Connector HTTP authorization must use the Bearer scheme.", nameof(connectorHttpAuthorization));
+
+        return BuildWorkflowCallerCredentialFromToken(authorization[bearerPrefix.Length..]);
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromToken(string? bearerToken)
+    {
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(bearerToken);
+        if (parsed.IsInvalid)
+            throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(bearerToken));
+
+        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+        {
+            BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+        };
     }
 
     private async Task RegisterRunAsync(
@@ -130,6 +248,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             RevisionId = target.Service.RevisionId ?? string.Empty,
             DeploymentId = target.Service.DeploymentId ?? string.Empty,
             Status = ServiceRunStatus.Accepted,
+            ScheduleId = request.ScheduleId ?? string.Empty,
             Identity = request.Identity?.Clone(),
         };
         await _serviceRunRegistrationPort.RegisterAsync(record, ct);
@@ -210,6 +329,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
             return chatRequest.ScopeId.Trim();
 
-        return string.Empty;
+        // 06-23-observatory-run-coverage-filter (W3b): fail fast instead of returning an empty scope, which
+        // would materialize an unattributed run invisible to every scope-bound observatory viewer. Scope is a
+        // cross-run authoritative fact; a workflow service invoke must carry it via typed identity or payload.
+        throw new InvalidOperationException(
+            "Workflow service invocation requires a scope: neither service identity tenantId nor chat payload " +
+            "scopeId was provided. Refusing to create an unattributed (empty-scope) run.");
     }
 }

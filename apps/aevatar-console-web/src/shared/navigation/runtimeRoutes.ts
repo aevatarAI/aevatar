@@ -3,6 +3,7 @@ const runtimePaths = {
   primitives: "/runtime/primitives",
   runs: "/runtime/runs",
   missionControl: "/runtime/mission-control",
+  missionWall: "/runtime/mission-wall",
   explorer: "/runtime/explorer",
   explorerDetail: "/runtime/explorer/detail",
   gagents: "/runtime/gagents",
@@ -111,6 +112,18 @@ export function buildRuntimeMissionControlHref(options?: {
   });
 }
 
+export function buildRuntimeMissionWallHref(options?: {
+  focusRunId?: string;
+  scopeId?: string;
+  teamId?: string;
+}): string {
+  return buildHref(runtimePaths.missionWall, {
+    focusRunId: options?.focusRunId,
+    scopeId: options?.scopeId,
+    teamId: options?.teamId,
+  });
+}
+
 export function buildRuntimeExplorerHref(options?: {
   actorId?: string;
   runId?: string;
@@ -129,12 +142,12 @@ export function buildRuntimeExplorerHref(options?: {
 
 export function buildRuntimeGAgentsHref(options?: {
   scopeId?: string;
-  actorTypeName?: string;
+  agentKind?: string;
   actorId?: string;
 }): string {
   return buildHref(runtimePaths.gagents, {
     scopeId: options?.scopeId,
-    type: options?.actorTypeName,
+    type: options?.agentKind,
     actorId: options?.actorId,
   });
 }

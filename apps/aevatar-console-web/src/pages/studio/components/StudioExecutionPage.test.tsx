@@ -171,7 +171,7 @@ describe('StudioExecutionPage', () => {
     expect(screen.getByText('Graph canvas')).toBeInTheDocument();
   });
 
-  it('shows the selected execution actor id and lets users copy it', async () => {
+  it('shows selected execution context without exposing the actor id', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {
       configurable: true,
@@ -182,14 +182,10 @@ describe('StudioExecutionPage', () => {
       React.createElement(StudioExecutionPage, createBaseProps() as any),
     );
 
-    expect(screen.getAllByText('Actor ID').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('actor-1').length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole('button', { name: '复制 Actor ID。' }));
-
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith('actor-1');
-    });
+    expect(screen.queryByText('Actor ID')).toBeNull();
+    expect(screen.queryByText('actor-1')).toBeNull();
+    expect(screen.queryByRole('button', { name: '复制 Actor ID。' })).toBeNull();
+    expect(writeText).not.toHaveBeenCalled();
   });
 
   it('surfaces approval playback details from the selected execution trace', () => {

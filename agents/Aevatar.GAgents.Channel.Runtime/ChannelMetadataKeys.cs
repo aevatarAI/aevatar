@@ -22,6 +22,14 @@ public static class ChannelMetadataKeys
     public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
     /// <summary>
+    /// Everyone @-mentioned in the inbound message, as a readable list of <c>name &lt;canonical_id&gt;</c>
+    /// entries (on Lark the canonical id is the mentioned party's <c>open_id</c>), in the order their
+    /// <c>@_user_N</c> placeholders appear in the message text. Surfaced into the agent's
+    /// <c>&lt;channel-context&gt;</c> so the agent can resolve a third-party mention to a real id instead
+    /// of misusing the literal <c>@_user_N</c> placeholder as a member id. Absent when no one is mentioned.
+    /// </summary>
+    public const string Mentions = "channel.mentions";
+    /// <summary>
     /// Lark <c>union_id</c> (<c>on_*</c>) of the inbound sender. Tenant-stable and cross-app safe;
     /// downstream Lark senders prefer this over <see cref="SenderId"/> (<c>open_id</c>) for p2p
     /// outbound delivery so a relay-app vs outbound-app mismatch does not produce
@@ -45,6 +53,16 @@ public static class ChannelMetadataKeys
     public const string LarkOperatorOpenId = "channel.lark.operator_open_id";
     /// <summary>Lark <c>union_id</c> of the card-action operator when available.</summary>
     public const string LarkOperatorUnionId = "channel.lark.operator_union_id";
+    /// <summary>
+    /// Lark <c>user_id</c> of the ordinary-message sender resolved from Lark contact lookup.
+    /// Distinct from <see cref="LarkOperatorUserId"/>, which is scoped to card actions.
+    /// </summary>
+    public const string LarkSubjectUserId = "channel.lark.subject_user_id";
+    /// <summary>
+    /// Lark <c>employee_id</c> of the ordinary-message sender resolved from Lark contact lookup.
+    /// Distinct from card-action operator identity.
+    /// </summary>
+    public const string LarkSubjectEmployeeId = "channel.lark.subject_employee_id";
     /// <summary>
     /// Authoritative outbound Lark <c>receive_id</c> for the current workflow run, captured at
     /// agent-create time. Propagated via <c>WorkflowChatRunRequest.Metadata</c> so workflow

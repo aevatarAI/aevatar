@@ -87,6 +87,31 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpsertAsync_RejectsCrossOwnerOverwrite()
+    {
+        var firstOwner = OwnerScope.ForNyxIdNative("user-1");
+        var secondOwner = OwnerScope.ForNyxIdNative("user-2");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "approvals",
+            ConversationId = "first-conversation",
+            OwnerScope = firstOwner,
+        });
+
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "approvals",
+            ConversationId = "second-conversation",
+            OwnerScope = secondOwner,
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        var entry = _agent.State.Entries[0];
+        entry.ConversationId.Should().Be("first-conversation");
+        entry.OwnerScope!.MatchesStrictly(firstOwner).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleUpsertAsync_WithoutOwnerScope_PersistsLegacyOwnershipFields()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
@@ -130,6 +155,176 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         _agent.State.Entries.Should().ContainSingle();
         _agent.State.Entries[0].OwnerScope!.MatchesStrictly(scope).Should().BeTrue(
             "an upsert without OwnerScope on an existing entry inherits the existing scope");
+    }
+
+    [Fact]
+    public async Task HandleUpsertAsync_PartialUpsertWithDefaultOutputFormat_PreservesExistingFormat()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "format-agent",
+            ConversationId = "oc_chat_1",
+            OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
+        });
+
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "format-agent",
+            ScheduleCron = "0 9 * * *",
+        });
+
+        _agent.State.Entries.Should().ContainSingle();
+        _agent.State.Entries[0].OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+    }
+
+    [Fact]
+    public async Task HandleShareAsync_OwnerChannelScope_AddsSingularGrant()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "alice-agent",
+            ConversationId = "oc_chat_alice",
+            OwnerScope = owner,
+        });
+
+        await _agent.HandleShareAsync(new UserAgentCatalogShareCommand
+        {
+            AgentId = "alice-agent",
+            OwnerScope = owner,
+            AllowTrigger = true,
+        });
+
+        var grant = _agent.State.Entries.Should().ContainSingle().Subject.SharingGrant;
+        grant.Should().NotBeNull();
+        grant!.SharedWithRegistrationScope.Should().Be("bot-1");
+        grant.AllowTrigger.Should().BeTrue();
+        grant.GrantedBy.Should().Be("alice");
+        grant.GrantedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task HandleShareAsync_NonOwner_DoesNotGrantAccess()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var otherSender = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "alice-agent",
+            ConversationId = "oc_chat_alice",
+            OwnerScope = owner,
+        });
+
+        await _agent.HandleShareAsync(new UserAgentCatalogShareCommand
+        {
+            AgentId = "alice-agent",
+            OwnerScope = otherSender,
+            AllowTrigger = true,
+        });
+
+        _agent.State.Entries.Should().ContainSingle().Subject.SharingGrant.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleShareAsync_NyxIdNativeOwnedEntry_DoesNotGrantAccess()
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-A");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "native-agent",
+            ConversationId = "oc_chat_native",
+            OwnerScope = owner,
+        });
+
+        await _agent.HandleShareAsync(new UserAgentCatalogShareCommand
+        {
+            AgentId = "native-agent",
+            OwnerScope = owner,
+            AllowTrigger = true,
+        });
+
+        var entry = _agent.State.Entries.Should().ContainSingle().Subject;
+        entry.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
+        entry.SharingGrant.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleShareAsync_ChannelOwnedEntryWithoutRegistrationScope_DoesNotGrantAccess()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", string.Empty, "alice");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "registration-less-agent",
+            ConversationId = "oc_chat_registration_less",
+            OwnerScope = owner,
+        });
+
+        await _agent.HandleShareAsync(new UserAgentCatalogShareCommand
+        {
+            AgentId = "registration-less-agent",
+            OwnerScope = owner,
+            AllowTrigger = true,
+        });
+
+        var entry = _agent.State.Entries.Should().ContainSingle().Subject;
+        entry.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
+        entry.SharingGrant.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleUnshareAsync_Owner_RemovesGrant()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "alice-agent",
+            ConversationId = "oc_chat_alice",
+            OwnerScope = owner,
+        });
+        await _agent.HandleShareAsync(new UserAgentCatalogShareCommand
+        {
+            AgentId = "alice-agent",
+            OwnerScope = owner,
+            AllowTrigger = true,
+        });
+
+        await _agent.HandleUnshareAsync(new UserAgentCatalogUnshareCommand
+        {
+            AgentId = "alice-agent",
+            OwnerScope = owner,
+        });
+
+        _agent.State.Entries.Should().ContainSingle().Subject.SharingGrant.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleUnshareAsync_NonOwner_PreservesGrant()
+    {
+        var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var otherSender = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "alice-agent",
+            ConversationId = "oc_chat_alice",
+            OwnerScope = owner,
+        });
+        await _agent.HandleShareAsync(new UserAgentCatalogShareCommand
+        {
+            AgentId = "alice-agent",
+            OwnerScope = owner,
+            AllowTrigger = true,
+        });
+
+        await _agent.HandleUnshareAsync(new UserAgentCatalogUnshareCommand
+        {
+            AgentId = "alice-agent",
+            OwnerScope = otherSender,
+        });
+
+        var grant = _agent.State.Entries.Should().ContainSingle().Subject.SharingGrant;
+        grant.Should().NotBeNull();
+        grant!.SharedWithRegistrationScope.Should().Be("bot-1");
+        grant.AllowTrigger.Should().BeTrue();
     }
 
     [Fact]

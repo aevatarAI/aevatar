@@ -87,6 +87,36 @@ public sealed class AIAbstractionsProtoCoverageTests
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "call-1",
+            ToolName = "ornn_publish_skill",
+            Status = AgentToolReceiptStatus.Success,
+            ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+            IsDestructive = false,
+            SideEffectKind = "ornn.publish.skill",
+            SubjectKind = "ornn.skill",
+            SubjectId = "skill-1",
+            SubjectVersion = "1.0",
+            SubjectHash = "hash-1",
+            ApprovalRequestId = "approval-1",
+            ErrorCode = "",
+            ErrorMessage = "",
+            ResultJson = """{"guid":"skill-1","version":"1.0","skillHash":"hash-1"}""",
+            ManagedWorkflowHandoff = new ManagedWorkflowHandoffReceipt
+            {
+                ParentActorId = "parent-actor",
+                ParentRunId = "parent-run",
+                ParentStepId = "parent-step",
+                InvocationId = "invoke-1",
+                ChildRunId = "child-run-1",
+            },
+        };
+        var receiptRoundTrip = RoundTrip(receipt, AgentToolReceipt.Parser);
+        receiptRoundTrip.SubjectId.Should().Be("skill-1");
+        receiptRoundTrip.SubjectHash.Should().Be("hash-1");
+        receiptRoundTrip.ManagedWorkflowHandoff.InvocationId.Should().Be("invoke-1");
+
         var request = RoundTrip(new ChatRequestEvent
         {
             Prompt = "hello",
@@ -175,8 +205,33 @@ public sealed class AIAbstractionsProtoCoverageTests
             ResultJson = "{\"ok\":true}",
             Success = true,
             Error = "",
+            Receipt = receipt.Clone(),
         }, ToolResultEvent.Parser);
         toolResult.Success.Should().BeTrue();
+        toolResult.Receipt.SubjectId.Should().Be("skill-1");
+
+        var tokenUsage = RoundTrip(new TokenUsagePayload
+        {
+            PromptTokens = 2,
+            CompletionTokens = 3,
+            TotalTokens = 5,
+        }, TokenUsagePayload.Parser);
+        tokenUsage.TotalTokens.Should().Be(5);
+
+        var tokenUsageEvent = RoundTrip(new ChatTokenUsageEvent
+        {
+            SessionId = "session-1",
+            Usage = new TokenUsagePayload
+            {
+                PromptTokens = 11,
+                CompletionTokens = 13,
+                TotalTokens = 24,
+            },
+            Model = "nyxid-model",
+        }, ChatTokenUsageEvent.Parser);
+        tokenUsageEvent.SessionId.Should().Be("session-1");
+        tokenUsageEvent.Usage.TotalTokens.Should().Be(24);
+        tokenUsageEvent.Model.Should().Be("nyxid-model");
 
         var sessionStarted = RoundTrip(new RoleChatSessionStartedEvent
         {
@@ -201,6 +256,13 @@ public sealed class AIAbstractionsProtoCoverageTests
             ReasoningContent = "thinking",
             Prompt = "hello",
             ContentEmitted = true,
+            Usage = new TokenUsagePayload
+            {
+                PromptTokens = 17,
+                CompletionTokens = 19,
+                TotalTokens = 36,
+            },
+            Model = "nyxid-model",
             ToolCalls =
             {
                 new ToolCallEvent
@@ -210,6 +272,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     CallId = "call-1",
                 },
             },
+            ToolReceipts = { receipt.Clone() },
             OutputParts =
             {
                 new ChatContentPart
@@ -223,7 +286,10 @@ public sealed class AIAbstractionsProtoCoverageTests
         sessionCompleted.Content.Should().Be("done");
         sessionCompleted.ReasoningContent.Should().Be("thinking");
         sessionCompleted.ContentEmitted.Should().BeTrue();
+        sessionCompleted.Usage.TotalTokens.Should().Be(36);
+        sessionCompleted.Model.Should().Be("nyxid-model");
         sessionCompleted.ToolCalls.Should().ContainSingle();
+        sessionCompleted.ToolReceipts.Should().ContainSingle(x => x.SubjectHash == "hash-1");
         sessionCompleted.OutputParts.Should().ContainSingle();
 
         var initialize = RoundTrip(new InitializeRoleAgentEvent
@@ -238,9 +304,23 @@ public sealed class AIAbstractionsProtoCoverageTests
             MaxHistoryMessages = 40,
             EventModules = "demo",
             EventRoutes = "event.type == X -> demo",
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "verse",
+                    Instructions = "agent voice defaults",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
+                    VadDetectionThreshold = 0.4f,
+                    VadPrefixPaddingMs = 120,
+                    VadSilenceDurationMs = 240,
+                },
+            },
         }, InitializeRoleAgentEvent.Parser);
         initialize.RoleName.Should().Be("assistant");
         initialize.HasTemperature.Should().BeTrue();
+        initialize.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("verse");
 
         var overrides = RoundTrip(new AIAgentConfigOverrides
         {
@@ -277,7 +357,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     new AgentToolRequestIdentity("req-1", "call-1"),
                     AgentToolCredentials.Empty,
                     new AgentToolCallerContext("scope-a", "owner-a", "response-a"),
-                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a"),
+                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a", "delivery-target-a", "secrets://nyx/reply-a"),
                     new AgentToolSenderBindingContext("binding-a"),
                     new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
                     new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -297,6 +377,22 @@ public sealed class AIAbstractionsProtoCoverageTests
                     LastDrainAckPlayoutSequence = 3400,
                     NextResponseId = 13,
                     ActiveProviderResponseId = "provider-response-12",
+                    ActiveSessionConfig = new VoiceSessionConfig
+                    {
+                        Voice = "verse",
+                        Instructions = "active voice",
+                        SampleRateHz = 16000,
+                        TurnDetectionMode = VoiceTurnDetectionMode.Disabled,
+                    },
+                },
+            },
+            VoiceSessionDefaults =
+            {
+                ["voice_presence"] = new VoiceSessionDefaults
+                {
+                    Voice = "marin",
+                    SampleRateHz = 16000,
+                    TurnDetectionMode = VoiceTurnDetectionMode.ClientVad,
                 },
             },
             Sessions =
@@ -335,6 +431,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                             CallId = "call-1",
                         },
                     },
+                    ToolReceipts = { receipt.Clone() },
                 },
             },
         }, RoleGAgentState.Parser);
@@ -347,6 +444,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].InputParts.Should().ContainSingle();
         state.Sessions["session-1"].OutputParts.Should().ContainSingle();
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
+        state.Sessions["session-1"].ToolReceipts.Should().ContainSingle(x => x.SubjectId == "skill-1");
         state.PendingApproval.Should().NotBeNull();
         state.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
         state.PendingApproval.ToolContext.Should().NotBeNull();
@@ -359,6 +457,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.Credentials.Should().Be(AgentToolCredentials.Empty);
         pendingContext.Caller.ScopeId.Should().Be("scope-a");
         pendingContext.Channel.SenderId.Should().Be("sender-a");
+        pendingContext.Channel.DeliveryTargetId.Should().Be("delivery-target-a");
         pendingContext.SenderBinding.BindingId.Should().Be("binding-a");
         pendingContext.Routing.ModelOverride.Should().Be("model-a");
         pendingContext.Routing.MaxToolRoundsOverride.Should().Be(4);
@@ -366,6 +465,67 @@ public sealed class AIAbstractionsProtoCoverageTests
         pendingContext.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-from-context");
         state.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(12);
         state.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-12");
+        state.VoicePresence["voice_presence"].ActiveSessionConfig.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.Disabled);
+        state.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("marin");
+    }
+
+    [Fact]
+    public void AgentToolReceipt_ShouldUseCanonicalWireContract()
+    {
+        ((int)AgentToolReceiptStatus.Unspecified).Should().Be(0);
+        ((int)AgentToolReceiptStatus.Success).Should().Be(1);
+        ((int)AgentToolReceiptStatus.ApprovalRequired).Should().Be(2);
+        ((int)AgentToolReceiptStatus.Denied).Should().Be(3);
+        ((int)AgentToolReceiptStatus.Error).Should().Be(4);
+
+        ((int)AgentToolReceiptApprovalMode.Unspecified).Should().Be(0);
+        ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
+        ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
+        ((int)AgentToolReceiptApprovalMode.Auto).Should().Be(3);
+        AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Equal(
+                (1, "call_id"),
+                (2, "tool_name"),
+                (3, "status"),
+                (4, "approval_mode"),
+                (5, "is_destructive"),
+                (6, "side_effect_kind"),
+                (7, "subject_kind"),
+                (8, "subject_id"),
+                (9, "subject_version"),
+                (10, "subject_hash"),
+                (11, "approval_request_id"),
+                (12, "error_code"),
+                (13, "error_message"),
+                (14, "result_json"),
+                (15, "managed_workflow_handoff"),
+                (16, "workflow_run_delivery"));
+
+        AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.Name)
+            .Should()
+            .NotContain(["observed_at_unix_ms", "subject_name", "is_read_only"]);
+
+        ToolResultEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((5, "receipt"))
+            .And.NotContain((5, "tool_name"));
+        ToolResultEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => field.Name)
+            .Should()
+            .NotContain("tool_name");
+
+        RoleChatSessionCompletedEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((11, "tool_receipts"));
+        RoleChatSessionState.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((12, "tool_receipts"));
     }
 
     [Fact]
@@ -386,8 +546,8 @@ public sealed class AIAbstractionsProtoCoverageTests
                 Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
                 Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
                 Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
-                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1"),
-                SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1", "secrets://nyx/reply-1"),
+                SenderBinding = new AgentToolSenderBindingContext("binding-1", "nyx-user-1"),
                 Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
                 ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),
                 ExternalMetadata = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -401,7 +561,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.ToolContext.Request.RequestId.Should().Be("req-typed");
         pending.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
         pending.ToolContext.Channel.Platform.Should().Be("lark");
-        pending.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
+        pending.ToolContext.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
+        (pending.ToolContext.SenderBinding.BindingId, pending.ToolContext.SenderBinding.NyxUserId).Should().Be(("binding-1", "nyx-user-1"));
         pending.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(4);
         pending.ToolContext.ConnectedServices.ContextJson.Should().Be("{\"service\":\"ok\"}");
         pending.ToolContext.ExternalMetadata["trace-id"].Should().Be("trace-typed");

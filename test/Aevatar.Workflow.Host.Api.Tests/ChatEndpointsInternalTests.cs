@@ -1,18 +1,30 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Primitives;
+using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -43,6 +55,81 @@ public sealed class ChatEndpointsInternalTests
         body.Should().Contain("cmd-1");
         body.Should().Contain("corr-1");
         body.Should().Contain("actor-1");
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldDispatchTypedForkCommandAndReturnAccepted()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
+        {
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
+                new WorkflowForkRunAcceptedReceipt(
+                    "source-run",
+                    "new-run-actor",
+                    "direct",
+                    true,
+                    "cmd-1",
+                    "corr-1",
+                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = " source-run ",
+                StartAtStepId = " step-b ",
+                Input = "resume input",
+                CommandId = " cmd-1 ",
+                CorrelationId = " corr-1 ",
+                ScopeId = " scope-1 ",
+                VariableOverrides = new Dictionary<string, string>
+                {
+                    [" topic "] = "override",
+                },
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        service.Commands.Should().ContainSingle();
+        var command = service.Commands[0];
+        command.SourceRunId.Should().Be("source-run");
+        command.StartAtStepId.Should().Be("step-b");
+        command.ScopeId.Should().Be("scope-1");
+        command.VariableOverrides.Should().Contain("topic", "override");
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        body.Should().Contain("new-run-actor");
+        body.Should().Contain("cmd-1");
+        body.Should().Contain("corr-1");
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldMapInvalidWorkflowYaml()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
+        {
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.InvalidWorkflowYaml("source-run", "step-b", "Workflow YAML is invalid.")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("Workflow YAML is invalid.");
     }
 
     [Fact]
@@ -173,6 +260,135 @@ public sealed class ChatEndpointsInternalTests
         service.LastCommand.InputParts.Should().ContainSingle();
         service.LastCommand.InputParts![0].Kind.Should()
             .Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind.Image);
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldReturnInvalidFileInput_WhenInlineFileSizeBytesMismatchesDecodedBytes()
+    {
+        var service = new FakeCommandDispatchService();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": 6
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_FILE_INPUT");
+        service.DispatchCalls.Should().Be(0);
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldReturnInvalidFileInput_WhenUnsupportedInputPartHasInvalidInlineFileSizeBytes()
+    {
+        var service = new FakeCommandDispatchService();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "prompt": "describe this",
+              "inputParts": [
+                {
+                  "type": "unsupported",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "sizeBytes": -1
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_FILE_INPUT");
+        service.DispatchCalls.Should().Be(0);
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PostChat_ShouldDispatch_WhenInlineFileSizeBytesMatchesDecodedBytes()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            input,
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None,
+            fileIngressPort: ingressPort);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.DispatchCalls.Should().Be(1);
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("hello"));
+        ingressPort.Requests[0].SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.ChatInput);
+        ingressPort.Requests[0].FileName.Should().Be("hello.png");
+        ingressPort.Requests[0].MediaType.Should().Be("image/png");
+        service.LastCommand.Should().NotBeNull();
+        var part = service.LastCommand!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.FileId.Should().Be("file-1");
+        part.FileRef.ArtifactId.Should().Be("workflow-file://file-1");
+        part.FileRef.SizeBytes.Should().Be(5);
+        part.Uri.Should().Be("workflow-file://file-1");
     }
 
     [Fact]
@@ -327,7 +543,7 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChat_ShouldPassTrustedBearerAsTypedConnectorAuthorization()
+    public async Task HandleChat_ShouldPassTrustedBearerAsWorkflowCallerCredential()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
         var interactionService = new FakeCommandInteractionService
@@ -357,8 +573,326 @@ public sealed class ChatEndpointsInternalTests
             CancellationToken.None);
 
         capturedCommand.Should().NotBeNull();
-        capturedCommand!.ConnectorHttpAuthorization.Should().Be("Bearer trusted-token");
+        capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
         capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldResolveIngressPortAndDispatchFileRefForInlineFile()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var http = CreateHttpContext();
+        http.RequestServices = new ServiceCollection()
+            .AddLogging()
+            .AddOptions()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<IHostEnvironment>(new StubHostEnvironment())
+            .AddSingleton<IWorkflowFileIngressPort>(ingressPort)
+            .BuildServiceProvider();
+        var input = JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "inputParts": [
+                {
+                  "type": "image",
+                  "inlineFile": {
+                    "dataBase64": "aGVsbG8=",
+                    "mediaType": "image/png",
+                    "name": "hello.png",
+                    "sizeBytes": 5
+                  }
+                }
+              ]
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            input,
+            interactionService,
+            CancellationToken.None);
+
+        ingressPort.Requests.Should().ContainSingle();
+        capturedCommand.Should().NotBeNull();
+        var part = capturedCommand!.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
+        part.FileRef.SizeBytes.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldParseMultipartUploadBeforeDispatchingWorkflowCommand()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            ingressPort,
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.Request.ContentType = "multipart/form-data; boundary=test";
+        http.Features.Set<IFormFeature>(new FormFeature(new FormCollection(
+            ToFormFields(new Dictionary<string, string>
+            {
+                ["prompt"] = "describe this",
+                ["workflow"] = "direct",
+                ["scopeId"] = "scope-1",
+            }),
+            new FormFileCollection
+            {
+                CreateFormFile("file", "cat.png", "image/png", "hello"),
+            })));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        ingressPort.Requests.Should().ContainSingle();
+        ingressPort.Requests[0].SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.FormUpload);
+        ingressPort.Requests[0].OwnerScopeId.Should().Be("scope-1");
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
+        capturedCommand.ScopeId.Should().Be("scope-1");
+        var part = capturedCommand.InputParts.Should().ContainSingle().Which;
+        part.DataBase64.Should().BeNull();
+        part.FileRef.Should().NotBeNull();
+        part.FileRef!.SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.FormUpload);
+        part.FileRef.ArtifactId.Should().Be("workflow-file://file-1");
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldRejectMalformedBearerBeforeIngestingMultipartFile()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = new WorkflowMultipartChatRequestParser(
+            ingressPort,
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer token 123");
+        http.Request.ContentType = "multipart/form-data; boundary=test";
+        http.Features.Set<IFormFeature>(new FormFeature(new FormCollection(
+            ToFormFields(new Dictionary<string, string>
+            {
+                ["prompt"] = "describe this",
+            }),
+            new FormFileCollection
+            {
+                CreateFormFile("file", "cat.png", "image/png", "hello"),
+            })));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            new FakeCommandInteractionService(),
+            parser,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        ingressPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldDeserializeJsonBodyBeforeDispatchingWorkflowCommand()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            {
+              "prompt": "describe the release plan",
+              "workflow": "direct",
+              "sessionId": "session-1",
+              "scopeId": "scope-1"
+            }
+            """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.Prompt.Should().Be("describe the release plan");
+        capturedCommand.Source.WorkflowName.Should().Be("direct");
+        capturedCommand.SessionId.Should().Be("session-1");
+        capturedCommand.ScopeId.Should().Be("scope-1");
+        capturedCommand.CallerCredential!.BearerToken.Should().Be("trusted-token");
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldReturnInvalidChatInputAndSkipDispatch_WhenJsonBodyIsMalformed()
+    {
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("""{ "prompt": """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CHAT_INPUT");
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldReturnUnsupportedMediaType_WhenContentTypeIsNotJsonOrMultipart()
+    {
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext();
+        http.Request.ContentType = "text/plain";
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            new FakeCommandInteractionService(),
+            parser,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status415UnsupportedMediaType);
+        body.Should().Contain("UNSUPPORTED_MEDIA_TYPE");
+        body.Should().Contain("Content-Type must be application/json or multipart/form-data.");
+    }
+
+    [Fact]
+    public void MapWorkflowCapabilityEndpoints_ShouldMapChatHttpAndWebSocketRoutes()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddWorkflowCapability(new ConfigurationBuilder().Build());
+        var app = builder.Build();
+
+        app.MapWorkflowCapabilityEndpoints();
+
+        ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .Should()
+            .Contain(["/api/chat", "/api/ws/chat"]);
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldReturnInvalidCallerCredential_WhenAuthorizationBearerIsMalformed()
+    {
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.AgentNotFound));
+            },
+        };
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token 123";
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        body.Should().Contain("Caller credential is invalid.");
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public void WorkflowCallerCredentialExtractor_ShouldExposeMissingValidAndInvalidStatus()
+    {
+        var missingHttpContext = WorkflowCallerCredentialExtractor.Extract(null);
+        var missingHttp = CreateHttpContext();
+        var unsupportedSchemeHttp = CreateHttpContext();
+        unsupportedSchemeHttp.Request.Headers.Authorization = "Basic token-123";
+        var validHttp = CreateHttpContext();
+        validHttp.Request.Headers.Authorization = "Bearer token-123";
+        var bareBearerHttp = CreateHttpContext();
+        bareBearerHttp.Request.Headers.Authorization = "Bearer";
+        var invalidHttp = CreateHttpContext();
+        invalidHttp.Request.Headers.Authorization = "Bearer token 123";
+
+        var missing = WorkflowCallerCredentialExtractor.Extract(missingHttp);
+        var unsupportedScheme = WorkflowCallerCredentialExtractor.Extract(unsupportedSchemeHttp);
+        var valid = WorkflowCallerCredentialExtractor.Extract(validHttp);
+        var bareBearer = WorkflowCallerCredentialExtractor.Extract(bareBearerHttp);
+        var invalid = WorkflowCallerCredentialExtractor.Extract(invalidHttp);
+
+        missingHttpContext.Succeeded.Should().BeTrue();
+        missingHttpContext.Credential.Should().BeNull();
+        missing.Succeeded.Should().BeTrue();
+        missing.Credential.Should().BeNull();
+        unsupportedScheme.Succeeded.Should().BeTrue();
+        unsupportedScheme.Credential.Should().BeNull();
+        valid.Succeeded.Should().BeTrue();
+        valid.Credential!.BearerToken.Should().Be("token-123");
+        bareBearer.Succeeded.Should().BeFalse();
+        bareBearer.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        bareBearer.Credential.Should().BeNull();
+        invalid.Succeeded.Should().BeFalse();
+        invalid.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        invalid.Credential.Should().BeNull();
     }
 
     [Fact]
@@ -469,7 +1003,7 @@ public sealed class ChatEndpointsInternalTests
         var http = CreateHttpContext();
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("boom"),
+            ResultFactory = (_, _, _, _) => throw new InvalidOperationException("provider secret token leaked"),
         };
 
         await WorkflowCapabilityEndpoints.HandleChat(
@@ -481,6 +1015,8 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
         body.Should().Contain("EXECUTION_FAILED");
+        body.Should().Contain("Workflow execution failed.");
+        body.Should().NotContain("provider secret token leaked");
     }
 
     [Fact]
@@ -515,7 +1051,38 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"delta\": \"hello\"");
-        body.Should().Contain("Workflow execution failed: line1  line2");
+        body.Should().Contain("Workflow execution failed.");
+        body.Should().NotContain("line1");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldWriteCompatibilityError_WhenTypeRegistryDescriptorIsMissing()
+    {
+        var http = CreateHttpContext();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                throw new InvalidOperationException(
+                    "Type registry has no descriptor for type name 'aevatar.ai.InitializeRoleAgentEvent'");
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("WORKFLOW_REVISION_INCOMPATIBLE");
+        body.Should().Contain("Re-publish or migrate the workflow/service revision");
+        body.Should().NotContain("EXECUTION_FAILED");
     }
 
     [Fact]
@@ -530,7 +1097,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -556,7 +1123,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -592,7 +1159,7 @@ public sealed class ChatEndpointsInternalTests
                 },
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -615,6 +1182,44 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleResume_ShouldDispatchNestedToolApproval()
+    {
+        var service = new RecordingDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
+                new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "cmd-1", "cmd-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleResume(
+            new WorkflowResumeInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                StepId = "tool-step",
+                Approved = true,
+                ToolApproval = new WorkflowToolApprovalResumeInput
+                {
+                    ExecutionId = "exec-1",
+                    ToolCallId = "tool-call-1",
+                    ApprovalRequestId = "approval-1",
+                },
+            },
+            service,
+            ct: CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.Commands.Should().ContainSingle();
+        var command = service.Commands.Single();
+        command.ToolApproval.Should().NotBeNull();
+        command.ToolApproval!.ExecutionId.Should().Be("exec-1");
+        command.ToolApproval.ToolCallId.Should().Be("tool-call-1");
+        command.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+    }
+
+    [Fact]
     public async Task HandleResume_ShouldTreatActorIdAsOpaqueAndForwardItUnchanged()
     {
         const string opaqueActorId = "static-gagent:script-runtime:mixed-shape";
@@ -632,7 +1237,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -662,7 +1267,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -690,7 +1295,7 @@ public sealed class ChatEndpointsInternalTests
                 StepId = "step-1",
             },
             service,
-            CancellationToken.None);
+            ct: CancellationToken.None);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -970,6 +1575,206 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleRetryCompensation_ShouldDispatchCommand_WhenRunOwnershipMatches()
+    {
+        var receipt = new WorkflowRunControlAcceptedReceipt("actor-1", "run-1", "retry-cmd-1", "corr-1");
+        var service = new RecordingDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
+        {
+            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(receipt),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                FailedCompensationStepId = " refund_payment ",
+                CommandId = "retry-cmd-1",
+                Reason = "operator retry",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/actor-1/current-state");
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().ActorId.Should().Be("actor-1");
+        service.Commands.Single().RunId.Should().Be("run-1");
+        service.Commands.Single().FailedCompensationStepId.Should().Be("refund_payment");
+        service.Commands.Single().CommandId.Should().Be("retry-cmd-1");
+        service.Commands.Single().Reason.Should().Be("operator retry");
+        body.Should().Contain("\"failedCompensationStepId\":\"refund_payment\"");
+        body.Should().Contain("\"acceptedCommandId\":\"retry-cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/actor-1/current-state\"");
+    }
+
+    [Fact]
+    public async Task HandleRetryCompensation_ShouldRejectMissingFailedStep()
+    {
+        var service = new RecordingDispatchService<WorkflowRetryCompensationCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>();
+
+        var result = await WorkflowCapabilityEndpoints.HandleRetryCompensation(
+            new WorkflowRetryCompensationInput
+            {
+                ActorId = "actor-1",
+                RunId = "run-1",
+                FailedCompensationStepId = " ",
+            },
+            service,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("actorId, runId and failedCompensationStepId are required");
+        service.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldReturnAcceptedLocationAndDispatchMappedCommand()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
+        {
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
+                new WorkflowForkRunAcceptedReceipt(
+                    "source-run",
+                    "new-run-actor",
+                    "workflow-1",
+                    true,
+                    "cmd-1",
+                    "corr-1",
+                    new DateTimeOffset(2026, 6, 8, 0, 0, 0, TimeSpan.Zero))),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = " source-run ",
+                StartAtStepId = " step-b ",
+                InlineYaml = "name: workflow-1\nsteps: []",
+                InlineSubYamls = new Dictionary<string, string>
+                {
+                    [" helper "] = "name: helper",
+                },
+                VariableOverrides = new Dictionary<string, string>
+                {
+                    [" topic "] = "recovered",
+                },
+                Input = "resume input",
+                ScopeId = " scope-1 ",
+                CommandId = " cmd-1 ",
+                CorrelationId = " corr-1 ",
+            },
+            service,
+            CreateHttpContext("Bearer trusted-token"),
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/workflow-actors/new-run-actor/current-state");
+        var body = await ReadBodyAsync(http.Response);
+        body.Should().Contain("\"newRunActorId\":\"new-run-actor\"");
+        body.Should().Contain("\"acceptedCommandId\":\"cmd-1\"");
+        body.Should().Contain("\"statusUrl\":\"/api/workflow-actors/new-run-actor/current-state\"");
+        service.Commands.Should().ContainSingle();
+        service.Commands.Single().SourceRunId.Should().Be("source-run");
+        service.Commands.Single().StartAtStepId.Should().Be("step-b");
+        service.Commands.Single().InlineYaml.Should().Be("name: workflow-1\nsteps: []");
+        service.Commands.Single().InlineSubYamls.Should().ContainKey("helper").WhoseValue.Should().Be("name: helper");
+        service.Commands.Single().VariableOverrides.Should().ContainKey("topic").WhoseValue.Should().Be("recovered");
+        service.Commands.Single().Input.Should().Be("resume input");
+        service.Commands.Single().ScopeId.Should().Be("scope-1");
+        service.Commands.Single().CallerCredential!.BearerToken.Should().Be("trusted-token");
+        service.Commands.Single().CommandId.Should().Be("cmd-1");
+        service.Commands.Single().CorrelationId.Should().Be("corr-1");
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldRejectMalformedBearerBeforeDispatch()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>();
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "step-b",
+            },
+            service,
+            CreateHttpContext("Bearer token 123"),
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        service.Commands.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("", "step-b")]
+    [InlineData("source-run", "   ")]
+    public async Task HandleForkRun_ShouldRejectMissingRequiredFields(string sourceRunId, string startAtStepId)
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>();
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = sourceRunId,
+                StartAtStepId = startAtStepId,
+            },
+            service,
+            null,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("sourceRunId and startAtStepId are required");
+        service.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleForkRun_ShouldMapStartErrorWithReason()
+    {
+        var service = new RecordingDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>
+        {
+            Result = CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Failure(
+                WorkflowForkRunStartError.StartStepNotFound("source-run", "missing-step")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleForkRun(
+            new WorkflowForkRunInput
+            {
+                SourceRunId = "source-run",
+                StartAtStepId = "missing-step",
+            },
+            service,
+            null,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("Start step 'missing-step' was not found");
+        service.Commands.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task HandleChatWebSocket_ShouldRejectNonWebSocketRequests()
     {
         var http = CreateHttpContext();
@@ -1036,18 +1841,56 @@ public sealed class ChatEndpointsInternalTests
         return await reader.ReadToEndAsync();
     }
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static DefaultHttpContext CreateHttpContext(string? authorization = null)
     {
         var http = new DefaultHttpContext
         {
+            // 06-20-observatory-run-state-feed (R2d): HandleChat now derives the run scope from the caller
+            // claim via AevatarScopeAccessGuard, which resolves auth-enablement from IConfiguration +
+            // IHostEnvironment (always present in real HTTP hosting). Register both so the harness mirrors
+            // production; with no authenticated user the guard yields no scope and the run falls back to the
+            // body scopeId, preserving these tests' expectations.
             RequestServices = new ServiceCollection()
                 .AddLogging()
                 .AddOptions()
+                .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+                .AddSingleton<IHostEnvironment>(new StubHostEnvironment())
                 .BuildServiceProvider(),
         };
+        if (!string.IsNullOrWhiteSpace(authorization))
+            http.Request.Headers.Authorization = authorization;
         http.Response.Body = new MemoryStream();
         return http;
     }
+
+    private sealed class StubHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "Aevatar.Workflow.Host.Api.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } =
+            new NullFileProvider();
+    }
+
+    private static IFormFile CreateFormFile(
+        string fieldName,
+        string fileName,
+        string contentType,
+        string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        return new FormFile(new MemoryStream(bytes), 0, bytes.Length, fieldName, fileName)
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = contentType,
+        };
+    }
+
+    private static Dictionary<string, StringValues> ToFormFields(IDictionary<string, string> fields) =>
+        fields.ToDictionary(
+            static pair => pair.Key,
+            static pair => new StringValues(pair.Value),
+            StringComparer.Ordinal);
 
     private static WorkflowRunEventEnvelope BuildRawObservedWorkflowExecutionStartedFrame()
     {
@@ -1149,6 +1992,31 @@ public sealed class ChatEndpointsInternalTests
             if (DispatchException != null)
                 throw DispatchException;
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    {
+        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+
+        public ValueTask<WorkflowFileIngressResult> IngestAsync(
+            WorkflowFileIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = request.SourceKind,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+                CreatedAtUnixMs = 1710000000000,
+                ExpiresAtUnixMs = 1710003600000,
+            }));
         }
     }
 

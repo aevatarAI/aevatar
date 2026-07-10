@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -800,6 +801,74 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         graph.Edges.Should().Contain(x => x.ToNodeId == "child-1");
     }
 
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldAggregateStepUsageAndClampNegativeMetrics()
+    {
+        var report = new WorkflowRunInsightReportDocument
+        {
+            Id = "root-actor",
+            RootActorId = "root-actor",
+            CommandId = "cmd-usage",
+        };
+        var timestamp = new DateTimeOffset(2026, 3, 18, 6, 15, 0, TimeSpan.Zero);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "step-negative",
+                    Success = true,
+                    Usage = new WorkflowUsageMetrics
+                    {
+                        PromptTokens = -10,
+                        CompletionTokens = -20,
+                        TotalTokens = -30,
+                        Cost = -1,
+                        LatencyMs = -100,
+                    },
+                },
+                28,
+                "evt-usage-negative"),
+            timestamp);
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "step-positive",
+                    Success = true,
+                    Usage = new WorkflowUsageMetrics
+                    {
+                        PromptTokens = 11,
+                        CompletionTokens = 7,
+                        TotalTokens = 18,
+                        Model = "gpt-usage",
+                        Cost = 0.42,
+                        LatencyMs = 1234,
+                    },
+                },
+                29,
+                "evt-usage-positive"),
+            timestamp.AddSeconds(1));
+
+        report.Steps.Should().HaveCount(2);
+        report.Steps[0].Usage.PromptTokens.Should().Be(0);
+        report.Steps[0].Usage.CompletionTokens.Should().Be(0);
+        report.Steps[0].Usage.TotalTokens.Should().Be(0);
+        report.Steps[0].Usage.Model.Should().BeEmpty();
+        report.Steps[0].Usage.Cost.Should().Be(0);
+        report.Steps[0].Usage.LatencyMs.Should().Be(0);
+
+        report.Usage.PromptTokens.Should().Be(11);
+        report.Usage.CompletionTokens.Should().Be(7);
+        report.Usage.TotalTokens.Should().Be(18);
+        report.Usage.Model.Should().Be("gpt-usage");
+        report.Usage.Cost.Should().Be(0.42);
+        report.Usage.LatencyMs.Should().Be(1234);
+    }
+
     [Theory]
     [MemberData(nameof(CurrentStateStatusCases))]
     public async Task WorkflowExecutionCurrentStateProjector_ShouldMapCommittedStateSnapshots(
@@ -823,12 +892,26 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     LastCommandId = "cmd-current",
                     DefinitionActorId = "definition-1",
                     WorkflowName = "wf-current",
+                    ScopeId = "scope-current",
+                    RunOrigin = "provisioned",
+                    ScheduleId = "schedule-current",
                     Status = status,
                     Compiled = true,
                     CompilationError = "none",
                     Input = "hello",
                     FinalOutput = "done",
                     FinalError = "err",
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                    DeadLetterFailedCompensationStepId = "refund_payment",
+                    DeadLetterRemainingUncompensated = 2,
+                    DeadLetterError = "refund failed",
+                    ExecutionStates =
+                    {
+                        ["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
+                        {
+                            InputFileRefs = { BuildWorkflowFileRef("file-current") },
+                        }),
+                    },
                 },
                 includeEnvelopeTimestamp: false));
 
@@ -838,11 +921,33 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.CommandId.Should().Be("cmd-current");
         document.DefinitionActorId.Should().Be("definition-1");
         document.WorkflowName.Should().Be("wf-current");
+        document.ScopeId.Should().Be("scope-current");
+        document.RunOrigin.Should().Be("provisioned");
+        document.ScheduleId.Should().Be("schedule-current");
         document.Status.Should().Be(status);
+        document.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        document.DeadLetterRemainingUncompensated.Should().Be(2);
+        document.DeadLetterError.Should().Be("refund failed");
+        document.StateVersion.Should().Be(1);
         document.Compiled.Should().BeTrue();
-        document.ExecutionStateCount.Should().Be(0);
+        document.ExecutionStateCount.Should().Be(1);
         document.Success.Should().Be(expectedSuccess);
         document.UpdatedAt.Should().Be(new DateTimeOffset(2026, 3, 18, 7, 0, 0, TimeSpan.Zero));
+        var fileRef = document.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("file-current");
+        fileRef.ArtifactId.Should().Be("workflow-file://file-current");
+        fileRef.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceMessageId.Should().Be("om_1");
+        fileRef.SourceResourceKey.Should().Be("resource-file-current");
+        fileRef.FileName.Should().Be("file-current.pdf");
+        fileRef.MediaType.Should().Be("application/pdf");
+        fileRef.SizeBytes.Should().Be(1234);
+        fileRef.Sha256.Should().Be("sha-file-current");
+        fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+        fileRef.OwnerRunId.Should().Be("run-owner");
+        fileRef.OwnerScopeId.Should().Be("scope-owner");
     }
 
     [Fact]
@@ -889,6 +994,122 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 publisherActorId: "child-run-actor"));
 
         dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldObserveCompensationMetricsFromCommittedFactsOnly()
+    {
+        using var metrics = new RecordingMeterListener();
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 3, 18, 7, 50, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new CompensationRequestEvent
+                {
+                    RunId = "root-actor",
+                    CompensationStepId = "refund_payment",
+                },
+                new WorkflowRunState { RunId = "root-actor", Status = "running" },
+                version: 10,
+                eventId: "evt-comp-request"));
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new CompensationStepCompletedEvent
+                {
+                    RunId = "root-actor",
+                    CompensationStepId = "refund_payment",
+                    Success = true,
+                },
+                new WorkflowRunState { RunId = "root-actor", Status = "running" },
+                version: 11,
+                eventId: "evt-comp-success"));
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompensationFailedEvent
+                {
+                    RunId = "root-actor",
+                    FailedCompensationStepId = "refund_payment",
+                    RemainingUncompensated = 2,
+                    Error = "refund failed",
+                },
+                new WorkflowRunState
+                {
+                    RunId = "root-actor",
+                    Status = "failed",
+                    SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+                },
+                version: 12,
+                eventId: "evt-comp-dead-letter"));
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompensationFailedEvent
+                {
+                    RunId = "child-run",
+                    FailedCompensationStepId = "child_refund",
+                },
+                new WorkflowRunState { RunId = "child-run", Status = "failed" },
+                version: 13,
+                eventId: "evt-child-comp-dead-letter",
+                publisherActorId: "child-run"));
+
+        dispatcher.Upserts.Should().HaveCount(3);
+        metrics.Sum("aevatar.workflow.compensation.requested_total").Should().Be(1);
+        metrics.Sum("aevatar.workflow.compensation.succeeded_total").Should().Be(1);
+        metrics.Sum("aevatar.workflow.compensation.dead_lettered_total").Should().Be(1);
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldMapStartedAt_FromCommittedRunState()
+    {
+        // O2 (06-19-workflow-run-observatory): started_at is owned by the actor (WorkflowRunState.StartedAtUtc),
+        // set once when the run starts. The projector maps it straight through — no prior-readmodel read.
+        var startedAt = new DateTimeOffset(2026, 6, 19, 9, 0, 0, TimeSpan.Zero);
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 6, 19, 10, 0, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent { Success = true },
+                new WorkflowRunState
+                {
+                    RunId = "root-actor",
+                    Status = "completed",
+                    StartedAtUtc = Timestamp.FromDateTimeOffset(startedAt),
+                },
+                includeEnvelopeTimestamp: false));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StartedAtUtcValue.Should().NotBeNull();
+        document.StartedAtUtcValue.ToDateTimeOffset().Should().Be(startedAt);
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldLeaveStartedAtUnset_WhenStateHasNoStartFact()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(new DateTimeOffset(2026, 6, 19, 9, 0, 0, TimeSpan.Zero)));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new BindWorkflowRunDefinitionEvent { RunId = "root-actor" },
+                new WorkflowRunState { RunId = "root-actor", Status = "bound" },
+                includeEnvelopeTimestamp: false));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StartedAtUtcValue.Should().BeNull();
     }
 
     [Fact]
@@ -941,6 +1162,37 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             .Be(1);
     }
 
+    // 06-21: the graph carries the real run order — a step's NextStepId becomes a NEXT edge to that step
+    // (with the branch taken as branchKey), but only when the next step is a known step node.
+    [Fact]
+    public void WorkflowRunGraphArtifactMaterializer_ShouldEmitNextEdgesFromStepFlow()
+    {
+        var readModel = new WorkflowRunInsightReportDocument
+        {
+            RootActorId = "actor-1",
+            CommandId = "cmd-1",
+            WorkflowName = "wf-flow",
+            Steps =
+            [
+                new WorkflowExecutionStepTrace { StepId = "a", StepType = "tool_call", Success = true, NextStepId = "b", BranchKey = "success" },
+                new WorkflowExecutionStepTrace { StepId = "b", StepType = "llm_call", Success = true, NextStepId = "missing" },
+            ],
+        };
+
+        var materialization = new WorkflowRunGraphArtifactMaterializer().Materialize(readModel);
+
+        materialization.Edges.Should().Contain(x =>
+            x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeNext &&
+            x.FromNodeId == "step:actor-1:cmd-1:a" &&
+            x.ToNodeId == "step:actor-1:cmd-1:b" &&
+            x.Properties.ContainsKey("branchKey") &&
+            x.Properties["branchKey"] == "success");
+        // b -> "missing" is dropped because the target is not a known step node
+        materialization.Edges.Should().NotContain(x =>
+            x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeNext &&
+            x.FromNodeId == "step:actor-1:cmd-1:b");
+    }
+
     [Fact]
     public void WorkflowExecutionReadModelMapper_ShouldMapReportAndGraphData()
     {
@@ -951,6 +1203,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             WorkflowName = string.Empty,
             CommandId = "cmd-4",
             Status = "running",
+            SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
+            DeadLetterFailedCompensationStepId = "refund_payment",
+            DeadLetterRemainingUncompensated = 2,
+            DeadLetterError = "refund failed",
             FinalOutput = string.Empty,
             FinalError = string.Empty,
             StateVersion = 30,
@@ -1011,6 +1267,15 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 CompletedSteps = 1,
                 RoleReplyCount = 4,
             },
+            Usage = new WorkflowUsageMetricsReadModel
+            {
+                PromptTokens = 25,
+                CompletionTokens = 30,
+                TotalTokens = 55,
+                Model = "gpt-5.4",
+                Cost = 0.66,
+                LatencyMs = 432,
+            },
         };
 
         var snapshot = mapper.ToActorSnapshot(currentState);
@@ -1069,6 +1334,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         snapshot.CompletionStatus.Should().Be(Aevatar.Workflow.Application.Abstractions.Queries.WorkflowRunCompletionStatus.Running);
         snapshot.LastSuccess.Should().BeNull();
         snapshot.LastOutput.Should().BeEmpty();
+        snapshot.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
+        snapshot.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
+        snapshot.DeadLetterRemainingUncompensated.Should().Be(2);
+        snapshot.DeadLetterError.Should().Be("refund failed");
         snapshot.TotalSteps.Should().Be(0);
         snapshot.RoleReplyCount.Should().Be(0);
 
@@ -1090,6 +1359,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         mappedReport.Steps[1].RequestedAt.Should().BeNull();
         mappedReport.Steps[1].CompletedAt.Should().BeNull();
         mappedReport.Steps[1].SuspensionTimeoutSeconds.Should().BeNull();
+        mappedReport.Usage.TotalTokens.Should().Be(55);
+        mappedReport.Usage.Model.Should().Be("gpt-5.4");
         mappedReport.RoleReplies[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 1, 0, TimeSpan.Zero));
         mappedReport.RoleReplies[1].Timestamp.Should().Be(default);
         mappedReport.Timeline[0].Timestamp.Should().Be(new DateTimeOffset(2026, 3, 18, 8, 2, 0, TimeSpan.Zero));
@@ -1161,6 +1432,24 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         };
     }
 
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.ConnectedServiceResource,
+            SourceMessageId = "om_1",
+            SourceResourceKey = $"resource-{fileId}",
+            FileName = $"{fileId}.pdf",
+            MediaType = "application/pdf",
+            SizeBytes = 1234,
+            Sha256 = $"sha-{fileId}",
+            CreatedAtUnixMs = 1710000000000,
+            ExpiresAtUnixMs = 1710003600000,
+            OwnerRunId = "run-owner",
+            OwnerScopeId = "scope-owner",
+        };
+
     private sealed class RecordingWriteDispatcher<TReadModel> : IProjectionWriteDispatcher<TReadModel>
         where TReadModel : class, IProjectionReadModel
     {
@@ -1186,5 +1475,41 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class RecordingMeterListener : IDisposable
+    {
+        private readonly MeterListener _listener = new();
+        private readonly List<(string InstrumentName, long Measurement)> _measurements = [];
+
+        public RecordingMeterListener()
+        {
+            _listener.InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == "Aevatar.Workflow" &&
+                    instrument.Name.StartsWith("aevatar.workflow.compensation.", StringComparison.Ordinal))
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            };
+            _listener.SetMeasurementEventCallback<long>(
+                (instrument, measurement, tags, state) =>
+                {
+                    _ = tags;
+                    _ = state;
+                    _measurements.Add((instrument.Name, measurement));
+                });
+            _listener.Start();
+        }
+
+        public long Sum(string instrumentName)
+        {
+            _listener.RecordObservableInstruments();
+            return _measurements
+                .Where(x => string.Equals(x.InstrumentName, instrumentName, StringComparison.Ordinal))
+                .Sum(x => x.Measurement);
+        }
+
+        public void Dispose() => _listener.Dispose();
     }
 }

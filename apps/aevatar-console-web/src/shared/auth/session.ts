@@ -44,6 +44,7 @@ const LEGACY_RETURN_TO_ALIASES = new Map<string, string>([
   ['/actors', '/runtime/explorer'],
   ['/gagents', '/runtime/gagents'],
   ['/mission-control', '/runtime/mission-control'],
+  ['/mission-wall', '/runtime/mission-wall'],
 ]);
 
 function getStorage(): Storage | undefined {
@@ -116,7 +117,11 @@ export function loadRestorableAuthSession(): NyxIDAuthSession | null {
     return null;
   }
 
-  if (hasActiveAccessToken(session.tokens) || session.tokens.refreshToken) {
+  if (hasActiveAccessToken(session.tokens)) {
+    return session;
+  }
+
+  if (session.tokens.refreshToken) {
     return session;
   }
 

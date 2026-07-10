@@ -14,7 +14,8 @@ public sealed record ServiceCatalogSnapshot(
     string DeploymentStatus,
     IReadOnlyList<ServiceEndpointSnapshot> Endpoints,
     IReadOnlyList<string> PolicyIds,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    ServiceExternalExposureSnapshot? ExternalExposure = null);
 
 public sealed record ServiceEndpointSnapshot(
     string EndpointId,
@@ -23,3 +24,17 @@ public sealed record ServiceEndpointSnapshot(
     string RequestTypeUrl,
     string ResponseTypeUrl,
     string Description);
+
+public sealed record ServiceExternalExposureSnapshot(
+    string NyxidSlug,
+    DateTimeOffset? RegisteredAt,
+    ServiceRegistrationStatus Status = ServiceRegistrationStatus.Unspecified,
+    string NyxidServiceId = "",
+    string DesiredSpecHash = "",
+    string RegisteredSpecHash = "",
+    string LastError = "",
+    int Attempt = 0,
+    DateTimeOffset? NextAttemptAt = null,
+    string CredentialKid = "",
+    bool ExposureDesired = false,
+    long SourceStateVersion = 0);

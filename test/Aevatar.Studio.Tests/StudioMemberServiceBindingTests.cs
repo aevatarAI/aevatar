@@ -34,10 +34,14 @@ public sealed class StudioMemberServiceBindingTests
             ScopeId,
             MemberId,
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["workflow:\n  name: x"])),
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["workflow:\n  name: x"])),
             CancellationToken.None);
 
         response.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
+        response.AckStage.Should().Be(StudioMemberBindingAckStageNames.DispatchAccepted);
+        response.BindingRunRole.Should().Be(StudioMemberBindingRunRoleNames.Candidate);
         response.BindingRunId.Should().StartWith("bind-");
         response.ScopeId.Should().Be(ScopeId);
         response.MemberId.Should().Be(MemberId);
@@ -47,6 +51,7 @@ public sealed class StudioMemberServiceBindingTests
         started.ScopeId.Should().Be(ScopeId);
         started.MemberId.Should().Be(MemberId);
         started.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        started.Binding.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         started.Binding.Workflow!.WorkflowYamls.Should().ContainSingle();
     }
 
@@ -84,7 +89,7 @@ public sealed class StudioMemberServiceBindingTests
             MemberId,
             new UpdateStudioMemberBindingRequest(
                 GAgent: new StudioMemberGAgentBindingSpec(
-                    ActorTypeName: "MyActor",
+                    AgentKind: "my.actor",
                     Endpoints: [
                         new StudioMemberGAgentEndpointSpec(
                             EndpointId: "chat",
@@ -97,7 +102,7 @@ public sealed class StudioMemberServiceBindingTests
 
         var started = commandPort.StartedRuns.Should().ContainSingle().Which;
         started.ImplementationKind.Should().Be(MemberImplementationKindNames.GAgent);
-        started.Binding.GAgent!.ActorTypeName.Should().Be("MyActor");
+        started.Binding.GAgent!.AgentKind.Should().Be("my.actor");
         started.Binding.GAgent.Endpoints.Should().ContainSingle()
             .Which.Kind.Should().Be("chat");
     }
@@ -112,11 +117,33 @@ public sealed class StudioMemberServiceBindingTests
             ScopeId,
             MemberId,
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["workflow:"])),
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["workflow:"])),
             CancellationToken.None);
 
         response.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
         commandPort.StartedRuns.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task BindAsync_Workflow_ShouldRequireWorkflowId()
+    {
+        var service = NewService(
+            new RecordingCommandPort(),
+            new ThrowingBindQueryPort());
+
+        var act = () => service.BindAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberBindingRequest(
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    string.Empty,
+                    ["workflow:\n  name: x"])),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*workflowId is required for workflow members*");
     }
 
     [Fact]
@@ -271,6 +298,7 @@ public sealed class StudioMemberServiceBindingTests
             bindingRunQueryPort ?? new InMemoryBindingRunQueryPort(null),
             new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
+            new ReadyScopeBindingReadinessQueryPort(),
             new ThrowingServiceCommandPort());
 
     private sealed class InertTeamQueryPort : IStudioTeamQueryPort
@@ -394,6 +422,16 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
+        public Task RenameAsync(
+            string scopeId,
+            string memberId,
+            string displayName,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("Rename");
+            return Task.CompletedTask;
+        }
+
         public Task StartBindingRunAsync(
             StudioMemberBindingRunStartRequest request,
             CancellationToken ct = default)
@@ -410,6 +448,24 @@ public sealed class StudioMemberServiceBindingTests
             OperationsInOrder.Add("PatchTeamAssignment");
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class ReadyScopeBindingReadinessQueryPort : IScopeBindingReadinessQueryPort
+    {
+        public Task<ScopeBindingReadinessSnapshot> GetReadinessAsync(
+            ScopeBindingReadinessRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScopeBindingReadinessSnapshot(
+                request.ScopeId,
+                request.ServiceId,
+                ScopeBindingReadinessStatus.Ready,
+                ServiceCatalogVisible: true,
+                ServingSetVisible: true,
+                EligibleServingTargetVisible: true,
+                InvokeReady: true,
+                RevisionId: request.ExpectedRevisionId,
+                DeploymentId: "dep-1",
+                ObservedAtUtc: DateTimeOffset.UtcNow));
     }
 
     private sealed class ThrowingServiceLifecycleQueryPort : IServiceLifecycleQueryPort

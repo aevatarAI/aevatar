@@ -14,8 +14,8 @@ namespace Aevatar.Studio.Tests;
 ///
 /// - CreateAsync routes through the canonical actor id and seeds the
 ///   immutable publishedServiceId from the member id (rename-safe).
-/// - All three implementation kinds (workflow / script / gagent) build the
-///   typed implementation_ref the actor expects.
+/// - CreateAsync is shell-only; implementation_ref enters through
+///   UpdateImplementationAsync / binding, not through the created event.
 /// - Binding requests route through the run actor with a stable payload hash.
 /// - Dispatch always goes through IStudioActorBootstrap before
 ///   IActorDispatchPort, so actor provisioning happens before the command
@@ -59,6 +59,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         evt.PublishedServiceId.Should().Be("member-m-alpha");
         evt.DisplayName.Should().Be("Alpha");
         evt.Description.Should().Be("first member");
+        evt.ImplementationRef.Should().BeNull();
     }
 
     [Fact]
@@ -78,6 +79,34 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         summary.MemberId.Should().StartWith("m-");
         summary.PublishedServiceId.Should().Be($"member-{summary.MemberId}");
         summary.MemberId.Should().NotContain(":");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectImplementationRefBeforeDispatch()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(
+            bootstrap,
+            CreateCommandDispatch(dispatch));
+
+        var act = () => service.CreateAsync(
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                MemberId: "m-alpha",
+                ImplementationRef: new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    WorkflowId: "wf-alpha",
+                    WorkflowRevision: "rev-1")),
+            CancellationToken.None);
+
+        var thrown = await act.Should().ThrowAsync<StudioMemberCreateImplementationRefNotAllowedException>();
+        thrown.Which.ScopeId.Should().Be(ScopeId);
+        thrown.Which.Field.Should().Be("implementationRef");
+        bootstrap.EnsuredActorIds.Should().BeEmpty();
+        dispatch.Dispatches.Should().BeEmpty();
     }
 
     // Note: input validation (length caps, slug pattern, empty display
@@ -124,7 +153,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ScriptRevision: "v2"),
             MemberImplementationKindNames.GAgent => new StudioMemberImplementationRefResponse(
                 ImplementationKind: kind,
-                ActorTypeName: "MyActor"),
+                DiagnosticActorTypeName: "MyActor"),
             _ => throw new InvalidOperationException("unreachable"),
         };
 
@@ -149,6 +178,26 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 evt.ImplementationRef.Gagent.ActorTypeName.Should().Be("MyActor");
                 break;
         }
+    }
+
+    [Fact]
+    public async Task RenameAsync_ShouldDispatchRenamedEventToCanonicalActor()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+
+        await service.RenameAsync(ScopeId, "m-1", "  Renamed Workflow  ", CancellationToken.None);
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("studio-member:scope-1:m-1");
+        dispatched.Envelope.Payload.Is(StudioMemberRenamedEvent.Descriptor).Should().BeTrue();
+        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberRenamedEvent>();
+        evt.DisplayName.Should().Be("Renamed Workflow");
+        evt.UpdatedAtUtc.Should().NotBeNull();
     }
 
     [Fact]
@@ -202,17 +251,20 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.Workflow,
                 Binding: new UpdateStudioMemberBindingRequest(
                     RevisionId: "rev-explicit",
-                    Workflow: new StudioMemberWorkflowBindingSpec([
-                        "workflow:\n  name: alpha",
-                        "workflow:\n  name: beta",
-                    ]))),
+                    Workflow: new StudioMemberWorkflowBindingSpec(
+                        "workflow-stable-id",
+                        [
+                            "workflow:\n  name: alpha_runtime",
+                            "workflow:\n  name: beta",
+                        ]))),
             CancellationToken.None);
 
         var evt = dispatch.Dispatches.Should().ContainSingle().Which
             .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
         evt.Request.RevisionId.Should().Be("rev-explicit");
+        evt.Request.Workflow.WorkflowId.Should().Be("workflow-stable-id");
         evt.Request.Workflow.WorkflowYamls.Should().Equal(
-            "workflow:\n  name: alpha",
+            "workflow:\n  name: alpha_runtime",
             "workflow:\n  name: beta");
     }
 
@@ -258,7 +310,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "MyCompany.MyGAgent",
+                        AgentKind: "my-company.my-gagent",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "chat",
@@ -272,7 +324,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
 
         var evt = dispatch.Dispatches.Should().ContainSingle().Which
             .Envelope.Payload.Unpack<StudioMemberBindingRunRequested>();
-        evt.Request.Gagent.ActorTypeName.Should().Be("MyCompany.MyGAgent");
+        evt.Request.Gagent.AgentKind.Should().Be("my-company.my-gagent");
         evt.Request.Gagent.Endpoints.Should().ContainSingle()
             .Which.Should().BeEquivalentTo(new StudioMemberGAgentEndpointBindingRequest
             {
@@ -299,7 +351,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "Example.Studio.CommandMember, Example.Studio",
+                        AgentKind: "example.studio.command-member",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "run",
@@ -336,7 +388,7 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                 ImplementationKind: MemberImplementationKindNames.GAgent,
                 Binding: new UpdateStudioMemberBindingRequest(
                     GAgent: new StudioMemberGAgentBindingSpec(
-                        ActorTypeName: "MyCompany.MyGAgent",
+                        AgentKind: "my-company.my-gagent",
                         Endpoints: [
                             new StudioMemberGAgentEndpointSpec(
                                 EndpointId: "chat",

@@ -36,7 +36,7 @@ public static class MainnetDistributedHostBuilderExtensions
 
         builder.Host.UseOrleans(siloBuilder =>
         {
-            ConfigureClustering(siloBuilder, hostOptions);
+            ConfigureClustering(siloBuilder, hostOptions, runtimeOptions.OrleansGarnetConnectionString);
 
             siloBuilder.AddAevatarFoundationRuntimeOrleans(orleansOptions =>
             {
@@ -67,7 +67,10 @@ public static class MainnetDistributedHostBuilderExtensions
         return builder;
     }
 
-    private static void ConfigureClustering(ISiloBuilder siloBuilder, OrleansHostOptions hostOptions)
+    private static void ConfigureClustering(
+        ISiloBuilder siloBuilder,
+        OrleansHostOptions hostOptions,
+        string garnetConnectionString)
     {
         if (string.Equals(hostOptions.ClusteringMode, OrleansHostOptions.ClusteringModeLocalhost, StringComparison.OrdinalIgnoreCase))
         {
@@ -83,7 +86,8 @@ public static class MainnetDistributedHostBuilderExtensions
         if (string.Equals(hostOptions.ClusteringMode, OrleansHostOptions.ClusteringModeDevelopment, StringComparison.OrdinalIgnoreCase))
         {
             var primarySiloEndpoint = TryParseEndpoint(hostOptions.PrimarySiloEndpoint);
-            var advertisedIp = ResolveHostAddress(hostOptions.SiloHost);
+            var advertisedIp = ResolveHostAddress(
+                string.IsNullOrWhiteSpace(hostOptions.SiloHost) ? "127.0.0.1" : hostOptions.SiloHost);
 
             siloBuilder.Configure<ClusterOptions>(options =>
             {
@@ -102,8 +106,51 @@ public static class MainnetDistributedHostBuilderExtensions
             return;
         }
 
+        if (string.Equals(hostOptions.ClusteringMode, OrleansHostOptions.ClusteringModeGarnet, StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(garnetConnectionString))
+                throw new InvalidOperationException(
+                    "Orleans Garnet clustering requires 'ActorRuntime:OrleansGarnetConnectionString'.");
+
+            siloBuilder.Configure<ClusterOptions>(options =>
+            {
+                options.ClusterId = hostOptions.ClusterId;
+                options.ServiceId = hostOptions.ServiceId;
+            });
+            ConfigureGarnetClusterEndpoints(siloBuilder, hostOptions);
+            // Membership must live in the same Garnet store (and ServiceId) as the
+            // reminder table and grain state: silos that overlap during a rolling
+            // deploy then join one cluster and partition the reminder ring, instead
+            // of running as two single-silo clusters that each fire every reminder
+            // and ping-pong grain-state etags until the old pod dies.
+            siloBuilder.UseRedisClustering(redisOptions => redisOptions.ConfigurationOptions =
+                StackExchange.Redis.ConfigurationOptions.Parse(garnetConnectionString));
+            return;
+        }
+
         throw new InvalidOperationException(
             $"Unsupported Orleans clustering mode '{hostOptions.ClusteringMode}'.");
+    }
+
+    private static void ConfigureGarnetClusterEndpoints(ISiloBuilder siloBuilder, OrleansHostOptions hostOptions)
+    {
+        if (string.IsNullOrWhiteSpace(hostOptions.SiloHost))
+        {
+            // No advertised host configured: let Orleans pick the first
+            // non-loopback interface address. Inside Kubernetes that is the
+            // pod IP, which peer silos can reach during a rolling deploy.
+            siloBuilder.ConfigureEndpoints(
+                siloPort: hostOptions.SiloPort,
+                gatewayPort: hostOptions.GatewayPort,
+                listenOnAnyHostAddress: hostOptions.ListenOnAnyHostAddress);
+            return;
+        }
+
+        siloBuilder.ConfigureEndpoints(
+            advertisedIP: ResolveHostAddress(hostOptions.SiloHost),
+            siloPort: hostOptions.SiloPort,
+            gatewayPort: hostOptions.GatewayPort,
+            listenOnAnyHostAddress: hostOptions.ListenOnAnyHostAddress);
     }
 
     private static AevatarActorRuntimeOptions ResolveRuntimeOptions(IConfiguration configuration)
@@ -228,6 +275,7 @@ public static class MainnetDistributedHostBuilderExtensions
     {
         public const string ClusteringModeLocalhost = "Localhost";
         public const string ClusteringModeDevelopment = "Development";
+        public const string ClusteringModeGarnet = "Garnet";
 
         public string ClusteringMode { get; set; } = ClusteringModeLocalhost;
 
@@ -235,7 +283,7 @@ public static class MainnetDistributedHostBuilderExtensions
 
         public string ServiceId { get; set; } = "aevatar-mainnet-host-api";
 
-        public string SiloHost { get; set; } = "127.0.0.1";
+        public string SiloHost { get; set; } = string.Empty;
 
         public string? PrimarySiloEndpoint { get; set; }
 

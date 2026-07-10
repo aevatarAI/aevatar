@@ -22,6 +22,19 @@ public class LayerDependencyTests
     }
 
     [Fact]
+    public void AevatarInvocationToolProvider_ShouldNot_DependOn_GAgentServiceApplication()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "src", "Aevatar.AI.ToolProviders.AevatarInvocation", "Aevatar.AI.ToolProviders.AevatarInvocation.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.DoesNotContain(
+            "Aevatar.GAgentService.Application.csproj",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GAgentServiceAbstractions_ShouldNot_Reference_PresentationProjects()
     {
         var root = FindRepositoryRoot();
@@ -38,6 +51,48 @@ public class LayerDependencyTests
             StringComparison.Ordinal);
         Assert.Contains(
             "Aevatar.AGUI.Contracts",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ScheduledAgents_ShouldUseSkillsAbstractionWithoutDependingOnOrnnProvider()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "agents", "Aevatar.GAgents.Scheduled", "Aevatar.GAgents.Scheduled.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.Contains(
+            "Aevatar.AI.ToolProviders.Skills.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Aevatar.Workflow.Application.Abstractions.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Aevatar.AI.ToolProviders.Ornn.csproj",
+            project,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NyxidChat_ShouldOnlyDependOnStudioApplicationAbstractions()
+    {
+        var root = FindRepositoryRoot();
+        var projectPath = Path.Combine(root, "agents", "Aevatar.GAgents.NyxidChat", "Aevatar.GAgents.NyxidChat.csproj");
+        var project = File.ReadAllText(projectPath);
+
+        Assert.Contains(
+            "Aevatar.Studio.Application.Abstractions.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Aevatar.Studio.Application.csproj",
+            project,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Aevatar.Studio.Infrastructure.csproj",
             project,
             StringComparison.Ordinal);
     }

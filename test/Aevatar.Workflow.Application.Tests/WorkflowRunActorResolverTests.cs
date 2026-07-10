@@ -174,6 +174,7 @@ public sealed class WorkflowRunActorResolverTests
         actorPort.CreateRunBindings[0].DefinitionActorId.Should().BeEmpty();
         actorPort.CreateRunBindings[0].WorkflowName.Should().Be("inline_entry");
         actorPort.CreateRunBindings[0].WorkflowYaml.Should().Be(entryWorkflowYaml);
+        actorPort.CreateRunBindings[0].RunOrigin.Should().Be(Aevatar.Workflow.Abstractions.WorkflowRunOrigins.Draft);
         actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().Contain(
             new KeyValuePair<string, string>("inline_entry", entryWorkflowYaml));
         actorPort.CreateRunBindings[0].InlineWorkflowYamls.Should().Contain(

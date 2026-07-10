@@ -52,6 +52,7 @@ internal static class ObservabilityExtensions
                     .AddRuntimeInstrumentation()
                     .AddMeter("Aevatar.Agents")
                     .AddMeter("Aevatar.Api")
+                    .AddMeter("Aevatar.Workflow")
                     .AddView(
                         instrumentName: "aevatar.api.request_duration_ms",
                         new ExplicitBucketHistogramConfiguration { Boundaries = apiLatencyBucketsMs })

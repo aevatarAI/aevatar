@@ -99,4 +99,28 @@ if [ -n "${handwritten_callback_state_hits}" ]; then
   fi
 fi
 
+scheduler_grain_path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Grains/Callbacks/RuntimeCallbackSchedulerGrain.cs"
+if [ -f "${scheduler_grain_path}" ]; then
+  scheduler_shared_storage_hits="$(
+    ci_search "PersistentState\([^)]*OrleansRuntimeConstants\.GrainStateStorageName" \
+      "${scheduler_grain_path}"
+  )"
+
+  if [ -n "${scheduler_shared_storage_hits}" ]; then
+    echo "${scheduler_shared_storage_hits}"
+    echo "Runtime callback scheduler grain must use isolated RuntimeCallbackSchedulerStorageName, not shared GrainStateStorageName."
+    exit 1
+  fi
+
+  scheduler_isolated_storage_hits="$(
+    ci_search "PersistentState\([^)]*OrleansRuntimeConstants\.RuntimeCallbackSchedulerStorageName" \
+      "${scheduler_grain_path}"
+  )"
+
+  if [ -z "${scheduler_isolated_storage_hits}" ]; then
+    echo "Runtime callback scheduler grain must declare PersistentState with OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName."
+    exit 1
+  fi
+fi
+
 echo "Runtime callback guards passed."

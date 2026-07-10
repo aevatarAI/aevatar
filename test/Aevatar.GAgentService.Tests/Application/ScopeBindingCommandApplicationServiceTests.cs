@@ -7,12 +7,14 @@ using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
@@ -44,10 +46,12 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            Workflow: new ScopeBindingWorkflowSpec([
-                "name: main\nsteps:\n  - run: echo hello",
-                "name: child\nsteps:\n  - run: echo child",
-            ])));
+            Workflow: new ScopeBindingWorkflowSpec(
+                "workflow-stable-id",
+                [
+                    "name: main_runtime\nsteps:\n  - run: echo hello",
+                    "name: child\nsteps:\n  - run: echo child",
+                ])));
 
         commandPort.Calls.Should().HaveCount(6);
         commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
@@ -62,8 +66,16 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         result.AcceptanceStage.Should().Be("accepted");
         result.PropagationStage.Should().Be("readmodel_propagating");
         result.Workflow.Should().NotBeNull();
-        result.Workflow!.WorkflowName.Should().Be("main");
-        result.DisplayName.Should().Be("main");
+        var expectedDefinitionActorIdPrefix = DefaultOptions.BuildDefinitionActorIdPrefix(ScopeId, "workflow-stable-id");
+        result.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
+        result.Workflow!.WorkflowName.Should().Be("main_runtime");
+        result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
+        result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
+        result.DisplayName.Should().Be("main_runtime");
+
+        var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
+        revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
 
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
         createCommand.Spec.Identity.Should().BeEquivalentTo(new ServiceIdentity
@@ -77,6 +89,264 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].ExposureKind.Should().Be(ServiceEndpointExposureKind.Internal);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldKeepDefaultDefinitionPrefix_WhenWorkflowIdIsOmitted()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec(
+            [
+                "name: main_runtime\nsteps:\n  - run: echo hello",
+            ]),
+            ServiceId: "custom-service"));
+
+        var expectedDefinitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(DefaultOptions, ScopeId);
+        result.Workflow.Should().NotBeNull();
+        result.Workflow!.WorkflowId.Should().Be("custom-service");
+        result.Workflow.DefinitionActorIdPrefix.Should().Be(expectedDefinitionActorIdPrefix);
+        result.ExpectedActorId.Should().StartWith($"{expectedDefinitionActorIdPrefix}:");
+
+        var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
+        revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRecordExternalExposureIntent_WhenExposureIsDesired()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var externalExposureIntentPort = new RecordingExternalExposureIntentPort(commandPort);
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort(),
+            externalExposureIntentPort: externalExposureIntentPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            ExposureDesired: true));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.ExternalExposure.Should().NotBeNull();
+        createCommand.Spec.ExternalExposure!.ExposureDesired.Should().BeTrue();
+        externalExposureIntentPort.Requests.Should().ContainSingle();
+        var request = externalExposureIntentPort.Requests[0];
+        request.ExposureDesired.Should().BeTrue();
+        request.DesiredDefinition.Should().NotBeNull();
+        request.DesiredDefinition!.ExternalExposure.Should().NotBeNull();
+        request.DesiredDefinition.ExternalExposure!.ExposureDesired.Should().BeTrue();
+        commandPort.Calls.TakeLast(2).Select(call => call.Method)
+            .Should()
+            .Equal("ActivateServiceRevisionAsync", "ExternalExposureIntent");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldDispatchExposureIntentAfterAlreadyActiveReplay()
+    {
+        const string revisionId = "rev-platform-bind-1";
+        var commandPort = new RecordingServiceCommandPort();
+        var externalExposureIntentPort = new RecordingExternalExposureIntentPort(commandPort);
+        var existingHash = "9FAFFAFE586BDBA6791AF7488B3D09AA3E9AA19B587D21AC772432E52DE86709";
+        var existingService = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
+            DefaultOptions.DefaultServiceId,
+            "main",
+            revisionId,
+            revisionId,
+            "dep-1",
+            "actor-1",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Chat.ToString(),
+                    GetTypeUrl(ChatRequestEvent.Descriptor),
+                    GetTypeUrl(ChatResponseEvent.Descriptor),
+                    "Workflow chat endpoint."),
+            ],
+            [],
+            DateTimeOffset.UtcNow);
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            existingService,
+            new ServiceRevisionCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Workflow.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        existingHash,
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null),
+                ],
+                DateTimeOffset.UtcNow));
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort(),
+            externalExposureIntentPort: externalExposureIntentPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            RevisionId: revisionId,
+            AllowExistingRevisionReplay: true,
+            ReplayRevisionId: revisionId,
+            ExposureDesired: true));
+
+        commandPort.Calls.Should().ContainSingle(call => call.Method == "UpdateServiceAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
+        externalExposureIntentPort.Requests.Should().ContainSingle();
+        var request = externalExposureIntentPort.Requests[0];
+        request.ExposureDesired.Should().BeTrue();
+        request.Identity.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
+        request.DesiredDefinition.Should().NotBeNull();
+        request.DesiredDefinition!.ExternalExposure.Should().NotBeNull();
+        request.DesiredDefinition.ExternalExposure!.ExposureDesired.Should().BeTrue();
+        request.ExistingService.Should().BeSameAs(existingService);
+        commandPort.Calls.TakeLast(2).Select(call => call.Method)
+            .Should()
+            .Equal("ActivateServiceRevisionAsync", "ExternalExposureIntent");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRetireExternalExposure_WhenExposureIsExplicitlyDisabled()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var externalExposureIntentPort = new RecordingExternalExposureIntentPort(commandPort);
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
+            DefaultOptions.DefaultServiceId,
+            "main",
+            "rev-old",
+            "rev-old",
+            "dep-old",
+            "actor-old",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Chat.ToString(),
+                    GetTypeUrl(ChatRequestEvent.Descriptor),
+                    GetTypeUrl(ChatResponseEvent.Descriptor),
+                    "Default chat endpoint."),
+            ],
+            [],
+            DateTimeOffset.UtcNow,
+            new ServiceExternalExposureSnapshot(
+                string.Empty,
+                null,
+                ServiceRegistrationStatus.Pending,
+                DesiredSpecHash: "hash-1",
+                ExposureDesired: true)));
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort(),
+            externalExposureIntentPort: externalExposureIntentPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            ExposureDesired: false));
+
+        externalExposureIntentPort.Requests.Should().ContainSingle();
+        var request = externalExposureIntentPort.Requests[0];
+        request.ExposureDesired.Should().BeFalse();
+        request.Identity.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
+        request.ExistingService!.ExternalExposure!.DesiredSpecHash.Should().Be("hash-1");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldPreserveExternalExposure_WhenIntentIsOmitted()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
+            DefaultOptions.DefaultServiceId,
+            "main",
+            "rev-old",
+            "rev-old",
+            "dep-old",
+            "actor-old",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Chat.ToString(),
+                    GetTypeUrl(ChatRequestEvent.Descriptor),
+                    GetTypeUrl(ChatResponseEvent.Descriptor),
+                    "Default chat endpoint."),
+            ],
+            [],
+            DateTimeOffset.UtcNow,
+            new ServiceExternalExposureSnapshot(
+                string.Empty,
+                null,
+                ServiceRegistrationStatus.Pending,
+                DesiredSpecHash: "hash-1",
+                ExposureDesired: true)));
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new FakeScopeScriptQueryPort(),
+            new FakeScriptDefinitionSnapshotPort(),
+            new FakeWorkflowRunActorPort());
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ])));
+
+        commandPort.Calls.Should().NotContain(call => call.Method == "RetireExternalExposureAsync");
+        commandPort.Calls.Should().NotContain(call => call.Method == "UpdateServiceAsync");
     }
 
     [Fact]
@@ -495,8 +765,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
                 ScopeBindingImplementationKind.GAgent,
                 GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                [
+                    GAgentServiceTestKit.TestStaticServiceAgentKind,
+                    [
                     new ScopeBindingGAgentEndpoint(
                         "run",
                         "Run",
@@ -504,7 +774,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         "type.googleapis.com/google.protobuf.StringValue",
                         string.Empty,
                         "Run the bound gagent."),
-                ]),
+                    ]),
             DisplayName: "Orders GAgent"));
 
         commandPort.Calls.Should().HaveCount(6);
@@ -514,11 +784,33 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         revisionCommand.Spec.StaticSpec.Should().NotBeNull();
-        revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
+        revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).FullName);
+        revisionCommand.Spec.StaticSpec.AgentKind.Should().Be(GAgentServiceTestKit.TestStaticServiceAgentKind);
         revisionCommand.Spec.StaticSpec.PreferredActorId.Should().BeEmpty();
         result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         result.GAgent.Should().NotBeNull();
-        result.GAgent!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
+        result.GAgent!.DiagnosticClrTypeName.Should().Be(typeof(TestStaticServiceAgent).FullName);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectGAgentBinding_WhenAgentKindIsMissing()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.GAgent,
+            GAgent: new ScopeBindingGAgentSpec(
+                " ",
+                [])));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*AgentKind*");
+        commandPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -535,7 +827,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                GAgentServiceTestKit.TestStaticServiceAgentKind,
                 [])));
 
         commandPort.Calls.Should().HaveCount(6);
@@ -1061,7 +1353,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     {
         const string revisionId = "rev-static-bind-1";
         var commandPort = new RecordingServiceCommandPort();
-        var existingHash = CreateStaticArtifactHash(revisionId, typeof(TestStaticServiceAgent).AssemblyQualifiedName!, [
+        var existingHash = CreateStaticArtifactHash(revisionId, typeof(TestStaticServiceAgent).FullName!, [
             new ServiceEndpointDescriptor
             {
                 EndpointId = "chat",
@@ -1121,7 +1413,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                GAgentServiceTestKit.TestStaticServiceAgentKind,
                 []),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
@@ -1325,7 +1617,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                GAgentServiceTestKit.TestStaticServiceAgentKind,
                 [
                     new ScopeBindingGAgentEndpoint(
                         "run",
@@ -1426,7 +1718,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         FakeServiceLifecycleQueryPort lifecyclePort,
         FakeScopeScriptQueryPort scopeScriptQueryPort,
         FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
-        FakeWorkflowRunActorPort actorPort) =>
+        FakeWorkflowRunActorPort actorPort,
+        IServiceExternalExposureIntentPort? externalExposureIntentPort = null) =>
         CreateService(
             commandPort,
             lifecyclePort,
@@ -1434,25 +1727,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             new FakeServiceGovernanceQueryPort(),
             scopeScriptQueryPort,
             scriptDefinitionSnapshotPort,
-            actorPort);
-
-    private static ScopeBindingCommandApplicationService CreateService(
-        RecordingServiceCommandPort commandPort,
-        FakeServiceLifecycleQueryPort lifecyclePort,
-        RecordingServiceGovernanceCommandPort governanceCommandPort,
-        FakeServiceGovernanceQueryPort governanceQueryPort,
-        FakeScopeScriptQueryPort scopeScriptQueryPort,
-        FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
-        FakeWorkflowRunActorPort actorPort) =>
-        CreateService(
-            commandPort,
-            lifecyclePort,
-            governanceCommandPort,
-            governanceQueryPort,
-            scopeScriptQueryPort,
-            scriptDefinitionSnapshotPort,
             actorPort,
-            DefaultOptions);
+            externalExposureIntentPort: externalExposureIntentPort);
 
     private static ScopeBindingCommandApplicationService CreateService(
         RecordingServiceCommandPort commandPort,
@@ -1462,7 +1738,28 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         FakeScopeScriptQueryPort scopeScriptQueryPort,
         FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         FakeWorkflowRunActorPort actorPort,
-        ScopeWorkflowCapabilityOptions options) =>
+        IServiceExternalExposureIntentPort? externalExposureIntentPort = null) =>
+        CreateService(
+            commandPort,
+            lifecyclePort,
+            governanceCommandPort,
+            governanceQueryPort,
+            scopeScriptQueryPort,
+            scriptDefinitionSnapshotPort,
+            actorPort,
+            DefaultOptions,
+            externalExposureIntentPort);
+
+    private static ScopeBindingCommandApplicationService CreateService(
+        RecordingServiceCommandPort commandPort,
+        FakeServiceLifecycleQueryPort lifecyclePort,
+        RecordingServiceGovernanceCommandPort governanceCommandPort,
+        FakeServiceGovernanceQueryPort governanceQueryPort,
+        FakeScopeScriptQueryPort scopeScriptQueryPort,
+        FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
+        FakeWorkflowRunActorPort actorPort,
+        ScopeWorkflowCapabilityOptions options,
+        IServiceExternalExposureIntentPort? externalExposureIntentPort = null) =>
         new(
             commandPort,
             lifecyclePort,
@@ -1471,7 +1768,16 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             scopeScriptQueryPort,
             scriptDefinitionSnapshotPort,
             actorPort,
-            Options.Create(options));
+            Options.Create(options),
+            CreateStaticAgentKindRegistry(),
+            externalExposureIntentPort);
+
+    private static IAgentKindRegistry CreateStaticAgentKindRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<TestStaticServiceAgent>();
+        return new AgentKindRegistry(builder.Build());
+    }
 
     private static string GetProductionSourcePath(
         [System.Runtime.CompilerServices.CallerFilePath] string testFilePath = "")
@@ -1621,6 +1927,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 StaticPlan = new StaticServiceDeploymentPlan
                 {
                     ActorTypeName = actorTypeName,
+                    AgentKind = GAgentServiceTestKit.TestStaticServiceAgentKind,
                 },
             },
         };
@@ -1662,6 +1969,18 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     private sealed record CommandCall(string Method, object? Command);
+
+    private sealed class RecordingExternalExposureIntentPort(RecordingServiceCommandPort commandPort) : IServiceExternalExposureIntentPort
+    {
+        public List<ServiceExternalExposureIntentRequest> Requests { get; } = [];
+
+        public Task ApplyAsync(ServiceExternalExposureIntentRequest request, CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            commandPort.Calls.Add(new CommandCall("ExternalExposureIntent", request));
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class RecordingServiceCommandPort : IServiceCommandPort
     {
@@ -1715,6 +2034,18 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("ActivateServiceRevisionAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> ReconcileExternalExposureAsync(ReconcileExternalExposureCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("ReconcileExternalExposureAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RetireExternalExposureAsync(RetireExternalExposureCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("RetireExternalExposureAsync", command));
             return Task.FromResult(DefaultReceipt);
         }
 

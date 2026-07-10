@@ -55,6 +55,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 RevisionId = "rev-9",
                 ImplementationKind = StudioMemberImplementationKind.Workflow,
                 BoundAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+                ExpectedActorId = "scope-workflow:scope-1:m-1",
             },
             Binding = new StudioMemberBindingAuthorityState
             {
@@ -102,6 +103,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.LastBoundRevisionId.Should().Be("rev-9");
         written.LastBoundImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         written.LastBoundAt.Should().NotBeNull();
+        written.LastBoundExpectedActorId.Should().Be("scope-workflow:scope-1:m-1");
 
         // async binding status denormalized from member authority state.
         written.BindingCurrentRunId.Should().Be("bind-1");
@@ -143,6 +145,47 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.ImplementationScriptRevision.Should().Be("v3");
         written.ImplementationWorkflowId.Should().BeEmpty();
         written.LastBoundPublishedServiceId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldProjectRenamedDisplayName()
+    {
+        var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
+        var projector = new StudioMemberCurrentStateProjector(
+            dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var updatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-01T12:00:00Z"));
+        var state = new StudioMemberState
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Renamed Workflow",
+            Description = "existing description",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            LifecycleStage = StudioMemberLifecycleStage.BuildReady,
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-30T12:00:00Z")),
+            UpdatedAtUtc = updatedAt,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef { WorkflowId = "wf-1" },
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new StudioMemberRenamedEvent { DisplayName = "Renamed Workflow", UpdatedAtUtc = updatedAt },
+                state,
+                3,
+                "evt-renamed"));
+
+        var written = dispatcher.Upserts.Should().ContainSingle().Subject;
+        written.DisplayName.Should().Be("Renamed Workflow");
+        written.Description.Should().Be("existing description");
+        written.MemberId.Should().Be("m-1");
+        written.PublishedServiceId.Should().Be("member-m-1");
+        written.ImplementationWorkflowId.Should().Be("wf-1");
+        written.StateVersion.Should().Be(3);
     }
 
     [Fact]

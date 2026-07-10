@@ -5,6 +5,7 @@ package aevatar.gagentservice;
 option csharp_namespace = "Aevatar.GAgentService.Abstractions";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
 import "service_endpoint.proto";
 import "service_revision.proto";
 
@@ -32,6 +33,9 @@ message ServiceRunRecord {
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
   ServiceIdentity identity = 15;
+  string last_output = 16;
+  string last_error = 17;
+  string schedule_id = 18;
 }
 
 message ServiceRunState {
@@ -47,6 +51,8 @@ message RegisterServiceRunRequested {
 message UpdateServiceRunStatusRequested {
   string run_id = 1;
   ServiceRunStatus status = 2;
+  google.protobuf.StringValue last_output = 3;
+  google.protobuf.StringValue last_error = 4;
 }
 
 message ServiceRunRegisteredEvent {
@@ -57,4 +63,6 @@ message ServiceRunStatusUpdatedEvent {
   string run_id = 1;
   ServiceRunStatus status = 2;
   google.protobuf.Timestamp updated_at = 3;
+  google.protobuf.StringValue last_output = 4;
+  google.protobuf.StringValue last_error = 5;
 }

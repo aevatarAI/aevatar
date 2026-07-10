@@ -1,5 +1,6 @@
 using System.Net;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
@@ -85,7 +86,7 @@ public sealed class OrnnSkillClientTests
     [Fact]
     public async Task SearchSkillsAsync_OnNyxIdProxy404_SurfacesSlugBindingHint()
     {
-        // 404 from NyxID proxy means the slug isn't resolvable — the user hasn't bound an
+        // 404 from NyxID proxy means the slug isn't resolvable: the user hasn't bound an
         // Ornn service or the deployment's slug differs. The LLM-facing error must tell the
         // model exactly that so it can guide the user rather than retry mechanically (which
         // is what we observed in mainnet after the first NyxID-proxy refactor).
@@ -130,6 +131,52 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task GetSkillSetAsync_RoutesThroughNyxIdProxyAndParsesBothMemberShapes()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "guid": "set-guid-1",
+                "name": "aevatar-system",
+                "instructions": "set master prompt",
+                "members": [
+                  { "guid": "m-1", "name": "aevatar-skill-loading", "version": "1.1" },
+                  "aevatar-lark-provisioning@1.0"
+                ]
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var set = await client.GetSkillSetAsync("access-token", "aevatar-system");
+
+        set.Should().NotBeNull();
+        set!.Guid.Should().Be("set-guid-1");
+        set.Members.Should().HaveCount(2);
+        set.Members[0].Reference.Should().Be("m-1");                       // object member → guid preferred
+        set.Members[1].Reference.Should().Be("aevatar-lark-provisioning"); // string member → name without @version
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/aevatar-system");
+    }
+
+    [Fact]
+    public async Task GetSkillSetAsync_OnNyxIdProxy403_ThrowsAccessDenied()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "denied" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillSetAsync("token", "aevatar-system");
+
+        await act.Should().ThrowAsync<RemoteSkillFetchException>();
+    }
+
+    [Fact]
     public async Task RemoteSkillFetcher_LiftsWorkflowYamlFilesIntoTypedDescriptorWithFrontmatterEntryOverride()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""
@@ -163,6 +210,77 @@ public sealed class OrnnSkillClientTests
         skill.AssociatedFiles.Should().NotContainKey("workflows/a-main.yaml");
         skill.AssociatedFiles.Should().ContainKey("docs/workflows/ignored.yaml");
         skill.AssociatedFiles.Should().ContainKey("assets/readme.md");
+    }
+
+    [Fact]
+    public async Task RemoteSkillFetcher_WhenFrontmatterEntryMatchesWorkflowFile_ShouldPutEntryYamlFirst()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Workflow Skill",
+                "description": "Runs a workflow",
+                "files": {
+                  "SKILL.md": "---\nname: wf-skill\nworkflow: z-entry\n---\nRun it.",
+                  "workflows/a-helper.yaml": "name: a-helper\nsteps: []\n",
+                  "workflows/m-middle.yaml": "name: m-middle\nsteps: []\n",
+                  "workflows/z-entry.yaml": "name: z-entry\nsteps: []\n"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Workflow Skill");
+
+        skill.Should().NotBeNull();
+        var workflow = skill!.Workflows.Should().ContainSingle().Subject;
+        workflow.WorkflowId.Should().Be("z-entry");
+        workflow.WorkflowYamls.Should().Equal(
+            "name: z-entry\nsteps: []",
+            "name: a-helper\nsteps: []",
+            "name: m-middle\nsteps: []");
+    }
+
+    [Fact]
+    public async Task RemoteSkillFetcher_LiftsScriptsIntoTypedDescriptorAndKeepsCallerToken()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "Script Skill",
+                "description": "Runs script",
+                "files": {
+                  "SKILL.md": "---\nname: script-skill\nscriptEntry: Zeta.EntryBehavior\n---\nRun it.",
+                  "scripts/a-helper.cs": "public sealed class HelperBehavior {}",
+                  "scripts/z-entry.cs": "public sealed class EntryBehavior {}",
+                  "scripts/contract.proto": "syntax = \"proto3\";",
+                  "assets/fallback.cs": "public sealed class FallbackBehavior {}",
+                  "docs/readme.md": "reference"
+                }
+              }
+            }
+            """);
+        var fetcher = new OrnnRemoteSkillFetcher(CreateClient(handler));
+
+        var skill = await fetcher.FetchSkillAsync("access-token", "Script Skill");
+
+        skill.Should().NotBeNull();
+        var script = skill!.Scripts.Should().ContainSingle().Subject;
+        script.ScriptId.Should().Be("script-skill-a-helper");
+        script.SourceFiles.Keys.Should().Equal("scripts/a-helper.cs", "scripts/z-entry.cs");
+        script.ProtoFiles.Should().ContainSingle()
+            .Which.Should().Be(new KeyValuePair<string, string>(
+                "scripts/contract.proto",
+                "syntax = \"proto3\";"));
+        script.EntryBehaviorTypeName.Should().Be("Zeta.EntryBehavior");
+        skill.AssociatedFiles.Should().ContainKeys("assets/fallback.cs", "docs/readme.md");
+        skill.AssociatedFiles.Should().NotContainKey("scripts/a-helper.cs");
+        skill.AssociatedFiles.Should().NotContainKey("scripts/z-entry.cs");
+        skill.AssociatedFiles.Should().NotContainKey("scripts/contract.proto");
+
+        handler.Requests.Should().ContainSingle()
+            .Which.Authorization!.Parameter.Should().Be("access-token");
     }
 
     [Fact]
@@ -207,6 +325,55 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
+    public async Task GetSkillJsonAsync_WhenNyxIdProxyForbidsAccess_ShouldThrowAccessDenied()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": "forbidden" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("scoped-agent-key", "daily-report");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.FailureKind.Should().Be(RemoteSkillFetchFailureKind.AccessDenied);
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("missing proxy scope or service authorization");
+        assertion.Which.Message.Should().Contain("ornn-api");
+    }
+
+    [Fact]
+    public async Task GetSkillJsonAsync_WhenOrnnReturnsNestedPermissionError_ShouldSurfaceUpstreamReason()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": { "code": "permission_denied", "message": "Missing ornn:skill:read permission" } }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("sender-token", "private-skill");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("permission_denied: Missing ornn:skill:read permission");
+        assertion.Which.Message.Should().NotContain("missing proxy scope");
+    }
+
+    [Fact]
+    public async Task GetSkillJsonAsync_WhenOrnnReturnsProblemJsonPermissionError_ShouldSurfaceDetail()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "status": 403, "code": "permission_denied", "detail": "You do not have permission to read this skill" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler, slug: "ornn-api");
+
+        var act = async () => await client.GetSkillJsonAsync("sender-token", "private-skill");
+
+        var assertion = await act.Should().ThrowAsync<RemoteSkillFetchException>();
+        assertion.Which.HttpStatus.Should().Be(403);
+        assertion.Which.Message.Should().Contain("You do not have permission to read this skill");
+        assertion.Which.Message.Should().NotContain("missing proxy scope");
+    }
+
+    [Fact]
     public async Task GetSkillJsonAsync_ReturnsNullWhenPerCallTimeoutFiresOnSlowUpstream()
     {
         // Regression for the 2026-05-13 lark-bot incident: a NyxID-proxied call to
@@ -248,7 +415,7 @@ public sealed class OrnnSkillClientTests
     [Fact]
     public async Task GetSkillJsonAsync_DoesNotMaskCallerCancellationAsTimeoutError()
     {
-        // If the caller cancels, we must NOT log the failure as "exceeded per-call budget" —
+        // If the caller cancels, we must NOT log the failure as "exceeded per-call budget";
         // that misroutes the diagnosis. Letting the OperationCanceledException propagate keeps
         // caller cancellation semantically distinct from our own per-call timeout fallback.
         var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
@@ -259,6 +426,23 @@ public sealed class OrnnSkillClientTests
         var act = async () => await client.GetSkillJsonAsync("token", "project-summary", callerCts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task UpdateSkillAsync_RoutesPutThroughNyxIdProxyWithEscapedIdAndZipContentType()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "id": "skill-1" } }""");
+        var client = CreateClient(handler);
+
+        var result = await client.UpdateSkillAsync("access-token", "skill id/1", [1, 2, 3]);
+
+        result.Succeeded.Should().BeTrue();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Put);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.ContentType.Should().Be("application/zip");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/skill%20id%2F1");
     }
 
     private static OrnnSkillClient CreateClient(

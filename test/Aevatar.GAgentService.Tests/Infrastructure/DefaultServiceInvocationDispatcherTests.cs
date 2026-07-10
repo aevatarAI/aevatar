@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -121,7 +122,92 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.RunActor.Envelopes.Should().BeEmpty();
         dispatchPort.Calls.Should().ContainSingle();
         dispatchPort.Calls[0].actorId.Should().Be("workflow-run");
-        dispatchPort.Calls[0].envelope.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("hello");
+        dispatchPort.Calls[0].envelope.Payload.Unpack<WorkflowChatRequestEvent>().Prompt.Should().Be("hello");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapChatLlmControlToWorkflowChatRequest()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-llm-control",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                LlmControl = new LLMControlContextPayload
+                {
+                    NyxIdAccessToken = "owner-token",
+                    ModelOverride = "sonnet",
+                    NyxIdRoutePreference = "chrono-llm-public",
+                    UserMemoryPrompt = "memory",
+                    SenderNyxIdAccessToken = "sender-token",
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("owner-token");
+        workflowRequest.LlmControl.ModelOverride.Should().Be("sonnet");
+        workflowRequest.LlmControl.RoutePreference.Should().Be("chrono-llm-public");
+        workflowRequest.LlmControl.UserMemoryPrompt.Should().Be("memory");
+        workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapConnectorAuthorizationToWorkflowCallerCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-auth",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer connector-token",
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
     }
 
     [Fact]
@@ -210,7 +296,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldIgnoreWorkflowScopeAnnotations_WhenTypedScopeIsBlank()
+    public async Task DispatchAsync_ShouldRejectBlankTypedScope_WithoutFallingBackToWorkflowScopeAnnotations()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -228,7 +314,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             WorkflowYaml = "name: wf",
         };
 
-        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
         {
             Identity = new ServiceIdentity { TenantId = "", AppId = "app", Namespace = "default", ServiceId = "svc" },
             EndpointId = "chat",
@@ -248,12 +334,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
             }),
         });
 
-        workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
+        // 06-23 W3b: a blank typed scope no longer falls back to untrusted header/metadata scope nor creates
+        // an empty-scope run; it fails fast so no unattributed run is materialized.
+        await dispatch.Should().ThrowAsync<InvalidOperationException>().WithMessage("*requires a scope*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldIgnoreLegacyScopeMetadata_WhenTypedScopeIsBlank()
+    public async Task DispatchAsync_ShouldRejectBlankTypedScope_WithoutFallingBackToLegacyMetadata()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -271,7 +359,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             WorkflowYaml = "name: wf",
         };
 
-        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        var dispatch = async () => await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
         {
             Identity = new ServiceIdentity { TenantId = "", AppId = "app", Namespace = "default", ServiceId = "svc" },
             EndpointId = "chat",
@@ -285,8 +373,10 @@ public sealed class DefaultServiceInvocationDispatcherTests
             }),
         });
 
-        workflowPort.CreateRunCalls.Should().ContainSingle();
-        workflowPort.CreateRunCalls[0].ScopeId.Should().BeEmpty();
+        // 06-23 W3b: a blank typed scope no longer falls back to untrusted metadata scope nor creates an
+        // empty-scope run; it fails fast so no unattributed run is materialized.
+        await dispatch.Should().ThrowAsync<InvalidOperationException>().WithMessage("*requires a scope*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
     }
 
     [Fact]
@@ -436,6 +526,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             Identity = GAgentServiceTestKit.CreateIdentity(),
             EndpointId = "run",
             CommandId = "cmd-static",
+            ScheduleId = "schedule-1",
             Payload = Any.Pack(new StringValue { Value = "payload" }),
         };
 
@@ -445,6 +536,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
         registry.Calls[0].RunId.Should().Be(receipt.CommandId);
         registry.Calls[0].CommandId.Should().Be("cmd-static");
         registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Static);
+        registry.Calls[0].ScheduleId.Should().Be("schedule-1");
         registry.Calls[0].TargetActorId.Should().Be("primary-actor");
         registry.Calls[0].ScopeId.Should().Be("tenant");
         registry.Calls[0].ServiceId.Should().Be("svc");
@@ -480,6 +572,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         registry.Calls.Should().ContainSingle();
         registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Scripting);
+        registry.Calls[0].RunId.Should().Be("cmd-script");
         registry.Calls[0].CommandId.Should().Be("cmd-script");
     }
 
@@ -497,10 +590,64 @@ public sealed class DefaultServiceInvocationDispatcherTests
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-wf",
+            ScheduleId = "schedule-wf",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hi" }),
+        };
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
-            WorkflowName = "wf",
-            WorkflowYaml = "name: wf",
+            WorkflowName = "artifact-wf",
+            WorkflowYaml = "name: artifact-wf",
+            DefinitionActorId = "artifact-definition-actor",
+            InlineWorkflowYamls =
+            {
+                ["helper"] = "name: helper",
+            },
+        };
+
+        var receipt = await dispatcher.DispatchAsync(target, request);
+
+        receipt.RunId.Should().Be(workflowPort.RunActor.Id);
+        receipt.TargetActorId.Should().Be(workflowPort.RunActor.Id);
+        receipt.CommandId.Should().Be("cmd-wf");
+        registry.Calls.Should().ContainSingle();
+        registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
+        registry.Calls[0].RunId.Should().Be(workflowPort.RunActor.Id);
+        registry.Calls[0].TargetActorId.Should().Be(workflowPort.RunActor.Id);
+        registry.Calls[0].CommandId.Should().Be("cmd-wf");
+        workflowPort.CreateRunCalls.Should().ContainSingle();
+        workflowPort.CreateRunCalls[0].DefinitionActorId.Should().Be("primary-actor");
+        workflowPort.CreateRunCalls[0].WorkflowName.Should().Be("artifact-wf");
+        workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: artifact-wf");
+        workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().Contain("helper", "name: helper");
+        // 06-24: scheduleId must ride from the service-invocation request into the run binding so the
+        // observatory can filter this schedule's runs (previously dropped on the workflow branch).
+        workflowPort.CreateRunCalls[0].ScheduleId.Should().Be("schedule-wf");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldFallbackToArtifactDefinitionActor_WhenWorkflowServiceHasNoPrimaryActor()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl,
+            primaryActorId: "");
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "artifact-wf",
+            WorkflowYaml = "name: artifact-wf",
+            DefinitionActorId = "artifact-definition-actor",
         };
         var request = new ServiceInvocationRequest
         {
@@ -512,10 +659,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         await dispatcher.DispatchAsync(target, request);
 
-        registry.Calls.Should().ContainSingle();
-        registry.Calls[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
-        registry.Calls[0].TargetActorId.Should().Be(workflowPort.RunActor.Id);
-        registry.Calls[0].CommandId.Should().Be("cmd-wf");
+        workflowPort.CreateRunCalls.Should().ContainSingle();
+        workflowPort.CreateRunCalls[0].DefinitionActorId.Should().Be("artifact-definition-actor");
     }
 
     [Fact]
@@ -543,7 +688,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
     private static ServiceInvocationResolvedTarget CreateTarget(
         ServiceImplementationKind implementationKind,
         string endpointId,
-        string requestTypeUrl = "")
+        string requestTypeUrl = "",
+        string primaryActorId = "primary-actor")
     {
         var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(
             GAgentServiceTestKit.CreateIdentity(),
@@ -561,7 +707,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 "tenant:app:default:svc",
                 "r1",
                 "dep-1",
-                "primary-actor",
+                primaryActorId,
                 ServiceDeploymentStatus.Active.ToString(),
                 []),
             artifact,

@@ -3,28 +3,36 @@ using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Core.Interactions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
+using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using DraftRunObservationScopeLeasePreparation = Aevatar.GAgentService.Abstractions.ScopeGAgents.GAgentDraftRunObservationScopeLeasePreparation;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class GAgentDraftRunApplicationRegistrationTests
 {
+    private const string TestAgentKind = "tests.draft-run-registration-agent";
+
     [Fact]
     public async Task AddScopeGAgentDraftRunInteraction_ShouldExposeBusinessPortAndSharedRealtimeSession()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
+        services.AddSingleton<RecordingActorRuntime>();
+        services.AddSingleton<IActorRuntime>(sp => sp.GetRequiredService<RecordingActorRuntime>());
+        services.AddSingleton<IAgentKindVerifier>(sp => sp.GetRequiredService<RecordingActorRuntime>());
         services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
         services.AddSingleton<IGAgentActorRegistryCommandPort, RecordingRegistryCommandPort>();
         services.AddSingleton<IScopeResourceAdmissionPort, AllowingAdmissionPort>();
         services.AddSingleton<IGAgentDraftRunProjectionPort, RecordingDraftRunProjectionPort>();
         services.AddSingleton<IGAgentRunTerminalProjectionPort, RecordingTerminalProjectionPort>();
         services.AddSingleton<IGAgentRunTerminalQueryPort, NoopTerminalQueryPort>();
-        services.AddSingleton<IGAgentDraftRunObservationScopeActivationPort, RecordingActivationPort>();
+        services.AddSingleton<IGAgentDraftRunObservationScopeLeasePreparationPort, RecordingPreparationPort>();
+        services.AddSingleton<IAgentKindRegistry>(BuildRegistry());
 
         services.AddScopeGAgentDraftRunInteraction();
 
@@ -57,7 +65,7 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         var result = await port.ExecuteAsync(
             new GAgentDraftRunInteractionRequest(
                 "scope-a",
-                typeof(TestAgent).AssemblyQualifiedName!,
+                TestAgentKind,
                 "hello",
                 PreferredActorId: "draft-actor"),
             (evt, _) =>
@@ -72,9 +80,10 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         emitted.Should().ContainSingle(x => x.EventCase == AGUIEvent.EventOneofCase.RunFinished);
     }
 
-    private sealed class RecordingActorRuntime : IActorRuntime
+    private sealed class RecordingActorRuntime : IActorRuntime, IAgentKindVerifier
     {
         private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _actorKinds = new(StringComparer.Ordinal);
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
@@ -88,6 +97,19 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
                 : id.Trim();
             var actor = new TestActor(actorId);
             _actors[actorId] = actor;
+            _actorKinds[actorId] = TestAgentKind;
+            return Task.FromResult<IActor>(actor);
+        }
+
+        public Task<IActor> CreateByKindAsync(string agentKind, string? id = null, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var actorId = string.IsNullOrWhiteSpace(id)
+                ? Guid.NewGuid().ToString("N")
+                : id.Trim();
+            var actor = new TestActor(actorId);
+            _actors[actorId] = actor;
+            _actorKinds[actorId] = agentKind;
             return Task.FromResult<IActor>(actor);
         }
 
@@ -95,6 +117,7 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         {
             ct.ThrowIfCancellationRequested();
             _actors.Remove(id);
+            _actorKinds.Remove(id);
             return Task.CompletedTask;
         }
 
@@ -109,6 +132,14 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<bool> IsExpectedKindAsync(string actorId, string expectedKind, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                _actorKinds.TryGetValue(actorId, out var kind) &&
+                string.Equals(kind, expectedKind, StringComparison.Ordinal));
+        }
     }
 
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
@@ -192,18 +223,18 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
             Task.FromResult<GAgentRunTerminalSnapshot?>(null);
     }
 
-    private sealed class RecordingActivationPort : IGAgentDraftRunObservationScopeActivationPort
+    private sealed class RecordingPreparationPort : IGAgentDraftRunObservationScopeLeasePreparationPort
     {
-        public Task<GAgentDraftRunObservationScopeActivation?> ActivateAsync(
+        public Task<DraftRunObservationScopeLeasePreparation?> PrepareAsync(
             string actorId,
             string commandId,
             string correlationId,
             CancellationToken ct = default) =>
-            Task.FromResult<GAgentDraftRunObservationScopeActivation?>(
-                new GAgentDraftRunObservationScopeActivation(actorId, commandId, correlationId));
+            Task.FromResult<DraftRunObservationScopeLeasePreparation?>(
+                new DraftRunObservationScopeLeasePreparation(actorId, commandId, correlationId));
 
         public Task ReleaseAsync(
-            GAgentDraftRunObservationScopeActivation activation,
+            DraftRunObservationScopeLeasePreparation activation,
             CancellationToken ct = default) =>
             Task.CompletedTask;
     }
@@ -256,6 +287,14 @@ public sealed class GAgentDraftRunApplicationRegistrationTests
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
 
+    private static IAgentKindRegistry BuildRegistry()
+    {
+        var builder = new AgentKindRegistryBuilder();
+        builder.Register<TestAgent>();
+        return new AgentKindRegistry(builder.Build());
+    }
+
+    [GAgent(TestAgentKind)]
     private sealed class TestAgent : IAgent
     {
         public string Id { get; } = "test-agent";

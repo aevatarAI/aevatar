@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { setLocale } from '@umijs/max';
 import { message } from 'antd';
 import React from 'react';
@@ -37,7 +37,7 @@ describe('TeamCreatePage', () => {
 
   beforeEach(() => {
     setLocale('zh-CN', false);
-    window.history.replaceState({}, '', '/teams/new?scopeId=scope-a');
+    window.history.replaceState({}, '', '/scopes/scope-a/teams/new');
     jest.clearAllMocks();
     fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -59,7 +59,12 @@ describe('TeamCreatePage', () => {
   it('renders the simplified Team create page', async () => {
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
-    expect(await screen.findByText('阿凡达/团队')).toBeTruthy();
+    const breadcrumb = await screen.findByRole('navigation', { name: '面包屑' });
+    expect(screen.getAllByRole('navigation')).toHaveLength(1);
+    expect(breadcrumb).toHaveTextContent('团队');
+    expect(breadcrumb).toHaveTextContent('创建团队');
+    const teamsBreadcrumbLink = within(breadcrumb).getByRole('link', { name: '团队' });
+    expect(teamsBreadcrumbLink).toHaveAttribute('href', '/scopes/scope-a/teams');
     expect(screen.getByRole('heading', { level: 2, name: '创建团队' })).toBeTruthy();
     expect(screen.getByText('团队信息')).toBeTruthy();
     expect(screen.getByLabelText('队名')).toBeTruthy();
@@ -71,6 +76,10 @@ describe('TeamCreatePage', () => {
     expect(screen.queryByRole('button', { name: '继续在 Studio 中编辑' })).toBeNull();
     expect(screen.queryByRole('button', { name: '查看 Behaviors' })).toBeNull();
     expect(screen.queryByText('已保存草稿')).toBeNull();
+
+    fireEvent.click(teamsBreadcrumbLink);
+    expect(window.location.pathname).toBe('/scopes/scope-a/teams');
+    expect(window.location.search).toBe('');
   });
 
   it('creates a backend StudioTeam and routes to team focus', async () => {
@@ -115,7 +124,7 @@ describe('TeamCreatePage', () => {
     });
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/teams/scope-a/t-alpha');
+      expect(window.location.pathname).toBe('/scopes/scope-a/teams/t-alpha');
     });
     expect(
       queryClient.getQueryData(['teams', 'team-summary', 'scope-a', 't-alpha']),
@@ -126,8 +135,8 @@ describe('TeamCreatePage', () => {
     expect(message.success).toHaveBeenCalledWith('已创建团队。');
   });
 
-  it('ignores legacy scopeId=new links and creates under the authenticated scope', async () => {
-    window.history.replaceState({}, '', '/teams/new?scopeId=new&teamName=test');
+  it('ignores scopeId=new query hints on scoped create links and creates under the route scope', async () => {
+    window.history.replaceState({}, '', '/scopes/scope-a/teams/new?scopeId=new&teamName=test');
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -153,9 +162,8 @@ describe('TeamCreatePage', () => {
 
     expect(await screen.findByLabelText('队名')).toHaveValue('test');
     await waitFor(() => {
-      expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
-        'scope-a',
-      );
+      expect(window.location.pathname).toBe('/scopes/scope-a/teams/new');
+      expect(new URLSearchParams(window.location.search).get('scopeId')).toBeNull();
     });
 
     fireEvent.change(screen.getByLabelText('团队描述'), {
@@ -181,22 +189,21 @@ describe('TeamCreatePage', () => {
     );
   });
 
-  it('drops legacy draft recovery params from old create links', async () => {
+  it('drops stale draft recovery params from scoped create links', async () => {
     window.history.replaceState(
       {},
       '',
-      '/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
+      '/scopes/scope-a/teams/new?teamName=%E8%AE%A2%E5%8D%95%E5%8A%A9%E6%89%8B%E5%9B%A2%E9%98%9F&entryName=%E8%AE%A2%E5%8D%95%E5%85%A5%E5%8F%A3&teamDraftWorkflowId=workflow-7&teamDraftWorkflowName=order-entry-draft',
     );
 
     renderWithQueryClient(React.createElement(TeamCreatePage));
 
     await waitFor(() => {
-      expect(new URLSearchParams(window.location.search).get('scopeId')).toBe(
-        'scope-a',
-      );
+      expect(window.location.pathname).toBe('/scopes/scope-a/teams/new');
+      expect(new URLSearchParams(window.location.search).get('scopeId')).toBeNull();
     });
     const params = new URLSearchParams(window.location.search);
-    expect(window.location.pathname).toBe('/teams/new');
+    expect(window.location.pathname).toBe('/scopes/scope-a/teams/new');
     expect(params.get('teamName')).toBe('订单助手团队');
     expect(params.get('entryName')).toBeNull();
     expect(params.get('teamDraftWorkflowId')).toBeNull();

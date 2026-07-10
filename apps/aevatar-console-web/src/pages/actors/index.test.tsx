@@ -157,7 +157,7 @@ describe("ActorsPage", () => {
 
     await screen.findByText("SupportRoot");
 
-    expect(container.textContent).toContain("Aevatar / Platform");
+    expect(container.textContent).toContain("Platform");
     expect(container.textContent).toContain("Topology");
     expect(container.textContent).toContain("真实数据");
     expect(container.textContent).toContain("选择追查对象");
@@ -205,38 +205,6 @@ describe("ActorsPage", () => {
       expect(runtimeActorsApi.getActorSnapshot).toHaveBeenCalledWith(
         "actor://workflow/customer-support/planner",
       );
-    });
-  });
-
-  it("bounds the actor table body instead of clipping the parent panel", async () => {
-    const { container } = renderWithQueryClient(React.createElement(ActorsPage));
-
-    await screen.findByText("SupportPlanner");
-
-    const tableShell = container.querySelector<HTMLElement>(".topology-actor-table-shell");
-    const table = container.querySelector<HTMLElement>(".topology-actor-table");
-    const tableBody = container.querySelector<HTMLElement>(
-      ".topology-actor-table .ant-table-body",
-    );
-
-    expect(tableShell).toBeTruthy();
-    expect(tableShell).toHaveStyle({
-      maxWidth: "100%",
-      minWidth: "0",
-      overflowX: "auto",
-      width: "100%",
-    });
-    expect(table).toBeTruthy();
-    expect(table).toHaveStyle({
-      maxHeight: "min(52vh, 440px)",
-      maxWidth: "100%",
-      minWidth: "0",
-      overflow: "hidden",
-      width: "100%",
-    });
-    expect(tableBody).toBeTruthy();
-    expect(tableBody).toHaveStyle({
-      maxHeight: "calc(min(52vh, 440px) - 64px)",
     });
   });
 

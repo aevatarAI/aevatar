@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Xunit;
@@ -54,6 +55,7 @@ public sealed class UserAgentCatalogProjectorTests
                     LarkReceiveIdType = "chat_id",
                     LarkReceiveIdFallback = "on_user_1",
                     LarkReceiveIdTypeFallback = "union_id",
+                    OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
                 },
             },
         };
@@ -79,16 +81,17 @@ public sealed class UserAgentCatalogProjectorTests
         document.CreatedAt.Should().Be(createdAt.ToDateTimeOffset());
         document.UpdatedAt.Should().Be(_clock.UtcNow);
         // Typed Lark target round-trips through the projection so catalog-backed senders
-        // (FeishuCardHumanInteractionPort) read it via UserAgentCatalogQueryPort.ToEntry
-        // instead of falling back to conversation_id prefix inference. The fallback pair
-        // (PR #412) MUST mirror through the projection too — without it the runtime
-        // `230002 bot not in chat` retry on FeishuCardHumanInteractionPort /
-        // SkillRunnerGAgent would never have a fallback typed pair to retry against, even
-        // though the actor-side state captured one at create time.
+        // read it via UserAgentCatalogQueryPort.ToEntry instead of falling back to
+        // conversation_id prefix inference. The fallback pair (PR #412) MUST mirror
+        // through the projection too — without it the runtime `230002 bot not in chat`
+        // retry on outbound Lark card senders / SkillRunnerGAgent would never have a
+        // fallback typed pair to retry against, even though the actor-side state captured
+        // one at create time.
         document.LarkReceiveId.Should().Be("oc_dm_chat_1");
         document.LarkReceiveIdType.Should().Be("chat_id");
         document.LarkReceiveIdFallback.Should().Be("on_user_1");
         document.LarkReceiveIdTypeFallback.Should().Be("union_id");
+        document.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
     }
 
     [Fact]
@@ -124,6 +127,69 @@ public sealed class UserAgentCatalogProjectorTests
         document.Platform.Should().BeEmpty();
         document.OwnerNyxUserId.Should().BeEmpty();
 #pragma warning restore CS0612
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WithSharingGrant_MaterializesAudienceKeys()
+    {
+        var ownerScope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "shared-agent",
+                    ConversationId = "oc_chat_1",
+                    AgentType = "skill_runner",
+                    OwnerScope = ownerScope,
+                    SharingGrant = new ScheduledAgentSharingGrant
+                    {
+                        SharedWithRegistrationScope = "bot-1",
+                        AllowTrigger = true,
+                        GrantedBy = "alice",
+                        GrantedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 17, 10, 0, 0, TimeSpan.Zero)),
+                    },
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-shared", 5, state), CancellationToken.None);
+
+        var document = _dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.SharingGrant.Should().NotBeNull();
+        document.SharingGrant!.SharedWithRegistrationScope.Should().Be("bot-1");
+        document.SharingGrant.AllowTrigger.Should().BeTrue();
+        document.VisibleSharingAudienceKey.Should().Be("lark:bot-1");
+        document.TriggerSharingAudienceKey.Should().Be("lark:bot-1");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_WithViewOnlySharingGrant_DoesNotMaterializeTriggerAudience()
+    {
+        var ownerScope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "view-only-agent",
+                    OwnerScope = ownerScope,
+                    SharingGrant = new ScheduledAgentSharingGrant
+                    {
+                        SharedWithRegistrationScope = "bot-1",
+                        AllowTrigger = false,
+                    },
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-view-only", 5, state), CancellationToken.None);
+
+        var document = _dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.VisibleSharingAudienceKey.Should().Be("lark:bot-1");
+        document.TriggerSharingAudienceKey.Should().BeEmpty();
     }
 
     [Fact]
@@ -164,7 +230,33 @@ public sealed class UserAgentCatalogProjectorTests
             LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
             ErrorCount = 2,
             LastError = "tool failed",
+            LastSuccessfulDelivery = new DeliveryLedgerEntry
+            {
+                DeliveryKind = DeliveryKind.TextMessage,
+                Status = DeliveryStatus.Succeeded,
+                Target = new DeliveryTarget
+                {
+                    Channel = ChannelId.From("lark"),
+                    ConversationKey = "oc_chat_1",
+                },
+                LarkMessageId = "om_success",
+                RequestId = "request-success",
+                ProducedAtVersion = 3,
+            },
         };
+        state.RecentDeliveries.Add(new DeliveryLedgerEntry
+        {
+            DeliveryKind = DeliveryKind.TextMessage,
+            Status = DeliveryStatus.FailedPreSend,
+            Target = new DeliveryTarget
+            {
+                Channel = ChannelId.From("lark"),
+                ConversationKey = "oc_chat_1",
+            },
+            RequestId = "request-failed",
+            ProducedAtVersion = 2,
+        });
+        state.RecentDeliveries.Add(state.LastSuccessfulDelivery.Clone());
 
         await projector.ProjectAsync(
             new UserAgentCatalogMaterializationContext
@@ -183,14 +275,18 @@ public sealed class UserAgentCatalogProjectorTests
         document.ErrorCount.Should().Be(2);
         document.StateVersion.Should().Be(4);
         document.LastEventId.Should().Be("runner-event-4");
+        document.RecentDeliveries.Select(delivery => delivery.RequestId)
+            .Should().Equal("request-failed", "request-success");
+        document.LastSuccessfulDelivery.Should().NotBeNull();
+        document.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_success");
     }
 
     [Fact]
     public void ToEntry_ShouldRoundTripTypedLarkReceiveTarget_FromDocumentToEntry()
     {
-        // FeishuCardHumanInteractionPort consumes UserAgentCatalogEntry via this conversion;
-        // dropping the typed fields would silently regress workflow / social_media DM delivery
-        // back to the prefix-inference path even after the projection captured them. The
+        // Outbound Lark senders consume UserAgentCatalogEntry via this conversion; dropping
+        // the typed fields would silently regress workflow / social_media DM delivery back
+        // to the prefix-inference path even after the projection captured them. The
         // fallback pair (PR #412) is part of the same contract — the catalog-backed
         // `230002 bot not in chat` retry depends on `LarkReceiveIdFallback` /
         // `LarkReceiveIdTypeFallback` surviving the document → entry mapping.
@@ -203,6 +299,7 @@ public sealed class UserAgentCatalogProjectorTests
             LarkReceiveIdType = "chat_id",
             LarkReceiveIdFallback = "on_user_1",
             LarkReceiveIdTypeFallback = "union_id",
+            OutputFormat = SkillRunnerOutputFormat.Text,
         };
 
         var entry = UserAgentCatalogQueryPort.ToEntry(document);
@@ -211,6 +308,7 @@ public sealed class UserAgentCatalogProjectorTests
         entry.LarkReceiveIdType.Should().Be("chat_id");
         entry.LarkReceiveIdFallback.Should().Be("on_user_1");
         entry.LarkReceiveIdTypeFallback.Should().Be("union_id");
+        entry.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
     }
 
     [Fact]

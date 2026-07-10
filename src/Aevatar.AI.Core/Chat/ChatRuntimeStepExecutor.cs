@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -45,12 +46,13 @@ public sealed class ChatRuntimeStepExecutor
         AgentToolExecutionContext? toolContext,
         LLMControlContext? llmControl,
         int round,
-        bool finalNoTools)
+        bool finalNoTools,
+        IReadOnlyList<AgentToolReceipt>? toolReceipts = null)
     {
         var baseRequest = BuildBaseRequest(requestId, metadata, toolContext, llmControl);
         return new LLMRequest
         {
-            Messages = [..messages],
+            Messages = BuildStepMessages(messages, finalNoTools, toolReceipts),
             RequestId = baseRequest.RequestId,
             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(baseRequest.Metadata),
             CallerContext = baseRequest.CallerContext,
@@ -185,6 +187,21 @@ public sealed class ChatRuntimeStepExecutor
         }
 
         return merged;
+    }
+
+    private static List<ChatMessage> BuildStepMessages(
+        IReadOnlyList<ChatMessage> messages,
+        bool finalNoTools,
+        IReadOnlyList<AgentToolReceipt>? toolReceipts)
+    {
+        if (!finalNoTools)
+            return [..messages];
+
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(toolOutcomes: null, toolReceipts);
+        if (constraints.Count == 0)
+            return [..messages];
+
+        return [..messages, ..constraints];
     }
 }
 

@@ -74,11 +74,19 @@ public sealed class ServiceRunRegistrationAdapterTests
         var adapter = new ServiceRunRegistrationAdapter(
             new RecordingRunRegistryRuntime(), dispatchPort);
 
-        await adapter.UpdateStatusAsync("service-run:tenant:svc:run-1", "run-1", ServiceRunStatus.Completed);
+        await adapter.UpdateStatusAsync(
+            "service-run:tenant:svc:run-1",
+            "run-1",
+            ServiceRunStatus.Completed,
+            "done",
+            string.Empty);
 
         dispatchPort.Calls.Should().ContainSingle();
         dispatchPort.Calls[0].actorId.Should().Be("service-run:tenant:svc:run-1");
         dispatchPort.Calls[0].envelope.Payload.TypeUrl.Should().Contain("UpdateServiceRunStatusRequested");
+        var command = dispatchPort.Calls[0].envelope.Payload.Unpack<UpdateServiceRunStatusRequested>();
+        command.LastOutput.Should().Be("done");
+        command.LastError.Should().BeEmpty();
     }
 
     [Fact]

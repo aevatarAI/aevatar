@@ -1,11 +1,12 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 
 namespace Aevatar.GAgentService.Application.Schedules;
 
 public sealed class ScheduledDispatchApplicationService : IScheduledDispatchApplicationService
 {
-    private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-";
+    private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
     private readonly IScheduledDispatchActorPort _actorPort;
     private readonly IScheduledDispatchQueryPort _queryPort;
     private readonly IScheduledDispatchTargetPreparationService _targetPreparationService;
@@ -26,6 +27,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var normalized = NormalizeConfiguration(configuration, requireScheduleId: false);
         ValidateSchedule(normalized);
+        await EnsureCreatableAsync(normalized.ScheduleId, ct);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -34,6 +36,23 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ct);
         var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
         var admission = await _actorPort.DispatchCreateAsync(actorId, normalized, dispatch, ct);
+        return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
+    }
+
+    public async Task<ScheduledDispatchMutationReceipt> EnsureAsync(
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default)
+    {
+        var normalized = NormalizeConfiguration(configuration, requireScheduleId: true);
+        ValidateSchedule(normalized);
+
+        var dispatch = await _targetPreparationService.PrepareAsync(
+            normalized,
+            BuildScheduleCommandId(normalized.ScheduleId),
+            BuildScheduleCorrelationId(normalized.ScheduleId),
+            ct);
+        var actorId = await _actorPort.EnsureScheduleActorAsync(normalized.ScheduleId, ct);
+        var admission = await _actorPort.DispatchEnsureAsync(actorId, normalized, dispatch, ct);
         return CreateMutationReceipt(normalized.ScheduleId, actorId, admission);
     }
 
@@ -47,6 +66,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             configuration with { ScheduleId = normalizedScheduleId },
             requireScheduleId: true);
         ValidateSchedule(normalized);
+        await EnsureMutableAsync(normalized.ScheduleId, ct);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -64,6 +84,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var admission = await _actorPort.DispatchEnableAsync(actorId, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
@@ -75,17 +96,31 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var admission = await _actorPort.DispatchDisableAsync(actorId, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
     }
 
-    public Task<ScheduledDispatchDetail?> GetAsync(
+    public async Task<ScheduledDispatchMutationReceipt> DeleteAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var admission = await _actorPort.DispatchDeleteAsync(actorId, NormalizeOptional(reason), ct);
+        return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
+    }
+
+    public async Task<ScheduledDispatchDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        return _queryPort.GetAsync(normalizedScheduleId, ct);
+        var schedule = await _queryPort.GetAsync(normalizedScheduleId, ct);
+        return schedule?.Schedule.Deleted == false ? schedule : null;
     }
 
     public Task<ScheduledDispatchListResult> ListAsync(
@@ -129,6 +164,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        await EnsureMutableAsync(normalizedScheduleId, ct);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var scheduledFireAt = DateTimeOffset.UtcNow;
         var admission = await _actorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
@@ -142,6 +178,20 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             admission.CorrelationId,
             admission.AckedAt,
             "accepted");
+    }
+
+    private async Task EnsureCreatableAsync(string scheduleId, CancellationToken ct)
+    {
+        var existingActorId = await _actorPort.ResolveScheduleActorAsync(scheduleId, ct);
+        if (!string.IsNullOrWhiteSpace(existingActorId))
+            throw new ScheduledDispatchConflictException(scheduleId, $"Scheduled dispatch '{scheduleId}' already exists.");
+    }
+
+    private async Task EnsureMutableAsync(string scheduleId, CancellationToken ct)
+    {
+        var existing = await _queryPort.GetAsync(scheduleId, ct);
+        if (existing?.Schedule.Deleted == true)
+            throw new ScheduledDispatchNotFoundException(scheduleId);
     }
 
     private static ScheduledDispatchMutationReceipt CreateMutationReceipt(
@@ -224,10 +274,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     {
         var invocation = target.ServiceInvocation
             ?? throw new ArgumentException("Service invocation scheduled dispatch target is required.", nameof(target));
-        if (invocation.Identity == null)
-            throw new ArgumentException("Service invocation identity is required.", nameof(target));
-        if (string.IsNullOrWhiteSpace(invocation.Identity.ServiceId))
-            throw new ArgumentException("Service invocation service id is required.", nameof(target));
+        var identity = NormalizeServiceInvocationIdentity(invocation.Identity);
         if (string.IsNullOrWhiteSpace(invocation.EndpointId))
             throw new ArgumentException("Service invocation endpoint id is required.", nameof(target));
         if (invocation.Payload == null)
@@ -241,12 +288,95 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             {
                 EndpointId = NormalizeRequired(invocation.EndpointId, nameof(invocation.EndpointId)),
                 RevisionId = NormalizeNullable(invocation.RevisionId),
-                Identity = invocation.Identity.Clone(),
+                Identity = identity,
                 Payload = invocation.Payload.Clone(),
                 Caller = invocation.Caller?.Clone(),
+                Auth = NormalizeServiceInvocationAuth(invocation.Auth),
             },
         };
     }
+
+    private static ServiceIdentity NormalizeServiceInvocationIdentity(ServiceIdentity? identity)
+    {
+        if (identity == null)
+            throw new ArgumentException("Service invocation identity is required.", nameof(identity));
+
+        return new ServiceIdentity
+        {
+            TenantId = NormalizeRequiredServiceIdentityField(identity.TenantId, "tenant id", nameof(identity.TenantId)),
+            AppId = NormalizeRequiredServiceIdentityField(identity.AppId, "app id", nameof(identity.AppId)),
+            Namespace = NormalizeRequiredServiceIdentityField(identity.Namespace, "namespace", nameof(identity.Namespace)),
+            ServiceId = NormalizeRequiredServiceIdentityField(identity.ServiceId, "service id", nameof(identity.ServiceId)),
+        };
+    }
+
+    private static string NormalizeRequiredServiceIdentityField(
+        string? value,
+        string fieldDescription,
+        string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"Service invocation {fieldDescription} is required.", parameterName);
+
+        return value.Trim();
+    }
+
+    private static ScheduledServiceInvocationAuth? NormalizeServiceInvocationAuth(
+        ScheduledServiceInvocationAuth? auth)
+    {
+        if (auth == null)
+            return null;
+
+        var hasSenderNyxId = auth.SenderNyxId != null;
+        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
+        var hasDurableSenderBearerToken = durableToken.Length > 0;
+        var hasScopeOwnerNyxId = auth.ScopeOwnerNyxId != null;
+        if (hasDurableSenderBearerToken)
+        {
+            throw new ArgumentException(
+                "Durable sender bearer token schedule auth is no longer supported; use senderNyxId or scopeOwnerNyxId so the dispatch can mint a short-lived NyxID token at fire time.",
+                nameof(auth));
+        }
+
+        if (Convert.ToInt32(hasSenderNyxId) +
+            Convert.ToInt32(hasScopeOwnerNyxId) != 1)
+        {
+            throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth));
+        }
+
+        if (hasScopeOwnerNyxId)
+        {
+            var ownerSource = auth.ScopeOwnerNyxId!;
+            return new ScheduledServiceInvocationAuth(
+                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    NormalizeRequired(ownerSource.Scope, nameof(ownerSource.Scope)),
+                    NormalizeOwnerSubject(ownerSource.OwnerSubject)));
+        }
+
+        var source = auth.SenderNyxId!;
+        if (source.Subject == null)
+            throw new ArgumentException("Service invocation sender NyxID subject is required.", nameof(auth));
+
+        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+            NormalizeSubject(source.Subject),
+            NormalizeRequired(source.Scope, nameof(source.Scope))));
+    }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeOwnerSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject)
+    {
+        if (subject == null)
+            throw new ArgumentException("Service invocation scope owner NyxID subject is required.", nameof(subject));
+
+        return NormalizeSubject(subject);
+    }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
+        ScheduledServiceInvocationNyxIdSubjectRef subject) =>
+        new(
+            NormalizeRequired(subject.Platform, nameof(subject.Platform)),
+            NormalizeOptional(subject.Tenant),
+            NormalizeRequired(subject.ExternalUserId, nameof(subject.ExternalUserId)));
 
     private static void ValidateSchedule(ScheduledDispatchConfiguration configuration)
     {
@@ -269,7 +399,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalized = scheduleId.Trim();
         if (normalized.Any(static ch => ScheduleIdAllowedCharacters.IndexOf(ch) < 0))
             throw new ArgumentException(
-                "Schedule id may only contain letters, digits, '.', '_', ':', and '-'.",
+                "Schedule id may only contain letters, digits, '.', '_', and '-'.",
                 nameof(scheduleId));
 
         return normalized;

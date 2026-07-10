@@ -47,26 +47,9 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(dispatch);
         ct.ThrowIfCancellationRequested();
 
-        var command = new ScheduledDispatchCreateCommand
-        {
-            ScheduleId = configuration.ScheduleId,
-            DisplayName = configuration.DisplayName,
-            TargetActorId = dispatch.TargetActorId ?? string.Empty,
-            TriggerEnvelope = dispatch.TriggerEnvelope.Clone(),
-            CronExpression = configuration.CronExpression,
-            Timezone = configuration.Timezone,
-            Enabled = configuration.Enabled,
-            PayloadTypeUrl = dispatch.PayloadTypeUrl,
-            Target = CreateTargetState(dispatch.Descriptor),
-            ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind),
-        };
-        foreach (var (key, value) in configuration.Headers)
-            command.Headers[key] = value;
-
+        var command = CreateCreateCommand(configuration, dispatch);
         return await DispatchAsync(actorId, command, ct);
     }
 
@@ -77,26 +60,22 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(dispatch);
         ct.ThrowIfCancellationRequested();
 
-        var command = new ScheduledDispatchUpdateCommand
-        {
-            ScheduleId = configuration.ScheduleId,
-            DisplayName = configuration.DisplayName,
-            TargetActorId = dispatch.TargetActorId ?? string.Empty,
-            TriggerEnvelope = dispatch.TriggerEnvelope.Clone(),
-            CronExpression = configuration.CronExpression,
-            Timezone = configuration.Timezone,
-            Enabled = configuration.Enabled,
-            PayloadTypeUrl = dispatch.PayloadTypeUrl,
-            Target = CreateTargetState(dispatch.Descriptor),
-            ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind),
-        };
-        foreach (var (key, value) in configuration.Headers)
-            command.Headers[key] = value;
+        var command = CreateUpdateCommand(configuration, dispatch);
+        return await DispatchAsync(actorId, command, ct);
+    }
 
+    public async Task<DispatchAdmission> DispatchEnsureAsync(
+        string actorId,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ct.ThrowIfCancellationRequested();
+
+        var command = CreateEnsureCommand(configuration, dispatch);
         return await DispatchAsync(actorId, command, ct);
     }
 
@@ -118,6 +97,16 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
         return await DispatchAsync(actorId, new ScheduledDispatchDisableCommand { Reason = reason ?? string.Empty }, ct);
+    }
+
+    public async Task<DispatchAdmission> DispatchDeleteAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ct.ThrowIfCancellationRequested();
+        return await DispatchAsync(actorId, new ScheduledDispatchDeleteCommand { Reason = reason ?? string.Empty }, ct);
     }
 
     public async Task<DispatchAdmission> DispatchRunNowAsync(
@@ -158,8 +147,102 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         kind switch
         {
             ScheduledDispatchScheduleKind.Workflow => ScheduledDispatchScheduleKindState.Workflow,
+            ScheduledDispatchScheduleKind.SkillRunner => ScheduledDispatchScheduleKindState.SkillRunner,
             _ => ScheduledDispatchScheduleKindState.Generic,
         };
+
+    private static ScheduledDispatchCreateCommand CreateCreateCommand(
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(dispatch);
+
+        var command = new ScheduledDispatchCreateCommand();
+        PopulateConfigureCommand(command, configuration, dispatch);
+        return command;
+    }
+
+    private static ScheduledDispatchUpdateCommand CreateUpdateCommand(
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(dispatch);
+
+        var command = new ScheduledDispatchUpdateCommand();
+        PopulateConfigureCommand(command, configuration, dispatch);
+        return command;
+    }
+
+    private static ScheduledDispatchEnsureCommand CreateEnsureCommand(
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(dispatch);
+
+        var command = new ScheduledDispatchEnsureCommand();
+        PopulateConfigureCommand(command, configuration, dispatch);
+        return command;
+    }
+
+    private static void PopulateConfigureCommand(
+        ScheduledDispatchCreateCommand command,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch)
+    {
+        command.ScheduleId = configuration.ScheduleId;
+        command.DisplayName = configuration.DisplayName;
+        command.TargetActorId = dispatch.TargetActorId ?? string.Empty;
+        command.TriggerEnvelope = dispatch.TriggerEnvelope.Clone();
+        command.CronExpression = configuration.CronExpression;
+        command.Timezone = configuration.Timezone;
+        command.Enabled = configuration.Enabled;
+        command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
+        command.Target = CreateTargetState(dispatch.Descriptor);
+        command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
+        foreach (var (key, value) in configuration.Headers)
+            command.Headers[key] = value;
+    }
+
+    private static void PopulateConfigureCommand(
+        ScheduledDispatchUpdateCommand command,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch)
+    {
+        command.ScheduleId = configuration.ScheduleId;
+        command.DisplayName = configuration.DisplayName;
+        command.TargetActorId = dispatch.TargetActorId ?? string.Empty;
+        command.TriggerEnvelope = dispatch.TriggerEnvelope.Clone();
+        command.CronExpression = configuration.CronExpression;
+        command.Timezone = configuration.Timezone;
+        command.Enabled = configuration.Enabled;
+        command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
+        command.Target = CreateTargetState(dispatch.Descriptor);
+        command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
+        foreach (var (key, value) in configuration.Headers)
+            command.Headers[key] = value;
+    }
+
+    private static void PopulateConfigureCommand(
+        ScheduledDispatchEnsureCommand command,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch)
+    {
+        command.ScheduleId = configuration.ScheduleId;
+        command.DisplayName = configuration.DisplayName;
+        command.TargetActorId = dispatch.TargetActorId ?? string.Empty;
+        command.TriggerEnvelope = dispatch.TriggerEnvelope.Clone();
+        command.CronExpression = configuration.CronExpression;
+        command.Timezone = configuration.Timezone;
+        command.Enabled = configuration.Enabled;
+        command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
+        command.Target = CreateTargetState(dispatch.Descriptor);
+        command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
+        foreach (var (key, value) in configuration.Headers)
+            command.Headers[key] = value;
+    }
 
     private static ScheduledDispatchTargetState CreateTargetState(ScheduledDispatchTargetDescriptor descriptor)
     {
@@ -195,6 +278,57 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             Payload = descriptor.Payload.Clone(),
             RevisionId = descriptor.RevisionId ?? string.Empty,
             Caller = descriptor.Caller?.Clone(),
+            Auth = CreateAuthState(descriptor.Auth),
         };
     }
+
+    private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)
+    {
+        if (auth == null)
+            return null;
+
+        var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
+        if (durableToken.Length > 0)
+        {
+            throw new ArgumentException(
+                "Durable sender bearer token schedule auth is no longer supported.",
+                nameof(auth));
+        }
+
+        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null)
+            return null;
+
+        var state = new ScheduledServiceInvocationAuthState();
+
+        if (auth.SenderNyxId != null)
+        {
+            state.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = CreateSubjectState(auth.SenderNyxId.Subject),
+                Scope = auth.SenderNyxId.Scope,
+            };
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            state.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+            {
+                Scope = auth.ScopeOwnerNyxId.Scope,
+                OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        return state;
+    }
+
+    private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(
+        ScheduledServiceInvocationNyxIdSubjectRef? subject) =>
+        subject == null
+            ? null
+            : new ScheduledServiceInvocationNyxIdSubjectRefState
+            {
+                Platform = subject.Platform,
+                Tenant = subject.Tenant,
+                ExternalUserId = subject.ExternalUserId,
+            };
 }

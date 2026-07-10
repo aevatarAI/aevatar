@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
@@ -15,6 +16,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// Actor ID convention: a single well-known instance "channel-bot-registration-store".
 /// CLAUDE.md: "long-lived actor for fact owners: definition/catalog/manager/index"
 /// </summary>
+[GAgent("channel.runtime.channel-bot-registration")]
 public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistrationStoreState>
 {
     // Refactor (iter27/cluster-003-channel-registration-scope-backfill):
@@ -29,6 +31,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             .On<ChannelBotRegistrationRejectedEvent>(static (state, _) => state)
             .On<ChannelBotScopeIdRepairedEvent>(ApplyScopeIdRepaired)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
+            .On<ChannelBotInboundObservedEvent>(ApplyInboundObserved)
             .On<ChannelBotTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .OrCurrent();
 
@@ -90,6 +93,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
+            NyxReplyCredentialRef = cmd.NyxReplyCredentialRef?.Trim() ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
@@ -114,6 +118,30 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             TombstoneStateVersion = NextCommittedVersion(),
         });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
+    }
+
+    [EventHandler]
+    public async Task HandleRecordInbound(ChannelBotRecordInboundCommand cmd)
+    {
+        if (string.IsNullOrWhiteSpace(cmd.RegistrationId))
+            return;
+
+        var entry = State.Registrations.FirstOrDefault(r => r.Id == cmd.RegistrationId);
+        if (entry is null || entry.Tombstoned)
+            return;
+
+        // Activation marker: set once on the first verified inbound. Deliberately NOT
+        // refreshed on every message — this is a single store actor, so a per-message
+        // event would grow its log unboundedly (CLAUDE.md: no needless EventStore growth).
+        if (entry.LastInboundAtUtc is not null)
+            return;
+
+        await PersistDomainEventAsync(new ChannelBotInboundObservedEvent
+        {
+            RegistrationId = cmd.RegistrationId,
+            ObservedAtUtc = cmd.ObservedAtUtc ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        Logger.LogInformation("Channel bot activated by first verified inbound: id={Id}", cmd.RegistrationId);
     }
 
     [EventHandler]
@@ -181,6 +209,19 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             entry.Tombstoned = true;
             entry.TombstoneStateVersion = evt.TombstoneStateVersion;
         }
+        return next;
+    }
+
+    private static ChannelBotRegistrationStoreState ApplyInboundObserved(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotInboundObservedEvent evt)
+    {
+        var next = current.Clone();
+        var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
+        if (entry is null || entry.Tombstoned)
+            return current;
+
+        entry.LastInboundAtUtc = evt.ObservedAtUtc;
         return next;
     }
 

@@ -15,7 +15,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("ASPNETCORE_ENVIRONMENT", "Development");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, FailingDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, FailingDocumentStore<WorkflowExecutionCurrentStateDocument>>();
         services.AddSingleton<IProjectionGraphStore, NoOpGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -36,7 +36,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("ASPNETCORE_ENVIRONMENT", "Production");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, FailingDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, FailingDocumentStore<WorkflowExecutionCurrentStateDocument>>();
         services.AddSingleton<IProjectionGraphStore, NoOpGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -58,7 +58,7 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
     {
         using var env = new EnvironmentVariableScope("DOTNET_ENVIRONMENT", "Production");
         var services = new ServiceCollection();
-        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, NoOpDocumentStore>();
+        services.AddSingleton<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>, NoOpDocumentStore<WorkflowExecutionCurrentStateDocument>>();
         services.AddSingleton<IProjectionGraphStore, FailingGraphStore>();
         await using var provider = services.BuildServiceProvider();
         var startupValidation = new WorkflowReadModelStartupValidationHostedService(
@@ -75,32 +75,34 @@ public class WorkflowReadModelStartupValidationHostedServiceTests
             .WithMessage("*graph startup probe failed*");
     }
 
-    private sealed class NoOpDocumentStore : IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>
+    private sealed class NoOpDocumentStore<TDocument> : IProjectionDocumentReader<TDocument, string>
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
-        public Task<WorkflowExecutionCurrentStateDocument?> GetAsync(string key, CancellationToken ct = default)
+        public Task<TDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<WorkflowExecutionCurrentStateDocument?>(null);
+            return Task.FromResult<TDocument?>(null);
         }
 
-        public Task<ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>> QueryAsync(
+        public Task<ProjectionDocumentQueryResult<TDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>.Empty);
+            return Task.FromResult(ProjectionDocumentQueryResult<TDocument>.Empty);
         }
     }
 
-    private sealed class FailingDocumentStore : IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>
+    private sealed class FailingDocumentStore<TDocument> : IProjectionDocumentReader<TDocument, string>
+        where TDocument : class, IProjectionReadModel<TDocument>, new()
     {
-        public Task<WorkflowExecutionCurrentStateDocument?> GetAsync(string key, CancellationToken ct = default)
+        public Task<TDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult<WorkflowExecutionCurrentStateDocument?>(null);
+            return Task.FromResult<TDocument?>(null);
         }
 
-        public Task<ProjectionDocumentQueryResult<WorkflowExecutionCurrentStateDocument>> QueryAsync(
+        public Task<ProjectionDocumentQueryResult<TDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default)
         {

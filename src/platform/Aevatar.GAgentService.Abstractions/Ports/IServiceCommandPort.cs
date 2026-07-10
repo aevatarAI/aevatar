@@ -12,6 +12,16 @@ public interface IServiceCommandPort
         UpdateServiceDefinitionCommand command,
         CancellationToken ct = default);
 
+    Task<ServiceCommandAcceptedReceipt> ReconcileExternalExposureAsync(
+        ReconcileExternalExposureCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{nameof(ReconcileExternalExposureAsync)} is not implemented.");
+
+    Task<ServiceCommandAcceptedReceipt> RetireExternalExposureAsync(
+        RetireExternalExposureCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{nameof(RetireExternalExposureAsync)} is not implemented.");
+
     Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(
         CreateServiceRevisionCommand command,
         CancellationToken ct = default);

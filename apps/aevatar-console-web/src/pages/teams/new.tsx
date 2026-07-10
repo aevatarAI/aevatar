@@ -4,24 +4,23 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import React from 'react';
 import { loadRestorableAuthSession } from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
-import { buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
+import { buildTeamCreateHref, buildTeamDetailHref, buildTeamsHref } from '@/shared/navigation/teamRoutes';
 import { studioApi } from '@/shared/studio/api';
 import { describeError } from '@/shared/ui/errorText';
-import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
+import {
+  AevatarPanel,
+  type AevatarBreadcrumbItem,
+} from '@/shared/ui/aevatarPageShells';
 import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
 import { rememberPendingTeamRosterSummary } from './pendingTeamRoster';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
 import {
-  buildScopeHref,
   readScopeQueryDraft,
 } from '../scopes/components/scopeQuery';
 import { t } from "@/shared/i18n/messages";
 
 const primaryActionButtonStyle: React.CSSProperties = {
-  background: '#6c5ce7',
-  borderColor: '#6c5ce7',
   borderRadius: 10,
-  color: '#ffffff',
   fontSize: 14,
   fontWeight: 600,
   height: 44,
@@ -98,11 +97,10 @@ const TeamCreatePage: React.FC = () => {
     [teamName],
   );
   React.useEffect(() => {
-    const nextPath = buildScopeHref(
-      '/teams/new',
-      { scopeId },
-      routeParams,
-    );
+    const nextPath = buildTeamCreateHref({
+      scopeId,
+      teamName: routeParams.teamName,
+    });
     const currentPath =
       typeof window === 'undefined'
         ? ''
@@ -159,9 +157,27 @@ const TeamCreatePage: React.FC = () => {
       setIsCreatingTeam(false);
     }
   };
+  const teamsHref = scopeId
+    ? buildTeamDetailHref({ scopeId })
+    : buildTeamsHref();
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      href: teamsHref,
+      onClick: (event) => {
+        event.preventDefault();
+        history.push(teamsHref);
+      },
+      title: t("pages.teams.new.teamsBreadcrumb", "Teams"),
+    },
+    {
+      current: true,
+      title: t("pages.teams.new.create.team.2", "Create Team"),
+    },
+  ];
+
   return (
     <ConsoleMenuPageShell
-      breadcrumb={t("pages.teams.new.aevatar.teams", "Aevatar / Teams")}
+      breadcrumbItems={breadcrumbItems}
       extra={
         <Space wrap>
           <Button
@@ -169,6 +185,7 @@ const TeamCreatePage: React.FC = () => {
             loading={isCreatingTeam}
             onClick={() => void handleCreateTeam()}
             style={primaryActionButtonStyle}
+            type="primary"
           >
             {t("pages.teams.new.create.team", "Create Team")}</Button>
         </Space>
@@ -240,9 +257,10 @@ const TeamCreatePage: React.FC = () => {
               loading={isCreatingTeam}
               onClick={() => void handleCreateTeam()}
               style={primaryActionButtonStyle}
+              type="primary"
             >
               {t("pages.teams.new.create.team.3", "Create Team")}</Button>
-            <Button onClick={() => history.push(buildTeamsHref())}>
+            <Button onClick={() => history.push(teamsHref)}>
               {t("pages.teams.new.back.to.my.teams", "Back to My Teams")}</Button>
           </Space>
         </div>

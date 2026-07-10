@@ -5,19 +5,30 @@ using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Core.Expressions;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.Workflow.Core.Execution;
 
 internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContext>
 {
+    private enum WorkflowStepDispatchKind
+    {
+        Forward,
+        Compensation,
+    }
+
     private const string ModuleStateKey = "workflow_execution_kernel";
     private const string WorkflowCallInvocationIdParameterKey = "workflow_call.invocation_id";
+    private const int DefaultCompensationTimeoutMs = 30_000;
+    private const int CompensationPhaseDeadlineMs = 300_000;
     private static readonly Regex TimeoutErrorPattern = new(
         @"\bTIMEOUT\b|(?:^|[^A-Za-z0-9])timed out after\s+\d+\s*(?:ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly WorkflowExpressionEvaluator _expressionEvaluator = new();
+    private readonly WorkflowSideEffectIdempotencyKeyResolver _idempotencyKeyResolver;
     private readonly WorkflowDefinition _workflow;
     private readonly IWorkflowExecutionStateHost _stateHost;
 
@@ -27,6 +38,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     {
         _workflow = workflow ?? throw new ArgumentNullException(nameof(workflow));
         _stateHost = stateHost ?? throw new ArgumentNullException(nameof(stateHost));
+        _idempotencyKeyResolver = new WorkflowSideEffectIdempotencyKeyResolver(_expressionEvaluator);
     }
 
     public string Name => "workflow_execution_kernel";
@@ -37,9 +49,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         var payload = envelope.Payload;
         return payload != null &&
                (payload.Is(StartWorkflowEvent.Descriptor) ||
+                payload.Is(CompensationRequestEvent.Descriptor) ||
+                payload.Is(CompensationStepCompletedEvent.Descriptor) ||
                 payload.Is(StepCompletedEvent.Descriptor) ||
                 payload.Is(WorkflowStoppedEvent.Descriptor) ||
                 payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor) ||
+                payload.Is(WorkflowCompensationPhaseDeadlineFiredEvent.Descriptor) ||
                 payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor));
     }
 
@@ -56,9 +71,25 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
         }
 
+        if (payload.Is(CompensationRequestEvent.Descriptor))
+        {
+            await HandleCompensationRequestAsync(payload.Unpack<CompensationRequestEvent>(), workflowContext, ct);
+            return;
+        }
+
         if (payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor))
         {
             await HandleTimeoutFiredAsync(payload.Unpack<WorkflowStepTimeoutFiredEvent>(), envelope, workflowContext, ct);
+            return;
+        }
+
+        if (payload.Is(WorkflowCompensationPhaseDeadlineFiredEvent.Descriptor))
+        {
+            await HandleCompensationPhaseDeadlineFiredAsync(
+                payload.Unpack<WorkflowCompensationPhaseDeadlineFiredEvent>(),
+                envelope,
+                workflowContext,
+                ct);
             return;
         }
 
@@ -71,6 +102,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (payload.Is(WorkflowStoppedEvent.Descriptor))
         {
             await HandleWorkflowStoppedAsync(payload.Unpack<WorkflowStoppedEvent>(), workflowContext, ct);
+            return;
+        }
+
+        if (payload.Is(CompensationStepCompletedEvent.Descriptor))
+        {
+            await HandleCompensationStepCompletedAsync(payload.Unpack<CompensationStepCompletedEvent>(), workflowContext, ct);
             return;
         }
 
@@ -113,20 +150,47 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.RunId = runId;
         state.CurrentStepId = string.Empty;
         state.CurrentStepInput = string.Empty;
+        state.CurrentStepInputFileRefs.Clear();
+        state.InputFileRefs.Clear();
         state.Variables.Clear();
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
         state.RetryBackoffsByStepId.Clear();
+        state.ExecutionIdsByStepId.Clear();
+        state.IdempotencyByStepId.Clear();
+        state.CompensationExecutionIdsByStepId.Clear();
+        state.Usage = new WorkflowUsageMetricsState();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineLease = null;
+        if (evt.WorkflowRuntime != null)
+        {
+            await _stateHost.UpdateExecutionContextAsync(
+                WorkflowRunExecutionContextStateAccess.BuildWorkflowRuntimeDelta(evt.WorkflowRuntime),
+                ct);
+        }
+
+        var forkSeed = evt.ForkSeed;
+        var hasForkSeedStart = forkSeed != null && !string.IsNullOrWhiteSpace(forkSeed.StartAtStepId);
+        if (hasForkSeedStart)
+            MergeStartParametersIntoVariables(state.Variables, forkSeed!.Variables);
+        ApplyForkSeedIdempotency(state, forkSeed);
         state.Variables["input"] = evt.Input ?? string.Empty;
+        state.InputFileRefs.Add(evt.InputFileRefs.Select(static fileRef => fileRef.Clone()));
+        MirrorRunUsageVariables(state);
         MergeStartParametersIntoVariables(state.Variables, evt.Parameters);
         await SaveStateAsync(state, ctx, ct);
 
-        var entry = _workflow.Steps.FirstOrDefault();
+        var entry = hasForkSeedStart
+            ? _workflow.GetStep(forkSeed!.StartAtStepId)
+            : _workflow.Steps.FirstOrDefault();
         if (entry == null)
         {
             await CleanupRunAsync(state, ctx, ct);
+            var error = hasForkSeedStart
+                ? $"fork seed start step '{forkSeed!.StartAtStepId}' was not found"
+                : "无步骤";
             await PublishWorkflowCompletedAsync(
                 ctx,
                 new WorkflowCompletedEvent
@@ -134,13 +198,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     WorkflowName = _workflow.Name,
                     RunId = runId,
                     Success = false,
-                    Error = "无步骤",
+                    Error = error,
                 },
                 ct);
             return;
         }
 
-        await DispatchStepAsync(entry, evt.Input ?? string.Empty, state, ctx, ct);
+        var startInput = hasForkSeedStart && forkSeed!.Variables.TryGetValue("input", out var seedInput)
+            ? seedInput ?? string.Empty
+            : evt.Input ?? string.Empty;
+        await DispatchStepAsync(entry, startInput, state.InputFileRefs, state, WorkflowStepDispatchKind.Forward, ctx, ct);
     }
 
     private async Task HandleTimeoutFiredAsync(
@@ -190,6 +257,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             RunId = runId,
             Success = false,
             Error = $"TIMEOUT after {evt.TimeoutMs}ms",
+            FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
         }, TopologyAudience.Self, ct);
 
         state.TimeoutsByStepId.Remove(stepId);
@@ -263,8 +331,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         state.ExecutionIdsByStepId.Remove(evt.StepId);
+        var compensationExecutionId = state.CompensationExecutionIdsByStepId.TryGetValue(evt.StepId, out var carriedCompensationExecutionId)
+            ? carriedCompensationExecutionId
+            : string.Empty;
 
         await CancelTimeoutAsync(state, evt.StepId, ctx, ct);
+
         if (!evt.Success && state.RetryBackoffsByStepId.ContainsKey(evt.StepId))
         {
             ctx.Logger.LogDebug(
@@ -275,29 +347,29 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         if (evt.Success)
+        {
             await CancelRetryBackoffAsync(state, evt.StepId, ctx, CancellationToken.None);
+        }
 
-        var outputPreview = (evt.Output ?? string.Empty).Length > 200
-            ? evt.Output![..200] + "..."
-            : evt.Output ?? string.Empty;
+        // Do NOT log step output content: tool results routinely carry secrets
+        // (NyxID access tokens, refresh tokens, connector credentials). Logging a
+        // preview leaked partial credentials into stdout -> Elasticsearch. Length only.
         if (evt.Success)
         {
             ctx.Logger.LogInformation(
-                "workflow_loop: step={StepId} completed success={Success} output=({Len} chars) {Preview}",
+                "workflow_loop: step={StepId} completed success={Success} output=({Len} chars)",
                 evt.StepId,
                 evt.Success,
-                (evt.Output ?? string.Empty).Length,
-                outputPreview);
+                (evt.Output ?? string.Empty).Length);
         }
         else
         {
             ctx.Logger.LogError(
-                "workflow_loop: step={StepId} failed run={RunId} error={Error} output=({Len} chars) {Preview}",
+                "workflow_loop: step={StepId} failed run={RunId} error={Error} output=({Len} chars)",
                 evt.StepId,
                 runId,
                 string.IsNullOrWhiteSpace(evt.Error) ? "(none)" : evt.Error,
-                (evt.Output ?? string.Empty).Length,
-                outputPreview);
+                (evt.Output ?? string.Empty).Length);
         }
 
         if (!string.IsNullOrWhiteSpace(evt.AssignedVariable))
@@ -311,9 +383,20 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (!string.IsNullOrWhiteSpace(evt.StepId))
             state.Variables[evt.StepId] = evt.Output ?? string.Empty;
         state.Variables["input"] = evt.Output ?? string.Empty;
+        ApplyStepUsage(evt, state);
+        MirrorStepCompletionVariables(state, evt);
 
         if (!evt.Success)
         {
+            if (!string.IsNullOrWhiteSpace(compensationExecutionId))
+            {
+                if (await TryRetryAsync(current, evt, state, ctx, ct))
+                    return;
+
+                await TryRecordFailedCompensationDeadLetterAsync(evt, compensationExecutionId, state, ctx, ct);
+                return;
+            }
+
             if (IsTimeoutError(evt.Error))
             {
                 ctx.Logger.LogError(
@@ -321,8 +404,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     runId,
                     evt.StepId,
                     evt.Error);
-                await CleanupRunAsync(state, ctx, ct);
-                await PublishWorkflowCompletedAsync(
+                await TryStartCompensationOrPublishTerminalFailureAsync(
                     ctx,
                     new WorkflowCompletedEvent
                     {
@@ -331,6 +413,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                         Success = false,
                         Error = evt.Error,
                     },
+                    state,
+                    evt,
                     ct);
                 return;
             }
@@ -345,8 +429,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 runId,
                 evt.StepId,
                 evt.Error);
-            await CleanupRunAsync(state, ctx, ct);
-            await PublishWorkflowCompletedAsync(
+            if (await TryRecordFailedCompensationDeadLetterAsync(evt, compensationExecutionId, state, ctx, ct))
+                return;
+
+            await TryStartCompensationOrPublishTerminalFailureAsync(
                 ctx,
                 new WorkflowCompletedEvent
                 {
@@ -355,6 +441,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     Success = false,
                     Error = evt.Error,
                 },
+                state,
+                evt,
                 ct);
             return;
         }
@@ -362,6 +450,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         state.RetryAttemptsByStepId.Remove(evt.StepId);
         state.RetryBackoffsByStepId.Remove(evt.StepId);
         await SaveStateAsync(state, ctx, ct);
+
+        if (await TryRecordSuccessfulCompensationAsync(evt, compensationExecutionId, state, ctx, ct))
+            return;
 
         StepDefinition? next;
         if (!string.IsNullOrWhiteSpace(evt.NextStepId))
@@ -375,8 +466,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     runId,
                     current.Id,
                     directNextStepId);
-                await CleanupRunAsync(state, ctx, ct);
-                await PublishWorkflowCompletedAsync(
+                await TryStartCompensationOrPublishTerminalFailureAsync(
                     ctx,
                     new WorkflowCompletedEvent
                     {
@@ -385,6 +475,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                         Success = false,
                         Error = $"invalid next_step '{directNextStepId}' from step '{current.Id}'",
                     },
+                    state,
+                    null,
                     ct);
                 return;
             }
@@ -396,7 +488,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         if (next == null)
         {
-            await CleanupRunAsync(state, ctx, ct);
+            await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
             await PublishWorkflowCompletedAsync(
                 ctx,
                 new WorkflowCompletedEvent
@@ -410,7 +502,274 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
         }
 
-        await DispatchStepAsync(next, evt.Output ?? string.Empty, state, ctx, ct);
+        await DispatchStepAsync(next, evt.Output ?? string.Empty, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
+    }
+
+    private async Task HandleCompensationRequestAsync(
+        CompensationRequestEvent evt,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var runId = NormalizeRunId(evt.RunId);
+        var compensationStepId = evt.CompensationStepId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(compensationStepId))
+            return;
+
+        var state = LoadState(ctx);
+        if (!IsActiveRun(state, runId))
+            return;
+
+        var step = _workflow.GetStep(compensationStepId);
+        if (step == null)
+        {
+            await ctx.PublishAsync(new CompensationStepCompletedEvent
+            {
+                RunId = runId,
+                CompensationStepId = compensationStepId,
+                Success = false,
+                Error = $"compensation step '{compensationStepId}' was not found",
+                ExecutionId = evt.ExecutionId ?? string.Empty,
+            }, TopologyAudience.Self, ct);
+            return;
+        }
+
+        if (!state.IdempotencyByStepId.TryGetValue(compensationStepId, out var existing) ||
+            string.IsNullOrWhiteSpace(existing.IdempotencyKey))
+        {
+            state.IdempotencyByStepId[compensationStepId] = new WorkflowStepIdempotencyState
+            {
+                LogicalRunId = runId,
+                StepId = compensationStepId,
+                LogicalAttempt = Math.Max(1, state.RetryAttemptsByStepId.GetValueOrDefault(compensationStepId, 0) + 1),
+                IdempotencyKey = evt.IdempotencyKey ?? string.Empty,
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(evt.ExecutionId))
+            state.CompensationExecutionIdsByStepId[compensationStepId] = evt.ExecutionId.Trim();
+
+        await SaveStateAsync(state, ctx, ct);
+
+        var input = string.IsNullOrWhiteSpace(evt.CapturedOutput)
+            ? state.CurrentStepInput
+            : evt.CapturedOutput;
+        await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
+        await DispatchStepAsync(step, input, state.CurrentStepInputFileRefs, state, WorkflowStepDispatchKind.Compensation, ctx, ct);
+    }
+
+    private async Task HandleCompensationStepCompletedAsync(
+        CompensationStepCompletedEvent completion,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var result = await _stateHost.RecordCompensationStepCompletionAsync(completion, ct);
+        await HandleCompensationTransitionAsync(
+            result,
+            completion.RunId,
+            completion.CompensationStepId,
+            completion.Error,
+            ctx,
+            ct);
+    }
+
+    private async Task<bool> TryRecordSuccessfulCompensationAsync(
+        StepCompletedEvent evt,
+        string compensationExecutionId,
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var result = await _stateHost.RecordCompensationStepCompletionAsync(new CompensationStepCompletedEvent
+        {
+            RunId = evt.RunId,
+            CompensationStepId = evt.StepId,
+            Success = true,
+            ExecutionId = compensationExecutionId ?? string.Empty,
+        }, ct);
+        if (result.Status != WorkflowCompensationTransitionStatus.NoCompensableLedger &&
+            state.CompensationExecutionIdsByStepId.Remove(evt.StepId))
+        {
+            await SaveStateAsync(state, ctx, ct);
+        }
+
+        return await HandleCompensationTransitionAsync(
+            result,
+            evt.RunId,
+            evt.StepId,
+            evt.Error,
+            ctx,
+            ct);
+    }
+
+    private async Task<bool> TryRecordFailedCompensationDeadLetterAsync(
+        StepCompletedEvent evt,
+        string compensationExecutionId,
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var result = await _stateHost.RecordCompensationStepCompletionAsync(new CompensationStepCompletedEvent
+        {
+            RunId = evt.RunId,
+            CompensationStepId = evt.StepId,
+            Success = false,
+            Error = evt.Error ?? string.Empty,
+            ExecutionId = compensationExecutionId ?? string.Empty,
+        }, ct);
+        if (result.Status != WorkflowCompensationTransitionStatus.NoCompensableLedger &&
+            state.CompensationExecutionIdsByStepId.Remove(evt.StepId))
+        {
+            await SaveStateAsync(state, ctx, ct);
+        }
+
+        return await HandleCompensationTransitionAsync(
+            result,
+            evt.RunId,
+            evt.StepId,
+            evt.Error,
+            ctx,
+            ct);
+    }
+
+    private async Task<bool> HandleCompensationTransitionAsync(
+        WorkflowCompensationTransitionResult result,
+        string runId,
+        string currentCompensationStepId,
+        string? error,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        switch (result.Status)
+        {
+            case WorkflowCompensationTransitionStatus.AdvancedAndRequestedNext:
+            case WorkflowCompensationTransitionStatus.Started:
+            case WorkflowCompensationTransitionStatus.AlreadyCompensating:
+                await EnsureCompensationPhaseDeadlineAsync(LoadState(ctx), ctx, ct);
+                await PublishCompensationRequestAsync(
+                    ctx,
+                    runId,
+                    currentCompensationStepId,
+                    result,
+                    ct);
+                return true;
+            case WorkflowCompensationTransitionStatus.CompletedAll:
+                await CleanupRunAsync(
+                    LoadState(ctx),
+                    ctx,
+                    ct,
+                    preserveTerminalFacts: true,
+                    preserveCurrentStepInputVariable: true);
+                await PublishWorkflowCompletedAsync(
+                    ctx,
+                    new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        RunId = NormalizeRunId(runId),
+                        Success = false,
+                        Error = error ?? string.Empty,
+                    },
+                    ct);
+                return true;
+            case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
+                return true;
+            case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
+            {
+                var state = LoadState(ctx);
+                await CleanupRunAsync(
+                    state,
+                    ctx,
+                    ct,
+                    preserveTerminalFacts: true,
+                    preserveCurrentStepInputVariable: true);
+                var deadLetterError = error ?? string.Empty;
+                await PublishWorkflowCompletedAsync(
+                    ctx,
+                    new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        RunId = NormalizeRunId(runId),
+                        Success = false,
+                        Error = deadLetterError,
+                    },
+                    ct);
+                return true;
+            }
+            case WorkflowCompensationTransitionStatus.NoCompensableLedger:
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private async Task TryStartCompensationOrPublishTerminalFailureAsync(
+        IWorkflowExecutionContext ctx,
+        WorkflowCompletedEvent terminalFailure,
+        WorkflowExecutionKernelState state,
+        StepCompletedEvent? terminalStep,
+        CancellationToken ct)
+    {
+        var result = await _stateHost.TryStartCompensationAsync(terminalFailure, terminalStep, ct);
+        switch (result.Status)
+        {
+            case WorkflowCompensationTransitionStatus.Started:
+            case WorkflowCompensationTransitionStatus.AlreadyCompensating:
+            case WorkflowCompensationTransitionStatus.AdvancedAndRequestedNext:
+                await EnsureCompensationPhaseDeadlineAsync(state, ctx, ct);
+                await PublishCompensationRequestAsync(
+                    ctx,
+                    terminalFailure.RunId,
+                    state.CurrentStepId,
+                    result,
+                    ct);
+                return;
+            case WorkflowCompensationTransitionStatus.NoCompensableLedger:
+                await CleanupRunAsync(
+                    state,
+                    ctx,
+                    ct,
+                    preserveTerminalFacts: true,
+                    preserveCurrentStepInputVariable: true);
+                await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
+                return;
+            case WorkflowCompensationTransitionStatus.CompletedAll:
+                await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
+                return;
+            case WorkflowCompensationTransitionStatus.CompensationDeadLettered:
+                await CleanupRunAsync(
+                    state,
+                    ctx,
+                    ct,
+                    preserveTerminalFacts: true,
+                    preserveCurrentStepInputVariable: true);
+                await PublishWorkflowCompletedAsync(ctx, terminalFailure, ct);
+                return;
+            case WorkflowCompensationTransitionStatus.RejectedStaleOrDuplicate:
+            default:
+                return;
+        }
+    }
+
+    private static Task PublishCompensationRequestAsync(
+        IWorkflowExecutionContext ctx,
+        string runId,
+        string failedStepId,
+        WorkflowCompensationTransitionResult result,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(result.NextCompensationStepId))
+            return Task.CompletedTask;
+
+        return ctx.PublishAsync(new CompensationRequestEvent
+        {
+            RunId = NormalizeRunId(runId),
+            FailedStepId = string.IsNullOrWhiteSpace(result.FailedStepId)
+                ? failedStepId ?? string.Empty
+                : result.FailedStepId,
+            CompensationStepId = result.NextCompensationStepId,
+            IdempotencyKey = result.IdempotencyKey ?? string.Empty,
+            CapturedOutput = result.CapturedOutput ?? string.Empty,
+            ExecutionId = result.ExecutionId ?? string.Empty,
+        }, TopologyAudience.Self, ct);
     }
 
     private async Task HandleWorkflowStoppedAsync(
@@ -483,13 +842,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         if (delayMs <= 0)
         {
+            state.IdempotencyByStepId.Remove(step.Id);
             state.RetryAttemptsByStepId[step.Id] = nextRetryCount;
             await SaveStateAsync(state, ctx, ct);
-            await DispatchStepAsync(step, retryInput, state, ctx, ct);
+            await DispatchStepAsync(step, retryInput, state.CurrentStepInputFileRefs, state, ResolveRetryDispatchKind(state, step.Id), ctx, ct);
             return true;
         }
 
         await StartRetryBackoffAsync(state, step.Id, delayMs, nextAttemptNumber, ctx, ct);
+        state.IdempotencyByStepId.Remove(step.Id);
         state.RetryAttemptsByStepId[step.Id] = nextRetryCount;
         await SaveStateAsync(state, ctx, ct);
         return true;
@@ -574,7 +935,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             pending.NextAttempt,
             evt.DelayMs);
 
-        var timeoutCallbackId = step.TimeoutMs is > 0
+        var dispatchKind = ResolveRetryDispatchKind(state, step.Id);
+        var effectiveTimeoutMs = ResolveStepTimeoutMs(step, dispatchKind);
+        var timeoutCallbackId = effectiveTimeoutMs > 0
             ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
             : string.Empty;
 
@@ -586,7 +949,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         try
         {
-            await DispatchStepAsync(step, retryInput, state, ctx, ct);
+            await DispatchStepAsync(step, retryInput, state.CurrentStepInputFileRefs, state, dispatchKind, ctx, ct);
         }
         catch
         {
@@ -670,7 +1033,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 var next = _workflow.GetNextStep(step.Id);
                 if (next == null)
                 {
-                    await CleanupRunAsync(state, ctx, ct);
+                    await CleanupRunAsync(state, ctx, ct, preserveTerminalFacts: true);
                     await PublishWorkflowCompletedAsync(
                         ctx,
                         new WorkflowCompletedEvent
@@ -684,7 +1047,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 }
                 else
                 {
-                    await DispatchStepAsync(next, output, state, ctx, ct);
+                    await DispatchStepAsync(next, output, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
                 }
 
                 return true;
@@ -705,7 +1068,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 var fallbackInput = string.IsNullOrWhiteSpace(evt.Output)
                     ? evt.Error ?? string.Empty
                     : evt.Output;
-                await DispatchStepAsync(fallback, fallbackInput, state, ctx, ct);
+                await DispatchStepAsync(fallback, fallbackInput, [], state, WorkflowStepDispatchKind.Forward, ctx, ct);
                 return true;
             }
             default:
@@ -722,18 +1085,23 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ArgumentNullException.ThrowIfNull(completed);
 
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
-        await ctx.PublishAsync(completed.Clone(), TopologyAudience.Parent, ct);
     }
 
     private async Task DispatchStepAsync(
         StepDefinition step,
         string input,
+        IEnumerable<WorkflowFileRef> inputFileRefs,
         WorkflowExecutionKernelState state,
+        WorkflowStepDispatchKind dispatchKind,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var request = BuildStepRequest(step, input, state, ctx);
-        var timeoutCallbackId = step.TimeoutMs is > 0
+        var fileRefs = inputFileRefs.Select(static fileRef => fileRef.Clone()).ToArray();
+        var request = BuildStepRequest(step, input, fileRefs, state, ctx);
+        var idempotency = ResolveAndPersistStepIdempotency(step, state);
+        request.IdempotencyKey = idempotency.IdempotencyKey;
+        var effectiveTimeoutMs = ResolveStepTimeoutMs(step, dispatchKind);
+        var timeoutCallbackId = effectiveTimeoutMs > 0
             ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
             : string.Empty;
 
@@ -744,6 +1112,8 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         state.CurrentStepId = step.Id;
         state.CurrentStepInput = input;
+        state.CurrentStepInputFileRefs.Clear();
+        state.CurrentStepInputFileRefs.Add(fileRefs.Select(static fileRef => fileRef.Clone()));
         state.CurrentStepDispatchPending = true;
         state.CurrentStepTimeoutCallbackId = timeoutCallbackId;
         await SaveStateAsync(state, ctx, ct);
@@ -751,20 +1121,25 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         RuntimeCallbackLease? timeoutLease = null;
         try
         {
-            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, state.RunId, ctx, ct);
+            timeoutLease = await ScheduleStepTimeoutLeaseAsync(timeoutCallbackId, step, effectiveTimeoutMs, state.RunId, ctx, ct);
             if (timeoutLease != null)
             {
                 state.TimeoutsByStepId[step.Id] = WorkflowRuntimeCallbackLeaseStateCodec.ToState(timeoutLease);
                 await SaveStateAsync(state, ctx, ct);
             }
 
+            await RecordCompensableStepDispatchAsync(step, idempotency, ct);
             await ctx.PublishAsync(request, TopologyAudience.Self, ct);
         }
         catch
         {
             if (timeoutLease != null)
             {
-                await TryCancelLeaseAsync(timeoutLease, ctx, CancellationToken.None);
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    ctx,
+                    timeoutLease,
+                    "workflow_loop rolled-back timeout cleanup",
+                    CancellationToken.None);
                 state.TimeoutsByStepId.Remove(step.Id);
                 await SaveStateAsync(state, ctx, CancellationToken.None);
             }
@@ -774,6 +1149,53 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
         state.CurrentStepDispatchPending = false;
         await SaveStateAsync(state, ctx, ct);
+    }
+
+    private async Task RecordCompensableStepDispatchAsync(
+        StepDefinition step,
+        WorkflowStepIdempotencyState idempotency,
+        CancellationToken ct)
+    {
+        var compensationStepId = step.Compensation?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(compensationStepId) ||
+            !WorkflowPrimitiveCatalog.IsSideEffectingPrimitive(step.Type))
+        {
+            return;
+        }
+
+        await _stateHost.RecordCompensableStepDispatchAsync(
+            new CompensableStepDispatchedEvent
+            {
+                RunId = NormalizeRunId(_stateHost.RunId),
+                StepId = step.Id,
+                CompensationStepId = compensationStepId,
+                IdempotencyKey = idempotency.IdempotencyKey ?? string.Empty,
+                DispatchedAtUnixMs = 0,
+            },
+            ct);
+    }
+
+    private WorkflowStepIdempotencyState ResolveAndPersistStepIdempotency(
+        StepDefinition step,
+        WorkflowExecutionKernelState state)
+    {
+        if (state.IdempotencyByStepId.TryGetValue(step.Id, out var existing) &&
+            !string.IsNullOrWhiteSpace(existing.IdempotencyKey))
+        {
+            var normalized = WorkflowSideEffectIdempotencyKeyResolver.NormalizeIdentity(existing);
+            state.IdempotencyByStepId[step.Id] = normalized;
+            return normalized;
+        }
+
+        var identity = new WorkflowStepIdempotencyState
+        {
+            LogicalRunId = state.RunId,
+            StepId = step.Id,
+            LogicalAttempt = Math.Max(1, state.RetryAttemptsByStepId.GetValueOrDefault(step.Id, 0) + 1),
+        };
+        var resolved = _idempotencyKeyResolver.Resolve(step, identity, state.Variables);
+        state.IdempotencyByStepId[step.Id] = resolved;
+        return resolved;
     }
 
     private static bool ShouldDeferWhileParameterEvaluation(string canonicalStepType, string parameterKey) =>
@@ -788,14 +1210,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
     private async Task<RuntimeCallbackLease?> ScheduleStepTimeoutLeaseAsync(
         string callbackId,
         StepDefinition step,
+        int effectiveTimeoutMs,
         string runId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        if (step.TimeoutMs is not > 0 || string.IsNullOrWhiteSpace(callbackId))
+        if (effectiveTimeoutMs <= 0 || string.IsNullOrWhiteSpace(callbackId))
             return null;
 
-        var timeoutMs = Math.Clamp(step.TimeoutMs.Value, 100, 600_000);
+        var timeoutMs = Math.Clamp(effectiveTimeoutMs, 100, 600_000);
         return await ctx.ScheduleSelfDurableTimeoutAsync(
             callbackId,
             TimeSpan.FromMilliseconds(timeoutMs),
@@ -806,25 +1229,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 TimeoutMs = timeoutMs,
             },
             ct: ct);
-    }
-
-    private static async Task TryCancelLeaseAsync(
-        RuntimeCallbackLease lease,
-        IWorkflowExecutionContext ctx,
-        CancellationToken ct)
-    {
-        try
-        {
-            await ctx.CancelDurableCallbackAsync(lease, ct);
-        }
-        catch (Exception ex)
-        {
-            ctx.Logger.LogDebug(
-                ex,
-                "workflow_loop: failed to cancel rolled-back timeout callback={CallbackId} generation={Generation}",
-                lease.CallbackId,
-                lease.Generation);
-        }
     }
 
     private async Task CancelTimeoutAsync(
@@ -843,7 +1247,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
 
         await SaveStateAsync(state, ctx, ct);
-        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            lease,
+            "workflow_loop timeout cleanup",
+            ct);
     }
 
     private async Task CancelRetryBackoffAsync(
@@ -856,33 +1264,205 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
 
         await SaveStateAsync(state, ctx, ct);
-        await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, pending.Lease, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            pending.Lease,
+            "workflow_loop retry backoff cleanup",
+            ct);
+    }
+
+    private async Task EnsureCompensationPhaseDeadlineAsync(
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.CompensationPhaseDeadlineLease != null &&
+            !string.IsNullOrWhiteSpace(state.CompensationPhaseDeadlineCallbackId))
+        {
+            return;
+        }
+
+        await ScheduleCompensationPhaseDeadlineAsync(state, ctx, ct);
+    }
+
+    private async Task ScheduleCompensationPhaseDeadlineAsync(
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        await CancelCompensationPhaseDeadlineAsync(state, ctx, CancellationToken.None);
+
+        var callbackId = BuildCompensationPhaseDeadlineCallbackId(state.RunId, ResolveInboundEnvelopeId(ctx));
+        state.CompensationPhaseDeadlineCallbackId = callbackId;
+        state.CompensationPhaseDeadlineLease = null;
+        await SaveStateAsync(state, ctx, ct);
+
+        RuntimeCallbackLease? lease = null;
+        try
+        {
+            lease = await ctx.ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                TimeSpan.FromMilliseconds(CompensationPhaseDeadlineMs),
+                new WorkflowCompensationPhaseDeadlineFiredEvent
+                {
+                    RunId = state.RunId,
+                },
+                ct: ct);
+
+            state.CompensationPhaseDeadlineLease = WorkflowRuntimeCallbackLeaseStateCodec.ToState(lease);
+            await SaveStateAsync(state, ctx, ct);
+        }
+        catch
+        {
+            state.CompensationPhaseDeadlineCallbackId = string.Empty;
+            state.CompensationPhaseDeadlineLease = null;
+            await SaveStateAsync(state, ctx, CancellationToken.None);
+            if (lease != null)
+            {
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    ctx,
+                    lease,
+                    "workflow_loop compensation phase deadline cleanup",
+                    CancellationToken.None);
+            }
+
+            throw;
+        }
+    }
+
+    private async Task CancelCompensationPhaseDeadlineAsync(
+        WorkflowExecutionKernelState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var lease = state.CompensationPhaseDeadlineLease?.Clone();
+        state.CompensationPhaseDeadlineLease = null;
+        state.CompensationPhaseDeadlineCallbackId = string.Empty;
+        await SaveStateAsync(state, ctx, ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            lease,
+            "workflow_loop compensation phase deadline cleanup",
+            ct);
+    }
+
+    private async Task HandleCompensationPhaseDeadlineFiredAsync(
+        WorkflowCompensationPhaseDeadlineFiredEvent evt,
+        EventEnvelope envelope,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var runId = NormalizeRunId(evt.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            return;
+
+        var state = LoadState(ctx);
+        if (!IsActiveRun(state, runId))
+            return;
+
+        if (!MatchesCompensationPhaseDeadline(state, envelope))
+        {
+            ctx.Logger.LogDebug(
+                "workflow_loop: ignore compensation phase deadline without matching lease metadata run={RunId}",
+                runId);
+            return;
+        }
+
+        var error = $"compensation phase deadline exceeded after {CompensationPhaseDeadlineMs}ms";
+        var result = await _stateHost.RecordCompensationPhaseDeadlineExceededAsync(runId, error, ct);
+        await HandleCompensationTransitionAsync(
+            result,
+            runId,
+            state.CurrentStepId,
+            error,
+            ctx,
+            ct);
     }
 
     private async Task CleanupRunAsync(
         WorkflowExecutionKernelState state,
         IWorkflowExecutionContext ctx,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool preserveTerminalFacts = false,
+        bool preserveCurrentStepInputVariable = false)
     {
         var timeoutLeases = state.TimeoutsByStepId.Values.ToList();
         var retryLeases = state.RetryBackoffsByStepId.Values.Select(x => x.Lease).ToList();
+        var compensationPhaseDeadlineLease = state.CompensationPhaseDeadlineLease?.Clone();
+        var terminalStepId = preserveTerminalFacts
+            ? state.CurrentStepId
+            : string.Empty;
+        var terminalStepInput = preserveTerminalFacts
+            ? state.CurrentStepInput
+            : string.Empty;
+        var terminalStepInputFileRefs = preserveTerminalFacts
+            ? state.CurrentStepInputFileRefs.Select(static fileRef => fileRef.Clone()).ToArray()
+            : [];
+        var terminalVariables = preserveTerminalFacts
+            ? state.Variables.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal)
+            : [];
+        var terminalUsage = preserveTerminalFacts
+            ? state.Usage?.Clone() ?? new WorkflowUsageMetricsState()
+            : new WorkflowUsageMetricsState();
+        var terminalIdempotency = preserveTerminalFacts
+            ? state.IdempotencyByStepId.ToDictionary(
+                x => x.Key,
+                x => x.Value.Clone(),
+                StringComparer.Ordinal)
+            : [];
+        var terminalCompensationExecutionIds = preserveTerminalFacts
+            ? state.CompensationExecutionIdsByStepId.ToDictionary(
+                x => x.Key,
+                x => x.Value,
+                StringComparer.Ordinal)
+            : [];
 
         state.Active = false;
         state.RunId = string.Empty;
-        state.CurrentStepId = string.Empty;
-        state.CurrentStepInput = string.Empty;
+        state.CurrentStepId = terminalStepId;
+        state.CurrentStepInput = terminalStepInput;
+        state.CurrentStepInputFileRefs.Clear();
+        state.CurrentStepInputFileRefs.Add(terminalStepInputFileRefs.Select(static fileRef => fileRef.Clone()));
+        state.InputFileRefs.Clear();
         state.CurrentStepDispatchPending = false;
         state.CurrentStepTimeoutCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineCallbackId = string.Empty;
+        state.CompensationPhaseDeadlineLease = null;
         state.Variables.Clear();
+        foreach (var (key, value) in terminalVariables)
+            state.Variables[key] = value ?? string.Empty;
+        if (preserveCurrentStepInputVariable && !string.IsNullOrWhiteSpace(terminalStepInput))
+            state.Variables["input"] = terminalStepInput;
         state.RetryAttemptsByStepId.Clear();
         state.TimeoutsByStepId.Clear();
         state.RetryBackoffsByStepId.Clear();
+        state.ExecutionIdsByStepId.Clear();
+        state.IdempotencyByStepId.Clear();
+        state.CompensationExecutionIdsByStepId.Clear();
+        foreach (var (key, value) in terminalIdempotency)
+            state.IdempotencyByStepId[key] = value;
+        foreach (var (key, value) in terminalCompensationExecutionIds)
+            state.CompensationExecutionIdsByStepId[key] = value ?? string.Empty;
+        state.Usage = terminalUsage;
         await SaveStateAsync(state, ctx, ct);
 
         foreach (var lease in timeoutLeases)
-            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                ctx,
+                lease,
+                "workflow_loop run timeout cleanup",
+                ct);
         foreach (var lease in retryLeases)
-            await WorkflowRuntimeCallbackLeaseSupport.CancelAsync(ctx, lease, ct);
+            await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                ctx,
+                lease,
+                "workflow_loop run retry cleanup",
+                ct);
+        await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+            ctx,
+            compensationPhaseDeadlineLease,
+            "workflow_loop run compensation phase deadline cleanup",
+            ct);
     }
 
     private static WorkflowExecutionKernelState LoadState(IWorkflowExecutionContext ctx) =>
@@ -902,7 +1482,15 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.Variables.Count == 0 &&
             state.RetryAttemptsByStepId.Count == 0 &&
             state.TimeoutsByStepId.Count == 0 &&
-            state.RetryBackoffsByStepId.Count == 0)
+            state.RetryBackoffsByStepId.Count == 0 &&
+            string.IsNullOrWhiteSpace(state.CompensationPhaseDeadlineCallbackId) &&
+            state.CompensationPhaseDeadlineLease == null &&
+            state.ExecutionIdsByStepId.Count == 0 &&
+            state.IdempotencyByStepId.Count == 0 &&
+            state.CompensationExecutionIdsByStepId.Count == 0 &&
+            state.InputFileRefs.Count == 0 &&
+            state.CurrentStepInputFileRefs.Count == 0 &&
+            IsEmptyUsage(state.Usage))
         {
             return WorkflowExecutionStateAccess.ClearAsync(ctx, ModuleStateKey, ct);
         }
@@ -937,6 +1525,144 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                string.Equals(activeInvocationId, requestedInvocationId.Trim(), StringComparison.Ordinal);
     }
 
+    private static void ApplyStepUsage(
+        StepCompletedEvent evt,
+        WorkflowExecutionKernelState state)
+    {
+        if (!HasUsage(evt.Usage))
+        {
+            MirrorRunUsageVariables(state);
+            return;
+        }
+
+        state.Usage ??= new WorkflowUsageMetricsState();
+        state.Usage.PromptTokens += Math.Max(0, evt.Usage.PromptTokens);
+        state.Usage.CompletionTokens += Math.Max(0, evt.Usage.CompletionTokens);
+        state.Usage.TotalTokens += Math.Max(0, evt.Usage.TotalTokens);
+        if (!string.IsNullOrWhiteSpace(evt.Usage.Model))
+            state.Usage.Model = evt.Usage.Model.Trim();
+        if (evt.Usage.Cost > 0)
+            state.Usage.Cost += evt.Usage.Cost;
+        if (evt.Usage.LatencyMs > 0)
+            state.Usage.LatencyMs += evt.Usage.LatencyMs;
+
+        MirrorRunUsageVariables(state);
+        MirrorStepUsageVariables(state, evt.StepId, evt.Usage);
+    }
+
+    private static void MirrorRunUsageVariables(WorkflowExecutionKernelState state)
+    {
+        state.Usage ??= new WorkflowUsageMetricsState();
+        state.Variables["workflow.usage.prompt_tokens"] = state.Usage.PromptTokens.ToString(CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.completion_tokens"] = state.Usage.CompletionTokens.ToString(CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.total_tokens"] = state.Usage.TotalTokens.ToString(CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.model"] = state.Usage.Model ?? string.Empty;
+        state.Variables["workflow.usage.cost"] = state.Usage.Cost.ToString("G17", CultureInfo.InvariantCulture);
+        state.Variables["workflow.usage.latency_ms"] = state.Usage.LatencyMs.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static void MirrorStepCompletionVariables(
+        WorkflowExecutionKernelState state,
+        StepCompletedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.StepId))
+            return;
+
+        var prefix = $"steps.{evt.StepId}";
+        state.Variables[$"{prefix}.output"] = evt.Output ?? string.Empty;
+        state.Variables[$"{prefix}.success"] = evt.Success ? "true" : "false";
+        state.Variables[$"{prefix}.error"] = evt.Error ?? string.Empty;
+        state.Variables[$"{prefix}.branch_key"] = evt.BranchKey ?? string.Empty;
+        state.Variables[$"{prefix}.next_step_id"] = evt.NextStepId ?? string.Empty;
+        state.Variables[$"{prefix}.assigned_variable"] = evt.AssignedVariable ?? string.Empty;
+        state.Variables[$"{prefix}.assigned_value"] = evt.AssignedValue ?? string.Empty;
+
+        foreach (var (key, value) in evt.Annotations)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                continue;
+
+            state.Variables[$"{prefix}.annotations.{key.Trim()}"] = value ?? string.Empty;
+        }
+
+        if (evt.Success && !string.IsNullOrWhiteSpace(evt.Output))
+            MirrorJsonObjectVariables(state, prefix, evt.Output);
+
+        if (HasUsage(evt.Usage))
+            MirrorStepUsageVariables(state, evt.StepId, evt.Usage);
+    }
+
+    private static void MirrorJsonObjectVariables(
+        WorkflowExecutionKernelState state,
+        string prefix,
+        string output)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(output);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return;
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (string.IsNullOrWhiteSpace(property.Name))
+                    continue;
+
+                state.Variables[$"{prefix}.json.{property.Name.Trim()}"] = ToVariableValue(property.Value);
+            }
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+    }
+
+    private static string ToVariableValue(JsonElement value) =>
+        value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+            _ => value.GetRawText(),
+        };
+
+    private static void MirrorStepUsageVariables(
+        WorkflowExecutionKernelState state,
+        string stepId,
+        WorkflowUsageMetrics usage)
+    {
+        if (string.IsNullOrWhiteSpace(stepId))
+            return;
+
+        var prefix = $"steps.{stepId}.usage";
+        state.Variables[$"{prefix}.prompt_tokens"] = Math.Max(0, usage.PromptTokens).ToString(CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.completion_tokens"] = Math.Max(0, usage.CompletionTokens).ToString(CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.total_tokens"] = Math.Max(0, usage.TotalTokens).ToString(CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.model"] = usage.Model ?? string.Empty;
+        state.Variables[$"{prefix}.cost"] = Math.Max(0, usage.Cost).ToString("G17", CultureInfo.InvariantCulture);
+        state.Variables[$"{prefix}.latency_ms"] = Math.Max(0, usage.LatencyMs).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static bool HasUsage(WorkflowUsageMetrics? usage) =>
+        usage != null &&
+        (usage.PromptTokens > 0 ||
+         usage.CompletionTokens > 0 ||
+         usage.TotalTokens > 0 ||
+         !string.IsNullOrWhiteSpace(usage.Model) ||
+         usage.Cost > 0 ||
+         usage.LatencyMs > 0);
+
+    private static bool IsEmptyUsage(WorkflowUsageMetricsState? usage) =>
+        usage == null ||
+        (usage.PromptTokens == 0 &&
+         usage.CompletionTokens == 0 &&
+         usage.TotalTokens == 0 &&
+         string.IsNullOrWhiteSpace(usage.Model) &&
+         Math.Abs(usage.Cost) < double.Epsilon &&
+         usage.LatencyMs == 0);
+
     private static string ResolveRunIdOrCurrent(string? runId, IWorkflowExecutionContext ctx)
     {
         var normalized = NormalizeRunId(runId);
@@ -968,22 +1694,45 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
     }
 
+    private static void ApplyForkSeedIdempotency(
+        WorkflowExecutionKernelState state,
+        WorkflowRunForkSeed? forkSeed)
+    {
+        if (forkSeed?.StartStepIdempotency == null ||
+            string.IsNullOrWhiteSpace(forkSeed.StartAtStepId))
+        {
+            return;
+        }
+
+        var idempotency = WorkflowSideEffectIdempotencyKeyResolver.NormalizeIdentity(forkSeed.StartStepIdempotency);
+        if (string.IsNullOrWhiteSpace(idempotency.StepId))
+            idempotency.StepId = forkSeed.StartAtStepId.Trim();
+        if (string.IsNullOrWhiteSpace(idempotency.LogicalRunId))
+            idempotency.LogicalRunId = NormalizeRunId(forkSeed.SourceRunId);
+        if (string.IsNullOrWhiteSpace(idempotency.IdempotencyKey))
+            idempotency.IdempotencyKey = WorkflowSideEffectIdempotencyKeyResolver.BuildDefaultKey(idempotency);
+
+        state.IdempotencyByStepId[idempotency.StepId] = idempotency;
+    }
+
     private StepRequestEvent BuildStepRequest(
         StepDefinition step,
         string input,
+        IEnumerable<WorkflowFileRef> inputFileRefs,
         WorkflowExecutionKernelState state,
         IWorkflowExecutionContext ctx)
     {
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
         var effectiveTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(_workflow, step);
-        var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
+        // Do NOT log step input content: tool-call arguments routinely carry secrets
+        // (e.g. {"token":"<NyxID JWT>"}). A preview leaked partial credentials into
+        // stdout -> Elasticsearch. Length only.
         ctx.Logger.LogInformation(
-            "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
+            "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars)",
             step.Id,
             canonicalStepType,
             string.IsNullOrWhiteSpace(effectiveTargetRole) ? "(none)" : effectiveTargetRole,
-            input.Length,
-            inputPreview);
+            input.Length);
 
         var request = new StepRequestEvent
         {
@@ -993,6 +1742,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             Input = input,
             TargetRole = effectiveTargetRole,
         };
+        request.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
 
         state.Variables["input"] = input;
         foreach (var (key, value) in step.Parameters)
@@ -1021,9 +1771,248 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 x => string.Equals(x.Id, effectiveTargetRole, StringComparison.OrdinalIgnoreCase));
             if (role is { Connectors.Count: > 0 })
                 request.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
+            ApplyAgentToolScope(request, role?.AgentToolScope, step.AgentToolScope);
+        }
+        else
+        {
+            ApplyAgentToolScope(request, roleScope: null, step.AgentToolScope);
         }
 
+        ApplyTransformOperation(request, step.TransformOperation, state);
+        ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
+        ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
+        ApplyInteractionPresentation(request, step.Presentation, state);
+
         return request;
+    }
+
+    private void ApplyTransformOperation(
+        StepRequestEvent request,
+        TransformOperationSpec? transformOperation,
+        WorkflowExecutionKernelState state)
+    {
+        if (transformOperation is null ||
+            transformOperation.Kind == TransformOperationKind.Unspecified)
+        {
+            return;
+        }
+
+        var spec = transformOperation.Clone();
+        spec.Key = _expressionEvaluator.Evaluate(spec.Key, state.Variables);
+        spec.Value = _expressionEvaluator.Evaluate(spec.Value, state.Variables);
+        (request.StepParameters ??= new WorkflowStepParameters()).TransformOperation = spec;
+    }
+
+    private static void ApplyHumanApprovalOptions(
+        StepRequestEvent request,
+        HumanApprovalOptionsDefinition? options)
+    {
+        if (options == null)
+            return;
+
+        var decision = ParseHumanApprovalTimeoutDefaultDecision(options.TimeoutDefaultDecision);
+        if (decision == WorkflowHumanApprovalTimeoutDefaultDecision.Unspecified)
+            return;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).HumanApproval = new WorkflowHumanApprovalOptions
+        {
+            TimeoutDefaultDecision = decision,
+        };
+    }
+
+    private static WorkflowHumanApprovalTimeoutDefaultDecision ParseHumanApprovalTimeoutDefaultDecision(string? value) =>
+        NormalizeOptionToken(value) switch
+        {
+            "approve" => WorkflowHumanApprovalTimeoutDefaultDecision.Approve,
+            "approved" => WorkflowHumanApprovalTimeoutDefaultDecision.Approve,
+            "reject" => WorkflowHumanApprovalTimeoutDefaultDecision.Reject,
+            "rejected" => WorkflowHumanApprovalTimeoutDefaultDecision.Reject,
+            _ => WorkflowHumanApprovalTimeoutDefaultDecision.Unspecified,
+        };
+
+    private void ApplyExternalApprovalOptions(
+        StepRequestEvent request,
+        ExternalApprovalWaitOptionsDefinition? options,
+        WorkflowExecutionKernelState state)
+    {
+        if (options == null)
+            return;
+
+        var sourceId = EvaluateOption(options.SourceId, state);
+        var externalIdKind = EvaluateOption(options.ExternalIdKind, state);
+        var externalId = EvaluateOption(options.ExternalId, state);
+        if (string.IsNullOrWhiteSpace(sourceId) ||
+            string.IsNullOrWhiteSpace(externalIdKind) ||
+            string.IsNullOrWhiteSpace(externalId))
+        {
+            return;
+        }
+
+        (request.StepParameters ??= new WorkflowStepParameters()).ExternalApproval =
+            new WorkflowExternalApprovalWaitOptions
+            {
+                SourceId = sourceId,
+                ExternalIdKind = externalIdKind,
+                ExternalId = externalId,
+                SignalName = EvaluateOption(options.SignalName, state),
+                CallbackIdempotencyKey = EvaluateOption(options.CallbackIdempotencyKey, state),
+                RequestId = EvaluateOption(options.RequestId, state),
+            };
+    }
+
+    private string EvaluateOption(string? value, WorkflowExecutionKernelState state) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : _expressionEvaluator.Evaluate(value, state.Variables).Trim();
+
+    private static string NormalizeOptionToken(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().Replace("-", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+
+    private static void ApplyAgentToolScope(
+        StepRequestEvent request,
+        WorkflowAgentToolScopeDefinition? roleScope,
+        WorkflowAgentToolScopeDefinition? stepScope)
+    {
+        var effectiveScope = IntersectAgentToolScope(roleScope, stepScope);
+        if (effectiveScope == null)
+            return;
+
+        var payload = (request.StepParameters ??= new WorkflowStepParameters()).AgentToolScope = new WorkflowAgentToolScope();
+        foreach (var toolName in effectiveScope.AllowedToolNames)
+            payload.AllowedToolNames.Add(toolName);
+    }
+
+    private static WorkflowAgentToolScopeDefinition? IntersectAgentToolScope(
+        WorkflowAgentToolScopeDefinition? roleScope,
+        WorkflowAgentToolScopeDefinition? stepScope)
+    {
+        if (roleScope == null)
+            return stepScope == null ? null : CloneAgentToolScope(stepScope);
+
+        if (stepScope == null)
+            return CloneAgentToolScope(roleScope);
+
+        var stepAllowed = new HashSet<string>(stepScope.AllowedToolNames, StringComparer.OrdinalIgnoreCase);
+        return new WorkflowAgentToolScopeDefinition
+        {
+            AllowedToolNames = roleScope.AllowedToolNames
+                .Where(stepAllowed.Contains)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+        };
+    }
+
+    private static WorkflowAgentToolScopeDefinition CloneAgentToolScope(WorkflowAgentToolScopeDefinition scope) =>
+        new()
+        {
+            AllowedToolNames = scope.AllowedToolNames
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+        };
+
+    private void ApplyInteractionPresentation(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        ApplyDeliveryTargetId(request, presentation, state);
+        ApplyInteractionSpec(request, presentation, state);
+        ApplyInteractionTemplateSpec(request, presentation, state);
+    }
+
+    private void ApplyDeliveryTargetId(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        if (string.IsNullOrWhiteSpace(presentation?.DeliveryTargetId))
+            return;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).DeliveryTargetId =
+            _expressionEvaluator.Evaluate(presentation.DeliveryTargetId.Trim(), state.Variables);
+    }
+
+    private void ApplyInteractionSpec(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        if (!StepPresentation.HasInteractionSpec(presentation?.InteractionSpec))
+            return;
+
+        var spec = presentation!.InteractionSpec!.Clone();
+        spec.Title = _expressionEvaluator.Evaluate(spec.Title, state.Variables);
+        spec.Body = _expressionEvaluator.Evaluate(spec.Body, state.Variables);
+        EvaluateActions(spec.Actions, state);
+        EvaluateFields(spec.Fields, state);
+        EvaluateCards(spec.Cards, state);
+        (request.StepParameters ??= new WorkflowStepParameters()).InteractionSpec = spec;
+    }
+
+    private void ApplyInteractionTemplateSpec(
+        StepRequestEvent request,
+        StepPresentation? presentation,
+        WorkflowExecutionKernelState state)
+    {
+        if (!StepPresentation.HasInteractionTemplateSpec(presentation?.InteractionTemplateSpec))
+            return;
+
+        var spec = presentation!.InteractionTemplateSpec!.Clone();
+        spec.TemplateId = _expressionEvaluator.Evaluate(spec.TemplateId, state.Variables);
+        var evaluatedVariables = spec.TemplateVariable
+            .Select(pair => new KeyValuePair<string, string>(
+                pair.Key,
+                _expressionEvaluator.Evaluate(pair.Value, state.Variables)))
+            .ToArray();
+        spec.TemplateVariable.Clear();
+        foreach (var (key, value) in evaluatedVariables)
+            spec.TemplateVariable[key] = value;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).InteractionTemplateSpec = spec;
+    }
+
+    private void EvaluateActions(
+        IEnumerable<Aevatar.Foundation.Abstractions.Interactions.InteractionAction> actions,
+        WorkflowExecutionKernelState state)
+    {
+        foreach (var action in actions)
+        {
+            action.Label = _expressionEvaluator.Evaluate(action.Label, state.Variables);
+            action.Value = _expressionEvaluator.Evaluate(action.Value, state.Variables);
+            action.Placeholder = _expressionEvaluator.Evaluate(action.Placeholder, state.Variables);
+            foreach (var option in action.Options)
+            {
+                option.Label = _expressionEvaluator.Evaluate(option.Label, state.Variables);
+                option.Value = _expressionEvaluator.Evaluate(option.Value, state.Variables);
+            }
+        }
+    }
+
+    private void EvaluateFields(
+        IEnumerable<Aevatar.Foundation.Abstractions.Interactions.InteractionField> fields,
+        WorkflowExecutionKernelState state)
+    {
+        foreach (var field in fields)
+        {
+            field.Title = _expressionEvaluator.Evaluate(field.Title, state.Variables);
+            field.Text = _expressionEvaluator.Evaluate(field.Text, state.Variables);
+        }
+    }
+
+    private void EvaluateCards(
+        IEnumerable<Aevatar.Foundation.Abstractions.Interactions.InteractionCard> cards,
+        WorkflowExecutionKernelState state)
+    {
+        foreach (var card in cards)
+        {
+            card.Title = _expressionEvaluator.Evaluate(card.Title, state.Variables);
+            card.Text = _expressionEvaluator.Evaluate(card.Text, state.Variables);
+            card.ImageUrl = _expressionEvaluator.Evaluate(card.ImageUrl, state.Variables);
+            EvaluateFields(card.Fields, state);
+            EvaluateActions(card.Actions, state);
+        }
     }
 
     private async Task ResumePendingCurrentStepDispatchAsync(
@@ -1048,11 +2037,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.RunId,
             state.CurrentStepId);
 
-        var request = BuildStepRequest(step, state.CurrentStepInput, state, ctx);
+        var request = BuildStepRequest(step, state.CurrentStepInput, state.CurrentStepInputFileRefs, state, ctx);
 
         // Restore the saved execution_id so stale-completion protection works after resume
         if (state.ExecutionIdsByStepId.TryGetValue(step.Id, out var savedExecutionId))
             request.ExecutionId = savedExecutionId;
+        request.IdempotencyKey = ResolveAndPersistStepIdempotency(step, state).IdempotencyKey;
 
         RuntimeCallbackLease? timeoutLease = null;
         var createdTimeoutLease = false;
@@ -1064,6 +2054,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 timeoutLease = await ScheduleStepTimeoutLeaseAsync(
                     state.CurrentStepTimeoutCallbackId,
                     step,
+                    ResolveStepTimeoutMs(step, ResolveRetryDispatchKind(state, step.Id)),
                     state.RunId,
                     ctx,
                     ct);
@@ -1081,7 +2072,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         {
             if (createdTimeoutLease && timeoutLease != null)
             {
-                await TryCancelLeaseAsync(timeoutLease, ctx, CancellationToken.None);
+                await WorkflowRuntimeCallbackLeaseSupport.TryCancelAsync(
+                    ctx,
+                    timeoutLease,
+                    "workflow_loop resumed timeout cleanup",
+                    CancellationToken.None);
                 state.TimeoutsByStepId.Remove(step.Id);
                 await SaveStateAsync(state, ctx, CancellationToken.None);
             }
@@ -1120,6 +2115,17 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                string.Equals(callbackState.CallbackId, pending.CallbackId, StringComparison.Ordinal);
     }
 
+    private static bool MatchesCompensationPhaseDeadline(
+        WorkflowExecutionKernelState state,
+        EventEnvelope envelope)
+    {
+        if (state.CompensationPhaseDeadlineLease != null)
+            return WorkflowRuntimeCallbackLeaseSupport.MatchesLease(envelope, state.CompensationPhaseDeadlineLease);
+
+        return RuntimeCallbackEnvelopeStateReader.TryRead(envelope, out var callbackState) &&
+               string.Equals(callbackState.CallbackId, state.CompensationPhaseDeadlineCallbackId, StringComparison.Ordinal);
+    }
+
     private static string ResolveInboundEnvelopeId(IWorkflowExecutionContext ctx) =>
         string.IsNullOrWhiteSpace(ctx.InboundEnvelope?.Id)
             ? Guid.NewGuid().ToString("N")
@@ -1130,5 +2136,20 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
 
     private static string BuildStepRetryBackoffCallbackId(string runId, string stepId, string originEnvelopeId) =>
         RuntimeCallbackKeyComposer.BuildCallbackId("workflow-step-retry-backoff", runId, stepId, originEnvelopeId);
+
+    private static string BuildCompensationPhaseDeadlineCallbackId(string runId, string originEnvelopeId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId("workflow-compensation-phase-deadline", runId, originEnvelopeId);
+
+    private static int ResolveStepTimeoutMs(StepDefinition step, WorkflowStepDispatchKind dispatchKind) =>
+        dispatchKind == WorkflowStepDispatchKind.Compensation
+            ? step.TimeoutMs is > 0 ? step.TimeoutMs.Value : DefaultCompensationTimeoutMs
+            : step.TimeoutMs is > 0 ? step.TimeoutMs.Value : 0;
+
+    private static WorkflowStepDispatchKind ResolveRetryDispatchKind(
+        WorkflowExecutionKernelState state,
+        string stepId) =>
+        state.CompensationExecutionIdsByStepId.ContainsKey(stepId)
+            ? WorkflowStepDispatchKind.Compensation
+            : WorkflowStepDispatchKind.Forward;
 
 }

@@ -1,10 +1,14 @@
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -14,7 +18,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldDeliverSuspension_WhenDeliveryTargetIsPresent()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -31,6 +37,11 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     Content = "Please review the summary.",
                     DeliveryTargetId = "agent-delivery-1",
                     TimeoutSeconds = 90,
+                    Interaction = new InteractionSpec
+                    {
+                        Title = "Typed review",
+                        Body = "Approve the summary",
+                    },
                     VariableName = "approval_note",
                     Secure = true,
                     RedactedOutput = "[captured]",
@@ -55,6 +66,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.request.SuspensionType.Should().Be("human_approval");
         call.request.Content.Should().Be("Please review the summary.");
         call.request.Options.Should().Equal("approve", "reject");
+        call.request.InteractionSpec.Should().NotBeNull();
+        call.request.InteractionSpec!.Title.Should().Be("Typed review");
+        call.request.InteractionSpec.Body.Should().Be("Approve the summary");
         call.request.TimeoutSeconds.Should().Be(90);
         call.request.Annotations.Should().ContainKey("source").WhoseValue.Should().Be("workflow-test");
         call.request.Annotations.Should().ContainKey("variable").WhoseValue.Should().Be("approval_note");
@@ -64,10 +78,97 @@ public sealed class WorkflowHumanInteractionProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldDerivePromptAndOptionsFromTypedInteraction()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-human-typed-1",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+                Payload = Any.Pack(new WorkflowSuspendedEvent
+                {
+                    RunId = "run-typed",
+                    StepId = "approval-typed",
+                    SuspensionType = "human_approval",
+                    DeliveryTargetId = "agent-delivery-typed",
+                    Interaction = new InteractionSpec
+                    {
+                        Title = "Typed approval",
+                        Body = "Review typed payload",
+                        Actions =
+                        {
+                            new InteractionAction
+                            {
+                                Kind = InteractionActionKind.FormSubmit,
+                                ActionId = "approve",
+                                Label = "Approve",
+                            },
+                            new InteractionAction
+                            {
+                                Kind = InteractionActionKind.FormSubmit,
+                                ActionId = "reject",
+                                Label = "Reject",
+                            },
+                        },
+                    },
+                }),
+            },
+            CancellationToken.None);
+
+        port.Calls.Should().ContainSingle();
+        var request = port.Calls[0].request;
+        request.Prompt.Should().Be("Review typed payload");
+        request.Options.Should().Equal("approve", "reject");
+        request.InteractionSpec.Should().NotBeNull();
+        request.InteractionSpec!.Actions.Select(action => action.ActionId)
+            .Should().Equal("approve", "reject");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldDeliverSuspension_FromCommittedStatePublication()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            BuildCommittedStateEnvelope(
+                "outer-human-committed",
+                "evt-human-committed",
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-committed",
+                    StepId = "approval-committed",
+                    SuspensionType = "human_approval",
+                    Prompt = "Approve committed event?",
+                    DeliveryTargetId = "agent-delivery-committed",
+                    TimeoutSeconds = 120,
+                }),
+            CancellationToken.None);
+
+        port.Calls.Should().ContainSingle();
+        var call = port.Calls[0];
+        call.deliveryTargetId.Should().Be("agent-delivery-committed");
+        call.request.RunId.Should().Be("run-committed");
+        call.request.StepId.Should().Be("approval-committed");
+        call.request.Options.Should().Equal("approve", "reject");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldIgnoreLegacySecureInputMetadataReservedKeys()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -107,7 +208,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldIgnoreSuspension_WhenDeliveryTargetMissing()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -132,7 +235,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldNotDeliverActionableRequest_ForToolApprovalSuspension()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -152,7 +257,6 @@ public sealed class WorkflowHumanInteractionProjectorTests
                         ToolName = "dangerous_tool",
                         ToolCallId = "call-tool",
                         ApprovalRequestId = "approval-tool",
-                        ArgumentsJson = "{}",
                     },
                 }),
             },
@@ -165,7 +269,9 @@ public sealed class WorkflowHumanInteractionProjectorTests
     public async Task ProjectAsync_ShouldIgnoreNonProjectionRoute()
     {
         var port = new RecordingHumanInteractionPort();
-        var projector = new WorkflowHumanInteractionProjector(port);
+        var projector = new WorkflowHumanInteractionProjector(
+            port,
+            NullLogger<WorkflowHumanInteractionProjector>.Instance);
 
         await projector.ProjectAsync(
             BuildContext(),
@@ -209,6 +315,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     Feedback = "Need stronger CTA",
                     DeliveryTargetId = "agent-delivery-4",
                     ResolvedContent = "Draft needs stronger CTA",
+                    ResolutionSource = WorkflowHumanApprovalResolutionSource.Timeout,
                 }),
             },
             CancellationToken.None);
@@ -224,6 +331,37 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.resolution.EditedContent.Should().Be("Edited but rejected");
         call.resolution.Feedback.Should().Be("Need stronger CTA");
         call.resolution.ResolvedContent.Should().Be("Draft needs stronger CTA");
+        call.resolution.TimedOut.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ApprovalResolutionProjector_ShouldDeliverResolution_FromCommittedStatePublication()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanApprovalResolutionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            BuildCommittedStateEnvelope(
+                "outer-human-resolution-committed",
+                "evt-human-resolution-committed",
+                new WorkflowHumanApprovalResolvedEvent
+                {
+                    RunId = "run-resolution-committed",
+                    StepId = "approval-resolution-committed",
+                    Approved = true,
+                    DeliveryTargetId = "agent-delivery-resolution-committed",
+                    ResolvedContent = "Approved content",
+                }),
+            CancellationToken.None);
+
+        port.ResolutionCalls.Should().ContainSingle();
+        var call = port.ResolutionCalls[0];
+        call.deliveryTargetId.Should().Be("agent-delivery-resolution-committed");
+        call.resolution.RunId.Should().Be("run-resolution-committed");
+        call.resolution.StepId.Should().Be("approval-resolution-committed");
+        call.resolution.Approved.Should().BeTrue();
+        call.resolution.ResolvedContent.Should().Be("Approved content");
     }
 
     [Fact]
@@ -255,6 +393,24 @@ public sealed class WorkflowHumanInteractionProjectorTests
         SessionId = "cmd-1",
         RootActorId = "workflow-actor-1",
         ProjectionKind = "workflow-execution-session",
+    };
+
+    private static EventEnvelope BuildCommittedStateEnvelope(
+        string envelopeId,
+        string eventId,
+        IMessage payload) => new()
+    {
+        Id = envelopeId,
+        Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-interaction-test"),
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = eventId,
+                Version = 12,
+                EventData = Any.Pack(payload),
+            },
+        }),
     };
 
     private sealed class RecordingHumanInteractionPort : IHumanInteractionPort

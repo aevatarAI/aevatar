@@ -4,6 +4,7 @@ using System.Text;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -43,12 +44,6 @@ public sealed class LarkCoverageTests
         reactionsDeleteTool.Description.Should().Contain("Delete a specific Lark message reaction");
         reactionsDeleteTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
 
-        var searchTool = new LarkMessagesSearchTool(client);
-        searchTool.Name.Should().Be("lark_messages_search");
-        searchTool.Description.Should().Contain("Search Lark messages");
-        searchTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
-        searchTool.IsReadOnly.Should().BeTrue();
-
         var batchGetTool = new LarkMessagesBatchGetTool(client);
         batchGetTool.Name.Should().Be("lark_messages_batch_get");
         batchGetTool.Description.Should().Contain("Batch fetch full Lark message details");
@@ -63,19 +58,34 @@ public sealed class LarkCoverageTests
 
         var approvalsListTool = new LarkApprovalsListTool(client);
         approvalsListTool.Name.Should().Be("lark_approvals_list");
-        approvalsListTool.Description.Should().Contain("List approval tasks");
+        approvalsListTool.Description.Should().Contain("List the Lark approval tasks of the current operator");
         approvalsListTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         approvalsListTool.IsReadOnly.Should().BeTrue();
+
+        var approvalsGetTool = new LarkApprovalsGetTool(client);
+        approvalsGetTool.Name.Should().Be("lark_approvals_get");
+        approvalsGetTool.Description.Should().Contain("Read one Lark approval instance");
+        approvalsGetTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        approvalsGetTool.IsReadOnly.Should().BeTrue();
 
         var approvalsActTool = new LarkApprovalsActTool(client);
         approvalsActTool.Name.Should().Be("lark_approvals_act");
         approvalsActTool.Description.Should().Contain("Act on a Lark approval task");
         approvalsActTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+        // approve/reject/transfer mutate someone's approval flow irreversibly through an
+        // org-shared tenant credential — the middleware must always pause for human approval.
+        approvalsActTool.IsDestructive.Should().BeTrue();
+        approvalsActTool.RequiresApproval("{}").Should().BeTrue();
 
         var sheetsTool = new LarkSheetsAppendRowsTool(client);
         sheetsTool.Name.Should().Be("lark_sheets_append_rows");
         sheetsTool.Description.Should().Contain("Append rows to a known Lark spreadsheet");
         sheetsTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+
+        var docxTool = new LarkDocxCreateTool(client);
+        docxTool.Name.Should().Be("lark_docx_create");
+        docxTool.Description.Should().Contain("Create a Lark cloud document");
+        docxTool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
     }
 
     [Fact]
@@ -89,6 +99,19 @@ public sealed class LarkCoverageTests
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LarkAgentToolSource_ShouldSkipDocxTool_WhenDisabled()
+    {
+        var source = new LarkAgentToolSource(
+            new LarkToolOptions { EnableDocxCreate = false },
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new StubLarkNyxClient());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().NotContain(tool => tool.Name == "lark_docx_create");
     }
 
     [Fact]
@@ -117,6 +140,9 @@ public sealed class LarkCoverageTests
         services.Should().ContainSingle(descriptor =>
             descriptor.ServiceType == typeof(IAgentToolSource) &&
             descriptor.ImplementationType == typeof(LarkAgentToolSource));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType.FullName != null &&
+            descriptor.ServiceType.FullName.Contains("WorkflowConnectedServiceFileSubmit", StringComparison.Ordinal));
 
         services.Single(descriptor => descriptor.ServiceType == typeof(LarkToolOptions))
             .ImplementationInstance.Should().BeOfType<LarkToolOptions>()
@@ -138,6 +164,29 @@ public sealed class LarkCoverageTests
 
         InvokeTryParseError("""{"code":0}""").Should().Be((false, string.Empty));
         InvokeTryParseError("not-json").Should().Be((true, "invalid_lark_response_json"));
+    }
+
+    [Fact]
+    public void LarkProxyResponseParser_ShouldHandleDocxAndPermissionShapes()
+    {
+        var parserType = typeof(LarkAgentToolSource).Assembly.GetType("Aevatar.AI.ToolProviders.Lark.LarkProxyResponseParser")!;
+        var parseDocx = parserType.GetMethod("ParseDocxCreateSuccess", BindingFlags.Public | BindingFlags.Static)!;
+        var parsePermission = parserType.GetMethod("ParseDrivePermissionSuccess", BindingFlags.Public | BindingFlags.Static)!;
+
+        var docxResult = parseDocx.Invoke(
+            null,
+            ["""{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}"""]);
+        docxResult.Should().NotBeNull();
+        docxResult!.GetType().GetProperty("DocumentToken")!.GetValue(docxResult).Should().Be("doccn_123");
+        docxResult.GetType().GetProperty("DocumentUrl")!.GetValue(docxResult).Should().Be("https://example.feishu.cn/docx/doccn_123");
+
+        var permissionResult = parsePermission.Invoke(
+            null,
+            ["""{"code":0,"data":{"link_share_entity":"tenant_readable","external_access":false,"share_url":"https://share.example/doc"}}"""]);
+        permissionResult.Should().NotBeNull();
+        permissionResult!.GetType().GetProperty("LinkShareEntity")!.GetValue(permissionResult).Should().Be("tenant_readable");
+        permissionResult.GetType().GetProperty("ExternalAccess")!.GetValue(permissionResult).Should().Be(false);
+        permissionResult.GetType().GetProperty("ShareUrl")!.GetValue(permissionResult).Should().Be("https://share.example/doc");
     }
 
     [Fact]
@@ -194,6 +243,7 @@ public sealed class LarkCoverageTests
             "token-123",
             new LarkApprovalTaskActionRequest(
                 "approve",
+                "approval-def-1",
                 "inst-1",
                 "task-1",
                 "lark-user-1",
@@ -205,31 +255,32 @@ public sealed class LarkCoverageTests
 
         handler.LastRequest!.RequestUri!.ToString()
             .Should()
-            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/pass");
+            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/approve");
+        handler.LastBody.Should().Contain("\"approval_code\":\"approval-def-1\"");
         handler.LastBody.Should().Contain("\"comment\":\"looks good\"");
         handler.LastBody.Should().Contain("\"form\":\"{\\u0022field\\u0022:\\u0022value\\u0022}\"");
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("reject", "inst-1", "task-1", "lark-user-1", null, null, null, null),
+            new LarkApprovalTaskActionRequest("reject", "approval-def-1", "inst-1", "task-1", "lark-user-1", null, null, null, null),
             CancellationToken.None);
 
         handler.LastRequest!.RequestUri!.ToString()
             .Should()
-            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/refuse");
+            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/reject");
 
         await client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("transfer", "inst-1", "task-1", "lark-user-1", null, null, "ou_target", null),
+            new LarkApprovalTaskActionRequest("transfer", "approval-def-1", "inst-1", "task-1", "lark-user-1", null, null, "ou_target", null),
             CancellationToken.None);
 
         handler.LastRequest!.RequestUri!.ToString()
             .Should()
-            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/forward");
+            .Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/approval/v4/tasks/transfer");
 
         var unsupported = () => client.ActOnApprovalTaskAsync(
             "token-123",
-            new LarkApprovalTaskActionRequest("escalate", "inst-1", "task-1", "lark-user-1", null, null, null, null),
+            new LarkApprovalTaskActionRequest("escalate", "approval-def-1", "inst-1", "task-1", "lark-user-1", null, null, null, null),
             CancellationToken.None);
 
         await unsupported.Should().ThrowAsync<InvalidOperationException>()
@@ -303,20 +354,23 @@ public sealed class LarkCoverageTests
             return Task.FromResult("""{"code":0,"data":{}}""");
         }
 
-        public Task<string> SearchMessagesAsync(string token, LarkMessageSearchRequest request, CancellationToken ct)
-        {
-            _ = token;
-            _ = request;
-            _ = ct;
-            return Task.FromResult("""{"code":0,"data":{"items":[],"count":0}}""");
-        }
-
         public Task<string> BatchGetMessagesAsync(string token, LarkMessagesBatchGetRequest request, CancellationToken ct)
         {
             _ = token;
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{"items":[]}}""");
+        }
+
+        public Task<LarkMessageResourceDownloadResult> DownloadMessageResourceAsync(
+            string token,
+            LarkMessageResourceDownloadRequest request,
+            CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult(new LarkMessageResourceDownloadResult(true, []));
         }
 
         public Task<string> SearchChatsAsync(string token, LarkChatSearchRequest request, CancellationToken ct)
@@ -343,12 +397,76 @@ public sealed class LarkCoverageTests
             return Task.FromResult("""{"code":0,"data":{"tasks":[],"count":0}}""");
         }
 
+        public Task<string> GetApprovalInstanceAsync(string token, LarkApprovalInstanceGetRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"instance_code":"inst_1","status":"1"}}""");
+        }
+
         public Task<string> ActOnApprovalTaskAsync(string token, LarkApprovalTaskActionRequest request, CancellationToken ct)
         {
             _ = token;
             _ = request;
             _ = ct;
             return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> CreateDocxDocumentAsync(string token, LarkDocxCreateRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"document":{"document_id":"doccn_123","url":"https://example.feishu.cn/docx/doccn_123"}}}""");
+        }
+
+        public Task<string> AppendDocxTextBlocksAsync(string token, LarkDocxAppendBlocksRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> SetDrivePermissionAsync(string token, LarkDrivePermissionRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{}}""");
+        }
+
+        public Task<string> CreateBitableAppAsync(string token, LarkBitableCreateRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"app":{"app_token":"bascn_default","url":"https://example.feishu.cn/base/bascn_default"}}}""");
+        }
+
+        public Task<string> GrantResourceMemberAsync(string token, LarkResourceMemberGrantRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"member":{"member_id":"ou_default","perm":"full_access"}}}""");
+        }
+
+        public Task<string> UploadDriveMediaAsync(string token, LarkDriveMediaUploadRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"file_token":"file_default"}}""");
+        }
+
+        public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct)
+        {
+            _ = token;
+            _ = request;
+            _ = ct;
+            return Task.FromResult("""{"code":0,"data":{"code":"approval_file_default"}}""");
         }
     }
 

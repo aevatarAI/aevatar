@@ -22,6 +22,7 @@ public sealed record NyxLarkProvisioningResult(
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
     string? NyxConversationRouteId = null,
+    string? NyxReplyCredentialRef = null,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
@@ -50,6 +51,7 @@ public sealed record NyxChannelBotProvisioningResult(
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
     string? NyxConversationRouteId = null,
+    string? NyxReplyCredentialRef = null,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
@@ -84,7 +86,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     private readonly ChannelRegistrationCommandFacade _commandFacade;
     private readonly ILogger<NyxLarkProvisioningService> _logger;
 
-    private sealed record RelayApiKeyCredentials(string Id);
     public NyxLarkProvisioningService(
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
@@ -114,6 +115,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             return Failure("missing_app_secret");
         if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
             return Failure("missing_webhook_base_url");
+        if (!NyxRelayCallbackUrl.IsSecureBaseUrl(request.WebhookBaseUrl))
+            return Failure("insecure_webhook_base_url");
         if (string.IsNullOrWhiteSpace(request.ScopeId))
             return Failure("missing_scope_id");
         if (string.IsNullOrWhiteSpace(_nyxOptions.BaseUrl))
@@ -121,42 +124,78 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
 
         var registrationId = Guid.NewGuid().ToString("N");
         var nyxBaseUrl = _nyxOptions.BaseUrl.TrimEnd('/');
-        var relayCallbackUrl = $"{request.WebhookBaseUrl.Trim().TrimEnd('/')}/api/webhooks/nyxid-relay";
+        var relayCallbackUrl = NyxRelayCallbackUrl.Build(request.WebhookBaseUrl);
         var label = string.IsNullOrWhiteSpace(request.Label)
             ? $"Aevatar Lark Bot {registrationId[..8]}"
             : request.Label.Trim();
-        var nyxProviderSlug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
+        var requestedProviderSlug = string.IsNullOrWhiteSpace(request.NyxProviderSlug)
             ? DefaultNyxProviderSlug
             : request.NyxProviderSlug.Trim();
 
         string? apiKeyId = null;
         string? channelBotId = null;
         string? routeId = null;
+        // No relay api-key secret is persisted (see below); the local mirror's reply-credential ref
+        // is always empty. Kept as a field on the command/result for proto compatibility only.
+        var replyCredentialRef = string.Empty;
         var localMirrorAccepted = false;
 
         try
         {
-            var relayApiKey = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
-            apiKeyId = relayApiKey.Id;
+            var relayApiKeyResponse = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
+            apiKeyId = NyxApiResponseHelper.ExtractRequiredApiKeyId(relayApiKeyResponse);
+            // aevatar does NOT persist the relay api-key secret. The relay reply path authenticates via
+            // the NyxID-issued reply token / api-lark-bot proxy, never a locally-stored full_key, and the
+            // mainnet host's secrets store is read-only — persisting it here was the original registration
+            // 502. NyxTelegramProvisioningService never persisted it either; the local mirror's
+            // NyxReplyCredentialRef is left empty (it is not used by the live relay reply path).
 
-            channelBotId = await RegisterChannelBotAsync(
-                request.AccessToken,
-                request.AppId,
-                request.AppSecret,
-                request.VerificationToken,
-                label,
-                ct);
+            // Re-bind support: a fresh bot creates cleanly on the first try. But re-registering the
+            // SAME Lark app hits NyxID's 409 already-exists (a stale channel-bot from the prior
+            // registration), which previously aborted the whole flow as a 502 in the /channels
+            // wizard. On that conflict, delete the stale channel-bot(s) for this app on the user's
+            // behalf and retry once — so a re-bind completes without manual NyxID cleanup.
+            try
+            {
+                channelBotId = await RegisterChannelBotAsync(
+                    request.AccessToken,
+                    request.AppId,
+                    request.AppSecret,
+                    request.VerificationToken,
+                    label,
+                    ct);
+            }
+            catch (InvalidOperationException ex) when (IndicatesChannelBotAlreadyExists(ex))
+            {
+                _logger.LogInformation(
+                    "Nyx channel-bot already exists for Lark app; replacing it and retrying registration: appId={AppId}",
+                    request.AppId);
+                await RemoveExistingLarkChannelBotsForAppAsync(request.AccessToken, request.AppId, ct);
+                channelBotId = await RegisterChannelBotAsync(
+                    request.AccessToken,
+                    request.AppId,
+                    request.AppSecret,
+                    request.VerificationToken,
+                    label,
+                    ct);
+            }
             routeId = await CreateDefaultRouteAsync(request.AccessToken, channelBotId, apiKeyId, ct);
 
-            // Best-effort: connect the api-lark-bot NyxID proxy service so typing
-            // reactions can call the Lark API. Intentionally NOT in the rollback chain
-            // because the service is reusable across registrations; a 409 on re-provision
-            // is the expected idempotent case, not an orphan to clean up.
-            await TryConnectLarkBotProxyServiceAsync(
+            // Connect the api-lark-bot NyxID proxy service (so card/typing calls can reach the Lark
+            // API) and capture the per-connection slug NyxID assigned. When the user already has an
+            // `api-lark-bot` connection, NyxID auto-numbers this one (api-lark-bot-2/-3...); storing
+            // that returned slug — not the generic default — is what makes a later reply proxy
+            // through THIS bot's own Lark app instead of always the first one (multi-bot cross-talk).
+            // Intentionally NOT in the rollback chain: the connection is reusable across
+            // registrations and a failure (incl. 409) is non-fatal — it just falls back to the
+            // requested slug, degrading only this bot's outbound app binding, not the relay path.
+            var connectedProviderSlug = await ConnectLarkBotProxyServiceAsync(
                 request.AccessToken,
+                requestedProviderSlug,
                 request.AppId.Trim(),
                 request.AppSecret.Trim(),
                 ct);
+            var nyxProviderSlug = connectedProviderSlug ?? requestedProviderSlug;
 
             var webhookUrl = $"{nyxBaseUrl}/api/v1/webhooks/channel/lark/{Uri.EscapeDataString(channelBotId)}";
             await RegisterLocalMirrorAsync(
@@ -167,6 +206,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 apiKeyId,
                 channelBotId,
                 routeId,
+                replyCredentialRef,
                 ct);
             localMirrorAccepted = true;
 
@@ -177,6 +217,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 NyxChannelBotId: channelBotId,
                 NyxAgentApiKeyId: apiKeyId,
                 NyxConversationRouteId: routeId,
+                NyxReplyCredentialRef: replyCredentialRef,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
                 Note: "Provisioning completed in Nyx and the local mirror command was accepted. Configure the Lark developer console webhook URL to point at Nyx; local read model visibility is asynchronous.");
@@ -228,13 +269,13 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         return ToGenericResult(result);
     }
 
-    private async Task<RelayApiKeyCredentials> CreateRelayApiKeyAsync(
+    private async Task<string> CreateRelayApiKeyAsync(
         string accessToken,
         string relayCallbackUrl,
         string registrationId,
         CancellationToken ct)
     {
-        var response = await _nyxClient.CreateApiKeyAsync(
+        return await _nyxClient.CreateApiKeyAsync(
             accessToken,
             JsonSerializer.Serialize(new
             {
@@ -244,8 +285,76 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 callback_url = relayCallbackUrl,
             }),
             ct);
+    }
 
-        return new RelayApiKeyCredentials(NyxApiResponseHelper.ExtractRequiredApiKeyId(response));
+    /// <summary>
+    /// True when a channel-bot creation failure is NyxID's "already exists" conflict for this Lark
+    /// app (HTTP 409), i.e. the re-bind case that should delete the stale bot and retry — not a
+    /// credential/transport error, which must surface as-is. The structured failure string carries
+    /// <c>nyx_status=409</c> (see <see cref="NyxApiResponseHelper.ExtractErrorDetail"/>).
+    /// </summary>
+    private static bool IndicatesChannelBotAlreadyExists(InvalidOperationException ex) =>
+        ex.Message.Contains("nyx_status=409", StringComparison.Ordinal) ||
+        ex.Message.Contains("already", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Best-effort removal of any existing Nyx channel-bot bound to the SAME Lark app before a
+    /// (re-)registration creates a fresh one. NyxID rejects a second channel-bot for an app that
+    /// already has one with 409 already-exists; deleting the stale bot first is what lets a user
+    /// re-bind the same bot from /channels without manual NyxID cleanup. The list response carries
+    /// only <c>id</c> + <c>platform</c>, not the per-app <c>platform_bot_id</c>, so each Lark bot's
+    /// detail is fetched to confirm it belongs to THIS app before deleting — a bot for a different
+    /// Lark app is never touched. Failures are logged and swallowed: a bot that could not be removed
+    /// simply resurfaces as the create 409 it would have produced anyway, so this never makes a fresh
+    /// registration worse.
+    /// </summary>
+    private async Task RemoveExistingLarkChannelBotsForAppAsync(string accessToken, string appId, CancellationToken ct)
+    {
+        var normalizedAppId = appId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedAppId))
+            return;
+
+        string listResponse;
+        try
+        {
+            listResponse = await _nyxClient.ListChannelBotsAsync(accessToken, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not list Nyx channel-bots before re-registration: appId={AppId}", normalizedAppId);
+            return;
+        }
+
+        foreach (var candidateBotId in NyxApiResponseHelper.ExtractLarkChannelBotIds(listResponse))
+        {
+            string detailResponse;
+            try
+            {
+                detailResponse = await _nyxClient.GetChannelBotAsync(accessToken, candidateBotId, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Could not read Nyx channel-bot detail while resolving the conflicting Lark app bot: botId={BotId}, appId={AppId}",
+                    candidateBotId,
+                    normalizedAppId);
+                continue;
+            }
+
+            if (!NyxApiResponseHelper.ChannelBotDetailMatchesApp(detailResponse, normalizedAppId))
+                continue;
+
+            _logger.LogInformation(
+                "Replacing existing Nyx channel-bot for Lark app before re-registration: botId={BotId}, appId={AppId}",
+                candidateBotId,
+                normalizedAppId);
+            await NyxApiResponseHelper.TryRollbackAsync(
+                () => _nyxClient.DeleteChannelBotAsync(accessToken, candidateBotId, ct),
+                "channel_bot_replace",
+                candidateBotId,
+                _logger);
+        }
     }
 
     private async Task<string> RegisterChannelBotAsync(
@@ -295,8 +404,17 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         return NyxApiResponseHelper.ExtractRequiredId(response, "channel_route_id");
     }
 
-    private async Task TryConnectLarkBotProxyServiceAsync(
+    /// <summary>
+    /// Connects the requested per-app NyxID proxy service and returns the slug NyxID assigned to
+    /// THIS connection (e.g. <c>api-lark-bot-3</c> when the base slug is already taken).
+    /// That slug is stored as the registration's provider slug so every reply for this bot proxies
+    /// through its own Lark app. Best-effort: any failure (incl. a 409 already-exists) returns
+    /// <c>null</c> so the caller falls back to the requested slug - the relay path still works,
+    /// only this bot's outbound app binding degrades.
+    /// </summary>
+    private async Task<string?> ConnectLarkBotProxyServiceAsync(
         string accessToken,
+        string providerSlug,
         string appId,
         string appSecret,
         CancellationToken ct)
@@ -304,18 +422,18 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         try
         {
             var credential = JsonSerializer.Serialize(new { app_id = appId, app_secret = appSecret });
-            var body = JsonSerializer.Serialize(new { service_slug = DefaultNyxProviderSlug, credential, label = $"Lark App {appId}" });
-            await _nyxClient.CreateServiceAsync(accessToken, body, ct);
+            var body = JsonSerializer.Serialize(new { service_slug = providerSlug, credential, label = $"Lark App {appId}" });
+            var response = await _nyxClient.CreateServiceAsync(accessToken, body, ct);
+            return NyxApiResponseHelper.ExtractOptionalProxyUrlSlug(response);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Best-effort: 409 conflict (service already exists) or any other error is
-            // non-fatal. The core relay path works without this; only typing reactions
-            // are degraded when the proxy service is not connected.
             _logger.LogWarning(
                 ex,
-                "Best-effort api-lark-bot proxy service connection failed (non-fatal). appId={AppId}",
-                appId);
+                "Best-effort Lark bot proxy service connection failed (non-fatal). appId={AppId}, providerSlug={ProviderSlug}",
+                appId,
+                providerSlug);
+            return null;
         }
     }
 
@@ -327,6 +445,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string apiKeyId,
         string channelBotId,
         string routeId,
+        string replyCredentialRef,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -342,6 +461,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             NyxAgentApiKeyId = apiKeyId,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
+            NyxReplyCredentialRef = replyCredentialRef,
         };
 
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
@@ -368,6 +488,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             NyxChannelBotId: result.NyxChannelBotId,
             NyxAgentApiKeyId: result.NyxAgentApiKeyId,
             NyxConversationRouteId: result.NyxConversationRouteId,
+            NyxReplyCredentialRef: result.NyxReplyCredentialRef,
             RelayCallbackUrl: result.RelayCallbackUrl,
             WebhookUrl: result.WebhookUrl,
             Error: result.Error,

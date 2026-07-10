@@ -25,7 +25,9 @@ public static class AgentToolRequestContext
     public static string? ResponseId => s_context.Value?.Caller.ResponseId;
     public static string? RequestId => s_context.Value?.Request.RequestId;
     public static string? CallId => s_context.Value?.Request.CallId;
+    public static string? IdempotencyKey => s_context.Value?.Request.IdempotencyKey;
     public static string? SenderBindingId => s_context.Value?.SenderBinding.BindingId;
+    public static string? SenderNyxUserId => s_context.Value?.SenderBinding.NyxUserId;
     public static string? ModelOverride => s_context.Value?.Routing.ModelOverride;
     public static string? NyxIdRoutePreference => s_context.Value?.Routing.NyxIdRoutePreference;
     public static int? MaxToolRoundsOverride => s_context.Value?.Routing.MaxToolRoundsOverride;
@@ -35,6 +37,9 @@ public static class AgentToolRequestContext
     public static string? ChannelRegistrationScopeId => s_context.Value?.Channel.RegistrationScopeId;
     public static string? ChannelMessageId => s_context.Value?.Channel.MessageId;
     public static string? ChannelPlatformMessageId => s_context.Value?.Channel.PlatformMessageId;
+    public static string? ChannelDeliveryTargetId => s_context.Value?.Channel.DeliveryTargetId;
+    public static AgentToolVisibilityScope ToolVisibility =>
+        s_context.Value?.ToolVisibility ?? AgentToolVisibilityScope.Unrestricted;
 
     public static string? TryGetExternalMetadata(string key)
     {

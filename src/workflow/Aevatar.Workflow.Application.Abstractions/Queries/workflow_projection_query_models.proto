@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.Workflow.Application.Abstractions.Queries";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
+import "workflow_execution_messages.proto";
 
 message WorkflowActorSnapshot {
   string actor_id = 1;
@@ -22,6 +23,30 @@ message WorkflowActorSnapshot {
   int32 requested_steps = 12;
   int32 completed_steps = 13;
   int32 role_reply_count = 14;
+  repeated WorkflowRunFileRef input_file_refs = 15;
+  aevatar.workflow.WorkflowSagaStatus saga_status = 16;
+  string dead_letter_failed_compensation_step_id = 17;
+  int32 dead_letter_remaining_uncompensated = 18;
+  string dead_letter_error = 19;
+  google.protobuf.Timestamp started_at_utc = 20;
+  string scope_id = 21;
+  string run_origin = 22;
+}
+
+message WorkflowRunFileRef {
+  string file_id = 1;
+  string artifact_id = 2;
+  int32 source_kind_value = 3;
+  string source_message_id = 4;
+  string source_resource_key = 5;
+  string file_name = 6;
+  string media_type = 7;
+  int64 size_bytes = 8;
+  string sha256 = 9;
+  int64 created_at_unix_ms = 10;
+  int64 expires_at_unix_ms = 11;
+  string owner_run_id = 12;
+  string owner_scope_id = 13;
 }
 
 message WorkflowActorProjectionState {

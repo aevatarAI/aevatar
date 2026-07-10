@@ -3,11 +3,21 @@ import {
   type Edge,
   type Node,
 } from '@xyflow/react';
+import { AGUIEventType } from '@aevatar-react-sdk/types';
+import type { RuntimeEvent } from "@/shared/agui/runtimeEventSemantics";
 import type { StudioGraphEdgeData, StudioGraphNodeData } from './graph';
-import type { StudioExecutionDetail } from './models';
+import type { StudioExecutionDetail, StudioExecutionFrame } from './models';
 import { t } from "@/shared/i18n/messages";
 
 export type ExecutionLogItem = {
+  readonly category?:
+    | 'lifecycle'
+    | 'step'
+    | 'output'
+    | 'usage'
+    | 'snapshot'
+    | 'raw'
+    | 'custom';
   readonly tone: 'started' | 'completed' | 'failed' | 'run' | 'pending';
   readonly title: string;
   readonly meta: string;
@@ -16,6 +26,9 @@ export type ExecutionLogItem = {
   readonly timestamp: string;
   readonly stepId: string | null;
   readonly interaction: ExecutionInteractionState | null;
+  readonly payloadText?: string;
+  readonly rawText?: string;
+  readonly eventType?: string;
 };
 
 export type StepExecutionState = {
@@ -48,6 +61,140 @@ export type ExecutionTrace = {
   readonly latestStepId: string | null;
   readonly defaultLogIndex: number | null;
 };
+
+export type ExecutionLogStatus =
+  | 'waiting'
+  | 'running'
+  | 'success'
+  | 'error'
+  | 'recorded';
+
+function readRuntimeEventString(
+  event: RuntimeEvent,
+  ...keys: string[]
+): string {
+  const record = event as unknown as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+export function readRuntimeEventTimestamp(event: RuntimeEvent): number {
+  const value = (event as unknown as { timestamp?: unknown }).timestamp;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Date.now();
+}
+
+export function formatRuntimeEventTimestamp(event: RuntimeEvent): string {
+  const date = new Date(readRuntimeEventTimestamp(event));
+  return Number.isFinite(date.getTime())
+    ? date.toISOString()
+    : new Date().toISOString();
+}
+
+export function serializeRuntimeEventFrame(event: RuntimeEvent): string {
+  const record = event as unknown as Record<string, unknown>;
+  const timestamp = readRuntimeEventTimestamp(event);
+
+  switch (event.type) {
+    case AGUIEventType.CUSTOM:
+      return JSON.stringify({
+        timestamp,
+        custom: {
+          name: readRuntimeEventString(event, 'name'),
+          payload: record.payload ?? record.value,
+        },
+      });
+    case AGUIEventType.RUN_STARTED:
+      return JSON.stringify({
+        timestamp,
+        runStarted: {
+          actorId: readRuntimeEventString(event, 'actorId', 'threadId'),
+          commandId: readRuntimeEventString(event, 'commandId', 'command_id'),
+          correlationId: readRuntimeEventString(
+            event,
+            'correlationId',
+            'correlation_id',
+          ),
+          runId: readRuntimeEventString(event, 'runId'),
+          threadId: readRuntimeEventString(event, 'threadId', 'actorId'),
+        },
+      });
+    case AGUIEventType.RUN_FINISHED:
+      return JSON.stringify({
+        timestamp,
+        runFinished: {
+          commandId: readRuntimeEventString(event, 'commandId', 'command_id'),
+          correlationId: readRuntimeEventString(
+            event,
+            'correlationId',
+            'correlation_id',
+          ),
+          result: record.result,
+          runId: readRuntimeEventString(event, 'runId'),
+          threadId: readRuntimeEventString(event, 'threadId', 'actorId'),
+        },
+      });
+    case AGUIEventType.RUN_ERROR:
+      return JSON.stringify({
+        timestamp,
+        runError: {
+          code: readRuntimeEventString(event, 'code', 'errorCode', 'error_code'),
+          commandId: readRuntimeEventString(event, 'commandId', 'command_id'),
+          correlationId: readRuntimeEventString(
+            event,
+            'correlationId',
+            'correlation_id',
+          ),
+          message: readRuntimeEventString(event, 'message'),
+          runId: readRuntimeEventString(event, 'runId'),
+        },
+      });
+    case AGUIEventType.STEP_STARTED:
+      return JSON.stringify({
+        timestamp,
+        stepStarted: {
+          stepName: readRuntimeEventString(event, 'stepName'),
+        },
+      });
+    case AGUIEventType.STEP_FINISHED:
+      return JSON.stringify({
+        timestamp,
+        stepFinished: {
+          stepName: readRuntimeEventString(event, 'stepName'),
+        },
+      });
+    default:
+      return JSON.stringify({
+        ...record,
+        timestamp,
+      });
+  }
+}
+
+export function createStudioExecutionFrame(
+  event: RuntimeEvent,
+): StudioExecutionFrame {
+  return {
+    payload: serializeRuntimeEventFrame(event),
+    receivedAtUtc: formatRuntimeEventTimestamp(event),
+  };
+}
 
 function formatParameterValue(value: unknown): string {
   if (value === null || value === undefined) {
@@ -102,6 +249,57 @@ function safeJsonParse(value: string): Record<string, unknown> | null {
   }
 }
 
+function asExecutionRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readRecordString(
+  record: Record<string, unknown> | null | undefined,
+  ...keys: string[]
+): string {
+  if (!record) {
+    return '';
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return '';
+}
+
+function readRecordNumber(
+  record: Record<string, unknown> | null | undefined,
+  ...keys: string[]
+): number | null {
+  if (!record) {
+    return null;
+  }
+
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return null;
+}
+
 function buildExecutionLogText(value: unknown): string {
   return formatParameterValue(value).trim();
 }
@@ -109,6 +307,113 @@ function buildExecutionLogText(value: unknown): string {
 function buildExecutionLogPreview(value: unknown): string {
   const text = buildExecutionLogText(value);
   return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
+
+function buildExecutionLogPreviewFromText(value: string): string {
+  const text = value.trim();
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
+
+function readCustomFrame(parsed: Record<string, unknown>): {
+  name: string;
+  payload: unknown;
+} {
+  const custom = asExecutionRecord(parsed.custom);
+  if (custom) {
+    return {
+      name: String(custom.name || '').trim(),
+      payload: custom.payload ?? custom.value ?? null,
+    };
+  }
+
+  if (String(parsed.type || '').trim().toUpperCase() === 'CUSTOM') {
+    return {
+      name: String(parsed.name || '').trim(),
+      payload: parsed.payload ?? parsed.value ?? null,
+    };
+  }
+
+  return {
+    name: '',
+    payload: null,
+  };
+}
+
+function buildUsageMeta(payload: unknown): string {
+  const record = asExecutionRecord(payload);
+  if (!record) {
+    return 'usage';
+  }
+
+  const model = readRecordString(record, 'model', 'modelName', 'model_name');
+  const promptTokens = readRecordNumber(record, 'promptTokens', 'prompt_tokens');
+  const completionTokens = readRecordNumber(
+    record,
+    'completionTokens',
+    'completion_tokens',
+  );
+  const totalTokens = readRecordNumber(record, 'totalTokens', 'total_tokens');
+  return [
+    model,
+    promptTokens !== null ? `prompt ${promptTokens}` : null,
+    completionTokens !== null ? `completion ${completionTokens}` : null,
+    totalTokens !== null ? `total ${totalTokens}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ') || 'usage';
+}
+
+function buildEvidencePreview(payload: unknown): string {
+  const record = asExecutionRecord(payload);
+  if (!record) {
+    return buildExecutionLogPreview(payload);
+  }
+
+  const summary = [
+    readRecordString(record, 'evidenceId', 'evidence_id', 'id'),
+    readRecordString(record, 'source', 'sourceName', 'source_name'),
+    readRecordString(record, 'status'),
+    readRecordString(record, 'currentStepId', 'current_step_id', 'stepId'),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return summary || buildExecutionLogPreview(payload);
+}
+
+function readBusinessOutputText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  const record = asExecutionRecord(value);
+  if (!record) {
+    return '';
+  }
+
+  const directOutput = readRecordString(
+    record,
+    'output',
+    'Output',
+    'message',
+    'Message',
+    'text',
+    'Text',
+  );
+  if (directOutput) {
+    return directOutput;
+  }
+
+  const nestedResult = record.result ?? record.Result;
+  if (nestedResult && nestedResult !== value) {
+    return readBusinessOutputText(nestedResult);
+  }
+
+  return '';
+}
+
+function isRawObservedEventName(value: string): boolean {
+  return value === 'aevatar.raw.observed' || value === 'aevatar.observed.raw';
 }
 
 function normalizeExecutionInteractionKind(
@@ -131,7 +436,7 @@ function normalizeExecutionTimeout(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function getExecutionFocusStepId(
+export function getExecutionFocusStepId(
   trace: ExecutionTrace | null,
   activeLogIndex: number | null,
 ): string | null {
@@ -144,6 +449,40 @@ function getExecutionFocusStepId(
     : null;
 
   return activeLog?.stepId || trace.latestStepId || null;
+}
+
+export function normalizeExecutionLogStatus(
+  log: ExecutionLogItem | null | undefined,
+): ExecutionLogStatus {
+  switch (log?.tone) {
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'error';
+    case 'pending':
+      return 'waiting';
+    case 'run':
+    case 'started':
+    default:
+      return 'running';
+  }
+}
+
+export function findExecutionLogIndexForStep(
+  trace: ExecutionTrace | null,
+  stepId: string,
+): number | null {
+  if (!trace?.logs?.length || !stepId) {
+    return null;
+  }
+
+  for (let index = trace.logs.length - 1; index >= 0; index -= 1) {
+    if (trace.logs[index].stepId === stepId) {
+      return index;
+    }
+  }
+
+  return null;
 }
 
 export function formatDurationBetween(
@@ -221,13 +560,13 @@ export function buildExecutionTrace(
       continue;
     }
 
-    const custom = (parsed.custom as Record<string, unknown> | undefined) || {};
-    const customName = String(custom.name || '').trim();
-    const customPayload =
-      (custom.payload as Record<string, unknown> | null | undefined) || null;
+    const rawText = buildExecutionLogText(parsed);
+    const { name: customName, payload: customPayloadValue } =
+      readCustomFrame(parsed);
+    const customPayload = asExecutionRecord(customPayloadValue);
 
     if (customName === 'aevatar.step.request') {
-      const parsedStepStarted = (parsed.stepStarted as Record<string, unknown> | undefined) || {};
+      const parsedStepStarted = asExecutionRecord(parsed.stepStarted) || {};
       const stepId =
         String(customPayload?.stepId || parsedStepStarted.stepName || '').trim();
       if (!stepId) {
@@ -243,6 +582,7 @@ export function buildExecutionTrace(
       stepState.startedAt = timestamp;
       latestStepId = stepId;
       logs.push({
+        category: 'step',
         tone: 'started',
         title: t("shared.studio.execution.started", "{value1} started", { value1: stepId }),
         meta: [
@@ -256,6 +596,9 @@ export function buildExecutionTrace(
         timestamp,
         stepId,
         interaction: null,
+        payloadText: buildExecutionLogText(customPayloadValue),
+        rawText,
+        eventType: customName,
       });
       continue;
     }
@@ -291,6 +634,7 @@ export function buildExecutionTrace(
       };
 
       logs.push({
+        category: 'step',
         tone: 'pending',
         title:
           interactionKind === 'human_approval'
@@ -316,13 +660,16 @@ export function buildExecutionTrace(
         timestamp,
         stepId,
         interaction,
+        payloadText: buildExecutionLogText(customPayloadValue),
+        rawText,
+        eventType: customName,
       });
       continue;
     }
 
     if (customName === 'aevatar.step.completed') {
       const parsedStepFinished =
-        (parsed.stepFinished as Record<string, unknown> | undefined) || {};
+        asExecutionRecord(parsed.stepFinished) || {};
       const stepId =
         String(customPayload?.stepId || parsedStepFinished.stepName || '').trim();
       if (!stepId) {
@@ -344,6 +691,7 @@ export function buildExecutionTrace(
 
       latestStepId = stepId;
       logs.push({
+        category: 'step',
         tone: customPayload?.success === false ? 'failed' : 'completed',
         title: t("shared.studio.execution.copy", "{value1} {value2}", { value1: stepId, value2: customPayload?.success === false ? 'failed' : 'completed' }),
         meta: [
@@ -362,6 +710,9 @@ export function buildExecutionTrace(
         timestamp,
         stepId,
         interaction: null,
+        payloadText: buildExecutionLogText(customPayloadValue),
+        rawText,
+        eventType: customName,
       });
       continue;
     }
@@ -380,6 +731,7 @@ export function buildExecutionTrace(
       );
       const approved = customPayload?.approved !== false;
       logs.push({
+        category: 'step',
         tone: 'run',
         title:
           interactionKind === 'human_approval'
@@ -402,12 +754,16 @@ export function buildExecutionTrace(
         timestamp,
         stepId,
         interaction: null,
+        payloadText: buildExecutionLogText(customPayloadValue),
+        rawText,
+        eventType: customName,
       });
       continue;
     }
 
     if (customName === 'studio.run.stop.requested') {
       logs.push({
+        category: 'lifecycle',
         tone: 'pending',
         title: t("shared.studio.execution.stop.requested", "Stop requested"),
         meta: '',
@@ -416,12 +772,16 @@ export function buildExecutionTrace(
         timestamp,
         stepId: latestStepId,
         interaction: null,
+        payloadText: buildExecutionLogText(customPayloadValue),
+        rawText,
+        eventType: customName,
       });
       continue;
     }
 
     if (customName === 'aevatar.run.stopped') {
       logs.push({
+        category: 'lifecycle',
         tone: 'run',
         title: t("shared.studio.execution.run.stopped", "Run stopped"),
         meta: '',
@@ -430,14 +790,37 @@ export function buildExecutionTrace(
         timestamp,
         stepId: latestStepId,
         interaction: null,
+        payloadText: buildExecutionLogText(customPayloadValue),
+        rawText,
+        eventType: customName,
+      });
+      continue;
+    }
+
+    const runStarted = asExecutionRecord(parsed.runStarted);
+    if (runStarted) {
+      logs.push({
+        category: 'lifecycle',
+        tone: 'run',
+        title: t("shared.studio.execution.run.started", "Run started"),
+        meta: String(detail.workflowName || ''),
+        previewText: '',
+        clipboardText: buildExecutionLogText(runStarted),
+        timestamp,
+        stepId: null,
+        interaction: null,
+        payloadText: buildExecutionLogText(runStarted),
+        rawText,
+        eventType: 'RUN_STARTED',
       });
       continue;
     }
 
     const runError =
-      (parsed.runError as Record<string, unknown> | undefined) || null;
+      asExecutionRecord(parsed.runError) || null;
     if (runError?.message) {
       logs.push({
+        category: 'lifecycle',
         tone: 'failed',
         title: t("shared.studio.execution.run.failed", "Run failed"),
         meta: String(runError.code || ''),
@@ -446,14 +829,18 @@ export function buildExecutionTrace(
         timestamp,
         stepId: latestStepId,
         interaction: null,
+        payloadText: buildExecutionLogText(runError),
+        rawText,
+        eventType: 'RUN_ERROR',
       });
       continue;
     }
 
     if (parsed.runStopped) {
       const runStopped =
-        parsed.runStopped as Record<string, unknown> | undefined;
+        asExecutionRecord(parsed.runStopped);
       logs.push({
+        category: 'lifecycle',
         tone: 'run',
         title: t("shared.studio.execution.run.stopped.2", "Run stopped"),
         meta: '',
@@ -462,26 +849,47 @@ export function buildExecutionTrace(
         timestamp,
         stepId: latestStepId,
         interaction: null,
+        payloadText: buildExecutionLogText(runStopped),
+        rawText,
+        eventType: 'RUN_STOPPED',
       });
       continue;
     }
 
     if (parsed.runFinished) {
+      const runFinished = asExecutionRecord(parsed.runFinished);
+      const runResult = runFinished?.result ?? runFinished;
+      const businessOutput = readBusinessOutputText(runResult);
+      const outputText = businessOutput || buildExecutionLogText(runResult);
       logs.push({
+        category: 'output',
         tone: 'run',
         title: t("shared.studio.execution.run.finished", "Run finished"),
         meta: '',
-        previewText: '',
-        clipboardText: '',
+        previewText: buildExecutionLogPreview(outputText),
+        clipboardText: outputText,
         timestamp,
         stepId: latestStepId,
         interaction: null,
+        payloadText: businessOutput ? buildExecutionLogText(runResult) : '',
+        rawText,
+        eventType: 'RUN_FINISHED',
       });
       continue;
     }
 
     if (customName === 'aevatar.run.context') {
+      const existingRunStartIndex = logs.findIndex(
+        (log) =>
+          log.category === 'lifecycle' &&
+          log.title === t("shared.studio.execution.run.started", "Run started"),
+      );
+      if (existingRunStartIndex >= 0) {
+        continue;
+      }
+
       logs.push({
+        category: 'lifecycle',
         tone: 'run',
         title: t("shared.studio.execution.run.started", "Run started"),
         meta: String(customPayload?.workflowName || detail.workflowName || ''),
@@ -490,6 +898,86 @@ export function buildExecutionTrace(
         timestamp,
         stepId: null,
         interaction: null,
+        payloadText: buildExecutionLogText(customPayloadValue),
+        rawText,
+        eventType: customName,
+      });
+      continue;
+    }
+
+    const snapshot = parsed.stateSnapshot ?? parsed.snapshot;
+    if (snapshot) {
+      const payloadText = buildExecutionLogText(snapshot);
+      logs.push({
+        category: 'snapshot',
+        tone: 'run',
+        title: 'STATE_SNAPSHOT',
+        meta: 'runtime evidence',
+        previewText: buildExecutionLogPreviewFromText(payloadText),
+        clipboardText: payloadText,
+        timestamp,
+        stepId: null,
+        interaction: null,
+        payloadText,
+        rawText,
+        eventType: 'STATE_SNAPSHOT',
+      });
+      continue;
+    }
+
+    if (customName === 'aevatar.usage') {
+      const payloadText = buildExecutionLogText(customPayloadValue);
+      logs.push({
+        category: 'usage',
+        tone: 'run',
+        title: customName,
+        meta: buildUsageMeta(customPayloadValue),
+        previewText: buildExecutionLogPreviewFromText(payloadText),
+        clipboardText: payloadText,
+        timestamp,
+        stepId: null,
+        interaction: null,
+        payloadText,
+        rawText,
+        eventType: customName,
+      });
+      continue;
+    }
+
+    if (isRawObservedEventName(customName)) {
+      const payloadText = buildExecutionLogText(customPayloadValue);
+      logs.push({
+        category: 'raw',
+        tone: 'run',
+        title: customName,
+        meta: 'runtime observation',
+        previewText: buildEvidencePreview(customPayloadValue),
+        clipboardText: payloadText,
+        timestamp,
+        stepId: null,
+        interaction: null,
+        payloadText,
+        rawText,
+        eventType: customName,
+      });
+      continue;
+    }
+
+    if (customName) {
+      const payloadText = buildExecutionLogText(customPayloadValue);
+      logs.push({
+        category: 'custom',
+        tone: 'run',
+        title: customName,
+        meta: 'custom event',
+        previewText: buildExecutionLogPreviewFromText(payloadText),
+        clipboardText: payloadText,
+        timestamp,
+        stepId: null,
+        interaction: null,
+        payloadText,
+        rawText,
+        eventType: customName,
       });
     }
   }
@@ -534,7 +1022,6 @@ export function decorateNodesForExecution(
     const stepState = trace?.stepStates.get(node.data.stepId);
     return {
       ...node,
-      draggable: false,
       selectable: true,
       data: {
         ...node.data,
@@ -592,21 +1079,4 @@ export function decorateEdgesForExecution(
       zIndex: 4,
     };
   });
-}
-
-export function findExecutionLogIndexForStep(
-  trace: ExecutionTrace | null,
-  stepId: string,
-): number | null {
-  if (!trace?.logs?.length || !stepId) {
-    return null;
-  }
-
-  for (let index = trace.logs.length - 1; index >= 0; index -= 1) {
-    if (trace.logs[index].stepId === stepId) {
-      return index;
-    }
-  }
-
-  return null;
 }

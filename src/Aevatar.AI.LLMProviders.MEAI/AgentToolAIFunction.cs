@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.AI;
 
@@ -53,12 +54,51 @@ internal sealed class AgentToolAIFunction : AIFunction
 
         try
         {
-            using var doc = JsonDocument.Parse(schema);
-            return doc.RootElement.Clone();
+            var node = JsonNode.Parse(schema);
+            if (node is null)
+                return EmptyObjectSchema();
+
+            CoerceAdditionalPropertiesToBoolean(node);
+            return JsonSerializer.SerializeToElement(node);
         }
         catch
         {
             return EmptyObjectSchema();
+        }
+    }
+
+    // Microsoft.Extensions.AI's OpenAI adapter (OpenAIClientExtensions.ToOpenAIFunctionParameters)
+    // reads a tool parameter schema's `additionalProperties` as a System.Boolean. A caller-supplied
+    // tool (e.g. codex's) whose schema expresses a map type with `additionalProperties: { …schema… }`
+    // then throws "The JSON value could not be converted to System.Boolean" and fails the whole turn.
+    // OpenAI's tool schema only accepts a boolean there anyway, so recursively coerce any non-boolean
+    // `additionalProperties` to `false` (the strict-compatible value) before the schema reaches MEAI.
+    private static void CoerceAdditionalPropertiesToBoolean(JsonNode node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                if (obj.TryGetPropertyValue("additionalProperties", out var additionalProperties)
+                    && additionalProperties?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
+                {
+                    obj["additionalProperties"] = false;
+                }
+
+                foreach (var property in obj.ToArray())
+                {
+                    if (property.Value is not null)
+                        CoerceAdditionalPropertiesToBoolean(property.Value);
+                }
+
+                break;
+            case JsonArray array:
+                foreach (var item in array.ToArray())
+                {
+                    if (item is not null)
+                        CoerceAdditionalPropertiesToBoolean(item);
+                }
+
+                break;
         }
     }
 

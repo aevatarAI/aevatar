@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Core.Agreement;
 
 namespace Aevatar.Workflow.Core.Validation;
 
@@ -74,12 +75,145 @@ public static class WorkflowValidator
             if (!string.IsNullOrWhiteSpace(step.Next) && !stepIds.Contains(step.Next))
                 errors.Add($"步骤 '{step.Id}' 的 next 引用不存在的步骤 '{step.Next}'");
 
+            if (!string.IsNullOrWhiteSpace(step.Compensation) && step.Compensation == step.Id)
+                errors.Add($"步骤 '{step.Id}' 的 compensation 不能指向自身");
+
+            if (!string.IsNullOrWhiteSpace(step.Compensation) && !stepIds.Contains(step.Compensation))
+                errors.Add($"步骤 '{step.Id}' 的 compensation '{step.Compensation}' 引用不存在的步骤 '{step.Compensation}'");
+
             ValidateBranchTargets(step, stepIds, errors);
             ValidateTypeSpecificRules(step, availableWorkflowNames, knownCanonicalStepTypes, options, errors);
 
         }
 
+        DetectCompensationCycles(allSteps, stepIds, errors);
+        ValidateCompensationTargetsExcludedFromForwardPath(allSteps, errors);
+        ValidateNestedCompensationTargets(allSteps, errors);
+
         return errors;
+    }
+
+    private static void DetectCompensationCycles(
+        IReadOnlyList<StepDefinition> allSteps,
+        ISet<string> stepIds,
+        List<string> errors)
+    {
+        var stepsById = BuildFirstStepById(allSteps);
+        var inspectedStarts = new HashSet<string>(StringComparer.Ordinal);
+        var reportedCycles = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var step in allSteps)
+        {
+            if (string.IsNullOrWhiteSpace(step.Id) || !inspectedStarts.Add(step.Id))
+                continue;
+
+            var path = new List<string>();
+            var pathIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+            var currentId = step.Id;
+
+            while (stepsById.TryGetValue(currentId, out var currentStep))
+            {
+                pathIndexes[currentId] = path.Count;
+                path.Add(currentId);
+
+                var nextId = currentStep.Compensation;
+                if (string.IsNullOrWhiteSpace(nextId) ||
+                    !stepIds.Contains(nextId) ||
+                    nextId == currentId)
+                {
+                    break;
+                }
+
+                if (pathIndexes.TryGetValue(nextId, out var cycleStartIndex))
+                {
+                    var cyclePath = path
+                        .Skip(cycleStartIndex)
+                        .Append(nextId)
+                        .ToList();
+                    var cycleKey = string.Join(
+                        "\u001F",
+                        cyclePath
+                            .Take(cyclePath.Count - 1)
+                            .OrderBy(id => id, StringComparer.Ordinal));
+
+                    if (reportedCycles.Add(cycleKey))
+                    {
+                        errors.Add(
+                            $"步骤 '{step.Id}' 的 compensation 链构成环：{string.Join(" -> ", cyclePath)}");
+                    }
+                    break;
+                }
+
+                currentId = nextId;
+            }
+        }
+    }
+
+    private static void ValidateCompensationTargetsExcludedFromForwardPath(
+        IReadOnlyList<StepDefinition> allSteps,
+        List<string> errors)
+    {
+        var forwardReferenced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var step in allSteps)
+        {
+            if (!string.IsNullOrWhiteSpace(step.Next))
+                forwardReferenced.Add(step.Next);
+
+            if (step.Branches == null)
+                continue;
+
+            foreach (var target in step.Branches.Values)
+            {
+                if (!string.IsNullOrWhiteSpace(target))
+                    forwardReferenced.Add(target);
+            }
+        }
+
+        var reportedTargets = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var step in allSteps)
+        {
+            if (string.IsNullOrWhiteSpace(step.Compensation) ||
+                !forwardReferenced.Contains(step.Compensation) ||
+                !reportedTargets.Add(step.Compensation))
+            {
+                continue;
+            }
+
+            errors.Add($"步骤 '{step.Compensation}' 既是 compensation 目标又出现在正向路径（next/branches），会被双重执行");
+        }
+    }
+
+    private static void ValidateNestedCompensationTargets(
+        IReadOnlyList<StepDefinition> allSteps,
+        List<string> errors)
+    {
+        var stepsById = BuildFirstStepById(allSteps);
+        var reportedTargets = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var step in allSteps)
+        {
+            if (string.IsNullOrWhiteSpace(step.Compensation) ||
+                !reportedTargets.Add(step.Compensation) ||
+                !stepsById.TryGetValue(step.Compensation, out var compensationStep) ||
+                string.IsNullOrWhiteSpace(compensationStep.Compensation))
+            {
+                continue;
+            }
+
+            errors.Add($"步骤 '{step.Compensation}' 是 compensation 步骤，不允许再声明 compensation（不会在反向 walk 生效）");
+        }
+    }
+
+    private static Dictionary<string, StepDefinition> BuildFirstStepById(IEnumerable<StepDefinition> allSteps)
+    {
+        var stepsById = new Dictionary<string, StepDefinition>(StringComparer.Ordinal);
+        foreach (var step in allSteps)
+        {
+            if (!string.IsNullOrWhiteSpace(step.Id))
+                stepsById.TryAdd(step.Id, step);
+        }
+
+        return stepsById;
     }
 
     private static void ValidateBranchTargets(
@@ -135,6 +269,7 @@ public static class WorkflowValidator
         }
 
         ValidateRawActorLifecycleParameters(step, errors);
+        ValidatePresentationRules(step, stepType, errors);
 
         if (stepType == "conditional")
         {
@@ -218,11 +353,158 @@ public static class WorkflowValidator
             errors.Add(
                 $"步骤 '{step.Id}' 使用了保留原语 'dynamic_workflow'。请改为 workflow_call 或其他业务原语。");
         }
+
+        if (stepType == "vote")
+        {
+            ValidateVoteAgreementStep(step, errors);
+            return;
+        }
+
+        if (stepType == "lease")
+        {
+            ValidateLeaseStep(step, errors);
+            return;
+        }
+
+        if (stepType == "parallel")
+        {
+            ValidateParallelVoteAgreement(step, errors);
+        }
     }
 
-    // Refactor (iter30/cluster-030-workflow-step-raw-actor-lifecycle):
-    //   Old pattern: WorkflowStepTargetAgentResolver 用 agent_type/agent_id 通过 Type.GetType + AppDomain scan + IRoleAgentTypeResolver 直接 create/link actors,workflow step parameter 暴露 raw CLR lifecycle
-    //   New principle: role-level agent_kind 配合 WorkflowRunGAgent runtime lifecycle;step 只用 target_role;删 agent_type/agent_id raw lifecycle 参数 + IWorkflowAgentTypeAliasProvider;Foundation 加 CreateByKindAsync;Bridge 注册 stable kind token
+    private static void ValidatePresentationRules(
+        StepDefinition step,
+        string stepType,
+        List<string> errors)
+    {
+        if (StepPresentation.HasInteractionTemplateSpec(step.Presentation?.InteractionTemplateSpec) &&
+            !string.Equals(stepType, "notify", StringComparison.Ordinal))
+        {
+            errors.Add($"步骤 '{step.Id}' 的 interaction_template_spec 只允许用于 notify 步骤");
+        }
+    }
+
+    private static void ValidateVoteAgreementStep(StepDefinition step, List<string> errors)
+    {
+        if (!VoteAgreementRuleConfigurationParser.TryParse(step.Parameters, out var rule, out var error))
+        {
+            errors.Add($"步骤 '{step.Id}'（vote）{error}");
+            return;
+        }
+
+        ValidateConfiguredDecisionBranches(step, rule, errors);
+    }
+
+    private static void ValidateParallelVoteAgreement(StepDefinition step, List<string> errors)
+    {
+        if (!TryGetParameter(step.Parameters, "vote_step_type", out var voteStepType) ||
+            string.IsNullOrWhiteSpace(voteStepType) ||
+            !string.Equals(WorkflowPrimitiveCatalog.ToCanonicalType(voteStepType), "vote", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var voteParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in step.Parameters)
+        {
+            var voteParameterKey = VoteAgreementRuleConfigurationParser.StripVoteParameterPrefix(key);
+            if (voteParameterKey != null)
+                voteParameters[voteParameterKey] = value;
+        }
+
+        if (!VoteAgreementRuleConfigurationParser.TryParse(voteParameters, out _, out var error))
+            errors.Add($"步骤 '{step.Id}'（parallel.vote）{error}");
+    }
+
+    private static void ValidateLeaseStep(StepDefinition step, List<string> errors)
+    {
+        var action = GetParameterOrDefault(step.Parameters, "action", "acquire").Trim().ToLowerInvariant();
+        if (action is not "acquire" and not "renew" and not "release")
+            errors.Add($"步骤 '{step.Id}'（lease）action 仅支持 acquire|renew|release，当前值 '{action}'");
+
+        if (!TryGetParameter(step.Parameters, "key", out var key) || string.IsNullOrWhiteSpace(key))
+            errors.Add($"步骤 '{step.Id}'（lease）缺少 key 参数");
+
+        ValidateOptionalBoundedInt(
+            step,
+            "ttl_ms",
+            WorkflowLeaseGAgent.MinLeaseTtlMs,
+            WorkflowLeaseGAgent.MaxLeaseTtlMs,
+            errors);
+        ValidateOptionalBoundedInt(
+            step,
+            "wait_timeout_ms",
+            WorkflowLeaseGAgent.MinWaitTimeoutMs,
+            WorkflowLeaseGAgent.MaxWaitTimeoutMs,
+            errors);
+
+        if (TryGetParameter(step.Parameters, "on_conflict", out var onConflict) &&
+            !string.IsNullOrWhiteSpace(onConflict) &&
+            !string.Equals(onConflict.Trim(), "fail", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(onConflict.Trim(), "wait", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add($"步骤 '{step.Id}'（lease）on_conflict 仅支持 fail|wait，当前值 '{onConflict}'");
+        }
+
+        var hasHolderToken = TryGetParameter(step.Parameters, "holder_token", out var holderToken) &&
+                             !string.IsNullOrWhiteSpace(holderToken);
+        var hasGeneration = TryGetParameter(step.Parameters, "generation", out var generation) &&
+                            !string.IsNullOrWhiteSpace(generation);
+        if (action is "renew" or "release")
+        {
+            if (!hasHolderToken)
+                errors.Add($"步骤 '{step.Id}'（lease）{action} 必须声明 holder_token");
+            if (!hasGeneration)
+                errors.Add($"步骤 '{step.Id}'（lease）{action} 必须声明 generation");
+        }
+        else
+        {
+            if (hasHolderToken)
+                errors.Add($"步骤 '{step.Id}'（lease）acquire 不允许声明 holder_token");
+            if (hasGeneration)
+                errors.Add($"步骤 '{step.Id}'（lease）acquire 不允许声明 generation");
+        }
+    }
+
+    private static void ValidateOptionalBoundedInt(
+        StepDefinition step,
+        string parameterName,
+        int min,
+        int max,
+        List<string> errors)
+    {
+        if (!TryGetParameter(step.Parameters, parameterName, out var raw) ||
+            string.IsNullOrWhiteSpace(raw))
+        {
+            return;
+        }
+
+        if (!int.TryParse(raw.Trim(), out var value) || value < min || value > max)
+            errors.Add($"步骤 '{step.Id}'（lease）{parameterName} 必须是 {min}..{max} 范围内的整数");
+    }
+
+    private static void ValidateConfiguredDecisionBranches(
+        StepDefinition step,
+        VoteAgreementRule rule,
+        List<string> errors)
+    {
+        ValidateDecisionBranch(step, rule.OnAgreed, "on_agreed", errors);
+        ValidateDecisionBranch(step, rule.OnRejected, "on_rejected", errors);
+        ValidateDecisionBranch(step, rule.OnInconclusive, "on_inconclusive", errors);
+    }
+
+    private static void ValidateDecisionBranch(
+        StepDefinition step,
+        string branchKey,
+        string parameterName,
+        List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(branchKey))
+            return;
+
+        if (step.Branches == null || !step.Branches.ContainsKey(branchKey))
+            errors.Add($"步骤 '{step.Id}'（vote）参数 '{parameterName}' 指向未定义分支 '{branchKey}'");
+    }
     private static void ValidateRawActorLifecycleParameters(StepDefinition step, List<string> errors)
     {
         if (TryGetParameter(step.Parameters, "agent_type", out _))
@@ -252,6 +534,14 @@ public static class WorkflowValidator
         value = string.Empty;
         return false;
     }
+
+    private static string GetParameterOrDefault(
+        IReadOnlyDictionary<string, string> parameters,
+        string key,
+        string fallback) =>
+        TryGetParameter(parameters, key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : fallback;
 
     public sealed class WorkflowValidationOptions
     {

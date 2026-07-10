@@ -75,6 +75,12 @@ internal static class VoicePresenceSessionDispatch
             case VoiceTransportAttachRequested attachRequested:
                 signal.TransportAttachRequested = attachRequested.Clone();
                 break;
+            case VoiceTransportLeaseRenewRequested renewRequested:
+                signal.TransportLeaseRenewRequested = renewRequested.Clone();
+                break;
+            case VoiceDrainTimeoutExpired drainTimeoutExpired:
+                signal.DrainTimeoutExpired = drainTimeoutExpired.Clone();
+                break;
             case VoiceTransportDetachRequested detachRequested:
                 signal.TransportDetachRequested = detachRequested.Clone();
                 break;
@@ -90,8 +96,8 @@ internal static class VoicePresenceSessionDispatch
             case VoiceProviderEventReceived providerReceived:
                 signal.ProviderEventReceived = providerReceived.Clone();
                 break;
-            case VoiceTransportAudioFrameReceived audioReceived:
-                signal.TransportAudioFrameReceived = audioReceived.Clone();
+            case VoiceInputImageReceived inputImageReceived:
+                signal.InputImageReceived = inputImageReceived.Clone();
                 break;
             default:
                 throw new InvalidOperationException(

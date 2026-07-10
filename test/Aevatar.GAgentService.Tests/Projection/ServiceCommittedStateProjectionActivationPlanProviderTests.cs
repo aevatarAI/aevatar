@@ -15,20 +15,49 @@ namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
 {
-    [Fact]
-    public void GetPlans_ShouldMapServiceDefinitionEventsToCatalogScope()
+    [Theory]
+    [MemberData(nameof(ServiceDefinitionCatalogEvents))]
+    public void GetPlans_ShouldMapServiceDefinitionEventsToCatalogScope(IMessage serviceDefinitionEvent)
     {
         var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
 
         var plans = provider.GetPlans(BuildContext(
             typeof(ServiceDefinitionGAgent),
-            new ServiceDefinitionCreatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } })).ToArray();
+            serviceDefinitionEvent)).ToArray();
 
         plans.Should().ContainSingle();
         plans[0].LeaseType.Should().Be(typeof(ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>));
         plans[0].StartRequest.RootActorId.Should().Be("service-actor");
         plans[0].StartRequest.ProjectionKind.Should().Be("service-catalog");
         plans[0].StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
+    }
+
+    public static IEnumerable<object[]> ServiceDefinitionCatalogEvents()
+    {
+        yield return [new ServiceDefinitionCreatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
+        yield return [new ServiceDefinitionUpdatedEvent { Spec = new ServiceDefinitionSpec { Identity = Identity() } }];
+        yield return [new ServiceRegistrationRequestedEvent { Identity = Identity(), DesiredSpecHash = "hash-1", Attempt = 1 }];
+        yield return [new ServiceRegistrationAttemptStartedEvent { Identity = Identity(), DesiredSpecHash = "hash-1", Attempt = 1 }];
+        yield return [new ServiceRegistrationSucceededEvent { Identity = Identity(), NyxidServiceId = "svc-1", NyxidSlug = "orders", DesiredSpecHash = "hash-1", RegisteredSpecHash = "hash-1", Attempt = 1 }];
+        yield return [new ServiceRegistrationFailedEvent { Identity = Identity(), DesiredSpecHash = "hash-1", LastError = "Transient:timeout", Attempt = 1 }];
+        yield return [new ServiceRegistrationRetiredEvent { Identity = Identity(), NyxidServiceId = "svc-1", NyxidSlug = "orders", Attempt = 1 }];
+        yield return [new DefaultServingRevisionChangedEvent { Identity = Identity(), RevisionId = "r1" }];
+    }
+
+    [Fact]
+    public void GetPlans_ShouldNotMapLegacyExternalExposureUpdatedEventToCatalogScope()
+    {
+        var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
+
+        var plans = provider.GetPlans(BuildContext(
+            typeof(ServiceDefinitionGAgent),
+            new ServiceExternalExposureUpdatedEvent
+            {
+                Identity = Identity(),
+                ExternalExposure = new ExternalExposure { NyxidSlug = "legacy" },
+            })).ToArray();
+
+        plans.Should().BeEmpty();
     }
 
     [Fact]
@@ -49,6 +78,22 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProviderTests
             typeof(ServiceProjectionRuntimeLease<ServiceDeploymentCatalogProjectionContext>),
             typeof(ServiceProjectionRuntimeLease<ServiceCatalogProjectionContext>));
         plans.Select(x => x.StartRequest.ProjectionKind).Should().Equal("service-deployments", "service-catalog");
+    }
+
+    [Fact]
+    public void GetPlans_ShouldMapInvocationCatalogEventsToInvocationCatalogScope()
+    {
+        var provider = new ServiceCommittedStateProjectionActivationPlanProvider();
+
+        var plan = provider.GetPlans(BuildContext(
+                typeof(ServiceInvocationCatalogGAgent),
+                new ServiceInvocationCatalogObservedEvent { Identity = Identity() }))
+            .Should().ContainSingle().Subject;
+
+        plan.LeaseType.Should().Be(typeof(ServiceProjectionRuntimeLease<ServiceInvocationCatalogProjectionContext>));
+        plan.StartRequest.RootActorId.Should().Be("service-actor");
+        plan.StartRequest.ProjectionKind.Should().Be("service-invocation-catalog");
+        plan.StartRequest.Mode.Should().Be(ProjectionRuntimeMode.DurableMaterialization);
     }
 
     [Fact]

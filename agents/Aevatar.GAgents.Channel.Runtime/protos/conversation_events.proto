@@ -28,6 +28,21 @@ message ConversationTurnCompletedEvent {
   repeated ConversationHistoryEntry appended_history = 9;
 }
 
+// Committed domain event: the conversation cleared its retained transcript window
+// on an explicit user request (/clear). Replay applies an empty retained history;
+// the cleared entry count is recorded for observability.
+message ConversationRetainedHistoryClearedEvent {
+  string processed_activity_id = 1;
+  int32 cleared_entry_count = 2;
+  int64 cleared_at_unix_ms = 3;
+}
+
+message RecentConversationAttachmentActivity {
+  string activity_id = 1;
+  int64 accepted_at_unix_ms = 2;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 3;
+}
+
 message NeedsLlmReplyEvent {
   string correlation_id = 1;
   string target_actor_id = 2;
@@ -64,6 +79,39 @@ message NeedsLlmReplyEvent {
   // ConversationGAgentState.retained_history into the transient run command so
   // per-message AgentRunGAgent instances still see the same conversation context.
   repeated ConversationHistoryEntry prior_history = 13;
+  // Conversation-owned recent accepted attachment activity snapshot. This is
+  // copied from ConversationGAgentState.recent_attachment_activities into the
+  // transient run command so the chat LLM path can include recent image context
+  // or inject an honest degradation warning.
+  repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
+}
+
+enum ChannelWorkflowDraftRunSourceKind {
+  CHANNEL_WORKFLOW_DRAFT_RUN_SOURCE_KIND_UNSPECIFIED = 0;
+  CHANNEL_WORKFLOW_DRAFT_RUN_SOURCE_KIND_DEFINITION_ACTOR = 1;
+}
+
+message ChannelWorkflowDraftRunSource {
+  ChannelWorkflowDraftRunSourceKind kind = 1;
+  string scope_id = 2;
+  string workflow_id = 3;
+  string workflow_name = 4;
+  string definition_actor_id = 5;
+}
+
+message NeedsWorkflowDraftRunEvent {
+  string correlation_id = 1;
+  string target_actor_id = 2;
+  string registration_id = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  ChannelWorkflowDraftRunSource workflow_source = 5;
+  string prompt = 6;
+  map<string, string> headers = 7;
+  int64 requested_at_unix_ms = 8;
+  string run_id = 9;
+  string reply_token = 10;
+  int64 reply_token_expires_at_unix_ms = 11;
+  string nyx_user_access_token = 12;
 }
 
 message ConversationHistoryEntry {
@@ -155,7 +203,8 @@ message LlmReplyReadyEvent {
 enum ConversationReplyLifecycleMode {
   CONVERSATION_REPLY_LIFECYCLE_MODE_UNSPECIFIED = 0;
   CONVERSATION_REPLY_LIFECYCLE_MODE_NYX_RELAY_TEXT = 1;
-  CONVERSATION_REPLY_LIFECYCLE_MODE_LARK_CARD = 2;
+  reserved 2;
+  reserved "CONVERSATION_REPLY_LIFECYCLE_MODE_LARK_CARD";
 }
 
 enum ConversationReplyLifecyclePhase {
@@ -167,12 +216,13 @@ enum ConversationReplyLifecyclePhase {
   CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_DISABLED_PRE_SEND = 5;
   CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_TERMINAL_SUCCEEDED = 6;
   CONVERSATION_REPLY_LIFECYCLE_PHASE_TEXT_TERMINAL_PARTIAL = 7;
-  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATING = 8;
-  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_STREAMING = 9;
-  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_COMPLETED = 10;
-  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_ABORTED = 11;
-  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_TERMINATED = 12;
-  CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATION_FAILED = 13;
+  reserved 8 to 13;
+  reserved "CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATING",
+           "CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_STREAMING",
+           "CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_COMPLETED",
+           "CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_ABORTED",
+           "CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_TERMINATED",
+           "CONVERSATION_REPLY_LIFECYCLE_PHASE_LARK_CARD_CREATION_FAILED";
 }
 
 enum LarkCardOperationPhase {
@@ -201,18 +251,15 @@ message ConversationReplyLifecycleChangedEvent {
   ConversationReplyLifecycleMode mode = 4;
   ConversationReplyLifecyclePhase previous_phase = 5;
   ConversationReplyLifecyclePhase phase = 6;
-  optional LarkCardOperationPhase lark_card_operation = 26;
+  reserved 26, 31 to 33, 36, 37;
+  reserved "lark_card_operation", "card_id_assigned", "card_message_id_assigned",
+           "original_card_id_assigned", "sequence_delta", "streaming_element_id_selected";
   optional NyxRelayTextOperationKind nyx_relay_operation = 27;
   optional int64 operation_sequence = 28;
   optional int64 operation_generation = 29;
   optional string platform_message_id_assigned = 30;
-  optional string card_id_assigned = 31;
-  optional string card_message_id_assigned = 32;
-  optional string original_card_id_assigned = 33;
   optional string flushed_text_delta = 34;
   optional int32 edit_count_delta = 35;
-  optional int64 sequence_delta = 36;
-  optional string streaming_element_id_selected = 37;
   optional string terminal_reason = 38;
   optional string queued_accumulated_text = 39;
   optional string finalize_text = 40;
@@ -264,7 +311,7 @@ message LlmReplyStreamChunkEvent {
 
 // Per-delta streaming signal for the Lark CardKit (card-mode) outbound path. Identical
 // payload to LlmReplyStreamChunkEvent, but a separate proto type so the routing decision is
-// structural: there is no boolean a misbehaving persistence layer can flip — the actor's
+// structural: there is no boolean a misbehaving persistence layer can flip. The run actor's
 // HandleLlmReplyCardStreamChunkAsync handler is reachable only via this type. Like its
 // edit-message sibling, this event is a runtime-only signal and must never be persisted to
 // the event store, projection, or any durable state.
@@ -282,6 +329,24 @@ message LlmReplyCardStreamChunkEvent {
   // actor state/event store/read models.
   string reply_token = 6;
   int64 reply_token_expires_at_unix_ms = 7;
+  // AgentRunGAgent run_id that owns the CardKit lifecycle. Card-mode chunks are
+  // sent directly to that run actor; ConversationGAgent must not receive them.
+  string run_id = 8;
+  // Set on the terminal chunk so the run actor never caps the final accumulated
+  // text on the text-edit fallback path.
+  bool is_final = 9;
+}
+
+message LarkCardDeliveryCompletedEvent {
+  string correlation_id = 1;
+  string run_id = 2;
+  string command_id = 3;
+  aevatar.gagents.channel.abstractions.ChatActivity activity = 4;
+  string card_message_id = 5;
+  string outbound_text = 6;
+  repeated ConversationHistoryEntry appended_history = 7;
+  LlmReplyDeliveryFailedEvent delivery_failure = 8;
+  int64 completed_at_unix_ms = 9;
 }
 
 // Refactor (iter57/cluster-065-lark-card-signal-only):
@@ -540,6 +605,10 @@ message LlmReplyDeliveredEvent {
   int64 acked_at_unix_ms = 3;
   // Channel-side message id from the sink ack (e.g. Lark message_id).
   string channel_message_id = 4;
+  // The bare platform message id (Lark om_...) of the message the bot just sent, recorded into
+  // ConversationGAgentState.bot_sent_platform_message_ids so a later reply to it is recognized as
+  // addressing the bot. Distinct from channel_message_id, which is path-prefixed on the card path.
+  string bot_platform_message_id = 5;
 }
 
 // Persisted by ConversationGAgent when the channel sink rejects or times

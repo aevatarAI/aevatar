@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
@@ -43,6 +44,46 @@ public sealed class ScopeWorkflowEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("WorkflowYaml is required");
+    }
+
+    [Fact]
+    public async Task HandleSaveAndBindWorkflowAsync_ShouldReturnAccepted_WithoutRequestRevisionId()
+    {
+        var http = CreateHttpContext();
+        var port = new RecordingScopeWorkflowSaveAndBindPort();
+
+        var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.SaveAndBindScopeWorkflowHttpRequest(
+                "wf-alpha",
+                "name: approval\nsteps: []\n",
+                WorkflowName: "approval",
+                DisplayName: "Approval",
+                InlineWorkflowYamls: new Dictionary<string, string>
+                {
+                    ["child"] = "name: child\nsteps: []\n",
+                },
+                AppId: "studio",
+                ServiceId: "svc-alpha",
+                ExposureDesired: true),
+            port,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/scopes/user-1/workflows/wf-alpha");
+        port.Request.Should().NotBeNull();
+        port.Request!.ScopeId.Should().Be("user-1");
+        port.Request.WorkflowId.Should().Be("wf-alpha");
+        port.Request.AppId.Should().Be("studio");
+        port.Request.ServiceId.Should().Be("svc-alpha");
+        port.Request.ExposureDesired.Should().BeTrue();
+        body.Should().Contain("\"revisionId\":\"rev-generated\"");
+        body.Should().Contain("\"acceptanceStage\":\"accepted\"");
+        body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
     }
 
     [Fact]
@@ -390,6 +431,11 @@ public sealed class ScopeWorkflowEndpointsTests
         var http = CreateHttpContext();
         http.Request.Headers.Authorization = "Bearer token-123";
 
+        var scopedControlInput = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+        scopedControlInput.Should().BeNull();
+
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,
             "user-1",
@@ -411,12 +457,172 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Should().NotBeNull();
         interactionService.LastRequest!.Source.ActorId.Should().Be("definition-actor-1");
         interactionService.LastRequest.ScopeId.Should().Be("user-1");
-        interactionService.LastRequest.ConnectorHttpAuthorization.Should().Be("Bearer token-123");
+        interactionService.LastRequest.CallerCredential!.BearerToken.Should().Be("token-123");
+        interactionService.LastRequest.LlmControl.Should().BeNull();
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
         interactionService.LastRequest.Metadata.Should().NotContainKey("connector.http.authorization");
         interactionService.LastRequest.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Headers.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public async Task BuildScopedLlmControlInputAsync_ShouldFallBackToProviderDefaults_WhenUserConfigFails()
+    {
+        var http = CreateHttpContext(userConfigQueryPort: new ThrowingUserConfigStore());
+
+        var scopedControlInput = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+
+        scopedControlInput.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnNotReady_WhenRunnableReadmodelIsMissing()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            ],
+        };
+        queryPort.GetServiceResults.Enqueue(queryPort.ListServicesResult[0]);
+        var interactionService = new FakeCommandInteractionService();
+        var http = CreateHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.Should().Contain("USER_WORKFLOW_NOT_READY");
+        interactionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldPropagateScopedPreferredLlmRouteToAguiRequest()
+    {
+        var snapshot = new ServiceCatalogSnapshot(
+            "tenant-a:workflow-app:user:token:approval",
+            "tenant-a",
+            "workflow-app",
+            "user:user-1-token",
+            "approval",
+            "Approval",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "definition-actor-1",
+            "active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult = [snapshot],
+        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (_, _, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("definition-actor-1", "approval", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateHttpContext(
+            userConfigQueryPort: new StubUserConfigStore(
+                new UserConfig(DefaultModel: string.Empty, PreferredLlmRoute: "/preferred-route")));
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        interactionService.LastRequest.Should().NotBeNull();
+        interactionService.LastRequest!.LlmControl.Should().NotBeNull();
+        interactionService.LastRequest.LlmControl!.RoutePreference.Should().Be("/preferred-route");
+        interactionService.LastRequest.LlmControl.ModelOverride.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
+    {
+        var snapshot = new ServiceCatalogSnapshot(
+            "tenant-a:workflow-app:user:token:approval",
+            "tenant-a",
+            "workflow-app",
+            "user:user-1-token",
+            "approval",
+            "Approval",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "definition-actor-1",
+            "active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult = [snapshot],
+        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
+        var interactionService = new FakeCommandInteractionService();
+        var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer token 123";
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest(
+                "hello",
+                EventFormat: "agui"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_CALLER_CREDENTIAL");
+        body.Should().Contain("Caller credential is invalid.");
+        interactionService.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -715,11 +921,13 @@ public sealed class ScopeWorkflowEndpointsTests
             }));
     }
 
-    private static DefaultHttpContext CreateHttpContext(string scopeId = "user-1")
+    private static DefaultHttpContext CreateHttpContext(
+        string scopeId = "user-1",
+        IUserConfigQueryPort? userConfigQueryPort = null)
     {
         var http = new DefaultHttpContext
         {
-            RequestServices = BuildRequestServices(),
+            RequestServices = BuildRequestServices(userConfigQueryPort),
         };
         http.Response.Body = new MemoryStream();
         http.User = new ClaimsPrincipal(
@@ -741,13 +949,18 @@ public sealed class ScopeWorkflowEndpointsTests
         return http;
     }
 
-    private static ServiceProvider BuildRequestServices() =>
-        new ServiceCollection()
+    private static ServiceProvider BuildRequestServices(IUserConfigQueryPort? userConfigQueryPort = null)
+    {
+        var services = new ServiceCollection()
             .AddLogging()
             .AddOptions()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
-            .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
-            .BuildServiceProvider();
+            .AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        if (userConfigQueryPort != null)
+            services.AddSingleton(userConfigQueryPort);
+
+        return services.BuildServiceProvider();
+    }
 
     private sealed class TestHostEnvironment : IHostEnvironment
     {
@@ -812,6 +1025,20 @@ public sealed class ScopeWorkflowEndpointsTests
         }
     }
 
+    private sealed class StubUserConfigStore(UserConfig config) : IUserConfigQueryPort
+    {
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+    }
+
+    private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
+    {
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) => throw new HttpRequestException("config backend unavailable");
+
+        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+    }
+
     private sealed class FakeServiceCommandPort : IServiceCommandPort
     {
         public Task<ServiceCommandAcceptedReceipt> CreateServiceAsync(CreateServiceDefinitionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
@@ -839,13 +1066,18 @@ public sealed class ScopeWorkflowEndpointsTests
 
         public readonly Queue<ServiceCatalogSnapshot?> GetServiceResults = new();
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
+        public ServiceDeploymentCatalogSnapshot? DeploymentResult { get; set; }
         public ServiceIdentity? LastGetIdentity { get; private set; }
         public ListRequest? LastListRequest { get; private set; }
+        private ServiceCatalogSnapshot? _lastServiceSnapshot;
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
             LastGetIdentity = identity;
-            return Task.FromResult(GetServiceResults.Count > 0 ? GetServiceResults.Dequeue() : null);
+            _lastServiceSnapshot = GetServiceResults.Count > 0
+                ? GetServiceResults.Dequeue()
+                : ListServicesResult.FirstOrDefault(x => string.Equals(x.ServiceId, identity.ServiceId, StringComparison.Ordinal));
+            return Task.FromResult(_lastServiceSnapshot);
         }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default)
@@ -855,7 +1087,29 @@ public sealed class ScopeWorkflowEndpointsTests
         }
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
-        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) => Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            if (DeploymentResult != null)
+                return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(DeploymentResult);
+
+            var serviceKey = ServiceKeys.Build(identity);
+            var service = ListServicesResult.FirstOrDefault(x => string.Equals(x.ServiceKey, serviceKey, StringComparison.Ordinal))
+                ?? _lastServiceSnapshot;
+            if (service == null || string.IsNullOrWhiteSpace(service.DeploymentId))
+                return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+
+            return Task.FromResult<ServiceDeploymentCatalogSnapshot?>(new ServiceDeploymentCatalogSnapshot(
+                service.ServiceKey,
+                [new ServiceDeploymentSnapshot(
+                    service.DeploymentId,
+                    service.ActiveServingRevisionId,
+                    service.PrimaryActorId,
+                    service.DeploymentStatus,
+                    service.UpdatedAt,
+                    service.UpdatedAt)],
+                service.UpdatedAt));
+        }
     }
 
     private sealed class FakeWorkflowActorBindingReader : IWorkflowActorBindingReader
@@ -863,7 +1117,16 @@ public sealed class ScopeWorkflowEndpointsTests
         public Dictionary<string, WorkflowActorBinding> Bindings { get; } = new(StringComparer.Ordinal);
 
         public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(Bindings.TryGetValue(actorId, out var binding) ? binding : null);
+            Task.FromResult(Bindings.TryGetValue(actorId, out var binding)
+                ? binding
+                : new WorkflowActorBinding(
+                    WorkflowActorKind.Definition,
+                    actorId,
+                    actorId,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    new Dictionary<string, string>()));
     }
 
     private sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQueryReader
@@ -911,6 +1174,43 @@ public sealed class ScopeWorkflowEndpointsTests
                 DateTimeOffset.UtcNow,
                 revisions.Count,
                 string.Empty));
+        }
+    }
+
+    private sealed class RecordingScopeWorkflowSaveAndBindPort : IScopeWorkflowSaveAndBindPort
+    {
+        public ScopeWorkflowSaveAndBindRequest? Request { get; private set; }
+
+        public Task<ScopeWorkflowSaveAndBindResult> SaveAndBindAsync(
+            ScopeWorkflowSaveAndBindRequest request,
+            CancellationToken ct = default)
+        {
+            Request = request;
+            var workflowId = request.WorkflowId ?? "wf-generated";
+            var workflowResult = new ScopeWorkflowUpsertResult(
+                request.ScopeId,
+                workflowId,
+                "scope-service-key",
+                "rev-generated",
+                "definition-prefix",
+                "workflow-actor",
+                "deployment-id",
+                DateTimeOffset.UtcNow,
+                [],
+                $"/api/scopes/{request.ScopeId}/workflows/{workflowId}");
+            var bindingResult = new ScopeBindingUpsertResult(
+                request.ScopeId,
+                request.ServiceId ?? "default",
+                request.DisplayName ?? "main",
+                "rev-generated",
+                ScopeBindingImplementationKind.Workflow,
+                "binding-actor");
+            return Task.FromResult(new ScopeWorkflowSaveAndBindResult(
+                request.ScopeId,
+                workflowId,
+                "rev-generated",
+                workflowResult,
+                bindingResult));
         }
     }
 

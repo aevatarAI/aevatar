@@ -1,10 +1,10 @@
-import { PageLoading } from '@ant-design/pro-components';
 import { Button, Result } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { loadStoredAuthSession } from '@/shared/auth/session';
 import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
+import { AevatarPageLoading } from '@/shared/ui/AevatarLoading';
 import { describeError } from '@/shared/ui/errorText';
 import { t } from "@/shared/i18n/messages";
 
@@ -33,7 +33,13 @@ const CallbackPage: React.FC = () => {
       }
     };
 
-    if (!loadStoredAuthSession()) {
+    const callbackParams = new URLSearchParams(window.location.search);
+    const hasCallbackPayload =
+      callbackParams.has('code') ||
+      callbackParams.has('state') ||
+      callbackParams.has('error');
+
+    if (hasCallbackPayload || !loadStoredAuthSession()) {
       void finishLogin();
     } else {
       window.location.replace(CONSOLE_HOME_ROUTE);
@@ -58,7 +64,7 @@ const CallbackPage: React.FC = () => {
     );
   }
 
-  return <PageLoading fullscreen tip="Completing NyxID sign-in..." />;
+  return <AevatarPageLoading fullscreen tip="Completing NyxID sign-in..." />;
 };
 
 export default CallbackPage;

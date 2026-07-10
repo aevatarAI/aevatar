@@ -1,8 +1,10 @@
 using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Transport;
 
@@ -20,13 +22,18 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     private static readonly JsonParser ControlJsonReader = new(JsonParser.Settings.Default);
 
     private readonly WebSocket _ws;
+    private readonly ILogger? _logger;
     private readonly TaskCompletionSource _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
     private bool _disposed;
 
-    public WebSocketVoiceTransport(WebSocket ws)
+    public WebSocketVoiceTransport(
+        WebSocket ws,
+        ILogger? logger = null)
     {
         _ws = ws ?? throw new ArgumentNullException(nameof(ws));
+        _logger = logger;
         if (_ws.State != WebSocketState.Open)
             _completion.TrySetResult();
     }
@@ -37,15 +44,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (pcm16.IsEmpty) return;
-        try
-        {
-            await _ws.SendAsync(pcm16, WebSocketMessageType.Binary, endOfMessage: true, ct);
-        }
-        catch
-        {
-            _completion.TrySetResult();
-            throw;
-        }
+        await SendAsync(pcm16, WebSocketMessageType.Binary, ct);
     }
 
     public async Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
@@ -54,9 +53,26 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         ArgumentNullException.ThrowIfNull(frame);
         var json = ControlJsonWriter.Format(frame);
         var bytes = Encoding.UTF8.GetBytes(json);
+        await SendAsync(bytes, WebSocketMessageType.Text, ct);
+    }
+
+    private async Task SendAsync(
+        ReadOnlyMemory<byte> payload,
+        WebSocketMessageType messageType,
+        CancellationToken ct)
+    {
         try
         {
-            await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
+            await _sendGate.WaitAsync(ct);
+            try
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                await _ws.SendAsync(payload, messageType, endOfMessage: true, ct);
+            }
+            finally
+            {
+                _sendGate.Release();
+            }
         }
         catch
         {
@@ -86,6 +102,11 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 {
                     yield break;
                 }
+                catch (VoiceTransportFrameRejectedException ex)
+                {
+                    await TryClosePolicyViolationAsync(ex.Message, ct);
+                    yield break;
+                }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     yield break;
@@ -102,9 +123,15 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 }
                 else if (messageType == WebSocketMessageType.Text)
                 {
-                    var frame = TryParseControlFrame(buffer, totalBytes);
-                    if (frame != null)
-                        yield return VoiceTransportFrame.ControlFrame(frame);
+                    var textFrame = TryParseTextFrame(buffer, totalBytes);
+                    if (textFrame.RejectionReason != null)
+                    {
+                        await TryClosePolicyViolationAsync(textFrame.RejectionReason, ct);
+                        yield break;
+                    }
+
+                    if (textFrame.Frame.HasValue)
+                        yield return textFrame.Frame.Value;
                 }
             }
         }
@@ -129,9 +156,10 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                 await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cts.Token);
             }
-            catch
+            catch (Exception ex)
             {
                 // best-effort close
+                _logger?.LogWarning(ex, "Best-effort close of voice WebSocket transport failed during disposal.");
             }
         }
 
@@ -153,21 +181,106 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
             result = await _ws.ReceiveAsync(
                 buffer.AsMemory(totalBytes, buffer.Length - totalBytes), ct);
             totalBytes += result.Count;
+
+            if (result.MessageType == WebSocketMessageType.Text &&
+                totalBytes > VoiceWireContractDefaults.MaxInputImageControlFrameBytes)
+            {
+                throw new VoiceTransportFrameRejectedException("Voice text frame exceeds the input image size limit.");
+            }
         } while (!result.EndOfMessage);
 
         return (totalBytes, result.MessageType, buffer);
     }
 
-    private static VoiceControlFrame? TryParseControlFrame(byte[] buffer, int length)
+    private static TextFrameParseResult TryParseTextFrame(byte[] buffer, int length)
     {
+        var containsInputImage = ContainsInputImageProperty(buffer, length);
         try
         {
             var json = Encoding.UTF8.GetString(buffer, 0, length);
-            return ControlJsonReader.Parse<VoiceControlFrame>(json);
+            var frame = ControlJsonReader.Parse<VoiceControlFrame>(json);
+            if (frame.FrameCase == VoiceControlFrame.FrameOneofCase.InputImage)
+            {
+                var rejection = ValidateInputImage(frame.InputImage);
+                return rejection == null
+                    ? TextFrameParseResult.Accepted(VoiceTransportFrame.InputImageFrame(frame.InputImage.Clone()))
+                    : TextFrameParseResult.Rejected(rejection);
+            }
+
+            return TextFrameParseResult.Accepted(VoiceTransportFrame.ControlFrame(frame));
         }
         catch
         {
-            return null;
+            return containsInputImage
+                ? TextFrameParseResult.Rejected("Invalid voice input image frame.")
+                : TextFrameParseResult.Ignored();
         }
     }
+
+    private static bool ContainsInputImageProperty(byte[] buffer, int length)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(buffer.AsSpan(0, length));
+            if (!JsonDocument.TryParseValue(ref reader, out var document))
+                return false;
+
+            using (document)
+            {
+                return document.RootElement.ValueKind == JsonValueKind.Object &&
+                       (document.RootElement.TryGetProperty("inputImage", out _) ||
+                        document.RootElement.TryGetProperty("input_image", out _));
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? ValidateInputImage(VoiceInputImage? inputImage)
+    {
+        if (inputImage == null ||
+            inputImage.Data.IsEmpty)
+        {
+            return "Voice input image data is required.";
+        }
+
+        if (!VoiceWireContractDefaults.IsSupportedInputImageMediaType(inputImage.MediaType))
+        {
+            return
+                $"Voice input image media type must be {VoiceWireContractDefaults.FormatSupportedInputImageMediaTypes()}.";
+        }
+
+        return inputImage.Data.Length <= VoiceWireContractDefaults.MaxInputImageBytes
+            ? null
+            : $"Voice input image exceeds the {VoiceWireContractDefaults.MaxInputImageBytes} bytes size limit.";
+    }
+
+    private async Task TryClosePolicyViolationAsync(string reason, CancellationToken ct)
+    {
+        if (_ws.State is not WebSocketState.Open and not WebSocketState.CloseReceived)
+            return;
+
+        try
+        {
+            await _ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, reason, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to close invalid voice WebSocket control frame.");
+            // best-effort close for invalid client input
+        }
+    }
+
+    private readonly record struct TextFrameParseResult(VoiceTransportFrame? Frame, string? RejectionReason)
+    {
+        public static TextFrameParseResult Accepted(VoiceTransportFrame frame) => new(frame, null);
+
+        public static TextFrameParseResult Ignored() => new(null, null);
+
+        public static TextFrameParseResult Rejected(string reason) => new(null, reason);
+    }
+
+    private sealed class VoiceTransportFrameRejectedException(string message) : Exception(message);
 }

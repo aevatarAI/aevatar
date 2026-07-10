@@ -75,6 +75,13 @@ public class DeviceEventEndpointsTests
     [InlineData("scene_summary", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Camera)]
     [InlineData("motion_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Motion)]
     [InlineData("speech_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Speech)]
+    [InlineData("doorbell_pressed", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("smoke_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("water_leak_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("carbon_monoxide_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("glass_break_detected", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("lock_tampered", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
+    [InlineData("alarm_triggered", Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert)]
     public void ParseCallbackPayload_known_v1_event_types_map_to_typed_payload_cases(
         string eventType,
         Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase expectedPayloadCase)
@@ -248,7 +255,7 @@ public class DeviceEventEndpointsTests
         var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
         var callbackService = Substitute.For<IDeviceCallbackCommandService>();
         queryPort.GetAsync("reg-known", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<DeviceRegistrationEntry?>(MakeRegistration()));
+            .Returns(Task.FromResult<DeviceRegistrationEntry?>(MakeRegistration(registrationId: "reg-known")));
         callbackService.DispatchCallbackAsync(
                 Arg.Do<DeviceCallbackDispatchCommand>(command => capturedCommand = command),
                 Arg.Any<CancellationToken>())
@@ -269,7 +276,10 @@ public class DeviceEventEndpointsTests
             humidity = 44.0,
             light_level = 18.0,
         });
-        var context = CreateJsonHttpContext(EncodeCallbackPayload(innerEvent, senderPlatformId: "sensor-1"));
+        var context = CreateJsonHttpContext(EncodeCallbackPayload(
+            innerEvent,
+            senderPlatformId: "sensor-1",
+            callbackTimestamp: DateTimeOffset.UtcNow.ToString("O")));
 
         var result = await InvokeHandleDeviceCallbackAsync(
             context,
@@ -282,6 +292,10 @@ public class DeviceEventEndpointsTests
         body.Should().Contain("accepted");
         capturedCommand.Should().NotBeNull();
         capturedCommand!.RegistrationId.Should().Be("reg-known");
+        capturedCommand.Admission.Should().NotBeNull();
+        capturedCommand.Admission!.RegistrationId.Should().Be("reg-known");
+        capturedCommand.Admission.MessageId.Should().Be("nxmsg-55");
+        capturedCommand.Admission.DeliveryId.Should().Be("evt-known");
         capturedCommand.Inbound.DeviceId.Should().Be("sensor-1");
         capturedCommand.Inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.Sensor);
         capturedCommand.Inbound.Sensor.Temperature.Should().Be(23.5);
@@ -296,7 +310,7 @@ public class DeviceEventEndpointsTests
         var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
         var callbackService = Substitute.For<IDeviceCallbackCommandService>();
         queryPort.GetAsync("reg-unknown", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<DeviceRegistrationEntry?>(MakeRegistration()));
+            .Returns(Task.FromResult<DeviceRegistrationEntry?>(MakeRegistration(registrationId: "reg-unknown")));
 
         var innerEvent = JsonSerializer.Serialize(new
         {
@@ -304,7 +318,9 @@ public class DeviceEventEndpointsTests
             event_type = "unknown_type",
             payload = new { raw = "not admitted" },
         });
-        var context = CreateJsonHttpContext(EncodeCallbackPayload(innerEvent));
+        var context = CreateJsonHttpContext(EncodeCallbackPayload(
+            innerEvent,
+            callbackTimestamp: DateTimeOffset.UtcNow.ToString("O")));
 
         var result = await InvokeHandleDeviceCallbackAsync(
             context,
@@ -315,6 +331,36 @@ public class DeviceEventEndpointsTests
 
         statusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("Invalid callback payload");
+        await callbackService.DidNotReceiveWithAnyArgs()
+            .DispatchCallbackAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task HandleDeviceCallbackAsync_stale_signed_body_returns_reject_status_and_does_not_dispatch()
+    {
+        var queryPort = Substitute.For<IDeviceRegistrationQueryPort>();
+        var callbackService = Substitute.For<IDeviceCallbackCommandService>();
+        queryPort.GetAsync("reg-stale", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<DeviceRegistrationEntry?>(MakeRegistration(registrationId: "reg-stale")));
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-stale-dispatch",
+            event_type = "motion_detected",
+            detected = true,
+        });
+        var context = CreateJsonHttpContext(EncodeCallbackPayload(
+            innerEvent,
+            callbackTimestamp: "2026-04-09T10:00:00Z"));
+
+        var result = await InvokeHandleDeviceCallbackAsync(
+            context,
+            "reg-stale",
+            queryPort,
+            callbackService);
+        var (statusCode, body) = await ExecuteResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain(((int)DeviceCallbackAdmissionError.StaleSignedBodyTimestamp).ToString());
         await callbackService.DidNotReceiveWithAnyArgs()
             .DispatchCallbackAsync(default!, default);
     }
@@ -368,6 +414,64 @@ public class DeviceEventEndpointsTests
         inbound.Motion.Detected.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("doorbell_pressed", "", Aevatar.GAgents.Household.DeviceEventSeverity.Info)]
+    [InlineData("smoke_detected", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("water_leak_detected", "warning", Aevatar.GAgents.Household.DeviceEventSeverity.Warning)]
+    [InlineData("carbon_monoxide_detected", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("glass_break_detected", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("lock_tampered", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    [InlineData("alarm_triggered", "", Aevatar.GAgents.Household.DeviceEventSeverity.Critical)]
+    public void ParseCallbackPayload_home_alert_events_map_to_typed_alert_payload(
+        string eventType,
+        string severity,
+        Aevatar.GAgents.Household.DeviceEventSeverity expectedSeverity)
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = $"evt-{eventType}",
+            source = "home-assistant",
+            event_type = eventType,
+            severity,
+            area = "kitchen",
+            entity_id = "binary_sensor.kitchen",
+            correlation_key = "ha-alert-1",
+            summary = "Kitchen alert",
+        });
+
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "ha-bridge");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert);
+        inbound.HomeAlert.Severity.Should().Be(expectedSeverity);
+        inbound.HomeAlert.Area.Should().Be("kitchen");
+        inbound.HomeAlert.EntityId.Should().Be("binary_sensor.kitchen");
+        inbound.HomeAlert.CorrelationKey.Should().Be("ha-alert-1");
+        inbound.HomeAlert.Summary.Should().Be("Kitchen alert");
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_home_alert_events_use_typed_fallback_fields()
+    {
+        var innerEvent = JsonSerializer.Serialize(new
+        {
+            event_id = "evt-fallback",
+            source = "home-assistant",
+            event_type = "alarm_triggered",
+            area = "garage",
+            entity_id = "alarm.garage",
+            description = "Garage alarm",
+        });
+
+        var payload = EncodeCallbackPayload(innerEvent, senderPlatformId: "ha-bridge");
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(Encoding.UTF8.GetBytes(payload));
+
+        inbound.PayloadCase.Should().Be(Aevatar.GAgents.Household.DeviceInbound.PayloadOneofCase.HomeAlert);
+        inbound.HomeAlert.Severity.Should().Be(Aevatar.GAgents.Household.DeviceEventSeverity.Critical);
+        inbound.HomeAlert.CorrelationKey.Should().Be("evt-fallback");
+        inbound.HomeAlert.Summary.Should().Be("Garage alarm");
+    }
+
     [Fact]
     public void ParseCallbackPayload_malformed_typed_payload_throws_at_adapter_boundary()
     {
@@ -408,9 +512,11 @@ public class DeviceEventEndpointsTests
 
     // ─── HMAC Verification Tests ───
 
-    private static DeviceRegistrationEntry MakeRegistration(string hmacKey = "test-secret") => new()
+    private static DeviceRegistrationEntry MakeRegistration(
+        string hmacKey = "test-secret",
+        string registrationId = "reg-test-1") => new()
     {
-        Id = "reg-test-1",
+        Id = registrationId,
         ScopeId = "scope-test",
         HmacKey = hmacKey,
         CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -419,7 +525,9 @@ public class DeviceEventEndpointsTests
     private static string EncodeCallbackPayload(
         string innerEvent,
         string? senderPlatformId = null,
-        string? legacySenderId = null)
+        string? legacySenderId = null,
+        string? callbackTimestamp = null,
+        string messageId = "nxmsg-55")
     {
         object sender = legacySenderId is not null
             ? new { id = legacySenderId }
@@ -427,13 +535,13 @@ public class DeviceEventEndpointsTests
 
         return JsonSerializer.Serialize(new
         {
-            message_id = "nxmsg-55",
+            message_id = messageId,
             platform = "device",
             agent = new { api_key_id = "key-1", name = "home-agent" },
             conversation = new { id = "conv-99", platform_id = "conv-p-99", conversation_type = "direct" },
             sender,
             content = new { content_type = "text", text = innerEvent, attachments = Array.Empty<object>() },
-            timestamp = "2026-04-09T10:00:00Z",
+            timestamp = callbackTimestamp ?? "2026-04-09T10:00:00Z",
         });
     }
 
@@ -488,24 +596,33 @@ public class DeviceEventEndpointsTests
     }
 
     private static (HttpContext context, byte[] bodyBytes) CreateContextWithSignature(
-        string body, string hmacKey)
+        string body,
+        string hmacKey,
+        string? nyxTimestampHeader = null)
     {
         var bodyBytes = Encoding.UTF8.GetBytes(body);
         var keyBytes = Encoding.UTF8.GetBytes(hmacKey);
         using var hmac = new HMACSHA256(keyBytes);
-        var hash = hmac.ComputeHash(bodyBytes);
+        var hash = hmac.ComputeHash(DeviceEventEndpoints.BuildSignaturePayload(bodyBytes));
         var signature = Convert.ToHexStringLower(hash);
 
         var context = new DefaultHttpContext();
         context.Request.Headers["X-NyxID-Signature"] = signature;
+        if (nyxTimestampHeader is not null)
+            context.Request.Headers["X-NyxID-Timestamp"] = nyxTimestampHeader;
         return (context, bodyBytes);
     }
 
     [Fact]
     public void HmacVerification_valid_signature_returns_true()
     {
-        const string body = "{\"test\":\"data\"}";
         const string hmacKey = "my-secret-key";
+        var body = EncodeCallbackPayload(JsonSerializer.Serialize(new
+        {
+            event_id = "evt-signature",
+            event_type = "motion_detected",
+            detected = true,
+        }));
 
         var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
         var registration = MakeRegistration(hmacKey);
@@ -514,6 +631,157 @@ public class DeviceEventEndpointsTests
         var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
 
         result.Should().BeTrue();
+    }
+
+    [Fact]
+    public void AdmitCallback_rejects_signed_body_outside_freshness_window()
+    {
+        const string hmacKey = "my-secret-key";
+        var now = DateTimeOffset.Parse("2026-04-09T10:00:20Z");
+        var body = EncodeCallbackPayload(
+            JsonSerializer.Serialize(new
+            {
+                event_id = "evt-stale",
+                event_type = "motion_detected",
+                detected = true,
+            }),
+            callbackTimestamp: "2026-04-09T10:00:00Z");
+        var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
+
+        var result = DeviceEventEndpoints.AdmitCallback(
+            context,
+            bodyBytes,
+            MakeRegistration(hmacKey),
+            new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
+            now);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(DeviceCallbackAdmissionError.StaleSignedBodyTimestamp);
+    }
+
+    [Fact]
+    public void AdmitCallback_rejects_captured_signed_body_replayed_after_window()
+    {
+        const string hmacKey = "my-secret-key";
+        var signedAt = DateTimeOffset.Parse("2026-04-09T10:00:00Z");
+        var body = EncodeCallbackPayload(
+            JsonSerializer.Serialize(new
+            {
+                event_id = "evt-replay",
+                event_type = "motion_detected",
+                detected = true,
+            }),
+            callbackTimestamp: "2026-04-09T10:00:00Z");
+        var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
+        var options = new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) };
+
+        var first = DeviceEventEndpoints.AdmitCallback(
+            context,
+            bodyBytes,
+            MakeRegistration(hmacKey),
+            options,
+            signedAt.AddSeconds(2));
+        var replay = DeviceEventEndpoints.AdmitCallback(
+            context,
+            bodyBytes,
+            MakeRegistration(hmacKey),
+            options,
+            signedAt.AddSeconds(11));
+
+        first.Succeeded.Should().BeTrue();
+        replay.Succeeded.Should().BeFalse();
+        replay.Error.Should().Be(DeviceCallbackAdmissionError.StaleSignedBodyTimestamp);
+    }
+
+    [Fact]
+    public void AdmitCallback_uses_body_timestamp_not_X_NyxID_Timestamp_as_freshness_authority()
+    {
+        const string hmacKey = "my-secret-key";
+        var body = EncodeCallbackPayload(
+            JsonSerializer.Serialize(new
+            {
+                event_id = "evt-header",
+                event_type = "motion_detected",
+                detected = true,
+            }),
+            callbackTimestamp: "2026-04-09T10:00:00Z");
+        var (context, bodyBytes) = CreateContextWithSignature(
+            body,
+            hmacKey,
+            nyxTimestampHeader: "2026-04-09T10:00:20Z");
+
+        var result = DeviceEventEndpoints.AdmitCallback(
+            context,
+            bodyBytes,
+            MakeRegistration(hmacKey),
+            new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
+            DateTimeOffset.Parse("2026-04-09T10:00:20Z"));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(DeviceCallbackAdmissionError.StaleSignedBodyTimestamp);
+    }
+
+    [Fact]
+    public void AdmitCallback_rejects_body_timestamp_tampering_without_resigning()
+    {
+        const string hmacKey = "my-secret-key";
+        var originalBody = EncodeCallbackPayload(
+            JsonSerializer.Serialize(new
+            {
+                event_id = "evt-tamper",
+                event_type = "motion_detected",
+                detected = true,
+            }),
+            callbackTimestamp: "2026-04-09T10:00:00Z");
+        var (context, _) = CreateContextWithSignature(originalBody, hmacKey);
+        var tamperedBody = originalBody.Replace(
+            "2026-04-09T10:00:00Z",
+            "2026-04-09T10:00:20Z",
+            StringComparison.Ordinal);
+
+        var result = DeviceEventEndpoints.AdmitCallback(
+            context,
+            Encoding.UTF8.GetBytes(tamperedBody),
+            MakeRegistration(hmacKey),
+            new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
+            DateTimeOffset.Parse("2026-04-09T10:00:20Z"));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(DeviceCallbackAdmissionError.SignatureRejected);
+    }
+
+    [Fact]
+    public void AdmitCallback_uses_inner_body_timestamp_when_outer_timestamp_is_absent()
+    {
+        const string hmacKey = "my-secret-key";
+        var body = JsonSerializer.Serialize(new
+        {
+            message_id = "nxmsg-inner-ts",
+            platform = "device",
+            content = new
+            {
+                content_type = "text",
+                text = JsonSerializer.Serialize(new
+                {
+                    event_id = "evt-inner-ts",
+                    event_type = "motion_detected",
+                    timestamp = "2026-04-09T10:00:00Z",
+                    detected = true,
+                }),
+            },
+        });
+        var (context, bodyBytes) = CreateContextWithSignature(body, hmacKey);
+
+        var result = DeviceEventEndpoints.AdmitCallback(
+            context,
+            bodyBytes,
+            MakeRegistration(hmacKey),
+            new DeviceEventOptions { CallbackFreshnessWindow = TimeSpan.FromSeconds(10) },
+            DateTimeOffset.Parse("2026-04-09T10:00:02Z"));
+
+        result.Succeeded.Should().BeTrue();
+        result.Admission!.SignedBodyTimestampValue.Should().Be("2026-04-09T10:00:00Z");
+        result.Admission.DeliveryId.Should().Be("evt-inner-ts");
     }
 
     [Fact]

@@ -58,6 +58,7 @@ public sealed class ServiceRunCurrentStateProjector
             CommandId = record.CommandId ?? string.Empty,
             CorrelationId = record.CorrelationId ?? string.Empty,
             EndpointId = record.EndpointId ?? string.Empty,
+            ScheduleId = record.ScheduleId ?? string.Empty,
             ImplementationKind = (int)record.ImplementationKind,
             TargetActorId = record.TargetActorId ?? string.Empty,
             RevisionId = record.RevisionId ?? string.Empty,
@@ -70,6 +71,8 @@ public sealed class ServiceRunCurrentStateProjector
             UpdatedAt = record.UpdatedAt?.ToDateTimeOffset() ?? observedAt,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
+            LastOutput = record.LastOutput ?? string.Empty,
+            LastError = record.LastError ?? string.Empty,
         };
 
         await _writeDispatcher.UpsertAsync(document, ct);

@@ -125,15 +125,17 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             // proto3 optional `team_id` semantics — absence on the wire means
             // "unassigned" on the application contract.
             TeamId = document.HasTeamId ? document.TeamId : null,
+            ImplementationRef = ToImplementationRefResponse(
+                document,
+                NormalizeImplementationKindWire(document.ImplementationKind)),
         };
     }
 
     private static StudioMemberDetailResponse ToDetail(StudioMemberCurrentStateDocument document)
     {
         var summary = ToSummary(document);
-        var implementationRef = ToImplementationRefResponse(document, summary.ImplementationKind);
         var lastBinding = ToLastBindingResponse(document);
-        return new StudioMemberDetailResponse(summary, implementationRef, lastBinding)
+        return new StudioMemberDetailResponse(summary, summary.ImplementationRef, lastBinding)
         {
             CurrentBindingRun = ToBindingRunStatusResponse(document),
         };
@@ -167,7 +169,7 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
         {
             return new StudioMemberImplementationRefResponse(
                 ImplementationKind: implementationKindWire,
-                ActorTypeName: document.ImplementationActorTypeName);
+                DiagnosticActorTypeName: document.ImplementationActorTypeName);
         }
 
         return null;
@@ -183,7 +185,10 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             PublishedServiceId: document.LastBoundPublishedServiceId,
             RevisionId: document.LastBoundRevisionId,
             ImplementationKind: NormalizeImplementationKindWire(document.LastBoundImplementationKind),
-            BoundAt: document.LastBoundAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue);
+            BoundAt: document.LastBoundAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+            ExpectedActorId: string.IsNullOrEmpty(document.LastBoundExpectedActorId)
+                ? null
+                : document.LastBoundExpectedActorId);
     }
 
     private static StudioMemberBindingRunStatusResponse? ToBindingRunStatusResponse(
@@ -211,7 +216,29 @@ public sealed class ProjectionStudioMemberQueryPort : IStudioMemberQueryPort
             Status: NormalizeBindingRunStatusWire(document.BindingCurrentStatus),
             StateVersion: document.StateVersion,
             Failure: failure,
-            UpdatedAt: document.BindingUpdatedAt?.ToDateTimeOffset());
+            UpdatedAt: document.BindingUpdatedAt?.ToDateTimeOffset())
+        {
+            Result = ToBindingResultResponse(document),
+        };
+    }
+
+    private static StudioMemberBindingRunResultResponse? ToBindingResultResponse(
+        StudioMemberCurrentStateDocument document)
+    {
+        if (string.IsNullOrEmpty(document.LastBoundPublishedServiceId)
+            || string.IsNullOrEmpty(document.LastBoundRevisionId)
+            || string.IsNullOrEmpty(document.LastBoundImplementationKind))
+        {
+            return null;
+        }
+
+        return new StudioMemberBindingRunResultResponse(
+            PublishedServiceId: document.LastBoundPublishedServiceId,
+            RevisionId: document.LastBoundRevisionId,
+            ImplementationKind: document.LastBoundImplementationKind,
+            ExpectedActorId: string.IsNullOrEmpty(document.LastBoundExpectedActorId)
+                ? null
+                : document.LastBoundExpectedActorId);
     }
 
     private static string NormalizeImplementationKindWire(string? wire) => wire switch

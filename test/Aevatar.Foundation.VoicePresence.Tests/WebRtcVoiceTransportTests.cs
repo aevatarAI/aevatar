@@ -69,10 +69,15 @@ public class WebRtcVoiceTransportTests
         peer.EmitAudio(codec.EncodePacket(new byte[codec.PcmBytesPerFrame]));
         peer.EmitControl(JsonFormatter.Default.Format(new VoiceControlFrame
         {
-            DrainAcknowledged = new VoiceDrainAcknowledged
+            FunctionCallOutput = new VoiceFunctionCallOutput
             {
-                ResponseId = 9,
-                PlayoutSequence = 88,
+                CallId = "client-call-1",
+                ToolName = "edge.light.toggle",
+                Failure = new VoiceFunctionCallFailure
+                {
+                    ErrorCode = "edge_failed",
+                    ErrorMessage = "edge tool failed",
+                },
             },
         }));
         peer.EmitClosed();
@@ -82,8 +87,32 @@ public class WebRtcVoiceTransportTests
         frames[0].IsAudio.ShouldBeTrue();
         frames[0].AudioPcm16.Length.ShouldBe(codec.PcmBytesPerFrame);
         frames[1].IsAudio.ShouldBeFalse();
-        frames[1].Control.ShouldNotBeNull();
-        frames[1].Control!.DrainAcknowledged.ResponseId.ShouldBe(9);
+        var control = frames[1].Control.ShouldNotBeNull();
+        control.FrameCase.ShouldBe(VoiceControlFrame.FrameOneofCase.FunctionCallOutput);
+        control.FunctionCallOutput.Failure.ErrorCode.ShouldBe("edge_failed");
+    }
+
+    [Fact]
+    public async Task ReceiveFramesAsync_should_map_camera_frame_to_input_image()
+    {
+        var peer = new FakeWebRtcVoicePeer();
+        await using var transport = new WebRtcVoiceTransport(peer, new WebRtcVoiceTransportOptions());
+        var receiveTask = CollectFramesAsync(transport);
+
+        peer.EmitControl(JsonFormatter.Default.Format(new VoiceControlFrame
+        {
+            InputImage = new VoiceInputImage
+            {
+                MediaType = "image/png",
+                Data = ByteString.CopyFrom([7, 8, 9]),
+            },
+        }));
+        peer.EmitClosed();
+
+        var frame = (await receiveTask).ShouldHaveSingleItem();
+        frame.InputImage.ShouldNotBeNull();
+        frame.InputImage!.MediaType.ShouldBe("image/png");
+        frame.InputImage.Data.ToByteArray().ShouldBe([7, 8, 9]);
     }
 
     [Fact]

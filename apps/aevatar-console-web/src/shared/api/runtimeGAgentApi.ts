@@ -19,14 +19,14 @@ import type {
   RuntimeGAgentBindingRevision,
   RuntimeGAgentBindingStatus,
   RuntimeGAgentActorGroup,
-  RuntimeGAgentTypeDescriptor,
+  RuntimeGAgentKindDescriptor,
 } from "@/shared/models/runtime/gagents";
 import {
   normalizeRuntimeGAgentBindingImplementationKind,
 } from "@/shared/models/runtime/gagents";
 
 export type RuntimeGAgentDraftRunRequest = {
-  actorTypeName: string;
+  agentKind: string;
   prompt: string;
   preferredActorId?: string;
   timeoutMs?: number;
@@ -35,26 +35,75 @@ export type RuntimeGAgentDraftRunRequest = {
 export type RuntimeScopeGAgentBindingRequest = {
   scopeId: string;
   displayName?: string;
-  actorTypeName: string;
+  agentKind: string;
   preferredActorId?: string;
   endpoints: RuntimeGAgentBindingEndpointInput[];
   revisionId?: string;
 };
 
-function decodeGAgentTypeDescriptor(
+function decodeGAgentEndpointDescriptor(
   value: unknown,
-  label = "RuntimeGAgentTypeDescriptor"
-): RuntimeGAgentTypeDescriptor {
+  label = "RuntimeGAgentEndpointDescriptor"
+) {
   const record = expectRecord(value, label);
   return {
-    typeName: readString(record, ["typeName", "TypeName"], `${label}.typeName`),
-    fullName: readString(record, ["fullName", "FullName"], `${label}.fullName`),
-    assemblyName: readString(
+    endpointId: readString(record, ["endpointId", "EndpointId"], `${label}.endpointId`),
+    displayName: readString(record, ["displayName", "DisplayName"], `${label}.displayName`),
+    kind: readString(record, ["kind", "Kind"], `${label}.kind`),
+    requestTypeUrl: readString(
       record,
-      ["assemblyName", "AssemblyName"],
-      `${label}.assemblyName`
+      ["requestTypeUrl", "RequestTypeUrl"],
+      `${label}.requestTypeUrl`
+    ),
+    responseTypeUrl: readString(
+      record,
+      ["responseTypeUrl", "ResponseTypeUrl"],
+      `${label}.responseTypeUrl`
+    ),
+    description: readString(record, ["description", "Description"], `${label}.description`),
+    auto: readBoolean(record, ["auto", "Auto"], `${label}.auto`),
+  };
+}
+
+function decodeGAgentKindDescriptor(
+  value: unknown,
+  label = "RuntimeGAgentKindDescriptor"
+): RuntimeGAgentKindDescriptor {
+  const record = expectRecord(value, label);
+  return {
+    agentKind: readString(record, ["agentKind", "AgentKind"], `${label}.agentKind`),
+    displayName:
+      readOptionalString(record, ["displayName", "DisplayName"], `${label}.displayName`) || "",
+    diagnosticClrTypeName:
+      readOptionalString(
+        record,
+        ["diagnosticClrTypeName", "DiagnosticClrTypeName"],
+        `${label}.diagnosticClrTypeName`
+      ) || "",
+    endpoints: expectArray(
+      record.endpoints ?? record.Endpoints ?? [],
+      `${label}.endpoints`,
+      decodeGAgentEndpointDescriptor
     ),
   };
+}
+
+function readAgentKind(record: Record<string, unknown>, label: string): string {
+  return readString(
+    record,
+    ["agentKind", "AgentKind"],
+    `${label}.agentKind`
+  );
+}
+
+function readOptionalAgentKind(record: Record<string, unknown>, label: string): string {
+  return (
+    readOptionalString(
+      record,
+      ["agentKind", "AgentKind"],
+      `${label}.agentKind`
+    ) || ""
+  );
 }
 
 function decodeGAgentActorGroup(
@@ -63,11 +112,7 @@ function decodeGAgentActorGroup(
 ): RuntimeGAgentActorGroup {
   const record = expectRecord(value, label);
   return {
-    gAgentType: readString(
-      record,
-      ["gAgentType", "GAgentType"],
-      `${label}.gAgentType`
-    ),
+    agentKind: readAgentKind(record, label),
     actorIds: readStringArray(record, ["actorIds", "ActorIds"], `${label}.actorIds`),
   };
 }
@@ -150,6 +195,8 @@ function decodeBindingRevision(
       readOptionalString(record, ["scriptSourceHash", "ScriptSourceHash"], `${label}.scriptSourceHash`) || "",
     staticActorTypeName:
       readOptionalString(record, ["staticActorTypeName", "StaticActorTypeName"], `${label}.staticActorTypeName`) || "",
+    staticAgentKind:
+      readOptionalString(record, ["staticAgentKind", "StaticAgentKind"], `${label}.staticAgentKind`) || "",
     staticPreferredActorId:
       readOptionalString(
         record,
@@ -231,8 +278,13 @@ function decodeBindingResult(
     ),
     gAgent: gAgentRecord
       ? {
-          actorTypeName:
-            readOptionalString(gAgentRecord, ["actorTypeName", "ActorTypeName"], `${label}.gAgent.actorTypeName`) || "",
+          agentKind: readOptionalAgentKind(gAgentRecord, `${label}.gAgent`),
+          diagnosticActorTypeName:
+            readOptionalString(
+              gAgentRecord,
+              ["diagnosticClrTypeName", "DiagnosticClrTypeName"],
+              `${label}.gAgent.diagnosticActorTypeName`
+            ) || "",
           preferredActorId:
             readOptionalString(
               gAgentRecord,
@@ -271,11 +323,11 @@ function decodeBindingRetirementResult(
 }
 
 export const runtimeGAgentApi = {
-  listTypes(): Promise<RuntimeGAgentTypeDescriptor[]> {
+  listKinds(): Promise<RuntimeGAgentKindDescriptor[]> {
     return requestJson(
       "/api/scopes/gagent-types",
       (value) =>
-        expectArray(value, "RuntimeGAgentTypeDescriptor[]", decodeGAgentTypeDescriptor)
+        expectArray(value, "RuntimeGAgentKindDescriptor[]", decodeGAgentKindDescriptor)
     );
   },
 
@@ -314,7 +366,7 @@ export const runtimeGAgentApi = {
           displayName: input.displayName?.trim() || undefined,
           revisionId: input.revisionId?.trim() || undefined,
           gagent: {
-            actorTypeName: input.actorTypeName.trim(),
+            agentKind: input.agentKind.trim(),
             preferredActorId: input.preferredActorId?.trim() || undefined,
             endpoints: input.endpoints.map((endpoint) => ({
               endpointId: endpoint.endpointId.trim(),
@@ -383,11 +435,11 @@ export const runtimeGAgentApi = {
 
   async removeActor(
     scopeId: string,
-    gAgentType: string,
+    agentKind: string,
     actorId: string
   ): Promise<void> {
     const response = await authFetch(
-      `/api/scopes/${encodeURIComponent(scopeId)}/gagent-actors/${encodeURIComponent(actorId)}?gagentType=${encodeURIComponent(gAgentType)}`,
+      `/api/scopes/${encodeURIComponent(scopeId)}/gagent-actors/${encodeURIComponent(actorId)}?agentKind=${encodeURIComponent(agentKind)}`,
       {
         method: "DELETE",
         headers: {
@@ -415,7 +467,7 @@ export const runtimeGAgentApi = {
           Accept: "text/event-stream",
         },
         body: JSON.stringify({
-          actorTypeName: request.actorTypeName.trim(),
+          agentKind: request.agentKind.trim(),
           prompt: request.prompt.trim(),
           preferredActorId: request.preferredActorId?.trim() || undefined,
           timeoutMs: request.timeoutMs,

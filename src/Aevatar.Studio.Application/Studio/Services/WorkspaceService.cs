@@ -166,7 +166,7 @@ public sealed class WorkspaceService
         }
 
         var stableWorkflowId = string.IsNullOrWhiteSpace(workflowId)
-            ? GenerateWorkflowId(normalizedName, existingFiles.Select(file => file.WorkflowId))
+            ? CreateWorkflowDraftId()
             : workflowId;
 
         if (conflictingFile != null &&
@@ -264,26 +264,8 @@ public sealed class WorkspaceService
             HasLayout: false,
             file.UpdatedAtUtc);
 
-    private static string GenerateWorkflowId(string workflowName, IEnumerable<string> existingWorkflowIds)
-    {
-        var baseId = StudioDocumentIdNormalizer.Normalize(workflowName, "workflow");
-        var usedIds = existingWorkflowIds.ToHashSet(StringComparer.Ordinal);
-        if (!usedIds.Contains(baseId))
-        {
-            return baseId;
-        }
-
-        for (var suffix = 2; suffix < int.MaxValue; suffix++)
-        {
-            var candidate = $"{baseId}-{suffix}";
-            if (!usedIds.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new InvalidOperationException("Unable to allocate a unique workflow draft id.");
-    }
+    private static string CreateWorkflowDraftId() =>
+        Guid.NewGuid().ToString("N");
 
     private static string NormalizeRuntimeBaseUrl(string url)
     {

@@ -39,6 +39,11 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        if (request.ImplementationRef != null)
+        {
+            throw new StudioMemberCreateImplementationRefNotAllowedException(scopeId);
+        }
+
         // Length caps + slug pattern are enforced at the Application
         // boundary (StudioMemberCreateRequestValidator). The transport-
         // level guards here only ensure the actor-id remains derivable —
@@ -103,7 +108,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             LastBoundRevisionId: null,
             CreatedAt: createdAt,
             UpdatedAt: createdAt)
-        { TeamId = responseTeamId };
+        {
+            TeamId = responseTeamId,
+            ImplementationRef = null,
+        };
     }
 
     public async Task PatchTeamAssignmentAsync(
@@ -187,6 +195,25 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
     }
 
+    public async Task RenameAsync(
+        string scopeId,
+        string memberId,
+        string displayName,
+        CancellationToken ct = default)
+    {
+        var normalizedScopeId = StudioMemberConventions.NormalizeScopeId(scopeId);
+        var normalizedMemberId = StudioMemberConventions.NormalizeMemberId(memberId);
+        var normalizedDisplayName = (displayName ?? string.Empty).Trim();
+
+        var evt = new StudioMemberRenamedEvent
+        {
+            DisplayName = normalizedDisplayName,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        await DispatchAsync(normalizedScopeId, normalizedMemberId, evt, ct);
+    }
+
     public async Task StartBindingRunAsync(
         StudioMemberBindingRunStartRequest request,
         CancellationToken ct = default)
@@ -243,7 +270,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             case MemberImplementationKindNames.GAgent:
                 message.Gagent = new StudioMemberGAgentRef
                 {
-                    ActorTypeName = implementation.ActorTypeName ?? string.Empty,
+                    ActorTypeName = implementation.DiagnosticActorTypeName ?? string.Empty,
                 };
                 break;
             default:
@@ -273,7 +300,10 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
         switch (implementationKindName)
         {
             case MemberImplementationKindNames.Workflow:
-                request.Workflow = new StudioMemberWorkflowBindingRequest();
+                request.Workflow = new StudioMemberWorkflowBindingRequest
+                {
+                    WorkflowId = binding.Workflow?.WorkflowId ?? string.Empty,
+                };
                 request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
                 break;
             case MemberImplementationKindNames.Script:
@@ -287,7 +317,7 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
             case MemberImplementationKindNames.GAgent:
                 request.Gagent = new StudioMemberGAgentBindingRequest
                 {
-                    ActorTypeName = binding.GAgent?.ActorTypeName ?? string.Empty,
+                    AgentKind = binding.GAgent?.AgentKind ?? string.Empty,
                 };
                 foreach (var endpoint in binding.GAgent?.Endpoints ?? [])
                 {

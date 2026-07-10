@@ -1,6 +1,7 @@
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Core.Runtime;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Scripting.Core;
 
+[GAgent("scripting.definition")]
 public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
 {
     // Refactor (iter42/cluster-044-scripting-source-package-json-shadow):

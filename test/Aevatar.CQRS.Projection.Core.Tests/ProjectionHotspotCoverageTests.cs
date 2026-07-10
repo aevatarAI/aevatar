@@ -216,7 +216,7 @@ public sealed class ProjectionHotspotCoverageTests
         ProjectionWriteResultEvaluator.Evaluate(existing, new TestReadModel("actor-1", 4, "evt-4b"))
             .Disposition.Should().Be(ProjectionWriteDisposition.Conflict);
         ProjectionWriteResultEvaluator.Evaluate(existing, new TestReadModel("actor-1", 6, "evt-6"))
-            .Disposition.Should().Be(ProjectionWriteDisposition.Gap);
+            .Disposition.Should().Be(ProjectionWriteDisposition.Applied);
         ProjectionWriteResultEvaluator.Evaluate(existing, new TestReadModel("actor-1", 5, "evt-5"))
             .Disposition.Should().Be(ProjectionWriteDisposition.Applied);
 

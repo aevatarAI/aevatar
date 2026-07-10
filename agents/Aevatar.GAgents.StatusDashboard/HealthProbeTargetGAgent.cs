@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
@@ -21,6 +22,7 @@ namespace Aevatar.GAgents.StatusDashboard;
 /// <see cref="HealthProbeStoreCommands.BuildActorId(string)"/>). Callers query
 /// the read model by slug, not by actor id.
 /// </summary>
+[GAgent("status.dashboard.health-probe-target")]
 public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>, IProjectedActor
 {
     public static string ProjectionKind => "health-probe-target";
@@ -234,12 +236,18 @@ public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
             };
         }
 
-        await SendToAsync(Id, new HealthProbeCompletedEvent
+        // Completion must reach HandleCompletedAsync, which is
+        // [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]. SendToAsync builds a
+        // Direct route (TopologyAudience.Unspecified) that the dispatch gate drops, so the real
+        // outcome was silently lost and only the durable timeout ever fired — every probe reported
+        // a false 5000ms timeout (regression 298fb1355). Publish as a Self topology event, the same
+        // self-routing the tick/timeout path already uses, so the OnlySelfHandling gate admits it.
+        await PublishAsync(new HealthProbeCompletedEvent
         {
             Slug = descriptor.Slug,
             OperationId = execution.OperationId,
             Outcome = outcome,
-        }, CancellationToken.None);
+        }, TopologyAudience.Self, CancellationToken.None);
     }
 
     private async Task ObserveImmediateOutcomeAsync(HealthProbeOutcome outcome)

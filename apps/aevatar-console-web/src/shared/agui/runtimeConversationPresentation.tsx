@@ -5,8 +5,14 @@ import type {
   RuntimeStepInfo,
   RuntimeToolCallInfo,
 } from "./runtimeEventSemantics";
+import {
+  AevatarLoadingDots,
+  AevatarLoadingPulseDot,
+  AevatarStreamingCursor,
+} from "@/shared/ui/AevatarLoading";
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from "@/shared/ui/interactionStandards";
 import { t } from "@/shared/i18n/messages";
+import { sanitizeUserFacingText } from "@/shared/ui/userFacingIdentifiers";
 
 function renderInline(text: string): React.ReactNode[] {
   const parts = text.split(/(`[^`]+`)/g);
@@ -115,19 +121,19 @@ function renderContent(text: string): React.ReactNode {
 
 function formatEventPreview(event: RuntimeEvent): string {
   if (event.type === "TEXT_MESSAGE_CONTENT") {
-    return String(event.delta || "").slice(0, 120);
+    return sanitizeUserFacingText(String(event.delta || "")).slice(0, 120);
   }
 
   if (event.type === "RUN_ERROR") {
-    return String(event.message || "");
+    return sanitizeUserFacingText(String(event.message || ""));
   }
 
   if (event.type === "STEP_STARTED" || event.type === "STEP_FINISHED") {
-    return String(event.stepName || "");
+    return sanitizeUserFacingText(String(event.stepName || ""));
   }
 
   if (event.type === "CUSTOM") {
-    return String((event.name as string) || "custom");
+    return sanitizeUserFacingText(String((event.name as string) || "custom")) || "custom";
   }
 
   return "";
@@ -161,16 +167,7 @@ function StepIndicator({
         }}
       >
         {isRunning ? (
-          <span
-            style={{
-              animation: "pulse 1.5s ease-in-out infinite",
-              background: "#f59e0b",
-              borderRadius: 999,
-              display: "block",
-              height: 8,
-              width: 8,
-            }}
-          />
+          <AevatarLoadingPulseDot color="#f59e0b" size={8} />
         ) : isError ? (
           <span
             style={{
@@ -274,16 +271,7 @@ function ToolCallIndicator({
           }}
         >
           {tool.status === "running" ? (
-            <span
-              style={{
-                animation: "pulse 1.5s ease-in-out infinite",
-                background: "#60a5fa",
-                borderRadius: 999,
-                display: "block",
-                height: 6,
-                width: 6,
-              }}
-            />
+            <AevatarLoadingPulseDot color="#60a5fa" size={6} />
           ) : (
             <svg
               fill="none"
@@ -325,7 +313,7 @@ function ToolCallIndicator({
             whiteSpace: "pre-wrap",
           }}
         >
-          {tool.result.slice(0, 500)}
+          {sanitizeUserFacingText(tool.result).slice(0, 500)}
         </pre>
       ) : null}
     </div>
@@ -382,16 +370,7 @@ function ThinkingBlock({
         </svg>
         <span>{t("shared.agui.runtimeconversationpresentation.thinking", "Thinking")}</span>
         {isStreaming ? (
-          <span
-            style={{
-              animation: "pulse 1.5s ease-in-out infinite",
-              background: "#a855f7",
-              borderRadius: 999,
-              display: "block",
-              height: 6,
-              width: 6,
-            }}
-          />
+          <AevatarLoadingPulseDot color="#a855f7" size={6} />
         ) : null}
       </button>
       {open ? (
@@ -528,16 +507,7 @@ export function RuntimeAssistantOutput({
                 </span>
                 {steps?.some((step) => step.status === "running") ||
                 toolCalls?.some((tool) => tool.status === "running") ? (
-                  <span
-                    style={{
-                      animation: "pulse 1.5s ease-in-out infinite",
-                      background: "#f59e0b",
-                      borderRadius: 999,
-                      display: "block",
-                      height: 6,
-                      width: 6,
-                    }}
-                  />
+                  <AevatarLoadingPulseDot color="#f59e0b" size={6} />
                 ) : null}
               </button>
               {actionsOpen ? (
@@ -576,17 +546,7 @@ export function RuntimeAssistantOutput({
             <div style={{ wordBreak: "break-word" }}>
               {renderContent(content)}
               {status === "streaming" && content ? (
-                <span
-                  style={{
-                    animation: "blink 1s step-end infinite",
-                    background: "#9ca3af",
-                    display: "inline-block",
-                    height: 18,
-                    marginLeft: 4,
-                    verticalAlign: "text-bottom",
-                    width: 2,
-                  }}
-                />
+                <AevatarStreamingCursor color="#9ca3af" />
               ) : null}
             </div>
             {!content && status === "streaming" ? (
@@ -598,20 +558,11 @@ export function RuntimeAssistantOutput({
                   padding: "10px 0",
                 }}
               >
-                {[0, 1, 2].map((index) => (
-                  <span
-                    key={index}
-                    style={{
-                      animation: "bounce 1s ease-in-out infinite",
-                      animationDelay: `${index * 160}ms`,
-                      background: "#d1d5db",
-                      borderRadius: 999,
-                      display: "block",
-                      height: 6,
-                      width: 6,
-                    }}
-                  />
-                ))}
+                <AevatarLoadingDots
+                  ariaLabel="Assistant is responding"
+                  color="#d1d5db"
+                  size={6}
+                />
               </div>
             ) : null}
           </div>

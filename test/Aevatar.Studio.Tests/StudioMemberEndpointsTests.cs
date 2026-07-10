@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -43,8 +44,40 @@ public sealed class StudioMemberEndpointsTests
             service,
             CancellationToken.None);
 
-        result.Should().BeOfType<Created<StudioMemberSummaryResponse>>()
-            .Which.Location.Should().Be($"/api/scopes/{ScopeId}/members/{NewSummary().MemberId}");
+        var created = result.Should().BeOfType<Created<StudioMemberSummaryResponse>>().Subject;
+        created.Location.Should().Be($"/api/scopes/{ScopeId}/members/{NewSummary().MemberId}");
+        created.Value!.LifecycleStage.Should().Be(MemberLifecycleStageNames.Created);
+        created.Value.ImplementationRef.Should().BeNull();
+        service.CreateInvoked.Should().BeTrue();
+        service.CreateRequest!.ImplementationRef.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldReturnTypedBadRequest_WhenImplementationRefIsPresent()
+    {
+        var service = new RecordingMemberService
+        {
+            CreateException = new StudioMemberCreateImplementationRefNotAllowedException(ScopeId),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleCreateAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new CreateStudioMemberRequest(
+                DisplayName: "Alpha",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                ImplementationRef: new StudioMemberImplementationRefResponse(
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    WorkflowId: "wf-alpha")),
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(
+            result,
+            StudioMemberCreateImplementationRefNotAllowedException.ErrorCode,
+            expectedField: "implementationRef",
+            expectedScopeId: ScopeId);
         service.CreateInvoked.Should().BeTrue();
     }
 
@@ -158,6 +191,155 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
+    public async Task HandlePatchAsync_ShouldReturnAccepted_OnTeamPatch()
+    {
+        var request = new StudioMemberEndpoints.StudioMemberPatchBody
+        {
+            TeamId = System.Text.Json.JsonSerializer.SerializeToElement("team-alpha"),
+        };
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            request,
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/m-alpha");
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        service.UpdateInvoked.Should().BeTrue();
+        service.UpdateRequest!.TeamId.HasValue.Should().BeTrue();
+        service.UpdateRequest.TeamId.Value.Should().Be("team-alpha");
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldMapImplementationRefPatch()
+    {
+        var implementationRef = new StudioMemberImplementationRefResponse(
+            ImplementationKind: MemberImplementationKindNames.Workflow,
+            WorkflowId: "wf-alpha");
+        var request = new StudioMemberEndpoints.StudioMemberPatchBody
+        {
+            ImplementationRef = System.Text.Json.JsonSerializer.SerializeToElement(implementationRef),
+        };
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            request,
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/m-alpha");
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        service.UpdateInvoked.Should().BeTrue();
+        service.UpdateRequest!.ImplementationRef.HasValue.Should().BeTrue();
+        service.UpdateRequest.ImplementationRef.Value.Should().Be(implementationRef);
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldForwardDisplayNamePatch()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                DisplayName = JsonSerializer.SerializeToElement("Renamed Workflow"),
+            },
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/m-alpha");
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.Accepted);
+        service.UpdateRequest!.DisplayName.HasValue.Should().BeTrue();
+        service.UpdateRequest.DisplayName.Value.Should().Be("Renamed Workflow");
+        service.UpdateRequest.TeamId.HasValue.Should().BeFalse();
+        service.UpdateRequest.ImplementationRef.HasValue.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldRejectNonStringDisplayName()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                DisplayName = JsonSerializer.SerializeToElement(42),
+            },
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_REQUEST");
+        service.UpdateInvoked.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldReturnBadRequest_OnValidationError()
+    {
+        var service = new RecordingMemberService
+        {
+            UpdateException = new InvalidOperationException("teamId must not be empty."),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                TeamId = System.Text.Json.JsonSerializer.SerializeToElement("team-alpha"),
+            },
+            service,
+            CancellationToken.None);
+
+        AssertBadRequestResult(result, "INVALID_STUDIO_MEMBER_REQUEST");
+    }
+
+    [Fact]
+    public async Task HandlePatchAsync_ShouldReturnTyped404_WhenMemberMissing()
+    {
+        var service = new RecordingMemberService
+        {
+            UpdateException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandlePatchAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-missing",
+            new StudioMemberEndpoints.StudioMemberPatchBody
+            {
+                TeamId = System.Text.Json.JsonSerializer.SerializeToElement("team-alpha"),
+            },
+            service,
+            CancellationToken.None);
+
+        var statusCode = result.GetType().GetProperty("StatusCode")?.GetValue(result) as int?;
+        statusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
     public async Task HandleBindAsync_ShouldReturnAccepted_OnSuccess()
     {
         var binding = new StudioMemberBindingAcceptedResponse(
@@ -176,7 +358,7 @@ public sealed class StudioMemberEndpointsTests
             ScopeId,
             "m-1",
             new UpdateStudioMemberBindingRequest(
-                Workflow: new StudioMemberWorkflowBindingSpec(["w:"])),
+                Workflow: new StudioMemberWorkflowBindingSpec("workflow-stable-id", ["w:"])),
             service,
             CancellationToken.None);
 
@@ -621,7 +803,13 @@ public sealed class StudioMemberEndpointsTests
         DefaultSmokePrompt: "Hello from Studio Bind.",
         SampleRequestJson: null,
         DeploymentStatus: "Active",
-        RevisionId: "rev-1");
+        RevisionId: "rev-1",
+        InvocationReadiness: new StudioMemberInvocationReadinessResponse(
+            CanInvoke: true,
+            Status: StudioMemberInvocationReadinessStatusNames.Ready,
+            ReasonCode: StudioMemberInvocationReadinessStatusNames.Ready,
+            Message: "Member endpoint is ready for invocation.",
+            RevisionId: "rev-1"));
 
     private static StudioMemberSummaryResponse NewSummary() => new(
         MemberId: "m-1",
@@ -667,7 +855,11 @@ public sealed class StudioMemberEndpointsTests
             because: $"expected JSON result with status {expectedStatus} but got {result.GetType().Name}");
     }
 
-    private static void AssertBadRequestResult(IResult result, string expectedCode)
+    private static void AssertBadRequestResult(
+        IResult result,
+        string expectedCode,
+        string? expectedField = null,
+        string? expectedScopeId = null)
     {
         result.GetType().Name.Should().StartWith("BadRequest");
 
@@ -682,6 +874,20 @@ public sealed class StudioMemberEndpointsTests
         var codeProp = value!.GetType().GetProperty("code");
         var code = codeProp?.GetValue(value) as string;
         code.Should().Be(expectedCode);
+
+        if (expectedField != null)
+        {
+            var fieldProp = value.GetType().GetProperty("field");
+            var field = fieldProp?.GetValue(value) as string;
+            field.Should().Be(expectedField);
+        }
+
+        if (expectedScopeId != null)
+        {
+            var scopeIdProp = value.GetType().GetProperty("scopeId");
+            var scopeId = scopeIdProp?.GetValue(value) as string;
+            scopeId.Should().Be(expectedScopeId);
+        }
     }
 
     private static void AssertNotFoundResult(IResult result, string expectedCode)
@@ -713,6 +919,7 @@ public sealed class StudioMemberEndpointsTests
         public StudioMemberSummaryResponse? CreateResponse { get; set; }
         public Exception? CreateException { get; set; }
         public bool CreateInvoked { get; private set; }
+        public CreateStudioMemberRequest? CreateRequest { get; private set; }
 
         public StudioMemberRosterResponse? ListResponse { get; set; }
         public StudioMemberDetailResponse? GetResponse { get; set; }
@@ -733,6 +940,7 @@ public sealed class StudioMemberEndpointsTests
             string scopeId, CreateStudioMemberRequest request, CancellationToken ct = default)
         {
             CreateInvoked = true;
+            CreateRequest = request;
             if (CreateException != null) throw CreateException;
             return Task.FromResult(CreateResponse!);
         }
@@ -790,7 +998,7 @@ public sealed class StudioMemberEndpointsTests
             return Task.FromResult(RetireResponse!);
         }
 
-        public Task<StudioMemberDetailResponse> UpdateAsync(
+        public Task<StudioMemberCommandResponse> UpdateAsync(
             string scopeId, string memberId, UpdateStudioMemberRequest request, CancellationToken ct = default)
         {
             UpdateInvoked = true;
@@ -798,14 +1006,18 @@ public sealed class StudioMemberEndpointsTests
             UpdateMemberId = memberId;
             UpdateRequest = request;
             if (UpdateException != null) throw UpdateException;
-            return Task.FromResult(UpdateResponse!);
+            return Task.FromResult(UpdateResponse ?? new StudioMemberCommandResponse(
+                StudioMemberCommandStatusNames.Accepted,
+                scopeId,
+                memberId,
+                DateTimeOffset.UtcNow));
         }
 
         public bool UpdateInvoked { get; set; }
         public string? UpdateScopeId { get; set; }
         public string? UpdateMemberId { get; set; }
         public UpdateStudioMemberRequest? UpdateRequest { get; set; }
-        public StudioMemberDetailResponse? UpdateResponse { get; set; }
+        public StudioMemberCommandResponse? UpdateResponse { get; set; }
         public Exception? UpdateException { get; set; }
     }
 

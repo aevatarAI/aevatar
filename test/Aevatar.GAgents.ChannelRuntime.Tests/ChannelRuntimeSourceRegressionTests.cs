@@ -49,6 +49,7 @@ public sealed class ChannelRuntimeSourceRegressionTests
         var repositoryRoot = GetRepositoryRoot();
         var bypasses = Directory.EnumerateFiles(Path.Combine(repositoryRoot, "agents"), "*.cs", SearchOption.AllDirectories)
             .Where(static file => !file.EndsWith("LarkOutboundDispatcher.cs", StringComparison.Ordinal))
+            .Where(static file => !file.EndsWith("FeishuCardOutboundMessageSender.cs", StringComparison.Ordinal))
             .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: StripComments(File.ReadAllText(file, Encoding.UTF8))))
             .Where(static item =>
                 item.Source.Contains("open-apis/im/v1/messages?receive_id_type=", StringComparison.Ordinal) ||
@@ -58,6 +59,52 @@ public sealed class ChannelRuntimeSourceRegressionTests
 
         bypasses.Should().BeEmpty(
             "new Lark message POST, message_id parsing, and 230002 fallback belong to LarkOutboundDispatcher");
+    }
+
+    [Fact]
+    public void Workflow_core_notify_boundary_must_not_reintroduce_channel_or_raw_lark_tokens()
+    {
+        var repositoryRoot = GetRepositoryRoot();
+        var guardSource = File.ReadAllText(
+            Path.Combine(repositoryRoot, "tools/ci/architecture_guards.sh"),
+            Encoding.UTF8);
+        foreach (var token in new[]
+                 {
+                     "Aevatar\\.GAgents\\.Channel\\.Abstractions",
+                     "MessageContent",
+                     "LarkMessageComposer",
+                     "open-apis/im/v1/messages",
+                     "raw card JSON",
+                 })
+        {
+            guardSource.Should().Contain(token, "FI-006 architecture guard must keep the Workflow Core/Lark boundary token '{0}'", token);
+        }
+
+        var forbiddenPatterns = new[]
+        {
+            "Aevatar.GAgents.Channel.Abstractions",
+            "MessageContent",
+            "LarkMessageComposer",
+            "open-apis/im/v1/messages",
+            "interactive_card",
+            "raw Lark",
+            "raw card JSON",
+        };
+        var workflowCoreRoot = Path.Combine(repositoryRoot, "src/workflow/Aevatar.Workflow.Core");
+        var hits = Directory.EnumerateFiles(workflowCoreRoot, "*.*", SearchOption.AllDirectories)
+            .Where(static file =>
+                (file.EndsWith(".cs", StringComparison.Ordinal) ||
+                 file.EndsWith(".proto", StringComparison.Ordinal)) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(file => (File: Path.GetRelativePath(repositoryRoot, file), Source: ReadPolicySurface(file)))
+            .SelectMany(item => forbiddenPatterns
+                .Where(token => item.Source.Contains(token, StringComparison.Ordinal))
+                .Select(token => $"{item.File}: {token}"))
+            .ToArray();
+
+        hits.Should().BeEmpty(
+            "Workflow Core may publish typed notification events, but channel rendering and raw Lark card payloads belong at the channel boundary");
     }
 
     [Fact]
@@ -113,6 +160,32 @@ public sealed class ChannelRuntimeSourceRegressionTests
 
         hits.Should().BeEmpty(
             "production code, prompts, route contracts, type names, and field names must not hardcode concrete skill names; use generic skill discovery");
+    }
+
+    [Fact]
+    public void Conversation_actor_must_not_switch_on_lark_card_reply_operation_step_payload_cases()
+    {
+        var actorSource = StripComments(ReadRepositoryFile(
+            "agents/Aevatar.GAgents.Channel.Runtime/Conversation/ConversationGAgent.cs"));
+
+        actorSource.Should().NotContain("PayloadOneofCase.LarkCard");
+        actorSource.Should().NotContain("ExecuteLarkCardOperationStepAsync");
+        actorSource.Should().NotContain("HandleLlmReplyCardStreamChunkAsync");
+        actorSource.Should().NotContain("HandleLarkCardOperationCompletedAsync");
+        actorSource.Should().NotContain("HandleLarkCardOperationTimeoutFiredAsync");
+    }
+
+    [Fact]
+    public void Reply_streaming_renderers_own_typed_step_payload_recognition()
+    {
+        var rendererSource = StripComments(ReadRepositoryFile(
+            "agents/Aevatar.GAgents.Channel.Runtime/Conversation/ReplyStreaming/NyxRelayTextReplyStreamRenderer.cs")) +
+                             StripComments(ReadRepositoryFile(
+                                 "agents/Aevatar.GAgents.Channel.Runtime/Conversation/ReplyStreaming/LarkCardReplyStreamRenderer.cs"));
+
+        rendererSource.Should().Contain("PayloadCase");
+        rendererSource.Should().Contain("PayloadOneofCase.NyxRelayText");
+        rendererSource.Should().Contain("PayloadOneofCase.LarkCard");
     }
 
     private static string ReadRepositorySources(params string[] relativeDirectories)

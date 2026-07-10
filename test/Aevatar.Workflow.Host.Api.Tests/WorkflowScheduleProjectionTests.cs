@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -37,6 +38,8 @@ public sealed class WorkflowScheduleProjectionTests
             CronExpression = "*/15 * * * *",
             Timezone = "UTC",
             Enabled = true,
+            Deleted = true,
+            DeletedAt = observedAt.AddMinutes(-1),
             CreatedAt = createdAt,
             NextFireAt = nextFireAt,
             LastFireAt = lastFireAt,
@@ -59,7 +62,7 @@ public sealed class WorkflowScheduleProjectionTests
                         ServiceId = "workflow-a",
                     },
                     EndpointId = "chat",
-                    Payload = Any.Pack(new StringValue { Value = "run it" }),
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "run it" }),
                 },
             },
         };
@@ -104,6 +107,8 @@ public sealed class WorkflowScheduleProjectionTests
         document.CronExpression.Should().Be("*/15 * * * *");
         document.Timezone.Should().Be("UTC");
         document.Enabled.Should().BeTrue();
+        document.Deleted.Should().BeTrue();
+        document.DeletedAt.Should().Be(observedAt.AddMinutes(-1));
         document.CreatedAt.Should().Be(createdAt);
         document.UpdatedAt.Should().Be(observedAt);
         document.NextFireAt.Should().Be(nextFireAt);
@@ -117,6 +122,7 @@ public sealed class WorkflowScheduleProjectionTests
         document.ServiceKey.Should().Be("scope-1:default:default:workflow-a");
         document.ServiceId.Should().Be("workflow-a");
         document.ServiceEndpointId.Should().Be("chat");
+        document.Prompt.Should().Be("run it");
         document.TargetActorId.Should().Be("target-actor-1");
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-7");
@@ -197,6 +203,7 @@ public sealed class WorkflowScheduleProjectionTests
             {
                 ["caller"] = "kept",
             },
+            Prompt = "saved prompt",
             FireRecords =
             {
                 new ScheduledDispatchFireRecordDocument
@@ -226,6 +233,7 @@ public sealed class WorkflowScheduleProjectionTests
         reader.GetKeys.Should().Equal("schedule-1");
         detail.Should().NotBeNull();
         detail!.Schedule.ScheduleId.Should().Be("schedule-1");
+        detail.Schedule.Deleted.Should().BeFalse();
         detail.Schedule.DisplayName.Should().BeEmpty();
         detail.Schedule.CronExpression.Should().BeEmpty();
         detail.Schedule.Timezone.Should().BeEmpty();
@@ -236,6 +244,7 @@ public sealed class WorkflowScheduleProjectionTests
         detail.Schedule.Headers.Should().Contain("caller", "kept");
         detail.Schedule.ScheduleActorId.Should().BeEmpty();
         detail.Schedule.TargetActorId.Should().BeEmpty();
+        detail.Schedule.Prompt.Should().Be("saved prompt");
         detail.RecentFires.Select(x => x.IdempotencyKey).Should().Equal("newer", "older");
         detail.RecentFires[0].TargetActorId.Should().Be("run-actor");
         detail.RecentFires[0].CommandId.Should().Be("cmd");
@@ -246,6 +255,29 @@ public sealed class WorkflowScheduleProjectionTests
         detail.RecentFires[1].CommandId.Should().BeEmpty();
         detail.RecentFires[1].CorrelationId.Should().BeEmpty();
         detail.RecentFires[1].Error.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task QueryPort_ShouldMapDeletedDetailForApplicationLayerVisibilityBoundary()
+    {
+        var deletedAt = DateTimeOffset.Parse("2026-05-29T09:30:00+00:00");
+        var reader = new StubScheduleDocumentReader();
+        reader.Documents["deleted-schedule"] = new ScheduledDispatchDocument
+        {
+            ScheduleId = "deleted-schedule",
+            Deleted = true,
+            DeletedAt = deletedAt,
+            CreatedAt = DateTimeOffset.Parse("2026-05-29T08:00:00+00:00"),
+            UpdatedAt = deletedAt,
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var detail = await port.GetAsync(" deleted-schedule ");
+
+        reader.GetKeys.Should().Equal("deleted-schedule");
+        detail.Should().NotBeNull();
+        detail!.Schedule.ScheduleId.Should().Be("deleted-schedule");
+        detail.Schedule.Deleted.Should().BeTrue();
     }
 
     [Fact]
@@ -270,6 +302,7 @@ public sealed class WorkflowScheduleProjectionTests
                         {
                             ["trace"] = "on",
                         },
+                        Prompt = "list prompt",
                         ScheduleActorId = "schedule-actor",
                         TargetActorId = "target-actor",
                     },
@@ -291,11 +324,17 @@ public sealed class WorkflowScheduleProjectionTests
         result.NextCursor.Should().Be("next");
         result.TotalCount.Should().Be(12);
         result.Items.Should().ContainSingle();
+        var deletedFilter = reader.Queries[0].Filters.Should().ContainSingle(filter =>
+            filter.FieldPath == nameof(ScheduledDispatchDocument.Deleted)).Subject;
+        deletedFilter.Operator.Should().Be(ProjectionDocumentFilterOperator.EqOrMissing);
+        deletedFilter.Value.Kind.Should().Be(ProjectionDocumentValueKind.Bool);
+        deletedFilter.Value.RawValue.Should().Be(false);
         var summary = result.Items.Single();
         summary.ScheduleId.Should().Be("schedule-1");
         summary.DisplayName.Should().Be("Daily");
         summary.CronExpression.Should().Be("0 9 * * *");
         summary.Headers.Should().Contain("trace", "on");
+        summary.Prompt.Should().Be("list prompt");
         summary.ScheduleActorId.Should().Be("schedule-actor");
         summary.TargetActorId.Should().Be("target-actor");
     }

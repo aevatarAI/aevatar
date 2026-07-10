@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using NSubstitute;
@@ -20,6 +21,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 Id = "agent-1",
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
+                OutputFormat = SkillRunnerOutputFormat.Text,
             });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
@@ -35,6 +37,83 @@ public sealed class UserAgentDeliveryTargetReaderTests
         target.Should().NotBeNull();
         target!.NyxApiKey.Should().Be("live-key");
         target.ConversationId.Should().Be("oc_chat_1");
+        target.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
+    }
+
+    [Fact]
+    public async Task GetAsync_ResolvesExplicitDeliveryTargetAlias_ForWorkflowDelivery()
+    {
+        var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+
+        documentReader.GetAsync("aelf-twitter-approval", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogDocument
+            {
+                Id = "aelf-twitter-approval",
+                ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                NyxProviderSlug = "api-lark-bot-2",
+                LarkReceiveId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                LarkReceiveIdType = "chat_id",
+                TargetPlatform = "lark",
+                AgentType = "delivery_target",
+                TemplateName = "explicit_delivery_target",
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+            });
+        credentialReader.GetAsync("aelf-twitter-approval", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogNyxCredentialDocument
+            {
+                Id = "aelf-twitter-approval",
+                NyxApiKey = "secret-created-key",
+            });
+
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+
+        var target = await reader.GetAsync("aelf-twitter-approval", CancellationToken.None);
+
+        target.Should().NotBeNull();
+        target!.AgentId.Should().Be("aelf-twitter-approval");
+        target.Platform.Should().Be("lark");
+        target.ConversationId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+        target.NyxProviderSlug.Should().Be("api-lark-bot-2");
+        target.NyxApiKey.Should().Be("secret-created-key");
+        target.LarkReceiveId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+        target.LarkReceiveIdType.Should().Be("chat_id");
+        target.AgentType.Should().Be("delivery_target");
+    }
+
+    [Fact]
+    public async Task GetAsync_UsesTargetPlatform_When_NotLark()
+    {
+        var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+
+        documentReader.GetAsync("email-approval", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogDocument
+            {
+                Id = "email-approval",
+                TargetPlatform = "email",
+                ConversationId = "approvals@example.com",
+                NyxProviderSlug = "api-email-outbound",
+                AgentType = "delivery_target",
+                TemplateName = "explicit_delivery_target",
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+            });
+        credentialReader.GetAsync("email-approval", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogNyxCredentialDocument
+            {
+                Id = "email-approval",
+                NyxApiKey = "secret-created-key",
+            });
+
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader);
+
+        var target = await reader.GetAsync("email-approval", CancellationToken.None);
+
+        target.Should().NotBeNull();
+        target!.Platform.Should().Be("email");
+        target.ConversationId.Should().Be("approvals@example.com");
+        target.LarkReceiveId.Should().BeEmpty();
+        target.LarkReceiveIdType.Should().BeEmpty();
     }
 
     [Fact]
@@ -66,8 +145,8 @@ public sealed class UserAgentDeliveryTargetReaderTests
     {
         // Issue #466 review: when the credential document hasn't projected yet,
         // returning a delivery target with NyxApiKey="" would push the projection-lag
-        // failure mode onto FeishuCardHumanInteractionPort as a NyxID 401/403. The
-        // reader fails closed instead — caller surfaces "delivery target unavailable".
+        // failure mode onto outbound Lark senders as a NyxID 401/403. The reader
+        // fails closed instead — caller surfaces "delivery target unavailable".
         var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
         var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
         documentReader.GetAsync("agent-1", Arg.Any<CancellationToken>())

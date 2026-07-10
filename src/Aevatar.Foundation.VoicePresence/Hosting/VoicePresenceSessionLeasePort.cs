@@ -8,10 +8,14 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePort
 {
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IVoicePresenceLeaseObservationPort _observationPort;
 
-    public VoicePresenceSessionLeasePort(IActorDispatchPort dispatchPort)
+    public VoicePresenceSessionLeasePort(
+        IActorDispatchPort dispatchPort,
+        IVoicePresenceLeaseObservationPort observationPort)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _observationPort = observationPort ?? throw new ArgumentNullException(nameof(observationPort));
     }
 
     public async Task<VoicePresenceSessionLeaseHandle> AcquireAsync(
@@ -35,17 +39,26 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
                     SessionId = request.SessionId,
                     OwnerId = request.OwnerId,
                     ExpiresAt = Timestamp.FromDateTimeOffset(expiresAtUtc),
+                    SessionOverrides = request.SessionOverrides?.Clone(),
+                    ToolContext = request.ToolContext?.Clone(),
                 }),
             ct);
+
+        var observed = await _observationPort.ObserveSessionLeaseAsync(request, ct);
 
         return new VoicePresenceSessionLeaseHandle(
             request.ActorId,
             request.ModuleName,
             request.SessionId,
             request.OwnerId,
-            request.ObservedStateVersion,
-            expiresAtUtc,
-            request.ObservedRemoteAudioSupport);
+            observed.StateVersion,
+            observed.LeaseExpiresAt?.ToUniversalTime() ?? expiresAtUtc,
+            observed.RemoteAudioSupport,
+            observed.ActiveTransportLeaseId,
+            observed.LeaseEpoch,
+            request.ToolContext?.Clone(),
+            // Carry the resolved per-session prompt so the host-side relay session can apply it.
+            request.SessionOverrides?.Instructions);
     }
 
     public Task ReleaseAsync(
@@ -90,6 +103,7 @@ public sealed class VoicePresenceSessionLeasePort : IVoicePresenceSessionLeasePo
                     OwnerId = handle.OwnerId,
                     TransportLeaseId = transportLeaseId,
                     LeaseExpiresAt = Timestamp.FromDateTimeOffset(handle.ExpiresAtUtc.ToUniversalTime()),
+                    LeaseEpoch = handle.LeaseEpoch,
                     Reason = reason,
                 }),
             ct);

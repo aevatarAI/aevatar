@@ -4,7 +4,7 @@ public sealed record WorkflowScheduleConfiguration(
     string ScheduleId,
     string DisplayName,
     string WorkflowName,
-    string Prompt,
+    string? Prompt,
     string CronExpression,
     string Timezone,
     bool Enabled,
@@ -14,7 +14,25 @@ public sealed record WorkflowScheduleConfiguration(
     string? AppId = null,
     string? Namespace = null,
     string? ServiceId = null,
-    string? RevisionId = null);
+    string? RevisionId = null,
+    WorkflowScheduleAuth? Auth = null);
+
+public sealed record WorkflowScheduleNyxIdSubjectRef(
+    string Platform,
+    string Tenant,
+    string ExternalUserId);
+
+public sealed record WorkflowScheduleNyxIdCredentialSource(
+    WorkflowScheduleNyxIdSubjectRef Subject,
+    string Scope);
+
+public sealed record WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+    string Scope,
+    WorkflowScheduleNyxIdSubjectRef OwnerSubject);
+
+public sealed record WorkflowScheduleAuth(
+    WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null,
+    WorkflowScheduleScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
 
 public sealed record WorkflowScheduleSummary(
     string ScheduleId,
@@ -36,7 +54,8 @@ public sealed record WorkflowScheduleSummary(
     IReadOnlyDictionary<string, string> Headers,
     string ScopeId,
     string ScheduleActorId,
-    string TargetActorId);
+    string TargetActorId,
+    string? Prompt = null);
 
 public sealed record WorkflowScheduleFireRecord(
     DateTimeOffset ScheduledFireAt,

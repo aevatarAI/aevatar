@@ -333,15 +333,18 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             isSecureStep,
             ctx,
             ct);
+        var requestMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
+        WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, requestMetadata);
         var connectorRequest = new ConnectorRequest
         {
-            HttpAuthorization = ExtractConnectorHttpAuthorization(ctx),
+            HttpAuthorization = ReconstructConnectorHttpAuthorization(ctx),
             RunId = runId,
             StepId = request.StepId,
             Connector = connectorName,
             Operation = operation,
             Payload = ResolvePayload(request, isSecureStep, ctx) ?? string.Empty,
             Parameters = request.Parameters.ToDictionary(kv => kv.Key, kv => kv.Value),
+            IdempotencyKey = request.IdempotencyKey ?? string.Empty,
         };
         _ = ExecuteConnectorAndSignalAsync(ctx, connector, connectorRequest, pending);
     }
@@ -418,6 +421,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             ExecutionId = request.ExecutionId,
             SecureStep = isSecureStep,
             ConnectorType = connectorType,
+            IdempotencyKey = request.IdempotencyKey ?? string.Empty,
         };
         foreach (var (key, value) in request.Parameters)
             pending.Parameters[key] = value;
@@ -516,6 +520,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             RunId = pending.RunId,
             Input = pending.Input,
             ExecutionId = pending.ExecutionId,
+            IdempotencyKey = pending.IdempotencyKey,
         };
         foreach (var (key, value) in pending.Parameters)
             request.Parameters[key] = value;
@@ -823,16 +828,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
-    // Refactor (issue1422/phase9-first-slice):
-    //   Old pattern: Connector execution rewrapped typed runtime authorization into Metadata.
-    //   New principle: Connector authorization crosses the execution boundary as a typed request field.
-    private static string ExtractConnectorHttpAuthorization(
+    private static string ReconstructConnectorHttpAuthorization(
         IWorkflowExecutionContext ctx)
     {
-        if (ConnectorAuthorizationRuntimeContextAccess.TryGetAuthorization(ctx, out var authorization) &&
-            !string.IsNullOrWhiteSpace(authorization))
+        if (WorkflowCallerCredentialRuntimeContextAccess.TryGetCredential(ctx, out var credential) &&
+            !string.IsNullOrWhiteSpace(credential.BearerToken))
         {
-            return authorization.Trim();
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken);
+            return parsed.IsValid ? $"Bearer {parsed.NormalizedBearerToken}" : string.Empty;
         }
 
         return string.Empty;

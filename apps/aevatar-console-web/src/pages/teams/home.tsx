@@ -10,6 +10,7 @@ import {
   Alert,
   Button,
   Empty,
+  Skeleton,
   Space,
   Tooltip,
   Typography,
@@ -22,7 +23,7 @@ import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
   buildTeamDetailHref,
-  buildTeamStudioHref,
+  buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
@@ -32,14 +33,13 @@ import {
   type StudioMemberSummary,
   type StudioTeamSummary,
 } from "@/shared/studio/models";
-import {
-  AevatarInspectorEmpty,
-  AevatarPageShell,
-} from "@/shared/ui/aevatarPageShells";
+import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
+import type { AevatarBreadcrumbItem } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import {
-  buildScopeHref,
+  buildTeamCreateRoute,
+  buildTeamWorkspaceRoute,
   readScopeQueryDraft,
 } from "../scopes/components/scopeQuery";
 import type { WorkflowOperationalAttention } from "./workflowOperationalUnits";
@@ -344,6 +344,46 @@ const SummaryStatCard: React.FC<{
   );
 };
 
+const SkeletonLine: React.FC<{
+  readonly height?: number;
+  readonly width: number | string;
+}> = ({ height = 16, width }) => (
+  <Skeleton.Input
+    active
+    size="small"
+    style={{
+      borderRadius: 999,
+      height,
+      maxWidth: "100%",
+      width,
+    }}
+  />
+);
+
+const SummaryStatSkeletonCard: React.FC = () => {
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      data-testid="teams-home-summary-skeleton"
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 22,
+        boxShadow: token.boxShadowTertiary,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        minHeight: 104,
+        padding: 18,
+      }}
+    >
+      <SkeletonLine height={30} width={68} />
+      <SkeletonLine width="72%" />
+    </div>
+  );
+};
+
 const TeamTitle: React.FC<{
   readonly level: 3 | 4;
   readonly title: string;
@@ -414,6 +454,150 @@ const TeamFact: React.FC<{
   );
 };
 
+const TeamRosterCardSkeleton: React.FC = () => {
+  const { token } = theme.useToken();
+
+  return (
+    <article
+      data-testid="teams-home-card-skeleton"
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 24,
+        boxShadow: token.boxShadowTertiary,
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+        minWidth: 0,
+        padding: 18,
+      }}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          gap: 16,
+          justifyContent: "space-between",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flex: "1 1 auto",
+            flexDirection: "column",
+            gap: 10,
+            minWidth: 0,
+          }}
+        >
+          <SkeletonLine height={26} width="62%" />
+          <SkeletonLine width="88%" />
+        </div>
+        <Skeleton.Button active shape="round" size="small" style={{ width: 92 }} />
+      </div>
+      <SkeletonLine width="38%" />
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <SkeletonLine width="78%" />
+        <SkeletonLine width="68%" />
+        <SkeletonLine width="74%" />
+      </div>
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 14,
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          paddingTop: 14,
+        }}
+      >
+        <SkeletonLine width="80%" />
+        <SkeletonLine width="72%" />
+      </div>
+      <Space size={8} wrap>
+        <Skeleton.Button active shape="round" style={{ width: 132 }} />
+        <Skeleton.Button active shape="round" style={{ width: 108 }} />
+        <Skeleton.Button active shape="round" style={{ width: 126 }} />
+      </Space>
+    </article>
+  );
+};
+
+const summaryStatSkeletonKeys = ["total", "actionable", "healthy"] as const;
+const rosterCardSkeletonKeys = ["primary", "secondary", "tertiary"] as const;
+
+const TeamsHomeLoadingSkeleton: React.FC = () => (
+  <section
+    aria-busy="true"
+    aria-label={t("pages.teams.home.copy.53", "Reading the team list.")}
+    data-testid="teams-home-skeleton"
+    role="status"
+    style={{ display: "flex", flexDirection: "column", gap: 20 }}
+  >
+    <div
+      style={{
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+      }}
+    >
+      {summaryStatSkeletonKeys.map((key) => (
+        <SummaryStatSkeletonCard key={key} />
+      ))}
+    </div>
+
+    <div
+      style={{
+        alignItems: "center",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 12,
+        justifyContent: "space-between",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          minWidth: 240,
+        }}
+      >
+        <SkeletonLine height={22} width={128} />
+        <SkeletonLine width={360} />
+      </div>
+      <Space.Compact>
+        <Skeleton.Button active style={{ height: 44, width: 44 }} />
+        <Skeleton.Button active style={{ height: 44, width: 44 }} />
+      </Space.Compact>
+    </div>
+
+    <ul
+      aria-hidden="true"
+      style={{
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+        listStyle: "none",
+        margin: 0,
+        padding: 0,
+      }}
+    >
+      {rosterCardSkeletonKeys.map((key) => (
+        <li key={key}>
+          <TeamRosterCardSkeleton />
+        </li>
+      ))}
+    </ul>
+  </section>
+);
+
 function compareMembers(
   left: StudioMemberSummary,
   right: StudioMemberSummary,
@@ -462,6 +646,10 @@ function groupMembersByTeamId(
     teamMembers.sort(compareMembers);
   });
   return result;
+}
+
+function isWorkflowMember(member: StudioMemberSummary | null | undefined): boolean {
+  return trimOptional(member?.implementationKind).toLowerCase() === "workflow";
 }
 
 function resolveMemberPreviewService(input: {
@@ -560,11 +748,12 @@ function buildTeamRosterPreview(input: {
     }),
   );
   const sortedMembers = [...input.members].sort(compareMembers);
-  const latestRun =
-    memberPreviews
-      .map((preview) => preview.latestRun)
-      .filter((run): run is ScopeServiceRunSummary => Boolean(run))
-      .sort(compareRuns)[0] ?? null;
+  const memberCount =
+    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
+  const entryMemberId = trimOptional(input.team.entryMemberId);
+  const entryMemberPreview = entryMemberId
+    ? memberPreviews.find((preview) => preview.memberId === entryMemberId)
+    : undefined;
   const statusRank: Record<TeamOperationalAttention, number> = {
     failed: 0,
     waiting: 1,
@@ -581,59 +770,53 @@ function buildTeamRosterPreview(input: {
         parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
         right.memberId.localeCompare(left.memberId),
     )[0];
-  const memberCount =
-    input.team.memberCount > 0 ? input.team.memberCount : input.members.length;
-  const teamHomeHref = buildScopeHref("/teams", { scopeId: input.scopeId });
-  const entryMemberId = trimOptional(input.team.entryMemberId);
-  const preferredEditMemberId =
-    entryMemberId ||
-    (memberCount === 1 && input.members.length === 1
-      ? trimOptional(input.members[0]?.memberId)
-      : "");
-  const memberQuickAction: TeamMemberQuickAction = entryMemberId
+  const entryMember = entryMemberId
+    ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
+    : undefined;
+  const runtimeSignalPreview = entryMemberPreview ?? mostImportantMemberPreview;
+  const latestRun = runtimeSignalPreview?.latestRun ?? null;
+  // Deferred P2: keep the current workflow-member fallback when the entry is non-workflow.
+  // A later pass should surface an explicit entry-unsupported/manage-members state.
+  const preferredWorkflowMember =
+    (entryMember && isWorkflowMember(entryMember) ? entryMember : undefined) ??
+    sortedMembers.find(isWorkflowMember);
+  const preferredWorkflowMemberId = trimOptional(preferredWorkflowMember?.memberId);
+  const memberQuickAction: TeamMemberQuickAction = preferredWorkflowMemberId
     ? {
-        href: buildTeamStudioHref({
-          memberId: entryMemberId,
+        href: buildTeamMemberWorkflowStudioHref({
+          memberId: preferredWorkflowMemberId,
           mode: "edit-member",
-          returnTo: teamHomeHref,
           scopeId: input.scopeId,
           teamId: input.team.teamId,
         }),
-        kind: "edit-entry-member",
-        label: t("teams.home.actions.editEntryMember", "Edit entry member"),
+        kind:
+          preferredWorkflowMemberId === entryMemberId
+            ? "edit-entry-member"
+            : "edit-member",
+        label:
+          preferredWorkflowMemberId === entryMemberId
+            ? t("teams.home.actions.debugEntryWorkflow", "Debug entry workflow")
+            : t("teams.home.actions.debugWorkflow", "Debug workflow"),
       }
-    : preferredEditMemberId
+    : memberCount === 0
       ? {
-          href: buildTeamStudioHref({
-            memberId: preferredEditMemberId,
-            mode: "edit-member",
-            returnTo: teamHomeHref,
+          href: buildTeamMemberWorkflowStudioHref({
+            mode: "create-member",
             scopeId: input.scopeId,
             teamId: input.team.teamId,
           }),
-          kind: "edit-member",
-          label: t("teams.home.actions.editMember", "Edit member"),
+          kind: "create-member",
+          label: t("teams.home.actions.createWorkflowMember", "Create workflow member"),
         }
-      : memberCount === 0
-        ? {
-            href: buildTeamStudioHref({
-              mode: "create-member",
-              returnTo: teamHomeHref,
-              scopeId: input.scopeId,
-              teamId: input.team.teamId,
-            }),
-            kind: "create-member",
-            label: t("teams.home.actions.createMember", "Create member"),
-          }
-        : {
-            href: buildTeamDetailHref({
-              scopeId: input.scopeId,
-              tab: "members",
-              teamId: input.team.teamId,
-            }),
-            kind: "manage-members",
-            label: t("teams.home.actions.manageMembers", "Manage members"),
-          };
+      : {
+          href: buildTeamDetailHref({
+            scopeId: input.scopeId,
+            tab: "members",
+            teamId: input.team.teamId,
+          }),
+          kind: "manage-members",
+          label: t("teams.home.actions.manageMembers", "Manage members"),
+        };
   const firstMemberLabel = pickMeaningfulLabel(
     sortedMembers[0]?.displayName,
     sortedMembers[0]?.memberId,
@@ -661,7 +844,10 @@ function buildTeamRosterPreview(input: {
   const serviceTooltip =
     uniqueServiceLabels.length > 0 ? uniqueServiceLabels.join(" / ") : undefined;
   const primaryMemberPreview =
-    memberPreviews.find((preview) => preview.serviceId) ?? memberPreviews[0] ?? null;
+    entryMemberPreview ??
+    memberPreviews.find((preview) => preview.serviceId) ??
+    memberPreviews[0] ??
+    null;
   const detailHref = buildTeamDetailHref({
     memberId: primaryMemberPreview?.memberId || undefined,
     runId: latestRun?.runId || undefined,
@@ -676,13 +862,13 @@ function buildTeamRosterPreview(input: {
   });
 
   let attention: TeamOperationalAttention =
-    mostImportantMemberPreview?.attention ?? "draft";
+    runtimeSignalPreview?.attention ?? "draft";
   let attentionDetail = t("pages.teams.home.team", "This team has no members yet. Next: add an entry member, then test the team.");
   if (input.team.lifecycleStage === "archived") {
     attention = "draft";
     attentionDetail = t("pages.teams.home.team.roster", "This team has been archived; the list keeps only its backend roster fact.");
-  } else if (mostImportantMemberPreview) {
-    attentionDetail = mostImportantMemberPreview.attentionDetail;
+  } else if (runtimeSignalPreview) {
+    attentionDetail = runtimeSignalPreview.attentionDetail;
   }
 
   return {
@@ -704,7 +890,7 @@ function buildTeamRosterPreview(input: {
     title: pickMeaningfulLabel(input.team.displayName, input.team.teamId) || t("pages.teams.home.team.2", "Unnamed team"),
     updatedAt:
       latestRun?.lastUpdatedAt ||
-      mostImportantMemberPreview?.updatedAt ||
+      runtimeSignalPreview?.updatedAt ||
       input.team.updatedAt ||
       null,
   };
@@ -720,7 +906,6 @@ function renderMemberQuickActionIcon(
       return <BarsOutlined />;
     case "edit-entry-member":
     case "edit-member":
-    default:
       return <EditOutlined />;
   }
 }
@@ -729,14 +914,17 @@ const TeamRosterActionGroup: React.FC<{
   readonly large?: boolean;
   readonly preview: TeamRosterPreview;
 }> = ({ large = false, preview }) => {
-  const buttonSize = large ? "large" : "middle";
+  const buttonSize = "middle";
   const { token } = theme.useToken();
   const showViewMembersAction =
     preview.memberQuickAction.href !== preview.membersHref;
   const buttonStyle: React.CSSProperties = {
     borderRadius: 999,
+    fontSize: large ? 13 : 12,
     fontWeight: 600,
-    paddingInline: large ? 12 : 10,
+    height: large ? 34 : 30,
+    lineHeight: "20px",
+    paddingInline: large ? 10 : 8,
   };
   const renderSeparator = () => (
     <span
@@ -745,7 +933,7 @@ const TeamRosterActionGroup: React.FC<{
         alignSelf: "center",
         background: token.colorBorderSecondary,
         display: "inline-block",
-        height: large ? 18 : 16,
+        height: large ? 15 : 14,
         width: 1,
       }}
     />
@@ -759,7 +947,7 @@ const TeamRosterActionGroup: React.FC<{
         background: token.colorFillQuaternary,
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: 999,
-        padding: large ? 4 : 3,
+        padding: large ? 3 : 2,
         width: "fit-content",
       }}
       wrap
@@ -855,18 +1043,6 @@ const TeamRosterCard: React.FC<{
           {formatAttentionLabel(preview.attention)}
         </span>
       </div>
-
-      <Typography.Text
-        title={preview.teamId}
-        ellipsis={{ tooltip: preview.teamId }}
-        style={{
-          color: token.colorTextSecondary,
-          display: "block",
-          fontSize: 12,
-        }}
-      >
-        {t("pages.teams.home.id", "ID：")}{preview.teamId}
-      </Typography.Text>
 
       <div
         style={{
@@ -976,18 +1152,6 @@ const TeamRosterRow: React.FC<{
           >
             {preview.attentionDetail}
           </Typography.Paragraph>
-          <Typography.Text
-            title={preview.teamId}
-            ellipsis={{ tooltip: preview.teamId }}
-            style={{
-              color: token.colorTextSecondary,
-              display: "block",
-              fontSize: 12,
-              marginTop: 4,
-            }}
-          >
-            {t("pages.teams.home.id.2", "ID：")}{preview.teamId}
-          </Typography.Text>
         </div>
 
         <div className="teams-home-roster-row-actions">
@@ -1085,13 +1249,15 @@ const TeamsHomePage: React.FC = () => {
   const queryScopeId =
     serverResolvedScope?.scopeId?.trim() === scopeId ? scopeId : "";
   const canLoadRoster = queryScopeId.length > 0;
+  const scopeAuthResolving =
+    scopeId.length > 0 && !canLoadRoster && authSessionQuery.isLoading;
 
   React.useEffect(() => {
     if (!scopeId) {
       return;
     }
 
-    const nextPath = buildScopeHref("/teams", { scopeId });
+    const nextPath = buildTeamWorkspaceRoute(scopeId);
     const currentPath =
       typeof window === "undefined"
         ? ""
@@ -1149,35 +1315,78 @@ const TeamsHomePage: React.FC = () => {
     () => groupMembersByTeamId(studioMembers),
     [studioMembers],
   );
-  const runtimeTrackableMembers = React.useMemo(
+  const runtimeTrackableEntryMemberServices = React.useMemo(() => {
+    const membersById = new Map(
+      studioMembers
+        .map((member) => [trimOptional(member.memberId), member] as const)
+        .filter(([memberId]) => memberId.length > 0),
+    );
+    const result: Array<{
+      readonly memberId: string;
+      readonly serviceId: string;
+    }> = [];
+
+    studioTeams.forEach((team) => {
+      const entryMemberId = trimOptional(team.entryMemberId);
+      if (!entryMemberId) {
+        return;
+      }
+
+      const member = membersById.get(entryMemberId);
+      const serviceId = trimOptional(member?.publishedServiceId);
+      if (!member || !serviceId) {
+        return;
+      }
+
+      result.push({
+        memberId: entryMemberId,
+        serviceId,
+      });
+    });
+
+    return result;
+  }, [studioMembers, studioTeams]);
+  const runtimeTrackableServiceIds = React.useMemo(
     () =>
-      studioMembers.filter(
-        (member) =>
-          Boolean(trimOptional(member.publishedServiceId)) ||
-          Boolean(trimOptional(member.lastBoundRevisionId)),
+      Array.from(
+        new Set(
+          runtimeTrackableEntryMemberServices.map((entry) => entry.serviceId),
+        ),
       ),
-    [studioMembers],
+    [runtimeTrackableEntryMemberServices],
   );
   const memberRunQueries = useQueries({
-    queries: runtimeTrackableMembers.map((member) => ({
+    queries: runtimeTrackableServiceIds.map((serviceId) => ({
       enabled: canLoadRoster && membersQuery.isSuccess,
-      queryKey: ["teams", "member-runs", queryScopeId, member.memberId],
+      queryKey: ["teams", "service-runs", queryScopeId, serviceId],
       queryFn: () =>
-        scopeRuntimeApi.listMemberRuns(queryScopeId, member.memberId, {
-          take: 12,
+        scopeRuntimeApi.listServiceRuns(queryScopeId, serviceId, {
+          take: 1,
         }),
       retry: false,
     })),
   });
   const runsByMemberId = React.useMemo(
-    () =>
-      Object.fromEntries(
-        runtimeTrackableMembers.map((member, index) => [
-          trimOptional(member.memberId),
+    () => {
+      const runsByServiceId = Object.fromEntries(
+        runtimeTrackableServiceIds.map((serviceId, index) => [
+          serviceId,
           memberRunQueries[index]?.data?.runs ?? [],
         ]),
-      ) as Record<string, readonly ScopeServiceRunSummary[]>,
-    [memberRunQueries, runtimeTrackableMembers],
+      ) as Record<string, readonly ScopeServiceRunSummary[]>;
+
+      return Object.fromEntries(
+        runtimeTrackableEntryMemberServices.map((entry) => [
+          entry.memberId,
+          runsByServiceId[entry.serviceId] ?? [],
+        ]),
+      ) as Record<string, readonly ScopeServiceRunSummary[]>;
+    },
+    [
+      memberRunQueries,
+      runtimeTrackableEntryMemberServices,
+      runtimeTrackableServiceIds,
+    ],
   );
   const teamPreviews = React.useMemo(
     () =>
@@ -1210,6 +1419,8 @@ const TeamsHomePage: React.FC = () => {
     manualRosterView ??
     (visibleTeamCount >= compactTeamRosterThreshold ? "list" : "cards");
   const useCompactRoster = resolvedRosterView === "list";
+  const rosterBootstrapLoading =
+    scopeAuthResolving || (!teamsQuery.isError && teamsQuery.isLoading);
   const emptyRosterHint =
     canLoadRoster
       ? t("pages.teams.home.team.ai", "This account has not created any teams yet. Your AI team list will appear here after you create one.")
@@ -1221,13 +1432,6 @@ const TeamsHomePage: React.FC = () => {
 
   const titleNode = (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <Typography.Text
-        style={{
-          color: token.colorTextSecondary,
-          fontSize: 14,
-        }}
-      >
-        {t("pages.teams.home.aevatar.teams", "Aevatar / Teams")}</Typography.Text>
       <Typography.Title
         level={1}
         style={{
@@ -1237,15 +1441,22 @@ const TeamsHomePage: React.FC = () => {
         {t("pages.teams.home.ai", "My AI teams")}</Typography.Title>
     </div>
   );
+  const breadcrumbItems: AevatarBreadcrumbItem[] = [
+    {
+      current: true,
+      title: t("teams.detail.breadcrumb.teams", "Teams"),
+    },
+  ];
 
   return (
     <AevatarPageShell
+      breadcrumbItems={breadcrumbItems}
       extra={
         <Space wrap>
           <Button
             icon={<PlusOutlined />}
             onClick={() =>
-              history.push(buildScopeHref("/teams/new", { scopeId }))
+              history.push(buildTeamCreateRoute(scopeId))
             }
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
@@ -1297,8 +1508,17 @@ const TeamsHomePage: React.FC = () => {
           />
         ) : null}
 
-        {canLoadRoster ? (
-          <>
+        {canLoadRoster || scopeAuthResolving ? (
+          rosterBootstrapLoading ? (
+            <TeamsHomeLoadingSkeleton />
+          ) : teamsQuery.isError ? (
+            <Alert
+              showIcon
+              title={t("pages.teams.home.copy.54", "The team list cannot be loaded right now.")}
+              type="error"
+            />
+          ) : (
+            <>
             <div
               style={{
                 display: "grid",
@@ -1311,15 +1531,7 @@ const TeamsHomePage: React.FC = () => {
               <SummaryStatCard label={t("pages.teams.home.copy.52", "Stable runs exist")} value={healthyTeamCount} />
             </div>
 
-            {teamsQuery.isLoading ? (
-              <AevatarInspectorEmpty description={t("pages.teams.home.copy.53", "Reading the team list.")} />
-            ) : teamsQuery.isError ? (
-              <Alert
-                showIcon
-                title={t("pages.teams.home.copy.54", "The team list cannot be loaded right now.")}
-                type="error"
-              />
-            ) : teamPreviews.length > 0 ? (
+            {teamPreviews.length > 0 ? (
               <>
                 <div
                   style={{
@@ -1415,15 +1627,15 @@ const TeamsHomePage: React.FC = () => {
               >
                 <Button
                   onClick={() =>
-                    history.push(buildScopeHref("/teams/new", { scopeId }))
+                    history.push(buildTeamCreateRoute(scopeId))
                   }
                   type="primary"
                 >
                   {t("pages.teams.home.copy.62", "Create team")}</Button>
               </Empty>
             )}
-
-          </>
+            </>
+          )
         ) : null}
       </div>
     </AevatarPageShell>

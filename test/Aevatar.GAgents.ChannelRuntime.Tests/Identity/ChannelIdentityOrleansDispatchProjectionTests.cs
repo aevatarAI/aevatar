@@ -1,5 +1,10 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -32,6 +37,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             ExternalUserId = $"user-{Guid.NewGuid():N}",
         };
         var actorId = subject.ToActorId();
+        await EnsureExternalIdentityBindingProjectionReadyAsync(host, actorId);
 
         var dispatch = host.Services.GetRequiredService<
             ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
@@ -73,6 +79,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             ExternalUserId = $"user-{Guid.NewGuid():N}",
         };
         var actorId = subject.ToActorId();
+        await EnsureExternalIdentityBindingProjectionReadyAsync(host, actorId);
 
         var commitDispatch = host.Services.GetRequiredService<
             ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
@@ -125,6 +132,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
             ExternalUserId = $"user-{Guid.NewGuid():N}",
         };
         var actorId = subject.ToActorId();
+        await EnsureExternalIdentityBindingProjectionReadyAsync(host, actorId);
 
         var commitDispatch = host.Services.GetRequiredService<
             ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>>();
@@ -174,6 +182,26 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
     private static TimeSpan TestTimeout => TimeSpan.FromSeconds(20);
 
+    private static async Task EnsureExternalIdentityBindingProjectionReadyAsync(IHost host, string actorId)
+    {
+        var targetActorId = ProjectionScopeActorId.Build(new ProjectionRuntimeScopeKey(
+            actorId,
+            ChannelIdentityCommittedStateProjectionActivationPlanProvider.ExternalIdentityBindingProjectionKind,
+            ProjectionRuntimeMode.DurableMaterialization));
+        var forwardingObserver = host.Services.GetRequiredService<ObservingStreamForwardingRegistry>();
+        var relayReady = forwardingObserver.WaitForUpsertAsync(actorId, targetActorId, TestTimeout);
+        var activation = host.Services.GetRequiredService<
+            IProjectionScopeActivationService<ExternalIdentityBindingMaterializationRuntimeLease>>();
+        await activation.EnsureAsync(new ProjectionScopeStartRequest
+        {
+            RootActorId = actorId,
+            ProjectionKind = ChannelIdentityCommittedStateProjectionActivationPlanProvider.ExternalIdentityBindingProjectionKind,
+            Mode = ProjectionRuntimeMode.DurableMaterialization,
+        });
+
+        await relayReady;
+    }
+
     private static Task<IHost> StartSiloHostAsync(ObservingExternalIdentityBindingWriter observer) =>
         SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
@@ -190,12 +218,128 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
                 });
                 siloBuilder.ConfigureServices(services =>
                 {
+                    var forwardingObserver = new ObservingStreamForwardingRegistry();
+                    services.AddSingleton(forwardingObserver);
                     services.AddChannelIdentity();
-                    services.AddChannelIdentityProjectionStores();
+                    services.AddInMemoryDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
+                        static document => document.Id,
+                        static key => key);
+                    services.AddInMemoryDocumentProjectionStore<AevatarOAuthClientDocument, string>(
+                        static document => document.Id,
+                        static key => key);
+                    services.DecorateStreamForwardingRegistry(forwardingObserver);
                     services.DecorateExternalIdentityBindingWriter(observer);
                 });
             })
             .Build());
+
+    internal sealed class ObservingStreamForwardingRegistry : IStreamForwardingRegistry
+    {
+        private readonly object _gate = new();
+        private readonly HashSet<(string SourceStreamId, string TargetStreamId)> _observedUpserts = [];
+        private readonly Dictionary<(string SourceStreamId, string TargetStreamId), TaskCompletionSource<StreamForwardingBinding>>
+            _nextUpsertsByKey = new();
+
+        private IStreamForwardingRegistry? _inner;
+
+        public void SetInner(IStreamForwardingRegistry inner)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        }
+
+        public async Task UpsertAsync(StreamForwardingBinding binding, CancellationToken ct = default)
+        {
+            EnsureInner();
+            await _inner!.UpsertAsync(binding, ct);
+
+            TaskCompletionSource<StreamForwardingBinding> completion;
+            var key = (binding.SourceStreamId, binding.TargetStreamId);
+            lock (_gate)
+            {
+                _observedUpserts.Add(key);
+                completion = ConsumeNextUpsertCompletion(key);
+            }
+
+            completion.TrySetResult(CloneBinding(binding));
+        }
+
+        public Task RemoveAsync(string sourceStreamId, string targetStreamId, CancellationToken ct = default)
+        {
+            EnsureInner();
+            return _inner!.RemoveAsync(sourceStreamId, targetStreamId, ct);
+        }
+
+        public Task<IReadOnlyList<StreamForwardingBinding>> ListBySourceAsync(
+            string sourceStreamId,
+            CancellationToken ct = default)
+        {
+            EnsureInner();
+            return _inner!.ListBySourceAsync(sourceStreamId, ct);
+        }
+
+        public Task<StreamForwardingBinding> WaitForUpsertAsync(
+            string sourceStreamId,
+            string targetStreamId,
+            TimeSpan timeout)
+        {
+            var key = (sourceStreamId, targetStreamId);
+            TaskCompletionSource<StreamForwardingBinding> completion;
+            lock (_gate)
+            {
+                if (_observedUpserts.Contains(key))
+                {
+                    return Task.FromResult(new StreamForwardingBinding
+                    {
+                        SourceStreamId = sourceStreamId,
+                        TargetStreamId = targetStreamId,
+                    });
+                }
+
+                completion = GetOrCreateNextUpsertCompletion(key);
+            }
+
+            return completion.Task.WaitAsync(timeout);
+        }
+
+        private void EnsureInner()
+        {
+            if (_inner == null)
+                throw new InvalidOperationException("Inner stream forwarding registry has not been assigned.");
+        }
+
+        private TaskCompletionSource<StreamForwardingBinding> GetOrCreateNextUpsertCompletion(
+            (string SourceStreamId, string TargetStreamId) key)
+        {
+            if (!_nextUpsertsByKey.TryGetValue(key, out var completion))
+            {
+                completion = new TaskCompletionSource<StreamForwardingBinding>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _nextUpsertsByKey[key] = completion;
+            }
+
+            return completion;
+        }
+
+        private TaskCompletionSource<StreamForwardingBinding> ConsumeNextUpsertCompletion(
+            (string SourceStreamId, string TargetStreamId) key)
+        {
+            var completion = GetOrCreateNextUpsertCompletion(key);
+            _nextUpsertsByKey.Remove(key);
+            return completion;
+        }
+
+        private static StreamForwardingBinding CloneBinding(StreamForwardingBinding binding) =>
+            new()
+            {
+                SourceStreamId = binding.SourceStreamId,
+                TargetStreamId = binding.TargetStreamId,
+                ForwardingMode = binding.ForwardingMode,
+                DirectionFilter = new HashSet<TopologyAudience>(binding.DirectionFilter),
+                EventTypeFilter = new HashSet<string>(binding.EventTypeFilter, StringComparer.Ordinal),
+                Version = binding.Version,
+                LeaseId = binding.LeaseId,
+            };
+    }
 
     internal sealed class ObservingExternalIdentityBindingWriter
     {
@@ -363,6 +507,26 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
 
 internal static class ChannelIdentityOrleansDispatchProjectionTestServiceCollectionExtensions
 {
+    public static IServiceCollection DecorateStreamForwardingRegistry(
+        this IServiceCollection services,
+        ChannelIdentityOrleansDispatchProjectionTests.ObservingStreamForwardingRegistry observer)
+    {
+        var descriptors = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(IStreamForwardingRegistry))
+            .ToArray();
+        descriptors.Should().ContainSingle();
+
+        foreach (var descriptor in descriptors)
+            services.Remove(descriptor);
+
+        services.AddSingleton<IStreamForwardingRegistry>(provider =>
+        {
+            observer.SetInner(ResolveOriginalStreamForwardingRegistry(provider, descriptors[0]));
+            return observer;
+        });
+        return services;
+    }
+
     public static IServiceCollection DecorateExternalIdentityBindingWriter(
         this IServiceCollection services,
         ChannelIdentityOrleansDispatchProjectionTests.ObservingExternalIdentityBindingWriter observer)
@@ -380,6 +544,26 @@ internal static class ChannelIdentityOrleansDispatchProjectionTestServiceCollect
                 ResolveOriginalWriter(provider, descriptors[0]),
                 observer));
         return services;
+    }
+
+    private static IStreamForwardingRegistry ResolveOriginalStreamForwardingRegistry(
+        IServiceProvider provider,
+        ServiceDescriptor descriptor)
+    {
+        if (descriptor.ImplementationInstance is IStreamForwardingRegistry instance)
+            return instance;
+
+        if (descriptor.ImplementationFactory is not null)
+            return (IStreamForwardingRegistry)descriptor.ImplementationFactory(provider);
+
+        if (descriptor.ImplementationType is not null)
+        {
+            return (IStreamForwardingRegistry)ActivatorUtilities.CreateInstance(
+                provider,
+                descriptor.ImplementationType);
+        }
+
+        throw new InvalidOperationException("Unable to resolve original stream forwarding registry.");
     }
 
     private static IProjectionDocumentWriter<ExternalIdentityBindingDocument> ResolveOriginalWriter(

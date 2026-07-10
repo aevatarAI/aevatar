@@ -2,11 +2,17 @@ namespace Aevatar.Workflow.Core.Execution;
 
 internal static class WorkflowExecutionStateModelExtensions
 {
-    public static ForEachItemResult ToForEachItemResult(this StepCompletedEvent evt) =>
+    public static ForEachItemResult ToForEachItemResult(
+        this StepCompletedEvent evt,
+        int index = -1,
+        WorkflowFileRef? fileRef = null) =>
         new()
         {
             Success = evt.Success,
             Output = evt.Output ?? string.Empty,
+            Error = evt.Error ?? string.Empty,
+            Index = index,
+            FileRef = fileRef?.Clone(),
         };
 
     public static MapReduceItemResult ToMapReduceItemResult(this StepCompletedEvent evt) =>

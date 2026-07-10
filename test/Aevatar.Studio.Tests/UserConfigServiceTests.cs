@@ -176,6 +176,51 @@ public sealed class UserConfigServiceTests
             config.DefaultModel == "gpt-5.5");
     }
 
+    [Fact]
+    public async Task ChannelPreferencePort_PresetProvisionThenUse_ShouldWriteProvisionedRouteAndPreserveCurrentModel()
+    {
+        var current = new UserConfig(
+            DefaultModel: "current-model",
+            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway);
+        var queryPort = new StubUserConfigQueryPort(current);
+        var commandService = new RecordingUserConfigCommandService();
+        var provisioned = ChronoLlm with
+        {
+            UserServiceId = "chrono-provisioned-service",
+            ServiceSlug = "chrono-provisioned",
+            DisplayName = "chrono provisioned",
+            RouteValue = "/api/v1/proxy/s/chrono-provisioned",
+            DefaultModel = null,
+            Models = [],
+        };
+        var preset = new UserLlmPreset(
+            "chrono-provision",
+            "Provision chrono",
+            "Provision shared service",
+            new ProvisionThenUse("chrono/shared"));
+        var catalogPort = new StubUserLlmCatalogPort(
+            new NyxIdLlmServicesResult(
+                [],
+                new UserLlmSetupHint("https://nyxid.example/services", [preset])),
+            provisioned);
+        var writer = new UserLlmPreferenceWriter(queryPort, commandService, catalogPort);
+        var preferencePort = new ChannelUserLlmPreferencePort(writer);
+
+        var receipt = await preferencePort.SaveAsync(
+            "bnd_sender",
+            "bearer",
+            new SaveUserLlmPreferenceCommand(PresetId: "chrono-provision"),
+            CancellationToken.None);
+
+        receipt.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
+        catalogPort.ProvisionCalls.Should().ContainSingle()
+            .Which.Should().Be(("bearer", "chrono/shared"));
+        var saved = commandService.ScopedSaved.Should().ContainSingle().Subject;
+        saved.ScopeId.Should().Be("bnd_sender");
+        saved.Config.PreferredLlmRoute.Should().Be(provisioned.RouteValue);
+        saved.Config.DefaultModel.Should().Be("current-model");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("cloud")]
@@ -242,6 +287,7 @@ public sealed class UserConfigServiceTests
     private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
     {
         public List<UserConfig> Saved { get; } = [];
+        public List<(string ScopeId, UserConfig Config)> ScopedSaved { get; } = [];
 
         public Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default)
         {
@@ -255,8 +301,11 @@ public sealed class UserConfigServiceTests
                 AckedAtUtc: DateTimeOffset.UtcNow));
         }
 
-        public Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default) =>
-            SaveAsync(config, ct);
+        public Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
+        {
+            ScopedSaved.Add((scopeId, config));
+            return SaveAsync(config, ct);
+        }
 
         public Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
             Task.FromResult(new UserConfigSaveReceipt(
@@ -268,12 +317,19 @@ public sealed class UserConfigServiceTests
                 AckedAtUtc: DateTimeOffset.UtcNow));
     }
 
-    private sealed class StubUserLlmCatalogPort(NyxIdLlmServicesResult result) : IUserLlmCatalogPort
+    private sealed class StubUserLlmCatalogPort(
+        NyxIdLlmServicesResult result,
+        NyxIdLlmService? provisionedService = null) : IUserLlmCatalogPort
     {
+        public List<(string BearerToken, string ProvisionEndpointId)> ProvisionCalls { get; } = [];
+
         public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct) =>
             Task.FromResult(result);
 
-        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>
-            Task.FromResult(ChronoLlm);
+        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct)
+        {
+            ProvisionCalls.Add((bearerToken, provisionEndpointId));
+            return Task.FromResult(provisionedService ?? ChronoLlm);
+        }
     }
 }

@@ -18,6 +18,7 @@ namespace Aevatar.GAgents.Channel.Identity;
 public sealed class AevatarOAuthClientBootstrapService : IHostedService
 {
     private const string ClientName = "aevatar";
+    public const string ForceDcrOnStartupEnvVar = "AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP";
 
     private readonly ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _provisioningDispatch;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
@@ -54,14 +55,30 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // at NyxID. The redirect URI must match what the broker sends at
         // authorize / token time — both call sites use NyxIdRedirectUriResolver.
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
+        var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(_logger);
+        var forceReprovision = string.Equals(
+            Environment.GetEnvironmentVariable(ForceDcrOnStartupEnvVar),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (forceReprovision)
+        {
+            _logger.LogWarning(
+                "Aevatar OAuth client force DCR is enabled by {EnvVar}; disable it after one successful startup to avoid creating a new NyxID client on every restart.",
+                ForceDcrOnStartupEnvVar);
+        }
+
+        var command = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = authority,
+            RedirectUri = redirectUri,
+            ClientName = ClientName,
+            ForceReprovision = forceReprovision,
+        };
+        command.RedirectUris.AddRange(redirectUris);
 
         var accepted = await _provisioningDispatch
-            .DispatchAsync(new EnsureAevatarOAuthClientProvisionedCommand
-            {
-                NyxidAuthority = authority,
-                RedirectUri = redirectUri,
-                ClientName = ClientName,
-            }, ct)
+            .DispatchAsync(command, ct)
             .ConfigureAwait(false);
         if (!accepted.Succeeded || accepted.Receipt is null)
             throw new InvalidOperationException($"Aevatar OAuth client bootstrap dispatch rejected: {accepted.Error}.");

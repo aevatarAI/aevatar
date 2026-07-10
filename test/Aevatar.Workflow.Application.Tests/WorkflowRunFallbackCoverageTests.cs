@@ -123,25 +123,22 @@ public sealed class WorkflowRunFallbackCoverageTests
         var service = new FallbackCommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
             new DefaultCommandInteractionService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>(
                 pipeline,
-                new FakeEventOutputStream
-                {
-                    Events =
-                    [
-                        new WorkflowRunEventEnvelope
-                        {
-                            RunFinished = new WorkflowRunFinishedEventPayload
-                            {
-                                ThreadId = receipt.ActorId,
-                                Result = ProtobufAny.Pack(new StringValue { Value = "done" }),
-                            },
-                        },
-                    ],
-                },
+                new FakeEventOutputStream(),
                 new FakeWorkflowRunCompletionPolicy(),
                 new FakeFinalizeEmitter(),
                 new FakeDurableCompletionResolver()),
             new WorkflowDirectFallbackPolicy(),
             logger: null);
+
+        target.RequireLiveSink().Push(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                ThreadId = receipt.ActorId,
+                Result = ProtobufAny.Pack(new StringValue { Value = "done" }),
+            },
+        });
+        target.RequireLiveSink().Complete();
 
         var result = await service.ExecuteAsync(
             new WorkflowChatRunRequest("hello", WorkflowChatSource.DefinitionActor("actor-requested", "auto")),
@@ -151,6 +148,7 @@ public sealed class WorkflowRunFallbackCoverageTests
         result.Succeeded.Should().BeTrue();
         pipeline.Requests.Select(static x => x.Source.WorkflowName).Should().Equal("auto", "direct");
         pipeline.Requests.Select(static x => x.Source.ActorId).Should().Equal("actor-requested", null);
+        await target.PendingReclaimTask;
         actorPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("actor-1");
     }
 
@@ -189,7 +187,10 @@ public sealed class WorkflowRunFallbackCoverageTests
             [actorId],
             projectionPort,
             actorPort,
-            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()));
+            new WorkflowRunDurableCompletionResolver(new NoopCurrentStateQueryPort()),
+            // 06-20-observatory-run-state-feed (R2): run the scheduled created-actor reclaim inline so the
+            // destroy is observed deterministically within the test.
+            detachedReclaimLauncher: reclaim => reclaim());
         target.BindLiveObservation(
             new FakeProjectionLease(actorId, commandId),
             new FakeLiveSinkLease(),
@@ -285,16 +286,13 @@ public sealed class WorkflowRunFallbackCoverageTests
 
     private sealed class FakeEventOutputStream : IEventOutputStream<WorkflowRunEventEnvelope, WorkflowRunEventEnvelope>
     {
-        public IReadOnlyList<WorkflowRunEventEnvelope> Events { get; set; } = [];
-
         public async Task PumpAsync(
             IAsyncEnumerable<WorkflowRunEventEnvelope> events,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowRunEventEnvelope, bool>? shouldStop = null,
             CancellationToken ct = default)
         {
-            _ = events;
-            foreach (var evt in Events)
+            await foreach (var evt in events.WithCancellation(ct))
             {
                 await emitAsync(evt, ct);
                 if (shouldStop?.Invoke(evt) == true)

@@ -9,8 +9,10 @@ const enUSMessages = {
   'common.language.zhCN': '中文',
   'common.user.logout': 'Logout',
   'common.user.settings': 'Settings',
+  'common.user.signIn': 'Sign in',
   'menu.Connectors': 'Connectors',
   'menu.Create Team': 'Create Team',
+  'menu.Chat': 'Chat',
   'menu.Deployments': 'Deployments',
   'menu.Event Stream': 'Event Stream',
   'menu.Files': 'Files',
@@ -21,19 +23,186 @@ const enUSMessages = {
   'menu.Services': 'Services',
   'menu.Settings': 'Settings',
   'menu.Team Details': 'Team Details',
+  'menu.Team Member Invoke': 'Team Member Invoke',
+  'menu.Team Member Published Runs': 'Team Member Published Runs',
+  'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
   'menu.Topology': 'Topology',
+  'nav.groups.chat': 'Chat',
   'nav.groups.platform': 'Platform',
   'nav.groups.settings': 'Settings',
   'nav.groups.teams': 'Teams',
   'nav.items.deployments': 'Deployments',
+  'nav.items.chat': 'Chat',
   'nav.items.eventStream': 'Event Stream',
   'nav.items.governance': 'Governance',
   'nav.items.myTeams': 'My Teams',
   'nav.items.services': 'Services',
   'nav.items.settings': 'Settings',
   'nav.items.topology': 'Topology',
+  'pages.gagents.index.platformBreadcrumb': 'Platform',
+  'pages.chat.index.chatStopped': 'Chat stopped.',
+  'pages.chat.index.composerPlaceholder':
+    'Describe the workflow you want, or ask about the current setup...',
+  'pages.chat.index.confirmAndCreate': 'Confirm and create',
+  'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
+  'pages.chat.index.conversationTitle': 'Conversation title',
+  'pages.chat.index.deleteChat': 'Delete {title}',
+  'pages.chat.index.emptyDescription':
+    'Describe the Team, Member, or Workflow you want to create.',
+  'pages.chat.index.historyStoredLocally': 'History is stored in this browser.',
+  'pages.chat.index.newChat': 'New chat',
+  'pages.chat.index.newChatAction': 'New Chat',
+  'pages.chat.index.noChatHistory': 'No chat history',
+  'pages.chat.index.noScope':
+    'No usable scope was resolved for this account. Refresh and try again.',
+  'pages.chat.index.openTeam': 'Open Team',
+  'pages.chat.index.openWorkflowStudio': 'Open Workflow Studio',
+  'pages.chat.index.renameChat': 'Rename {title}',
+  'pages.chat.index.renameChatTitle': 'Rename chat',
+  'pages.chat.index.resolvingScope': 'Resolving scope',
+  'pages.chat.index.reviewPlan': 'Review the plan before creating resources.',
+  'pages.chat.index.scopeValue': 'Scope {scopeId}',
+  'pages.chat.index.status.completed': 'Completed',
+  'pages.chat.index.status.creating': 'Creating',
+  'pages.chat.index.status.draft': 'Draft',
+  'pages.chat.index.status.error': 'Error',
+  'pages.chat.index.status.needsConfirmation': 'Needs confirmation',
+  'pages.chat.index.status.streaming': 'Streaming',
+  'pages.chat.index.status.studioReady': 'Studio ready',
+  'pages.chat.index.time.daysAgo': '{count}d ago',
+  'pages.chat.index.time.hoursAgo': '{count}h ago',
+  'pages.chat.index.time.justNow': 'just now',
+  'pages.chat.index.time.minutesAgo': '{count}m ago',
+  'pages.chat.index.title': 'Chat',
+  'pages.chat.index.tokenSplit': '{input} in / {output} out',
+  'pages.chat.index.totalTokens': '{count} tokens',
+  'pages.gagents.index.teamMembersBreadcrumb': 'Team members',
+  'pages.missioncontrol.index.missionControlBreadcrumb': 'Mission Control',
+  'pages.missioncontrol.index.platformBreadcrumb': 'Platform',
+  'pages.missionwall.focus': 'Focus',
+  'pages.missionwall.focusReason.failed': 'failed',
+  'pages.missionwall.focusReason.latestRunning': 'latest running',
+  'pages.missionwall.focusReason.none': 'No focus',
+  'pages.missionwall.focusReason.recentlyCompleted': 'recently completed',
+  'pages.missionwall.focusReason.retrying': 'retrying',
+  'pages.missionwall.focusReason.staleLive': 'stale',
+  'pages.missionwall.focusReason.staleProjection': 'stale',
+  'pages.missionwall.focusReason.timedOut': 'timed out',
+  'pages.missionwall.focusReason.unknown': 'unknown',
+  'pages.missionwall.focusReason.waitingHuman': 'waiting approval',
+  'pages.missionwall.latencyMs': '{latency}ms',
+  'pages.missionwall.latencySeconds': '{latency}s',
+  'pages.missionwall.liveState.connected':
+    'Connected to published workflow run read models.',
+  'pages.missionwall.liveState.empty':
+    'No published workflow runs are visible yet.',
+  'pages.missionwall.liveState.loading': 'Loading published workflow runs.',
+  'pages.missionwall.liveState.partialRunError':
+    'Some published service runs could not be loaded.',
+  'pages.missionwall.liveState.scopeUnavailable':
+    'Mission wall could not load the authenticated scope.',
+  'pages.missionwall.liveState.snapshotUnavailable':
+    'Mission wall snapshot could not be loaded.',
+  'pages.missionwall.liveStatus.degraded': 'Degraded',
+  'pages.missionwall.liveStatus.disconnected': 'Disconnected',
+  'pages.missionwall.liveStatus.idle': 'Idle',
+  'pages.missionwall.liveStatus.live': 'On',
+  'pages.missionwall.liveStatus.unknown': 'Unknown',
+  'pages.missionwall.metric.failed': 'Failed',
+  'pages.missionwall.metric.live': 'Live',
+  'pages.missionwall.metric.retrying': 'Retrying',
+  'pages.missionwall.metric.running': 'Running',
+  'pages.missionwall.metric.waiting': 'Waiting',
+  'pages.missionwall.noFocusExplain': 'Select a workflow.',
+  'pages.missionwall.noFocusRun': 'No focus run',
+  'pages.missionwall.branchLabel': 'branch: {label}',
+  'pages.missionwall.publishedRunWindow': 'Published Run Window',
+  'pages.missionwall.publishedRunWindowAria': 'Published run window',
+  'pages.missionwall.runProgress': '{completed} / {total} steps',
+  'pages.missionwall.runStage.failedAtStep': '{step} failed',
+  'pages.missionwall.runStage.retryingAtStep': 'Retrying {step}',
+  'pages.missionwall.runStage.runningAtStep': 'Running {step}',
+  'pages.missionwall.runStage.staleAtStep': 'Stale at {step}',
+  'pages.missionwall.runStage.timedOutAtStep': '{step} timed out',
+  'pages.missionwall.runStage.waitingAtStep': 'Waiting at {step}',
+  'pages.missionwall.runtimeKicker': 'AEVATAR WORKFLOW RUNTIME',
+  'pages.missionwall.runtimeData.completed': 'Completed',
+  'pages.missionwall.runtimeData.failed': 'Failed',
+  'pages.missionwall.runtimeData.retrying': 'Retrying',
+  'pages.missionwall.runtimeData.running': 'Running',
+  'pages.missionwall.runtimeData.stopped': 'Stopped',
+  'pages.missionwall.runtimeData.timedOut': 'Timed out',
+  'pages.missionwall.runtimeData.unknown': 'Unknown',
+  'pages.missionwall.runtimeData.noRuntimeRun': 'No visible run',
+  'pages.missionwall.runtimeData.unnamedWorkflow': 'Unnamed workflow',
+  'pages.missionwall.runtimeData.waiting': 'Waiting',
+  'pages.missionwall.status.completed': 'DONE',
+  'pages.missionwall.status.failed': 'FAILED',
+  'pages.missionwall.status.retrying': 'RETRY',
+  'pages.missionwall.status.running': 'LIVE',
+  'pages.missionwall.status.published': 'PUBLISHED',
+  'pages.missionwall.status.stale': 'STALE',
+  'pages.missionwall.status.stopped': 'STOP',
+  'pages.missionwall.status.timedOut': 'TIMEOUT',
+  'pages.missionwall.status.unknown': 'UNKNOWN',
+  'pages.missionwall.status.waiting': 'WAIT',
+  'pages.missionwall.state.auditLoading': 'Loading selected run',
+  'pages.missionwall.state.auditPendingTitle':
+    'No step flow for this run yet',
+  'pages.missionwall.state.emptyKicker': 'Waiting for runs',
+  'pages.missionwall.state.emptyTitle': 'No published workflows are visible',
+  'pages.missionwall.state.loadingKicker': 'Loading runtime',
+  'pages.missionwall.state.loadingTitle': 'Loading workflow runs',
+  'pages.missionwall.state.publishedWorkflowTitle':
+    'No visible run',
+  'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
+  'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepStatus.active': 'ACTIVE',
+  'pages.missionwall.stepStatus.completed': 'COMPLETED',
+  'pages.missionwall.stepStatus.failed': 'FAILED',
+  'pages.missionwall.stepStatus.idle': 'NEXT',
+  'pages.missionwall.stepStatus.retrying': 'RETRYING',
+  'pages.missionwall.stepStatus.unknown': 'UNKNOWN',
+  'pages.missionwall.stepStatus.waiting': 'WAITING',
+  'pages.missionwall.title': 'Published Run Mission Wall',
+  'pages.missionwall.unknownEntryMember': 'Unknown entry member',
+  'pages.missionwall.unknownTeam': 'Unknown team',
+  'pages.scopes.assets.legacyAssetsBreadcrumb': 'Legacy Assets',
+  'pages.scopes.assets.legacyAssetsContent':
+    'Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over.',
+  'pages.scopes.assets.legacyAssetsTitleHelp':
+    'This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative.',
+  'pages.scopes.assets.teamHome': 'Team Home',
+  'pages.scopes.assets.teamsBreadcrumb': 'Teams',
+  'pages.scopes.files.title': 'Files',
+  'pages.scopes.files.titleHelp':
+    'Browse workspace workflows, scope-backed scripts, and reusable Studio catalogs from one structured entry point.',
+  'pages.scopes.invoke.legacyInvokeBreadcrumb': 'Legacy Invoke',
+  'pages.scopes.invoke.legacyInvokeTitleHelp':
+    'Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows.',
+  'pages.scopes.invoke.teamsBreadcrumb': 'Teams',
+  'pages.settings.index.accountContent':
+    'Identity, session, and access details for this browser.',
+  'pages.settings.index.llmContent': 'Personal defaults for Chat and Studio.',
+  'pages.settings.index.title': 'Settings',
+  'pages.studio.index.studioBreadcrumb': 'Studio',
+  'pages.studio.index.teamBreadcrumb': 'Team',
+  'pages.studio.index.teamsBreadcrumb': 'Teams',
+  'pages.teammemberinvoke.backToTeam': 'Back to team',
+  'pages.teammemberinvoke.invokeBreadcrumb': 'Invoke',
+  'pages.teammemberinvoke.memberBreadcrumb': 'Member',
+  'pages.teammemberinvoke.teamsBreadcrumb': 'Teams',
+  'pages.teams.new.teamsBreadcrumb': 'Teams',
+  'pages.workflows.index.platformBreadcrumb': 'Platform',
+  'pages.workflows.index.workflowLibraryBreadcrumb': 'Workflow Library',
+  'shared.ui.aevatarpageshells.breadcrumb': 'Breadcrumb',
+  'teamMemberWorkflowStudio.header.breadcrumbAria': 'Workflow location',
+  'teamMemberWorkflowStudio.header.statusAria': 'Workflow status',
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
+  'teams.home.actions.createWorkflowMember': 'Create workflow member',
+  'teams.home.actions.debugEntryWorkflow': 'Debug entry workflow',
+  'teams.home.actions.debugWorkflow': 'Debug workflow',
   'teams.home.actions.editEntryMember': 'Edit entry member',
   'teams.home.actions.editMember': 'Edit member',
   'teams.home.actions.manageMembers': 'Manage members',
@@ -50,7 +219,8 @@ const enUSMessages = {
     'The member roster for this workspace is temporarily unavailable.',
   'teams.home.alerts.noScope':
     'No usable team scope could be resolved from the current login state. Refresh and try again.',
-  'teams.home.alerts.partialSignals': 'Some team signals are temporarily unavailable',
+  'teams.home.alerts.partialSignals':
+    'Some team signals are temporarily unavailable',
   'teams.home.alerts.teamsUnavailable':
     'The team roster for this workspace is temporarily unavailable.',
   'teams.home.attention.draft': 'Draft',
@@ -78,7 +248,8 @@ const enUSMessages = {
   'teams.home.breadcrumb': 'Aevatar / Teams',
   'teams.home.empty.description':
     'This account has not created any teams yet. Your AI teams will appear here after creation.',
-  'teams.home.errors.rosterUnavailable': 'The team list cannot be loaded right now.',
+  'teams.home.errors.rosterUnavailable':
+    'The team list cannot be loaded right now.',
   'teams.home.facts.currentStatus': 'Current status',
   'teams.home.facts.latestUpdate': 'Latest update',
   'teams.home.facts.members': 'Members',
@@ -114,7 +285,6 @@ const enUSMessages = {
   'teams.home.summary.actionable': 'Teams needing action',
   'teams.home.summary.healthy': 'Recently completed teams',
   'teams.home.summary.total': 'Total AI teams',
-  'teams.home.team.identity': 'Team ID: {teamId}',
   'teams.home.team.unnamed': 'Unnamed team',
   'teams.home.title': 'My AI teams',
   'teams.home.view.cards': 'Card view',
@@ -129,14 +299,17 @@ const enUSMessages = {
   'teams.detail.actions.moreAria': 'Team actions',
   'teams.detail.actions.test': 'Test team',
   'teams.detail.archive.hint.noTeam': 'Select a real team before archiving.',
-  'teams.detail.archive.hint.ready': 'The team summary must be loaded before archiving.',
+  'teams.detail.archive.hint.ready':
+    'The team summary must be loaded before archiving.',
   'teams.detail.archive.modal.content':
     'After archiving, this team is de-emphasized in active member lists, but you can still edit configuration and inspect history.',
   'teams.detail.archive.modal.title': 'Archive this team?',
   'teams.detail.breadcrumb.detail': 'Team detail',
   'teams.detail.breadcrumb.teams': 'Teams',
+  'teams.detail.backToTeams': 'Back to teams',
   'teams.detail.edit.hint.noTeam': 'Select a real team before editing.',
-  'teams.detail.edit.hint.ready': 'The team summary must be loaded before editing.',
+  'teams.detail.edit.hint.ready':
+    'The team summary must be loaded before editing.',
   'teams.detail.edit.modal.description': 'Team description',
   'teams.detail.edit.modal.descriptionAria': 'Edit team description',
   'teams.detail.edit.modal.help':
@@ -149,7 +322,8 @@ const enUSMessages = {
     'This URL only has workspace context and no concrete team identity. Return to the teams list and choose a team.',
   'teams.detail.empty.panel': 'No team selected',
   'teams.detail.empty.title': 'Team detail',
-  'teams.detail.empty.subtitle': 'Choose a team from the teams list before opening its detail page.',
+  'teams.detail.empty.subtitle':
+    'Choose a team from the teams list before opening its detail page.',
   'teams.detail.heading.currentTeam': 'Current team',
   'teams.detail.heading.default': 'Team detail',
   'teams.detail.loading': 'Loading team detail...',
@@ -166,9 +340,10 @@ const enUSMessages = {
   'teams.detail.messages.teamTestStopped': 'Team Test stopped.',
   'teams.detail.messages.updateFailed': 'Failed to update team.',
   'teams.detail.messages.updateSuccess': 'Team updated.',
-  'teams.detail.meta.memberCount': '{count, plural, one {# member} other {# members}}',
-  'teams.detail.meta.scopeId': 'Scope ID',
-  'teams.detail.meta.teamId': 'Team ID',
+  'teams.detail.meta.memberCount':
+    '{count, plural, one {# member} other {# members}}',
+  'teams.detail.meta.scopeId': 'Workspace',
+  'teams.detail.meta.teamId': 'Team',
   'teams.detail.overview.cards.currentRun': 'Latest run',
   'teams.detail.overview.cards.currentMember': 'Current member',
   'teams.detail.overview.cards.currentService': 'Current service',
@@ -178,13 +353,15 @@ const enUSMessages = {
     'There are not enough facts to build team composition yet.',
   'teams.detail.overview.composition.empty.title': 'No team composition yet',
   'teams.detail.overview.composition.title': 'Team composition',
-  'teams.detail.overview.configuration.bindingCurrentService': 'Routes to {service}',
+  'teams.detail.overview.configuration.bindingCurrentService':
+    'Routes to {service}',
   'teams.detail.overview.configuration.bindingMode': 'Binding mode',
   'teams.detail.overview.configuration.bindingNoService':
     'No primary service entry has been matched yet.',
   'teams.detail.overview.configuration.primaryService': 'Primary service entry',
   'teams.detail.overview.configuration.title': 'Configuration details',
   'teams.detail.overview.configuration.versionIdentity': 'Version identity',
+  'teams.detail.overview.configuration.versionStatus': 'Version status',
   'teams.detail.overview.configuration.workflow': 'Team workflow',
   'teams.detail.overview.entry.configuredCaption':
     'Calls to this team route to this member first.',
@@ -194,10 +371,29 @@ const enUSMessages = {
   'teams.detail.overview.fallback.currentExecution': 'Current execution',
   'teams.detail.overview.fallback.noRecentRun': 'No recent run',
   'teams.detail.overview.fallback.primaryService': 'Primary service',
-  'teams.detail.overview.fallback.serviceEntry': 'Service entry {serviceId}',
+  'teams.detail.overview.fallback.serviceEntry': 'Service entry',
   'teams.detail.overview.fallback.teamWorkflow': 'Team workflow',
-  'teams.detail.overview.identity.noService': 'No additional service identity yet',
+  'teams.detail.overview.identity.noService': 'No service is visible yet',
   'teams.detail.overview.identity.noVisibleRun': 'No visible run synced yet',
+  'teams.detail.overview.composition.memberDraft': 'Not bound yet.',
+  'teams.detail.overview.composition.memberReady':
+    'Bound and ready to receive traffic.',
+  'teams.detail.overview.configuration.versionAvailable':
+    'Current serving version is available.',
+  'teams.detail.overview.configuration.versionPending':
+    'Serving version is pending.',
+  'teams.detail.overview.configuration.workflowLinked':
+    'Workflow draft is linked.',
+  'teams.detail.overview.configuration.workflowPending':
+    'Workflow draft is not linked yet.',
+  'teams.detail.overview.member.selectedCaption':
+    "Selected from this team's members.",
+  'teams.detail.overview.run.visibleCaption': 'Latest run is available.',
+  'teams.detail.overview.service.boundCaption':
+    'Traffic is routed through the bound service.',
+  'teams.detail.overview.service.boundFallback': 'Bound service',
+  'teams.detail.overview.service.configuredCaption':
+    'Service routing is configured.',
   'teams.detail.overview.pill.run': 'Run · {value}',
   'teams.detail.overview.pill.runMissing': 'No recent visible run',
   'teams.detail.overview.pill.service': 'Service · {value}',
@@ -228,6 +424,7 @@ const enUSMessages = {
   'teams.detail.status.kind.workflow': 'Workflow',
   'teams.detail.status.unknown': 'Unknown status',
   'teams.detail.tabList.label': 'Team detail tabs',
+  'teams.detail.tabs.automations': 'Automations',
   'teams.detail.tabs.members': 'Team members',
   'teams.detail.tabs.overview': 'Overview',
   'teams.detail.test.actions.retry': 'Retry',
@@ -235,7 +432,8 @@ const enUSMessages = {
   'teams.detail.test.actions.stop': 'Stop',
   'teams.detail.test.currentMemberContext':
     'Current page selected {member}, but Team Test still starts through the entry member.',
-  'teams.detail.test.disabled.archived': 'Archived teams cannot start a new test.',
+  'teams.detail.test.disabled.archived':
+    'Archived teams cannot start a new test.',
   'teams.detail.test.entry.buildFirst': 'Build / Bind first',
   'teams.detail.test.entry.checking.description':
     'You can choose an entry member after the member roster finishes syncing.',
@@ -253,7 +451,8 @@ const enUSMessages = {
   'teams.detail.test.entry.promptRequiredTitle': 'Enter a test prompt first.',
   'teams.detail.test.entry.rosterUnavailable.description':
     'The team member roster cannot be read right now, so an entry member cannot be selected.',
-  'teams.detail.test.entry.rosterUnavailable.title': 'Member roster unavailable',
+  'teams.detail.test.entry.rosterUnavailable.title':
+    'Member roster unavailable',
   'teams.detail.test.entry.setAndTest': 'Set entry and test',
   'teams.detail.test.entrySyncing.action': 'Retry',
   'teams.detail.test.entrySyncing.description':
@@ -310,18 +509,418 @@ const enUSMessages = {
   'teams.detail.test.status.stopped': 'Stopped',
   'teams.detail.test.status.success': 'Completed',
   'teams.detail.test.archivedHint': 'Archived teams cannot start new tests.',
-  'teams.detail.test.subtitle': 'Start a real team invocation through the entry member.',
+  'teams.detail.test.subtitle':
+    'Start a real team invocation through the entry member.',
   'teams.detail.update.empty': 'No visible update time yet',
-  'teams.detail.update.fromRun': 'From run {runId}',
+  'teams.detail.update.fromRun': 'From latest run',
   'teams.detail.update.fromTeam': 'From team update time',
   'teams.detail.update.fromVisibleRun': 'From the latest visible run',
   'teams.detail.update.fromWorkflow': 'From workflow update time',
+  'shared.studio.nodeConfiguration.assign.target.label': 'Target variable',
+  'shared.studio.nodeConfiguration.assign.target.placeholder': 'result',
+  'shared.studio.nodeConfiguration.assign.value.label': 'Value',
+  'shared.studio.nodeConfiguration.assign.value.placeholder': '$input',
+  'shared.studio.nodeConfiguration.cache.childStep.label': 'Cached node',
+  'shared.studio.nodeConfiguration.cache.key.label': 'Cache key',
+  'shared.studio.nodeConfiguration.cache.key.placeholder': '$input',
+  'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL seconds',
+  'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
+  'shared.studio.nodeConfiguration.checkpoint.name.label': 'Checkpoint name',
+  'shared.studio.nodeConfiguration.checkpoint.name.placeholder':
+    'before_publish',
+  'shared.studio.nodeConfiguration.conditional.condition.label': 'Condition',
+  'shared.studio.nodeConfiguration.conditional.condition.placeholder':
+    'eq($input, "ok")',
+  'shared.studio.nodeConfiguration.connectorCall.connector.label': 'Connector',
+  'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
+    'Configured connector name',
+  'shared.studio.nodeConfiguration.connectorCall.method.label': 'Method',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.delete':
+    'DELETE',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.get': 'GET',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.patch': 'PATCH',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.post': 'POST',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.put': 'PUT',
+  'shared.studio.nodeConfiguration.connectorCall.onError.label': 'On error',
+  'shared.studio.nodeConfiguration.connectorCall.operation.label': 'Operation',
+  'shared.studio.nodeConfiguration.connectorCall.operation.placeholder':
+    'Operation or endpoint name',
+  'shared.studio.nodeConfiguration.connectorCall.path.label': 'Path',
+  'shared.studio.nodeConfiguration.connectorCall.path.placeholder': '/v1/items',
+  'shared.studio.nodeConfiguration.connectorCall.retry.label': 'Retries',
+  'shared.studio.nodeConfiguration.connectorCall.retry.placeholder': '0',
+  'shared.studio.nodeConfiguration.connectorCall.timeout.label': 'Timeout ms',
+  'shared.studio.nodeConfiguration.connectorCall.timeout.placeholder': '10000',
+  'shared.studio.nodeConfiguration.delay.duration.label': 'Duration ms',
+  'shared.studio.nodeConfiguration.delay.duration.placeholder': '1000',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.description':
+    'Optional input passed into the generated workflow after YAML extraction.',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.label':
+    'Original input',
+  'shared.studio.nodeConfiguration.dynamicWorkflow.originalInput.placeholder':
+    '$input',
+  'shared.studio.nodeConfiguration.emit.eventType.label': 'Event type',
+  'shared.studio.nodeConfiguration.emit.eventType.placeholder':
+    'workflow.completed',
+  'shared.studio.nodeConfiguration.emit.payload.label': 'Payload',
+  'shared.studio.nodeConfiguration.emit.payload.placeholder': '$input',
+  'shared.studio.nodeConfiguration.evaluate.criteria.label': 'Criteria',
+  'shared.studio.nodeConfiguration.evaluate.criteria.placeholder':
+    'correctness and clarity',
+  'shared.studio.nodeConfiguration.evaluate.onBelow.label':
+    'Below threshold branch',
+  'shared.studio.nodeConfiguration.evaluate.onBelow.placeholder': 'rewrite',
+  'shared.studio.nodeConfiguration.evaluate.scale.label': 'Scale',
+  'shared.studio.nodeConfiguration.evaluate.scale.placeholder': '1-5',
+  'shared.studio.nodeConfiguration.evaluate.threshold.label': 'Threshold',
+  'shared.studio.nodeConfiguration.evaluate.threshold.placeholder': '4',
+  'shared.studio.nodeConfiguration.foreach.delimiter.label': 'Delimiter',
+  'shared.studio.nodeConfiguration.foreach.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.foreach.subStepType.label': 'Item step',
+  'shared.studio.nodeConfiguration.foreach.subTargetRole.label':
+    'Item target role',
+  'shared.studio.nodeConfiguration.foreach.subTargetRole.placeholder':
+    'assistant',
+  'shared.studio.nodeConfiguration.guard.check.label': 'Check',
+  'shared.studio.nodeConfiguration.guard.check.option.contains':
+    'Contains keyword',
+  'shared.studio.nodeConfiguration.guard.check.option.jsonValid':
+    'Input is valid JSON',
+  'shared.studio.nodeConfiguration.guard.check.option.maxLength':
+    'Within max length',
+  'shared.studio.nodeConfiguration.guard.check.option.notEmpty':
+    'Input is not empty',
+  'shared.studio.nodeConfiguration.guard.check.option.regex': 'Matches regex',
+  'shared.studio.nodeConfiguration.guard.onFailure.label': 'On failure',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.label':
+    'On rejection',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.option.fail':
+    'Fail the run',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.option.skip':
+    'Skip this step',
+  'shared.studio.nodeConfiguration.humanApproval.prompt.label':
+    'Approval prompt',
+  'shared.studio.nodeConfiguration.humanApproval.prompt.placeholder':
+    'Approve this step?',
+  'shared.studio.nodeConfiguration.humanInput.prompt.label': 'Input prompt',
+  'shared.studio.nodeConfiguration.humanInput.prompt.placeholder':
+    'Please provide the missing input.',
+  'shared.studio.nodeConfiguration.humanInput.variable.label':
+    'Response variable',
+  'shared.studio.nodeConfiguration.humanInput.variable.placeholder':
+    'human_response',
+  'shared.studio.nodeConfiguration.llmCall.instruction.description':
+    'Prepended to the run message before the role is called.',
+  'shared.studio.nodeConfiguration.llmCall.instruction.label': 'Instruction',
+  'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
+    'Tell the role what this step should do.',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.label': 'Delimiter',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder':
+    '\\n---\\n',
+  'shared.studio.nodeConfiguration.mapReduce.mapStepType.label': 'Map step',
+  'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.label':
+    'Map target role',
+  'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.placeholder':
+    'mapper',
+  'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.label':
+    'Reduce instruction',
+  'shared.studio.nodeConfiguration.mapReduce.reducePromptPrefix.placeholder':
+    'Merge these chunk summaries:',
+  'shared.studio.nodeConfiguration.mapReduce.reduceStepType.label':
+    'Reduce step',
+  'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.label':
+    'Reduce target role',
+  'shared.studio.nodeConfiguration.mapReduce.reduceTargetRole.placeholder':
+    'reducer',
+  'shared.studio.nodeConfiguration.option.onFailure.branch': 'Go to a branch',
+  'shared.studio.nodeConfiguration.option.onFailure.fail': 'Fail the run',
+  'shared.studio.nodeConfiguration.option.onFailure.skip': 'Skip this step',
+  'shared.studio.nodeConfiguration.parallel.count.label': 'Parallel count',
+  'shared.studio.nodeConfiguration.parallel.count.placeholder': '3',
+  'shared.studio.nodeConfiguration.parallel.voteStepType.label': 'Vote step',
+  'shared.studio.nodeConfiguration.parallel.workers.label': 'Workers',
+  'shared.studio.nodeConfiguration.parallel.workers.placeholder':
+    'agent_a,agent_b,agent_c',
+  'shared.studio.nodeConfiguration.race.count.label': 'Winner count',
+  'shared.studio.nodeConfiguration.race.count.placeholder': '2',
+  'shared.studio.nodeConfiguration.race.workers.label': 'Workers',
+  'shared.studio.nodeConfiguration.race.workers.placeholder':
+    'fast_model,cheap_model',
+  'shared.studio.nodeConfiguration.reflect.criteria.label': 'Criteria',
+  'shared.studio.nodeConfiguration.reflect.criteria.placeholder':
+    'accuracy and conciseness',
+  'shared.studio.nodeConfiguration.reflect.maxRounds.label': 'Max rounds',
+  'shared.studio.nodeConfiguration.reflect.maxRounds.placeholder': '3',
+  'shared.studio.nodeConfiguration.retrieveFacts.query.label': 'Query',
+  'shared.studio.nodeConfiguration.retrieveFacts.query.placeholder':
+    'What facts should this step retrieve?',
+  'shared.studio.nodeConfiguration.retrieveFacts.topK.label': 'Top K',
+  'shared.studio.nodeConfiguration.retrieveFacts.topK.placeholder': '3',
+  'shared.studio.nodeConfiguration.stepType.option.assign': 'Assign',
+  'shared.studio.nodeConfiguration.stepType.option.cache': 'Cache',
+  'shared.studio.nodeConfiguration.stepType.option.checkpoint': 'Checkpoint',
+  'shared.studio.nodeConfiguration.stepType.option.conditional': 'Conditional',
+  'shared.studio.nodeConfiguration.stepType.option.connectorCall':
+    'Connector call',
+  'shared.studio.nodeConfiguration.stepType.option.delay': 'Delay',
+  'shared.studio.nodeConfiguration.stepType.option.dynamicWorkflow':
+    'Dynamic workflow',
+  'shared.studio.nodeConfiguration.stepType.option.emit': 'Emit',
+  'shared.studio.nodeConfiguration.stepType.option.evaluate': 'Evaluate',
+  'shared.studio.nodeConfiguration.stepType.option.foreach': 'For each',
+  'shared.studio.nodeConfiguration.stepType.option.guard': 'Guard',
+  'shared.studio.nodeConfiguration.stepType.option.humanApproval':
+    'Human approval',
+  'shared.studio.nodeConfiguration.stepType.option.humanInput': 'Human input',
+  'shared.studio.nodeConfiguration.stepType.option.llmCall': 'LLM call',
+  'shared.studio.nodeConfiguration.stepType.option.mapReduce': 'Map reduce',
+  'shared.studio.nodeConfiguration.stepType.option.parallel': 'Parallel',
+  'shared.studio.nodeConfiguration.stepType.option.race': 'Race',
+  'shared.studio.nodeConfiguration.stepType.option.reflect': 'Reflect',
+  'shared.studio.nodeConfiguration.stepType.option.retrieveFacts':
+    'Retrieve facts',
+  'shared.studio.nodeConfiguration.stepType.option.switch': 'Switch',
+  'shared.studio.nodeConfiguration.stepType.option.toolCall': 'Tool call',
+  'shared.studio.nodeConfiguration.stepType.option.transform': 'Transform',
+  'shared.studio.nodeConfiguration.stepType.option.vote': 'Vote',
+  'shared.studio.nodeConfiguration.stepType.option.waitSignal':
+    'Wait for signal',
+  'shared.studio.nodeConfiguration.stepType.option.while': 'While',
+  'shared.studio.nodeConfiguration.stepType.option.workflowCall':
+    'Workflow call',
+  'shared.studio.nodeConfiguration.stepType.option.workflowYamlValidate':
+    'Workflow YAML validation',
+  'shared.studio.nodeConfiguration.switch.on.description':
+    'Value matched against branch keys such as bug, feature, or _default.',
+  'shared.studio.nodeConfiguration.switch.on.label': 'Switch on',
+  'shared.studio.nodeConfiguration.switch.on.placeholder': '$input',
+  'shared.studio.nodeConfiguration.toolCall.tool.label': 'Tool',
+  'shared.studio.nodeConfiguration.toolCall.tool.placeholder': 'web_search',
+  'shared.studio.nodeConfiguration.transform.operation.label': 'Operation',
+  'shared.studio.nodeConfiguration.transform.operation.option.count':
+    'Count lines',
+  'shared.studio.nodeConfiguration.transform.operation.option.identity':
+    'Pass through',
+  'shared.studio.nodeConfiguration.transform.operation.option.join':
+    'Join sections',
+  'shared.studio.nodeConfiguration.transform.operation.option.jsonExtract':
+    'Extract JSON',
+  'shared.studio.nodeConfiguration.transform.operation.option.lowercase':
+    'Lowercase',
+  'shared.studio.nodeConfiguration.transform.operation.option.split':
+    'Split into sections',
+  'shared.studio.nodeConfiguration.transform.operation.option.take':
+    'Take first lines',
+  'shared.studio.nodeConfiguration.transform.operation.option.takeLast':
+    'Take last lines',
+  'shared.studio.nodeConfiguration.transform.operation.option.trim':
+    'Trim whitespace',
+  'shared.studio.nodeConfiguration.transform.operation.option.uppercase':
+    'Uppercase',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.label': 'Signal name',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder':
+    'continue',
+  'shared.studio.nodeConfiguration.waitSignal.timeout.label': 'Timeout ms',
+  'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
+  'shared.studio.nodeConfiguration.while.condition.label': 'Condition',
+  'shared.studio.nodeConfiguration.while.condition.placeholder':
+    'lt(iteration, 5)',
+  'shared.studio.nodeConfiguration.while.maxIterations.label': 'Max iterations',
+  'shared.studio.nodeConfiguration.while.maxIterations.placeholder': '5',
+  'shared.studio.nodeConfiguration.while.step.label': 'Loop step',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.label': 'Lifecycle',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.inline':
+    'Inline call',
+  'shared.studio.nodeConfiguration.workflowCall.lifecycle.option.scope':
+    'Use scope workflow',
+  'shared.studio.nodeConfiguration.workflowCall.workflow.label': 'Workflow',
+  'shared.studio.nodeConfiguration.workflowCall.workflow.placeholder':
+    'child_workflow',
   'teams.members.actions.build': 'Build',
   'teams.members.actions.clearEntry': 'Clear entry member',
   'teams.members.actions.create': 'Create member',
   'teams.members.actions.createFirst': 'Create first member',
+  'teams.members.actions.createFirstWorkflow': 'Create first workflow member',
+  'teams.members.actions.createWorkflowMember': 'Create workflow member',
   'teams.members.actions.editInStudio': 'Edit in Studio',
+  'teams.members.actions.automate': 'Automate',
+  'teams.members.actions.invokeRequiresBinding':
+    'Bind this workflow member before invoking it.',
+  'teams.members.actions.invokeWorkflow': 'Invoke',
+  'teams.members.actions.publishedRuns': 'Published runs',
+  'teams.members.actions.publishedRuns.publishFirst':
+    'Publish this member before viewing published runs.',
   'teams.members.actions.setEntry': 'Set as entry member',
+  'teams.members.actions.workflowOnly': 'Workflow only',
+  'teams.members.actions.workflowOnlyTitle':
+    'This console currently supports workflow members only.',
+  'teams.members.actions.workflowStudio': 'Workflow Studio',
+  'teams.automations.actions.addRecurringWork': 'Add recurring work',
+  'teams.automations.actions.create': 'New automation',
+  'teams.automations.actions.delete': 'Delete',
+  'teams.automations.actions.edit': 'Edit',
+  'teams.automations.actions.pause': 'Pause',
+  'teams.automations.actions.resume': 'Resume',
+  'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.columns.actions': 'Actions',
+  'teams.automations.columns.automation': 'Automation',
+  'teams.automations.columns.member': 'Member',
+  'teams.automations.columns.schedule': 'Schedule',
+  'teams.automations.createPanel.description':
+    'Pick a published member, describe the job, choose a cadence, and preview the next runs before creating it.',
+  'teams.automations.createPanel.title': 'Give a member recurring work',
+  'teams.automations.cron.custom': 'Custom schedule',
+  'teams.automations.cron.daily': 'Daily · {time}',
+  'teams.automations.cron.dailyDetail': 'Every day at {time} · {timezone}',
+  'teams.automations.cron.hourly': 'Hourly · :{minute}',
+  'teams.automations.cron.hourlyDetail':
+    'Every hour at minute {minute} · {timezone}',
+  'teams.automations.cron.weekdays': 'Weekdays · {time}',
+  'teams.automations.cron.weekdaysDetail': 'Weekdays at {time} · {timezone}',
+  'teams.automations.cron.weekly': '{weekday} · {time}',
+  'teams.automations.cron.weeklyDetail': '{weekday} at {time} · {timezone}',
+  'teams.automations.description':
+    'Recurring work belongs to a member. The team view shows every commitment so operators can see what will run next and what needs attention.',
+  'teams.automations.empty.createFirst': 'Create first automation',
+  'teams.automations.empty.description':
+    'Create an automation from a published member so this team has visible recurring commitments.',
+  'teams.automations.empty.publishHint':
+    'Publish a workflow member before scheduling recurring work.',
+  'teams.automations.empty.title': 'No recurring work yet',
+  'teams.automations.error.description':
+    'Refresh the page or try again after the schedule service is available.',
+  'teams.automations.error.title': 'Automations could not load',
+  'teams.automations.form.cadence': 'Cadence',
+  'teams.automations.form.cadenceAria': 'Automation cadence',
+  'teams.automations.form.create': 'Create automation',
+  'teams.automations.form.cron': 'Cron expression',
+  'teams.automations.form.cronAria': 'Cron expression',
+  'teams.automations.form.cronFiveFieldHint':
+    'Use a 5-field cron expression: minute hour day month weekday.',
+  'teams.automations.form.defaultTitle': '{memberName} recurring work',
+  'teams.automations.form.displayName': 'Name',
+  'teams.automations.form.displayNameAria': 'Automation name',
+  'teams.automations.form.displayNamePlaceholder': 'Daily escalation digest',
+  'teams.automations.form.editPromptHint':
+    'Optional: leave it blank to save without a recurring prompt.',
+  'teams.automations.form.editTitle': 'Edit automation',
+  'teams.automations.form.enabled': 'Enabled',
+  'teams.automations.form.identityMissing':
+    "Waiting for this member's published service identity.",
+  'teams.automations.form.identityReady':
+    "Targets the member's published service.",
+  'teams.automations.form.member': 'Member',
+  'teams.automations.form.memberAria': 'Automation member',
+  'teams.automations.form.preset.custom': 'Custom cron',
+  'teams.automations.form.preset.dailyMorning': 'Daily · 09:00',
+  'teams.automations.form.preset.hourly': 'Hourly',
+  'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
+  'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
+  'teams.automations.form.preview': 'Preview next runs',
+  'teams.automations.form.previewEmpty':
+    'Preview the cadence to confirm the next scheduled runs.',
+  'teams.automations.form.previewHint':
+    'Preview uses the schedule service before saving.',
+  'teams.automations.form.prompt': 'Recurring prompt (optional)',
+  'teams.automations.form.promptAria': 'Recurring prompt (optional)',
+  'teams.automations.form.promptLimit':
+    'Optional. Up to {maxLength} characters.',
+  'teams.automations.form.promptPlaceholder':
+    'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.form.save': 'Save changes',
+  'teams.automations.form.scheduleReadsAs': 'Schedule reads as',
+  'teams.automations.form.section.schedule': '3. Schedule',
+  'teams.automations.form.section.scheduleHint':
+    'Choose a common cadence or switch to custom cron for advanced schedules.',
+  'teams.automations.form.section.target': '1. Target member',
+  'teams.automations.form.section.targetHint':
+    "Recurring work runs through the selected member's published service.",
+  'teams.automations.form.section.work': '2. Work to run',
+  'teams.automations.form.section.workHint':
+    'Name the automation and optionally add a prompt for each run.',
+  'teams.automations.form.timezone': 'Timezone',
+  'teams.automations.form.timezoneAria': 'Timezone',
+  'teams.automations.form.title': 'New member automation',
+  'teams.automations.member.publishFirst':
+    'Publish this member before adding recurring work.',
+  'teams.automations.member.publishedServiceReady':
+    'Published service ready',
+  'teams.automations.member.unknown': 'Unknown member',
+  'teams.automations.member.workflowOnly':
+    'Only workflow members can have recurring work.',
+  'teams.automations.messages.createFailed':
+    'Automation was not created: {message}',
+  'teams.automations.messages.createSuccess': 'Automation created.',
+  'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
+  'teams.automations.messages.deleteSuccess': 'Automation deleted.',
+  'teams.automations.messages.disableSuccess': 'Automation paused.',
+  'teams.automations.messages.enableSuccess': 'Automation resumed.',
+  'teams.automations.messages.previewFailed': 'Preview failed: {message}',
+  'teams.automations.messages.promptTooLong':
+    'Recurring prompt must be {maxLength} characters or fewer.',
+  'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
+  'teams.automations.messages.runNowSuccess': 'Run requested.',
+  'teams.automations.messages.serviceIdentityLoading':
+    'Service identity is still loading.',
+  'teams.automations.messages.serviceIdentityMissing':
+    'The selected member does not have a service identity yet.',
+  'teams.automations.messages.updateFailed':
+    'Automation was not updated: {message}',
+  'teams.automations.messages.updateSuccess': 'Automation updated.',
+  'teams.automations.noPublishedMember.description':
+    'Automations need a member with a published service identity before they can run.',
+  'teams.automations.noPublishedMember.title': 'Publish a member first',
+  'teams.automations.preview.daily.cadence': 'Every weekday · 09:00',
+  'teams.automations.preview.daily.member': 'Support Analyst',
+  'teams.automations.preview.daily.nextRun': 'Next run today',
+  'teams.automations.preview.daily.prompt':
+    'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.preview.daily.title': 'Daily customer escalation digest',
+  'teams.automations.preview.runsThroughMember':
+    'Runs through the member service',
+  'teams.automations.preview.runsThroughService':
+    'Runs through published service',
+  'teams.automations.preview.status.active': 'Active',
+  'teams.automations.preview.status.attention': 'Needs attention',
+  'teams.automations.preview.weekly.cadence': 'Friday · 16:30',
+  'teams.automations.preview.weekly.member': 'Release Manager',
+  'teams.automations.preview.weekly.nextRun': 'Needs channel permission',
+  'teams.automations.preview.weekly.prompt':
+    'Prepare release handoff notes and flag deploy risks.',
+  'teams.automations.preview.weekly.title': 'Weekly release handoff',
+  'teams.automations.previewOnly': 'Automation API wiring is coming next.',
+  'teams.automations.row.nextRun': 'Next {time}',
+  'teams.automations.row.awaitingReadModel': 'Waiting for schedule sync',
+  'teams.automations.row.manualRunRequested': 'Run requested {time}',
+  'teams.automations.row.noNextRun': 'No next run',
+  'teams.automations.row.target': 'Workflow chat · {endpoint}',
+  'teams.automations.status.active': 'Active',
+  'teams.automations.status.error': 'Error',
+  'teams.automations.status.paused': 'Paused',
+  'teams.automations.status.runRequested': 'Run requested',
+  'teams.automations.summary.active': 'Active',
+  'teams.automations.summary.needsAttention': 'Need attention',
+  'teams.automations.summary.paused': 'Paused',
+  'teams.automations.title': 'Automations',
+  'teams.automations.untitled': 'Untitled automation',
+  'teams.automations.unavailable.title': 'Not ready for automation',
+  'teams.automations.upcoming.attention.caption':
+    'Weekly release handoff needs attention',
+  'teams.automations.upcoming.empty': 'No upcoming runs are visible yet.',
+  'teams.automations.upcoming.friday': 'Friday · 16:30',
+  'teams.automations.upcoming.memberCaption': '{memberName} recurring work',
+  'teams.automations.upcoming.scheduled.caption':
+    'Scheduled teammate commitment',
+  'teams.automations.upcoming.title': 'Upcoming',
+  'teams.automations.upcoming.today': 'Today · 09:00',
+  'teams.automations.upcoming.tomorrow': 'Tomorrow · 18:00',
+  'teams.automations.weekdays.friday': 'Friday',
+  'teams.automations.weekdays.monday': 'Monday',
+  'teams.automations.weekdays.saturday': 'Saturday',
+  'teams.automations.weekdays.sunday': 'Sunday',
+  'teams.automations.weekdays.thursday': 'Thursday',
+  'teams.automations.weekdays.tuesday': 'Tuesday',
+  'teams.automations.weekdays.wednesday': 'Wednesday',
   'teams.members.columns.actions': 'Actions',
   'teams.members.columns.implementation': 'Implementation',
   'teams.members.columns.member': 'Member',
@@ -329,17 +928,21 @@ const enUSMessages = {
   'teams.members.columns.service': 'Service',
   'teams.members.count': '{count, plural, one {# member} other {# members}}',
   'teams.members.description':
-    'Confirm entry members here: Set entry determines where team tests start, Build / Edit in Studio completes member implementation and binding, then return to team detail to test the team.',
+    'Review team members, choose the Team entry member, and open workflow members in Studio. Invoke is available only after a workflow member is bound to a published service.',
   'teams.members.empty.description':
     'The team exists as a backend fact, but its current member roster is empty. New members will appear here.',
   'teams.members.empty.title': 'This team has no members yet',
   'teams.members.entry': 'Entry member',
   'teams.members.selected': 'Selected',
-  'teams.members.fallback.team': 'Team {teamId}',
+  'teams.members.unnamed': 'Untitled member',
+  'teams.members.service.bound': 'Bound service',
+  'teams.members.service.needsBinding': 'Bind this member before invoking it.',
+  'teams.members.service.notBound': 'Not bound yet',
+  'teams.members.service.ready': 'Ready to invoke.',
   'teams.members.loading.description': 'Reading members for this team.',
   'teams.members.loading.title': 'Reading member roster',
   'teams.members.noSelection.description':
-    'The current route has no team ID, so only runtime-observed member identities can be shown.',
+    'Choose a team from the list to review its members.',
   'teams.members.noSelection.title': 'No real team selected',
   'teams.members.roster': 'Member roster',
   'teams.members.syncing.description':
@@ -349,6 +952,512 @@ const enUSMessages = {
   'teams.members.unavailable.description':
     'The member roster for this team cannot be read right now.',
   'teams.members.unavailable.title': 'Member roster unavailable',
+  'pages.teammemberinvoke.back': 'Team members',
+  'pages.teammemberinvoke.description':
+    'Run the bound published workflow member and keep the runtime observation pinned to this member.',
+  'pages.teammemberinvoke.endpoint.missing':
+    'No callable endpoint is available.',
+  'pages.teammemberinvoke.endpoint.missing.description':
+    'The published service has no callable endpoints available to this page.',
+  'pages.teammemberinvoke.fact.member': 'Member',
+  'pages.teammemberinvoke.fact.revision': 'Serving state',
+  'pages.teammemberinvoke.fact.service': 'Service',
+  'pages.teammemberinvoke.fact.workflow': 'Implementation',
+  'pages.teammemberinvoke.implementation.workflow': 'Workflow',
+  'pages.teammemberinvoke.load.failed':
+    'Member invoke context could not be loaded.',
+  'pages.teammemberinvoke.loading': 'Loading invoke context...',
+  'pages.teammemberinvoke.member': 'Member',
+  'pages.teammemberinvoke.next.step': 'Next step',
+  'pages.teammemberinvoke.open.studio': 'Workflow Studio',
+  'pages.teammemberinvoke.publishedRuns': 'Published runs',
+  'pages.teammemberinvoke.publishedRuns.open':
+    'View runs from the published member service.',
+  'pages.teammemberinvoke.publishedRuns.publishFirst':
+    'Publish this member to start recording published runs.',
+  'pages.teammemberinvoke.resolve.in.studio': 'Open Workflow Studio',
+  'pages.teammemberinvoke.route.missing': 'Missing member route',
+  'pages.teammemberinvoke.route.missing.description':
+    'Open this page from a concrete team member so the invoke target stays stable.',
+  'pages.teammemberinvoke.service.pending':
+    'Published service is not visible yet.',
+  'pages.teammemberinvoke.service.pending.description':
+    'The member binding exists, but the service catalog has not exposed its callable endpoints yet.',
+  'pages.teammemberinvoke.title': 'Run workflow member',
+  'pages.teammemberinvoke.revision.ready': 'Ready',
+  'pages.teammemberinvoke.service.bound': 'Bound service',
+  'pages.teammemberinvoke.unbound': 'This workflow member is not bound yet.',
+  'pages.teammemberinvoke.unbound.description':
+    'Bind this workflow member first so it has a published callable service and endpoint contract.',
+  'pages.teammemberinvoke.workflow.only':
+    'Invoke is available for workflow members only.',
+  'pages.teammemberinvoke.workflow.only.description':
+    "This page only runs workflow members. Use the member's own surface for other implementation kinds.",
+  'pages.runs.memberPublishedRuns.auditUnavailable':
+    'Published run audit is unavailable.',
+  'pages.runs.memberPublishedRuns.backToTeamMembers': 'Back to team members',
+  'pages.runs.memberPublishedRuns.details': 'Details',
+  'pages.runs.memberPublishedRuns.input': 'Input',
+  'pages.runs.memberPublishedRuns.listUnavailable':
+    'Published runs are unavailable.',
+  'pages.runs.memberPublishedRuns.logs': 'Logs',
+  'pages.runs.memberPublishedRuns.noAuditSteps':
+    'No audit steps were recorded for this published run.',
+  'pages.runs.memberPublishedRuns.navigation': 'Published runs navigation',
+  'pages.runs.memberPublishedRuns.noRuns': 'No published runs yet.',
+  'pages.runs.memberPublishedRuns.openEditor': 'Open editor',
+  'pages.runs.memberPublishedRuns.output': 'Output',
+  'pages.runs.memberPublishedRuns.publishedRuns': 'Published runs',
+  'pages.runs.memberPublishedRuns.refresh': 'Refresh',
+  'pages.runs.memberPublishedRuns.selectPublishedRun': 'Select a published run',
+  'pages.runs.memberPublishedRuns.timeline': 'Timeline',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
+    'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
+    'No workflow draft is linked to this member yet.',
+  'teamMemberWorkflowStudio.common.close': 'Close',
+  'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
+  'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
+  'teamMemberWorkflowStudio.executionPanel.clear': 'Clear logs',
+  'teamMemberWorkflowStudio.executionPanel.copyAll': 'Copy all logs',
+  'teamMemberWorkflowStudio.executionPanel.copyAllDone': 'Copied all logs.',
+  'teamMemberWorkflowStudio.executionPanel.copySelected': 'Copy selected log',
+  'teamMemberWorkflowStudio.executionPanel.copySelectedDone':
+    'Copied selected log.',
+  'teamMemberWorkflowStudio.executionPanel.emptyEvidence':
+    'Runtime events will appear here when the backend emits them.',
+  'teamMemberWorkflowStudio.executionPanel.emptyEventPayload':
+    'No event payload was captured.',
+  'teamMemberWorkflowStudio.executionPanel.emptyLogs':
+    'Node logs will appear after the workflow draft runs.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeInput':
+    'No input captured for this node.',
+  'teamMemberWorkflowStudio.executionPanel.emptyNodeOutput':
+    'No output captured for this node.',
+  'teamMemberWorkflowStudio.executionPanel.emptyOutput':
+    'Output will appear after the draft run emits a result.',
+  'teamMemberWorkflowStudio.executionPanel.error': 'Error',
+  'teamMemberWorkflowStudio.executionPanel.evidence': 'Evidence frames',
+  'teamMemberWorkflowStudio.executionPanel.eventCount': '{count} events',
+  'teamMemberWorkflowStudio.executionPanel.eventPayload': 'Event payload',
+  'teamMemberWorkflowStudio.executionPanel.events': 'Events',
+  'teamMemberWorkflowStudio.executionPanel.items': 'items',
+  'teamMemberWorkflowStudio.executionPanel.logDetails': 'Log details',
+  'teamMemberWorkflowStudio.executionPanel.logs': 'Logs',
+  'teamMemberWorkflowStudio.executionPanel.logsOverview': 'Logs overview',
+  'teamMemberWorkflowStudio.executionPanel.node': 'Node',
+  'teamMemberWorkflowStudio.executionPanel.nodeInput': 'Input',
+  'teamMemberWorkflowStudio.executionPanel.nodeInteraction': 'Interaction',
+  'teamMemberWorkflowStudio.executionPanel.nodeOutput': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.nodePrompt': 'Prompt',
+  'teamMemberWorkflowStudio.executionPanel.nodeRunCardAria':
+    '{stepId} node run',
+  'teamMemberWorkflowStudio.executionPanel.nodes': 'Nodes',
+  'teamMemberWorkflowStudio.executionPanel.output': 'Output',
+  'teamMemberWorkflowStudio.executionPanel.overview': 'Overview',
+  'teamMemberWorkflowStudio.executionPanel.rawFrames':
+    '{count} run event(s) received, but no node output is available yet.',
+  'teamMemberWorkflowStudio.executionPanel.resultFirst': 'Result',
+  'teamMemberWorkflowStudio.executionPanel.runLog': 'Run log',
+  'teamMemberWorkflowStudio.executionPanel.selectLog':
+    'Select a log entry to inspect its input, output, and raw event data.',
+  'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
+  'teamMemberWorkflowStudio.executionPanel.status.error': 'Error',
+  'teamMemberWorkflowStudio.executionPanel.status.recorded': 'Recorded',
+  'teamMemberWorkflowStudio.executionPanel.status.running': 'Running',
+  'teamMemberWorkflowStudio.executionPanel.status.success': 'Success',
+  'teamMemberWorkflowStudio.executionPanel.status.waiting': 'Waiting',
+  'teamMemberWorkflowStudio.executionPanel.summary': 'Summary',
+  'teamMemberWorkflowStudio.executionPanel.timeline': 'Timeline',
+  'teamMemberWorkflowStudio.executionPanel.tokens': 'Tokens',
+  'teamMemberWorkflowStudio.executionsPanel.description':
+    'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
+  'teamMemberWorkflowStudio.executionsPanel.empty':
+    'No safely scoped executions are available for this workflow member.',
+  'teamMemberWorkflowStudio.executionsPanel.fallbackName': 'Workflow execution',
+  'teamMemberWorkflowStudio.executionsPanel.inspect': 'Inspect',
+  'teamMemberWorkflowStudio.executionsPanel.sectionAria':
+    'Workflow executions',
+  'teamMemberWorkflowStudio.executionsPanel.serviceMeta':
+    'Service ready',
+  'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
+  'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.header.activateAria': 'Activate workflow member',
+  'teamMemberWorkflowStudio.header.activation.active': 'Active',
+  'teamMemberWorkflowStudio.header.activation.error': 'Error',
+  'teamMemberWorkflowStudio.header.activation.inactive': 'Inactive',
+  'teamMemberWorkflowStudio.header.activation.publishing': 'Publishing',
+  'teamMemberWorkflowStudio.header.activation.ready': 'Ready',
+  'teamMemberWorkflowStudio.header.addNode': 'Add node',
+  'teamMemberWorkflowStudio.header.automations.publishFirst':
+    'Publish this member before adding recurring work.',
+  'teamMemberWorkflowStudio.header.automations.saveFirst':
+    'Save this member before adding recurring work.',
+  'teamMemberWorkflowStudio.header.back': 'Back',
+  'teamMemberWorkflowStudio.header.currentTeam': 'Current team',
+  'teamMemberWorkflowStudio.header.confirmDeleteConnection':
+    'Delete the selected connection? This cannot be undone.',
+  'teamMemberWorkflowStudio.header.confirmDeleteNode':
+    'Delete the selected node? This cannot be undone.',
+  'teamMemberWorkflowStudio.header.deleteConnection': 'Delete connection',
+  'teamMemberWorkflowStudio.header.deleteNode': 'Delete node',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
+    'Delete selected connection',
+  'teamMemberWorkflowStudio.header.deleteSelectedNode': 'Delete selected node',
+  'teamMemberWorkflowStudio.header.editWorkflowName': 'Edit workflow name',
+  'teamMemberWorkflowStudio.header.identityAria': 'Workflow identity',
+  'teamMemberWorkflowStudio.header.inputSet': 'input set',
+  'teamMemberWorkflowStudio.header.invoke': 'Invoke',
+  'teamMemberWorkflowStudio.header.invoke.open':
+    'Open the published member invoke workbench.',
+  'teamMemberWorkflowStudio.header.invoke.publishFirst':
+    'Publish this member before invoking it.',
+  'teamMemberWorkflowStudio.header.invoke.saveFirst':
+    'Save this member before invoking it.',
+  'teamMemberWorkflowStudio.header.more': 'More',
+  'teamMemberWorkflowStudio.header.moreActions': 'More workflow actions',
+  'teamMemberWorkflowStudio.header.nodeActionsAria':
+    'Workflow draft and node actions',
+  'teamMemberWorkflowStudio.header.openAutomations':
+    'Open recurring work for this member',
+  'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
+  'teamMemberWorkflowStudio.header.primaryActionsAria':
+    'Workflow primary actions',
+  'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
+  'teamMemberWorkflowStudio.header.publishedRuns': 'Published runs',
+  'teamMemberWorkflowStudio.header.publishedRuns.open':
+    'View runs from the published member service.',
+  'teamMemberWorkflowStudio.header.publishedRuns.publishFirst':
+    'Publish this member to start recording published runs.',
+  'teamMemberWorkflowStudio.header.publishedRuns.saveFirst':
+    'Save this member before viewing published runs.',
+  'teamMemberWorkflowStudio.header.publish': 'Publish',
+  'teamMemberWorkflowStudio.header.runMessage': 'Run message',
+  'teamMemberWorkflowStudio.header.refreshPublishStatus': 'Refresh status',
+  'teamMemberWorkflowStudio.header.run': 'Run',
+  'teamMemberWorkflowStudio.header.runActiveMember': 'Run draft',
+  'teamMemberWorkflowStudio.header.runDraft': 'Run draft',
+  'teamMemberWorkflowStudio.header.recurringWork': 'Recurring work',
+  'teamMemberWorkflowStudio.header.save': 'Save',
+  'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
+  'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
+  'teamMemberWorkflowStudio.header.tabs.executions': 'Executions',
+  'teamMemberWorkflowStudio.header.tabs.runs': 'Runs',
+  'teamMemberWorkflowStudio.header.publish.binding': 'Binding',
+  'teamMemberWorkflowStudio.header.publish.bindingStatus': 'Binding',
+  'teamMemberWorkflowStudio.header.publish.draft': 'Draft',
+  'teamMemberWorkflowStudio.header.publish.error': 'Error',
+  'teamMemberWorkflowStudio.header.publish.published': 'Published',
+  'teamMemberWorkflowStudio.header.publish.publishing': 'Publishing',
+  'teamMemberWorkflowStudio.header.publish.publishingStatus': 'Publishing',
+  'teamMemberWorkflowStudio.header.publishMember': 'Publish member workflow',
+  'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
+  'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
+  'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
+  'teamMemberWorkflowStudio.header.viewYaml': 'View YAML',
+  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
+    'Load the workflow draft before viewing YAML.',
+  'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
+  'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
+  'teamMemberWorkflowStudio.header.yaml': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
+  'teamMemberWorkflowStudio.header.yamlActionsTitle':
+    'View or import workflow YAML',
+  'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
+    'Advanced raw configuration',
+  'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
+    'Use this only when a node option is not available as a guided field.',
+  'teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration': 'Apply raw JSON',
+  'teamMemberWorkflowStudio.nodeDetail.configuration': 'Configuration',
+  'teamMemberWorkflowStudio.nodeDetail.configurationDescription':
+    'Edit the fields this node uses when the draft runs.',
+  'teamMemberWorkflowStudio.nodeDetail.noSemanticFields':
+    'This node type does not have guided fields yet. Use advanced raw configuration when needed.',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria':
+    'Raw node configuration',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationError':
+    'Raw node configuration must be a JSON object.',
+  'teamMemberWorkflowStudio.nodeDetail.sectionAria': 'Node detail',
+  'teamMemberWorkflowStudio.nodeDetail.updateNode': 'Update node',
+  'teamMemberWorkflowStudio.nodeInspector.basics': 'Basics',
+  'teamMemberWorkflowStudio.nodeInspector.branches': 'Branches',
+  'teamMemberWorkflowStudio.nodeInspector.branchesUnavailable':
+    'Branches unavailable',
+  'teamMemberWorkflowStudio.nodeInspector.closeAria': 'Close node inspector',
+  'teamMemberWorkflowStudio.nodeInspector.flow': 'Flow',
+  'teamMemberWorkflowStudio.nodeInspector.nextStep': 'Next step',
+  'teamMemberWorkflowStudio.nodeInspector.noBranches': 'No branches',
+  'teamMemberWorkflowStudio.nodeInspector.notSet': 'Not set',
+  'teamMemberWorkflowStudio.nodeInspector.resizeHandle':
+    'Resize node inspector',
+  'teamMemberWorkflowStudio.nodeInspector.sectionAria': 'Node inspector',
+  'teamMemberWorkflowStudio.nodeInspector.selectedNode': 'Selected node',
+  'teamMemberWorkflowStudio.nodeInspector.targetRole': 'Target role',
+  'teamMemberWorkflowStudio.nodeInspector.type': 'Type',
+  'teamMemberWorkflowStudio.nodeLibrary.closeAria': 'Close node library',
+  'teamMemberWorkflowStudio.nodeLibrary.emptySearch':
+    'No nodes match this search.',
+  'teamMemberWorkflowStudio.nodeLibrary.insertNodeAria':
+    'Insert {nodeName} node',
+  'teamMemberWorkflowStudio.nodeLibrary.searchAria': 'Search nodes',
+  'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': 'Search nodes',
+  'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
+  'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
+  'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
+  'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
+  'teamMemberWorkflowStudio.draftRunPanel.closeAria': 'Close draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
+    'Leave blank to run this draft without user input.',
+  'teamMemberWorkflowStudio.draftRunPanel.addFiles': 'Add files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFiles': 'Attach files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesButton': 'Add files',
+  'teamMemberWorkflowStudio.draftRunPanel.attachFilesInput': 'Attach files',
+  'teamMemberWorkflowStudio.draftRunPanel.dropFiles': 'Drop files here',
+  'teamMemberWorkflowStudio.draftRunPanel.filesHint':
+    'Attach files for this draft run.',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLabel': 'Files',
+  'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
+    'Images, documents, audio, video, CSV, and text files up to 10 MB.',
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel': 'Draft run input',
+  'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
+    'Optional input sent to this workflow draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached': 'No files attached',
+  'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
+    'Remove empty file {name} before starting the draft run.',
+  'teamMemberWorkflowStudio.draftRunPanel.removeFile': 'Remove {name}',
+  'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun': 'Start draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.thisFile': 'this file',
+  'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
+  'teamMemberWorkflowStudio.runsPanel.description':
+    'This tab only shows runs with an explicit link to the current workflow member.',
+  'teamMemberWorkflowStudio.runsPanel.empty':
+    'No runs are linked to this workflow member yet.',
+  'teamMemberWorkflowStudio.runsPanel.fallbackName': 'Member run',
+  'teamMemberWorkflowStudio.runsPanel.openRun': 'Open run',
+  'teamMemberWorkflowStudio.runsPanel.preview.error': 'Error',
+  'teamMemberWorkflowStudio.runsPanel.preview.input': 'Input',
+  'teamMemberWorkflowStudio.runsPanel.preview.output': 'Output',
+  'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
+  'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
+  'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.yamlImportPanel.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
+    'Close paste YAML panel',
+  'teamMemberWorkflowStudio.yamlImportPanel.import': 'Import',
+  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
+    'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
+  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
+    'Paste workflow YAML panel',
+  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
+    'Import into the current draft',
+  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlImportPanel.title': 'Paste YAML',
+  'teamMemberWorkflowStudio.yamlPanel.closeAria': 'Close YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.copy': 'Copy',
+  'teamMemberWorkflowStudio.yamlPanel.copyFailed': 'Failed to copy YAML.',
+  'teamMemberWorkflowStudio.yamlPanel.copySuccess': 'YAML copied.',
+  'teamMemberWorkflowStudio.yamlPanel.empty':
+    'No YAML is available for this draft.',
+  'teamMemberWorkflowStudio.yamlPanel.retry': 'Retry',
+  'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.subtitle': 'Current draft source',
+  'teamMemberWorkflowStudio.yamlPanel.textareaAria': 'Current workflow YAML',
+  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
+  'pages.studio.studiomembercurrentrunpanel.details': 'Details',
+  'pages.studio.studiomemberinvokeinspector.copy':
+    'Endpoint, payload, run events, and recent history are available here without taking over the task page.',
+  'pages.studio.studiomemberinvokeinspector.current.run': 'Current run',
+  'pages.studio.studiomemberinvokeinspector.close': 'Close details',
+  'pages.studio.studiomemberinvokeinspector.drag.handle': 'Drag details panel',
+  'pages.studio.studiomemberinvokeinspector.endpoint': 'Endpoint',
+  'pages.studio.studiomemberinvokeinspector.endpoint.2': 'Endpoint',
+  'pages.studio.studiomemberinvokeinspector.history': 'History',
+  'pages.studio.studiomemberinvokeinspector.payload': 'Payload',
+  'pages.studio.studiomemberinvokeinspector.payload.base64': 'Payload base64',
+  'pages.studio.studiomemberinvokeinspector.payload.base64.2': 'Payload base64',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url':
+    'Payload type URL',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url.2':
+    'Payload type URL',
+  'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
+    'Paste encoded protobuf payload when this type cannot be built from text.',
+  'pages.studio.studiomemberinvokeinspector.revision': 'Revision',
+  'pages.studio.studiomemberinvokeinspector.resize.handle':
+    'Resize details panel',
+  'pages.studio.studiomemberinvokeinspector.run': 'Run',
+  'pages.studio.studiomemberinvokeinspector.service.target': 'Service target',
+  'pages.studio.studiomemberinvokeinspector.title': 'Details',
+  'pages.studio.studiomemberinvokepanel.endpoint': 'Endpoint',
+  'pages.studio.studiomemberinvokepanel.inspector': 'Details',
+  'pages.actors.index.actor': 'Actor',
+  'pages.actors.index.command.recorded': 'Command recorded',
+  'pages.actors.index.snapshot.available': 'Snapshot available',
+  'pages.deployments.index.actor.available': 'Actor available',
+  'pages.deployments.index.artifact.ready': 'Artifact ready',
+  'pages.deployments.index.deployment.attached': 'Deployment attached',
+  'pages.deployments.index.endpoint.ready': 'Endpoint ready',
+  'pages.deployments.index.rollout.active': 'Rollout active',
+  'pages.deployments.index.service': 'Service',
+  'pages.deployments.index.traffic.target.number': 'Target {value1}',
+  'pages.deployments.index.traffic.target.summary': '{value1}% {value2}',
+  'pages.deployments.index.version.ready': 'Version ready',
+  'pages.gagents.index.actor.not.assigned': '· Actor not assigned',
+  'pages.gagents.index.actor.ready': '· Actor ready',
+  'pages.gagents.index.attached': 'Attached',
+  'pages.gagents.index.available': 'Available',
+  'pages.gagents.index.configured': 'Configured',
+  'pages.gagents.index.deployment.ready': 'Deployment ready',
+  'pages.gagents.index.draft.deployment': 'Draft deployment',
+  'pages.gagents.index.latest.run.output': 'Latest Run Output',
+  'pages.gagents.index.service': 'Service',
+  'pages.governance.columns.binding': 'Binding',
+  'pages.governance.columns.binding.count': '{value1} bindings',
+  'pages.governance.columns.caller.count': '{value1} callers',
+  'pages.governance.columns.connector.target': 'Connector target',
+  'pages.governance.columns.endpoint': 'Endpoint',
+  'pages.governance.columns.policy': 'Policy',
+  'pages.governance.columns.policy.count': '{value1} policies',
+  'pages.governance.columns.request.contract.ready': 'Request contract ready',
+  'pages.governance.columns.secret.target': 'Secret target',
+  'pages.governance.columns.service.endpoint.target': 'Service endpoint target',
+  'pages.governance.columns.service.target': 'Service target',
+  'pages.governance.governanceinspectordrawer.version.ready': 'Version ready',
+  'pages.governance.governanceworkbench.binding.accepted.for.creation':
+    'Binding was accepted for governance creation.',
+  'pages.governance.governanceworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.governance.governanceworkbench.binding.accepted.for.update':
+    'Binding was accepted for update.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.creation':
+    'Endpoint was accepted for governance creation.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.exposure':
+    'Endpoint was accepted for {value1} exposure.',
+  'pages.governance.governanceworkbench.endpoint.accepted.for.update':
+    'Endpoint was accepted for update.',
+  'pages.governance.governanceworkbench.policy': 'Policy',
+  'pages.governance.governanceworkbench.policy.accepted.for.creation':
+    'Policy was accepted for governance creation.',
+  'pages.governance.governanceworkbench.policy.accepted.for.retirement':
+    'Policy was accepted for retirement.',
+  'pages.governance.governanceworkbench.policy.accepted.for.update':
+    'Policy was accepted for update.',
+  'pages.governance.governanceworkbench.service': 'Service',
+  'pages.governance.governanceworkbench.service.endpoint.target':
+    'Service endpoint target',
+  'pages.governance.governanceworkbench.service.target': 'Service target',
+  'pages.governance.governanceworkbench.version.pending': 'Version pending',
+  'pages.governance.governanceworkbench.version.ready': 'Version ready',
+  'pages.governance.governanceworkbench.revision.was.published.for.governance.evaluation':
+    'Revision was published for governance evaluation.',
+  'pages.governance.governanceworkbench.revision.is.prepared.and.waiting.for':
+    'Revision is prepared and waiting for promotion decisions.',
+  'pages.governance.governanceworkbench.revision.missing.policies':
+    'Revision is missing {value1} required policies.',
+  'pages.runs.memberPublishedRuns.event': 'Event',
+  'pages.runs.memberPublishedRuns.member': 'Team member',
+  'pages.runs.memberPublishedRuns.step': 'Step',
+  'pages.runs.runsinspectorpane.actor': 'Actor',
+  'pages.runs.runsinspectorpane.command': 'Command',
+  'pages.runs.runsinspectorpane.command.accepted': 'Command accepted',
+  'pages.runs.runsinspectorpane.command.accepted.2': 'Command accepted',
+  'pages.runs.runsinspectorpane.current.run': 'Current run',
+  'pages.runs.runsinspectorpane.current.run.2': 'Current run',
+  'pages.runs.runsinspectorpane.current.run.ready': 'Current run ready',
+  'pages.runs.runsinspectorpane.event.recorded': 'Event recorded',
+  'pages.runs.runsinspectorpane.no.user.visible.payload':
+    'No user-visible payload fields.',
+  'pages.runs.runsinspectorpane.runtime.actor.ready': 'Runtime actor ready',
+  'pages.runs.runsinspectorpane.runtime.actor.ready.2': 'Runtime actor ready',
+  'pages.runs.runsinspectorpane.runtime.actor.ready.3': 'Runtime actor ready',
+  'pages.runs.runslaunchrail.no.run': 'No run',
+  'pages.runs.runslaunchrail.run.ready': 'Run ready',
+  'pages.runs.runsstatusstrip.current.run.ready': 'Current run ready',
+  'pages.runs.runsstatusstrip.pending': 'Pending',
+  'pages.runs.runsstatusstrip.run': 'Run',
+  'pages.runs.runworkbenchconfig.available': 'Available',
+  'pages.runs.runworkbenchconfig.command.accepted': 'Command accepted',
+  'pages.runs.runworkbenchconfig.current.run': 'Current run',
+  'pages.runs.runworkbenchconfig.current.run.2': 'Current run',
+  'pages.runs.runworkbenchconfig.current.run.ready': 'Current run ready',
+  'pages.runs.runworkbenchconfig.runtime.actor.ready': 'Runtime actor ready',
+  'pages.scopes.assets.actor.available': 'Actor available',
+  'pages.scopes.invoke.endpoint': 'Endpoint',
+  'pages.scopes.invoke.run': 'Run',
+  'pages.scopes.invoke.run.available': 'Run available',
+  'pages.scopes.invoke.runtime': 'Runtime',
+  'pages.scopes.invoke.runtime.ready': 'Runtime ready',
+  'pages.scopes.invoke.selected.service': 'the selected service',
+  'pages.scopes.invoke.service': 'Service',
+  'pages.scopes.invoke.version.ready': 'Version ready',
+  'pages.scopes.scopeserviceruntimeworkbench.actor.available': 'Actor available',
+  'pages.scopes.scopeserviceruntimeworkbench.binding': 'Binding',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.accepted.for.retirement':
+    'Binding was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.created':
+    'Binding was created.',
+  'pages.scopes.scopeserviceruntimeworkbench.binding.updated':
+    'Binding was updated.',
+  'pages.scopes.scopeserviceruntimeworkbench.endpoint': 'Endpoint',
+  'pages.scopes.scopeserviceruntimeworkbench.endpoints': 'endpoints',
+  'pages.scopes.scopeserviceruntimeworkbench.policy.count': '{value1} policies',
+  'pages.scopes.scopeserviceruntimeworkbench.ready': 'Ready',
+  'pages.scopes.scopeserviceruntimeworkbench.revision.accepted.for.retirement':
+    'Revision was accepted for retirement.',
+  'pages.scopes.scopeserviceruntimeworkbench.service': 'Service',
+  'pages.scopes.scopeserviceruntimeworkbench.service.target': 'Service target',
+  'pages.scopes.scopeserviceruntimeworkbench.serving.version.ready':
+    'serving version ready',
+  'pages.scopes.scopeserviceruntimeworkbench.version': 'Version',
+  'pages.services.index.artifact.attached': 'Artifact attached',
+  'pages.services.index.endpoint': 'Endpoint',
+  'pages.services.index.endpoint.ready': 'Endpoint ready',
+  'pages.services.index.request.contract.ready': 'Request contract ready',
+  'pages.services.index.service': 'Service',
+  'pages.services.index.service.identity.ready': 'Service identity ready',
+  'pages.services.index.version.ready': 'Version ready',
+  'pages.studio.bind.studiomemberbindpanel.binding': 'Binding',
+  'pages.studio.bind.studiomemberbindpanel.endpoint': 'Endpoint',
+  'pages.studio.bind.studiomemberbindpanel.endpoint.ready': 'Endpoint ready',
+  'pages.studio.bind.studiomemberbindpanel.member.selected': 'Member selected',
+  'pages.studio.bind.studiomemberbindpanel.policy.count': '{value1} policies',
+  'pages.studio.bind.studiomemberbindpanel.revision.ready': 'Revision ready',
+  'pages.studio.bind.studiomemberbindpanel.run.completed': 'Run completed',
+  'pages.studio.bind.studiomemberbindpanel.service.ready': 'Service ready',
+  'pages.studio.studiobuildpanels.command.accepted': 'command: accepted',
+  'pages.studio.studiobuildpanels.current.run.ready': 'current run: ready',
+  'pages.studio.studiobuildpanels.events.count': 'events: {count}',
+  'pages.studio.studiobuildpanels.runtime.actor.ready': 'runtime actor: ready',
+  'pages.studio.studiobuildpanels.save.accepted.checking.again':
+    'Save accepted. Waiting for catalog; checking again in {value1}s.',
+  'pages.studio.studiobuildpanels.save.accepted.waiting.for.catalog':
+    'Save accepted. Still waiting for catalog; use Refresh catalog to check again.',
+  'pages.studio.studiobuildpanels.save.applied': 'Save applied.',
+  'pages.studio.studiobuildpanels.save.rejected': 'Save rejected.',
+  'pages.studio.studiobuildpanels.script': 'Script',
+  'pages.studio.studiobuildpanels.script.applied': 'Applied script',
+  'pages.studio.studiobuildpanels.script.draft': 'Script draft',
+  'pages.studio.studiobuildpanels.script.promotion.version.summary':
+    'Script promotion version summary',
+  'pages.studio.studiobuildpanels.version.ready': 'version ready',
+  'pages.studio.studiofilesdetailpane.draft': 'Draft',
+  'pages.studio.studiofilesdetailpane.version.ready': 'Version ready',
+  'pages.studio.studiofilespage.chat.history': 'Chat history',
+  'pages.studio.studiofilespage.draft': 'Draft',
+  'pages.studio.studiofilespage.version.ready': 'Version ready',
+  'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready': 'Endpoint ready',
+  'pages.studio.studiomemberinvokeinspector.service.ready': 'Service ready',
+  'pages.studio.studiomemberinvokeinspector.version.ready': 'Version ready',
+  'pages.studio.studioworkbenchsections.runtime.available':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.2':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.3':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.available.4':
+    'Runtime available',
+  'pages.studio.studioworkbenchsections.runtime.facts.available':
+    'Runtime facts available',
 };
 
 export default enUSMessages;

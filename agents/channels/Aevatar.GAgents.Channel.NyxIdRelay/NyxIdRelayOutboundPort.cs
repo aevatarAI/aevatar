@@ -90,6 +90,31 @@ public sealed class NyxIdRelayOutboundPort
             platformMessageId: result.PlatformMessageId);
     }
 
+    public async Task<EmitResult> SendWithAgentKeyAsync(
+        string platform,
+        ConversationReference conversation,
+        MessageContent content,
+        OutboundDeliveryContext delivery,
+        string agentKey,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(agentKey))
+        {
+            return EmitResult.Failed(
+                "bot_agent_key_missing",
+                "Relay reply is missing the bot agent key required for channel-relay/reply.");
+        }
+
+        return await SendAsync(
+                platform,
+                conversation,
+                content,
+                delivery,
+                agentKey,
+                ct)
+            .ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Edits a previously-sent relay reply in place. Used by the progressive streaming reply path
     /// to drive edit-in-place updates while the LLM is still generating.
@@ -184,45 +209,33 @@ public sealed class NyxIdRelayOutboundPort
                 "Relay outbound is missing the platform required to resolve a message composer.");
         }
 
-        if (!_composers.TryGetValue(normalizedPlatform, out var composer))
+        if (_composers.TryGetValue(normalizedPlatform, out var composer))
         {
-            return EmitResult.Failed(
-                "composer_not_found",
-                $"Relay outbound has no message composer registered for platform '{normalizedPlatform}'.");
-        }
-
-        var composeContext = new ComposeContext
-        {
-            Conversation = conversation.Clone(),
-        };
-        if (composer.Evaluate(content, composeContext) == ComposeCapability.Unsupported)
-        {
-            return EmitResult.Failed(
-                "composer_unsupported",
-                $"Relay outbound composer for platform '{normalizedPlatform}' cannot express the requested message content.");
-        }
-
-        if (ShouldUseLarkTextOnlyFallback(normalizedPlatform, content))
-        {
-            replyText = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(content);
-            if (string.IsNullOrWhiteSpace(replyText))
+            var composeContext = new ComposeContext
+            {
+                Conversation = conversation.Clone(),
+            };
+            if (composer.Evaluate(content, composeContext) == ComposeCapability.Unsupported)
             {
                 return EmitResult.Failed(
-                    "empty_reply",
-                    "Relay outbound could not render a non-empty reply payload.");
+                    "composer_unsupported",
+                    $"Relay outbound composer for platform '{normalizedPlatform}' cannot express the requested message content.");
             }
 
-            return null;
-        }
+            if (composer.Compose(content, composeContext) is not IPlainTextComposedMessage plainTextPayload)
+            {
+                return EmitResult.Failed(
+                    "plain_text_payload_unavailable",
+                    $"Relay outbound composer for platform '{normalizedPlatform}' does not expose a plain-text payload.");
+            }
 
-        if (composer.Compose(content, composeContext) is not IPlainTextComposedMessage plainTextPayload)
+            replyText = plainTextPayload.PlainText;
+        }
+        else
         {
-            return EmitResult.Failed(
-                "plain_text_payload_unavailable",
-                $"Relay outbound composer for platform '{normalizedPlatform}' does not expose a plain-text payload.");
+            replyText = NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(content);
         }
 
-        replyText = plainTextPayload.PlainText;
         if (string.IsNullOrWhiteSpace(replyText))
         {
             return EmitResult.Failed(
@@ -237,8 +250,4 @@ public sealed class NyxIdRelayOutboundPort
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim().ToLowerInvariant();
-
-    private static bool ShouldUseLarkTextOnlyFallback(string normalizedPlatform, MessageContent content) =>
-        string.Equals(normalizedPlatform, "lark", StringComparison.OrdinalIgnoreCase) &&
-        (content.Actions.Count > 0 || content.Cards.Count > 0);
 }

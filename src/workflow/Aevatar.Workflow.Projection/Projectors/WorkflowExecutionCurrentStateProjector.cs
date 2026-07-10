@@ -1,6 +1,9 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Projection.Observability;
 using Aevatar.Workflow.Projection.ReadModels;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Projection.Projectors;
 
@@ -10,6 +13,8 @@ public sealed class WorkflowExecutionCurrentStateProjector
         WorkflowRunState,
         WorkflowExecutionCurrentStateDocument>
 {
+    private readonly WorkflowRunForkSeedReadModelMapper _forkSeedMapper = new();
+
     public WorkflowExecutionCurrentStateProjector(
         IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument> writeDispatcher,
         IProjectionClock clock)
@@ -17,7 +22,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
     {
     }
 
-    protected override WorkflowExecutionCurrentStateDocument Map(
+    protected override WorkflowExecutionCurrentStateDocument? Map(
         MappedCurrentStateProjectionInput<WorkflowExecutionMaterializationContext, WorkflowRunState> input)
     {
         var context = input.Context;
@@ -30,12 +35,15 @@ public sealed class WorkflowExecutionCurrentStateProjector
             return null;
 
         var stateEvent = input.StateEvent;
+        WorkflowCompensationMetrics.ObserveCommittedPayload(stateEvent.EventData);
+
         var state = input.State;
+        var seedSnapshot = _forkSeedMapper.ToProjectionSnapshot(state);
 
         // Refactor (iter97/cluster-591): Old/New
         //   Old: every current-state projector hand-rolled committed-state unpack, timestamp resolution, and upsert.
         //   New: core mapped helper owns that projection shell; this projector keeps only WorkflowRunState -> read model mapping.
-        return new WorkflowExecutionCurrentStateDocument
+        var document = new WorkflowExecutionCurrentStateDocument
         {
             Id = context.RootActorId,
             RootActorId = context.RootActorId,
@@ -44,16 +52,83 @@ public sealed class WorkflowExecutionCurrentStateProjector
             RunId = string.IsNullOrWhiteSpace(state.RunId) ? context.RootActorId : state.RunId,
             WorkflowName = state.WorkflowName ?? string.Empty,
             Status = state.Status ?? string.Empty,
+            ScopeId = state.ScopeId ?? string.Empty,
+            RunOrigin = state.RunOrigin ?? string.Empty,
+            ScheduleId = state.ScheduleId ?? string.Empty,
             Compiled = state.Compiled,
             CompilationError = state.CompilationError ?? string.Empty,
             Input = state.Input ?? string.Empty,
             FinalOutput = state.FinalOutput ?? string.Empty,
             FinalError = state.FinalError ?? string.Empty,
+            SagaStatus = state.SagaStatus,
+            DeadLetterFailedCompensationStepId = state.DeadLetterFailedCompensationStepId ?? string.Empty,
+            DeadLetterRemainingUncompensated = state.DeadLetterRemainingUncompensated,
+            DeadLetterError = state.DeadLetterError ?? string.Empty,
             ExecutionStateCount = state.ExecutionStates.Count,
             Success = ResolveSuccess(state.Status),
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = input.ObservedAt,
+            WorkflowYaml = seedSnapshot.WorkflowYaml,
+            InlineWorkflowYamls = seedSnapshot.InlineWorkflowYamls.ToDictionary(
+                x => x.Key,
+                x => x.Value,
+                StringComparer.Ordinal),
+            ForkSeedVariables = seedSnapshot.Variables.ToDictionary(
+                x => x.Key,
+                x => x.Value,
+                StringComparer.Ordinal),
+            ForkSeedCompletedStepIds = seedSnapshot.CompletedStepIds.ToList(),
+            ForkSeedLastFailedStepId = seedSnapshot.LastFailedStepId,
+            ForkSeedIdempotencies = seedSnapshot.IdempotencyByStepId.ToDictionary(
+                x => x.Key,
+                x => MapStepIdempotency(x.Value),
+                StringComparer.Ordinal),
+            InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+        };
+
+        // O2 (06-19-workflow-run-observatory): started_at is derived from the committed WorkflowRunState's
+        // own start fact (StartedAtUtc), so the projector stays a pure committed-state -> readmodel mapper
+        // (no prior-readmodel read). Absent for pre-existing runs -> run list falls back to updated_at.
+        if (state.StartedAtUtc != null)
+            document.StartedAtUtcValue = state.StartedAtUtc;
+
+        return document;
+    }
+
+    private static WorkflowStepIdempotencyReadModel MapStepIdempotency(
+        WorkflowStepIdempotencyState source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowStepIdempotencyReadModel
+        {
+            LogicalRunId = source.LogicalRunId ?? string.Empty,
+            StepId = source.StepId ?? string.Empty,
+            LogicalAttempt = source.LogicalAttempt,
+            IdempotencyKey = source.IdempotencyKey ?? string.Empty,
+        };
+    }
+
+    private static WorkflowExecutionInputFileRefReadModel MapInputFileRef(WorkflowFileRef source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new WorkflowExecutionInputFileRefReadModel
+        {
+            FileId = source.FileId ?? string.Empty,
+            ArtifactId = source.ArtifactId ?? string.Empty,
+            SourceKindValue = (int)source.SourceKind,
+            SourceMessageId = source.SourceMessageId ?? string.Empty,
+            SourceResourceKey = source.SourceResourceKey ?? string.Empty,
+            FileName = source.FileName ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
         };
     }
 

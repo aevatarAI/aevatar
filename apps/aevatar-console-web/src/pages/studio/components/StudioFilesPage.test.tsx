@@ -380,7 +380,7 @@ describe('StudioFilesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open in Studio' }));
     expect(props.onOpenWorkflowInStudio).toHaveBeenCalledWith('workflow-1');
 
-    fireEvent.click(await screen.findByRole('button', { name: /script-alpha\.cs/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /script-1\.cs/i }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Script source preview')).toHaveTextContent(
@@ -398,7 +398,7 @@ describe('StudioFilesPage', () => {
     renderWithQueryClient(React.createElement(StudioFilesPage, props));
 
     fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
-    fireEvent.click(await screen.findByText(/NyxIdChat:scope-1/i));
+    fireEvent.click(await screen.findByText('Scope conversation'));
 
     expect(await screen.findByLabelText('Chat history messages')).toHaveTextContent(
       'hello from user',
@@ -406,6 +406,7 @@ describe('StudioFilesPage', () => {
     expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
       'assistant reply',
     );
+    expect(screen.queryByText(/NyxIdChat:scope-1/i)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 

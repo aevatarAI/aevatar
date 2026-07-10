@@ -84,6 +84,35 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_WhenNonManualCallbackDeliveredPastGrace_ShouldStillDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "*/15 * * * *", enabled: true));
+
+        var request = scheduler.TimeoutRequests.Single();
+        var scheduledFireAt = agent.State.NextFireAt!.Value;
+
+        // The callback reaches the handler 20 minutes after its scheduled time (late delivery while
+        // the grain stayed active). A late fire must still dispatch, not be suppressed, and is not
+        // counted as an OnActivate overdue detection (that is a separate, reactivation-time signal).
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            request,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: scheduledFireAt.AddMinutes(20),
+            scheduledFireAt: scheduledFireAt));
+
+        dispatch.Dispatches.Should().ContainSingle();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
+        agent.State.OverdueFireDetectedCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleConfigureAsync_WhenEnabled_ShouldRegisterDurableNextFireCallback()
     {
         var eventStore = new TestEventStore();
@@ -118,6 +147,144 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.NextFireLease.CallbackId.Should().Be(NextFireCallbackId);
         agent.State.NextFireLease.Generation.Should().Be(1);
         agent.State.NextFireLease.Backend.Should().Be(ScheduledDispatchRuntimeCallbackBackendState.Dedicated);
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WhenNextFireIsBeyondRuntimeRange_ShouldRegisterBoundedCallbackHop()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            cronExpression: CreateFarFutureCronExpression(),
+            enabled: true));
+
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        var request = scheduler.TimeoutRequests[0];
+        request.DueTime.Should().Be(TimeSpan.FromDays(7));
+        var fireCommand = request.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        var scheduledFireAt = fireCommand.ScheduledFireAt.ToDateTimeOffset();
+        scheduledFireAt.Should().Be(agent.State.NextFireAt);
+        scheduledFireAt.Should().BeAfter(DateTimeOffset.UtcNow.AddDays(7));
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WhenUnconfigured_ShouldCreateScheduleState()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+
+        await agent.HandleEnsureAsync(CreateEnsureCommand(enabled: true));
+
+        agent.State.ScheduleId.Should().Be("schedule-1");
+        agent.State.Enabled.Should().BeTrue();
+        agent.State.NextFireLease.Should().NotBeNull();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchConfiguredEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WhenDefinitionIsIdentical_ShouldNoOpWithoutLeaseChurn()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        var command = CreateEnsureCommand(enabled: true);
+        await agent.HandleEnsureAsync(command);
+        var eventCount = eventStore.GetEvents(ScheduleActorId).Count;
+        var lease = agent.State.NextFireLease!.Clone();
+
+        await agent.HandleEnsureAsync(command);
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        scheduler.Canceled.Should().BeEmpty();
+        agent.State.NextFireLease.Should().BeEquivalentTo(lease);
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WhenDefinitionChanges_ShouldUpdateAndCancelStaleLeaseAfterNewLeaseIsDurable()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleEnsureAsync(CreateEnsureCommand(cronExpression: "* * * * *", enabled: true));
+        var previousLease = agent.State.NextFireLease!.Clone();
+
+        await agent.HandleEnsureAsync(CreateEnsureCommand(
+            targetActorId: "target-actor-updated",
+            cronExpression: "*/5 * * * *",
+            enabled: true));
+
+        agent.State.TargetActorId.Should().Be("target-actor-updated");
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Should().ContainSingle()
+            .Which.Generation.Should().Be(previousLease.Generation);
+        agent.State.NextFireLease!.Generation.Should().Be(2);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchConfiguredEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .HaveCount(2);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_WhenEnsureUpdateReplacesLease_ShouldIgnoreStaleCallback()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleEnsureAsync(CreateEnsureCommand(cronExpression: "* * * * *", enabled: true));
+        var staleRequest = scheduler.TimeoutRequests.Single();
+        await agent.HandleEnsureAsync(CreateEnsureCommand(cronExpression: "*/5 * * * *", enabled: true));
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(staleRequest, generation: 1, fireIndex: 1));
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        agent.State.NextFireLease!.Generation.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_ShouldPreserveDuplicateFireSuppressionRecords()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleEnsureAsync(CreateEnsureCommand(enabled: false));
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        await agent.HandleEnsureAsync(CreateEnsureCommand(displayName: "Updated schedule", enabled: false));
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        dispatch.Dispatches.Should().ContainSingle();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        agent.State.FireRecords.Should().ContainKey(idempotencyKey);
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
     }
 
     [Fact]
@@ -192,6 +359,33 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.Enabled.Should().BeFalse();
         agent.State.NextFireAt.Should().BeNull();
         agent.State.NextFireLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleEnableAsync_AfterDisable_ShouldRegisterNewNextFireLease()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        await agent.HandleDisableAsync(new ScheduledDispatchDisableCommand { Reason = "pause" });
+        await agent.HandleEnableAsync(new ScheduledDispatchEnableCommand { Reason = "resume" });
+
+        agent.State.Enabled.Should().BeTrue();
+        agent.State.NextFireAt.Should().NotBeNull();
+        agent.State.NextFireLease.Should().NotBeNull();
+        agent.State.NextFireLease!.Generation.Should().Be(2);
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Should().ContainSingle()
+            .Which.Generation.Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchEnabledEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which.EventData.Unpack<ScheduledDispatchEnabledEvent>().Reason.Should().Be("resume");
     }
 
     [Fact]
@@ -284,6 +478,96 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleDeleteAsync_WhenConfiguredEnabled_ShouldPersistDeletedStateAndCancelNextFireLease()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+        var previousLease = agent.State.NextFireLease!.Clone();
+
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
+        {
+            Reason = "remove",
+        });
+
+        agent.State.Deleted.Should().BeTrue();
+        agent.State.DeletedAt.Should().NotBeNull();
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        agent.State.PendingNextFireAt.Should().BeNull();
+        scheduler.Canceled.Should().ContainSingle();
+        scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
+        scheduler.Canceled[0].CallbackId.Should().Be(NextFireCallbackId);
+        scheduler.Canceled[0].Generation.Should().Be(previousLease.Generation);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchDeletedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which.EventData.Unpack<ScheduledDispatchDeletedEvent>().Reason.Should().Be("remove");
+    }
+
+    [Fact]
+    public async Task DeletedSchedule_ShouldRejectMutationsAndManualFireWithoutDispatch()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false));
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand());
+
+        var enable = () => agent.HandleEnableAsync(new ScheduledDispatchEnableCommand());
+        var disable = () => agent.HandleDisableAsync(new ScheduledDispatchDisableCommand());
+        var update = () => agent.HandleConfigureAsync(CreateUpdateCommand(enabled: false));
+        var manualFire = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
+            Manual = true,
+        });
+
+        await enable.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
+        await disable.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
+        await update.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*deleted*");
+        await manualFire.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
+        dispatch.Dispatches.Should().BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireStartedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleEventAsync_WhenLateNonManualCallbackArrivesAfterDelete_ShouldIgnoreWithoutDispatchOrFireStartedEvent()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+        var request = scheduler.TimeoutRequests.Single();
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand());
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(request, generation: 1, fireIndex: 1));
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireStartedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleEventAsync_WhenDueCallbackArrives_ShouldDispatchNonManualFireAndScheduleNext()
     {
         var eventStore = new TestEventStore();
@@ -297,7 +581,11 @@ public sealed class ScheduledDispatchGAgentTests
         var firstFireCommand = firstRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
         var firstScheduledFireAt = firstFireCommand.ScheduledFireAt.ToDateTimeOffset();
 
-        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(firstRequest, generation: 1, fireIndex: 1));
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: firstScheduledFireAt));
 
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstScheduledFireAt);
         dispatch.Dispatches.Should().ContainSingle();
@@ -306,10 +594,12 @@ public sealed class ScheduledDispatchGAgentTests
         dispatched.Envelope.Id.Should().Be(idempotencyKey);
         dispatched.Envelope.Route.GetTargetActorId().Should().Be("target-actor-1");
         var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
-        chatRequest.SessionId.Should().Be(idempotencyKey);
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(firstScheduledFireAt.ToUniversalTime().ToString("O"));
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.SessionId.Should().Be("template-session");
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        dispatched.Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
+            .Should().Be(firstScheduledFireAt.ToUniversalTime().ToString("O"));
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
 
@@ -330,6 +620,40 @@ public sealed class ScheduledDispatchGAgentTests
         nextFireCommand.Manual.Should().BeFalse();
         nextFireCommand.ScheduledFireAt.ToDateTimeOffset().Should().BeAfter(firstScheduledFireAt);
         agent.State.NextFireLease!.Generation.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleEventAsync_WhenBoundedCallbackArrivesEarly_ShouldRearmWithoutDispatching()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            cronExpression: CreateFarFutureCronExpression(),
+            enabled: true));
+        var firstRequest = scheduler.TimeoutRequests.Single();
+        var firstFireCommand = firstRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        var scheduledFireAt = firstFireCommand.ScheduledFireAt.ToDateTimeOffset();
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(firstRequest, generation: 1, fireIndex: 1));
+
+        dispatch.Dispatches.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        agent.State.FireCount.Should().Be(0);
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.TimeoutRequests[1].DueTime.Should().Be(TimeSpan.FromDays(7));
+        var rearmedFireCommand = scheduler.TimeoutRequests[1].TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        rearmedFireCommand.ScheduledFireAt.ToDateTimeOffset().Should().Be(scheduledFireAt);
+        agent.State.NextFireAt.Should().Be(scheduledFireAt);
+        agent.State.NextFireLease!.Generation.Should().Be(2);
+        scheduler.Canceled.Should().ContainSingle()
+            .Which.Generation.Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireStartedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .BeEmpty();
     }
 
     [Fact]
@@ -418,9 +742,11 @@ public sealed class ScheduledDispatchGAgentTests
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
         var chatRequest = dispatch.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Metadata["workflow.schedule_id"].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        var baggage = dispatch.Dispatches.Single().Envelope.Propagation!.Baggage;
+        baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        baggage[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
+        baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
     }
 
@@ -453,9 +779,11 @@ public sealed class ScheduledDispatchGAgentTests
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
         dispatched.Envelope.Id.Should().Be(idempotencyKey);
         var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.FireAtUtc].Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
-        chatRequest.Metadata[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        dispatched.Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
+            .Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
+        dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(idempotencyKey);
         chatRequest.Metadata.Should().NotContainKey("workflow.schedule_id");
         chatRequest.Metadata.Should().NotContainKey("workflow.scheduled_fire_at_utc");
         agent.State.FireRecords[idempotencyKey].TargetActorId.Should().Be("generic-agent-1");
@@ -582,9 +910,486 @@ public sealed class ScheduledDispatchGAgentTests
         var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Prompt.Should().Be("configured");
         chatRequest.Metadata.Should().Contain("caller", "kept");
-        chatRequest.Metadata.Should().Contain(ScheduledDispatchMetadataKeys.ScheduleId, "schedule-1");
-        chatRequest.Metadata.Should().ContainKey(ScheduledDispatchMetadataKeys.FireAtUtc);
-        chatRequest.Metadata.Should().Contain(ScheduledDispatchMetadataKeys.IdempotencyKey, request.CommandId);
+        chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
+        var headers = serviceInvocationDispatch.Headers.Should().ContainSingle().Which;
+        headers.Should().NotBeNull();
+        headers![ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
+        headers.Should().ContainKey(ScheduledDispatchMetadataKeys.FireAtUtc);
+        headers[ScheduledDispatchMetadataKeys.IdempotencyKey].Should().Be(request.CommandId);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForServiceInvocationAuth_ShouldPassTypedAuthWithoutTokenExchange()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                        LlmControl = new LLMControlContextPayload
+                        {
+                            ModelOverride = "sonnet",
+                        },
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-1",
+                                ExternalUserId = "ou-user-1",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().NotBeNull();
+        auth.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
+        auth.SenderNyxId.Subject.Platform.Should().Be("lark");
+        auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
+        auth.SenderNyxId.Scope.Should().Be("proxy");
+        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
+            .ContainSingle()
+            .Which.Should().BeFalse();
+        var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
+        var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForScopeOwnerServiceInvocationAuth_ShouldPassScopeOwnerAuthWithoutSenderSubject()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        {
+                            Scope = " owner-proxy ",
+                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = OwnerScope.NyxIdPlatform,
+                                Tenant = string.Empty,
+                                ExternalUserId = " owner-nyx-user ",
+                            },
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-nyx-user"));
+        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
+            .ContainSingle()
+            .Which.Should().BeFalse();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
+        agent.State.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.ExternalUserId.Should().Be("owner-nyx-user");
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WhenServiceInvocationNoOpOmitsAuth_ShouldPreserveExistingAuthWithoutConfiguredEvent()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        var triggerEnvelope = CreateTriggerEnvelope("target-actor-1", new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "template-session",
+        });
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            triggerEnvelope: triggerEnvelope,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        {
+                            Scope = "proxy",
+                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = OwnerScope.NyxIdPlatform,
+                                Tenant = string.Empty,
+                                ExternalUserId = "owner-nyx-user",
+                            },
+                        },
+                    },
+                },
+            }));
+        var eventCount = eventStore.GetEvents(ScheduleActorId).Count;
+
+        await agent.HandleEnsureAsync(CreateEnsureCommand(
+            triggerEnvelope: triggerEnvelope,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                },
+            }));
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
+        agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
+        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WhenServiceInvocationUpdateOmitsAuth_ShouldPreserveExistingAuth()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        {
+                            Scope = "proxy",
+                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = OwnerScope.NyxIdPlatform,
+                                Tenant = string.Empty,
+                                ExternalUserId = "owner-nyx-user",
+                            },
+                        },
+                    },
+                },
+            }));
+
+        await agent.HandleEnsureAsync(CreateEnsureCommand(
+            displayName: "Updated schedule",
+            targetActorId: ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "updated" }),
+                },
+            }));
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
+        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject!.ExternalUserId.Should().Be("owner-nyx-user");
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForWorkflowServiceInvocationAuth_ShouldRequestWorkflowCallerCredentialProjection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-1",
+                                ExternalUserId = "ou-user-1",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        serviceInvocationDispatch.Auths.Should().ContainSingle()
+            .Which!.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
+        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
+            .ContainSingle()
+            .Which.Should().BeTrue();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForLegacyDurableBearerTokenAuth_ShouldFailClosed()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        DurableSenderBearerToken = "durable-run-key",
+                    },
+                },
+            }));
+
+        var stateAuth = agent.State.Target.ServiceInvocation!.Auth!;
+        stateAuth.DurableSenderBearerToken.Should().BeEmpty();
+        stateAuth.LegacyDurableSenderBearerBlocked.Should().BeTrue();
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        serviceInvocationDispatch.Auths.Should().BeEmpty();
+        serviceInvocationDispatch.Requests.Should().BeEmpty();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Contain("legacy durable bearer auth");
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForServiceInvocationAuthDispatchFailure_ShouldRecordFailure()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = new InvalidOperationException("exchange failed"),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-1",
+                                ExternalUserId = "ou-user-1",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        serviceInvocationDispatch.Auths.Should().ContainSingle();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be("exchange failed");
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForDuplicateServiceInvocationAuth_ShouldNotExchangeAgain()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+                        {
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            {
+                                Platform = "lark",
+                                Tenant = "tenant-1",
+                                ExternalUserId = "ou-user-1",
+                            },
+                            Scope = "proxy",
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        serviceInvocationDispatch.Auths.Should().ContainSingle();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -860,6 +1665,219 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task OnActivateAsync_WhenArmedFireIsDueAndNoPendingIntent_ShouldRearmForArmedTimeAsCatchUpInsteadOfSkipping()
+    {
+        // Regression: a daily cron armed NextFireAt for a fire time that came due while the
+        // actor was inactive (pod churn at the fire boundary). PendingNextFireAt is null in
+        // steady state, so reactivation must NOT recompute the next occurrence from "now"
+        // (which would skip the due fire), but re-arm for the armed time as a catch-up.
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        // Arm NextFireAt for a fire time in the past (the occurrence that came due while the
+        // actor was offline) via the early-callback re-arm path. This persists a
+        // NextFireScheduledEvent that sets NextFireAt and clears PendingNextFireAt, exactly
+        // like steady state after a normal arm.
+        var armedFireAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+        var firstRequest = scheduler.TimeoutRequests.Single();
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: armedFireAt.AddSeconds(-1),
+            scheduledFireAt: armedFireAt));
+
+        agent.State.NextFireAt.Should().Be(armedFireAt);
+        agent.State.PendingNextFireAt.Should().BeNull();
+        dispatch.Dispatches.Should().BeEmpty();
+        var armCount = scheduler.TimeoutRequests.Count;
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // The reactivation re-arms for the armed (past) time as a catch-up: a new timeout is
+        // registered for armedFireAt with a near-immediate due time, and NextFireAt is NOT
+        // advanced to a future occurrence (which is the silent-skip bug).
+        scheduler.TimeoutRequests.Should().HaveCount(armCount + 1);
+        var reactivationRequest = scheduler.TimeoutRequests[^1];
+        reactivationRequest.CallbackId.Should().Be(NextFireCallbackId);
+        reactivationRequest.DueTime.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(1));
+        var reactivationFire = reactivationRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        reactivationFire.Manual.Should().BeFalse();
+        reactivationFire.ScheduledFireAt.ToDateTimeOffset().Should().Be(armedFireAt);
+        reactivated.State.NextFireAt.Should().Be(armedFireAt);
+        reactivated.State.NextFireLease.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenNothingArmedAndNoPendingIntent_ShouldComputeNextFireFromNow()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+
+        // Seed an enabled, configured schedule whose persisted state has neither an armed
+        // NextFireAt nor a PendingNextFireAt (genuine first activation): the scheduler throws
+        // on the configure arm so only the ConfiguredEvent is persisted.
+        var seed = CreateAgent(eventStore, dispatch, scheduler);
+        await seed.ActivateAsync();
+        scheduler.ScheduleException = new InvalidOperationException("schedule failed");
+        var failedConfigure = () => seed.HandleConfigureAsync(CreateConfigureCommand(
+            cronExpression: "*/15 * * * *",
+            enabled: true));
+        await failedConfigure.Should().ThrowAsync<InvalidOperationException>();
+        seed.State.NextFireAt.Should().BeNull();
+        seed.State.PendingNextFireAt.Should().NotBeNull();
+
+        // Drop the pending intent so the reactivated state has nothing armed and nothing
+        // pending, isolating the genuine-first-activation branch.
+        eventStore.RemoveEvents(
+            ScheduleActorId,
+            ScheduledDispatchNextFireIntentRecordedEvent.Descriptor.FullName);
+        scheduler.ScheduleException = null;
+        var armCountBeforeReactivation = scheduler.TimeoutRequests.Count;
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // First activation with nothing armed computes the next occurrence from now, so the
+        // newly armed fire is in the future (not a catch-up of a past time).
+        reactivated.State.PendingNextFireAt.Should().BeNull();
+        reactivated.State.NextFireLease.Should().NotBeNull();
+        reactivated.State.NextFireAt.Should().NotBeNull();
+        reactivated.State.NextFireAt!.Value.Should().BeAfter(DateTimeOffset.UtcNow);
+        scheduler.TimeoutRequests.Should().HaveCount(armCountBeforeReactivation + 1);
+        var reactivationRequest = scheduler.TimeoutRequests[^1];
+        var reactivationFire = reactivationRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+        reactivationFire.ScheduledFireAt.ToDateTimeOffset().Should().BeAfter(DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenArmedFireOverduePastGrace_ShouldRecordOverdueDetection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var armedFireAt = await ArmOverdueFireAsync(eventStore, dispatch, scheduler, overdueBy: TimeSpan.FromMinutes(30));
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // The armed occurrence came due while the actor was dormant and is overdue well past
+        // the grace window with no terminal record, so reactivation records exactly one overdue
+        // detection and remembers which occurrence it was.
+        reactivated.State.OverdueFireDetectedCount.Should().Be(1);
+        reactivated.State.LastOverdueFireAt.Should().Be(armedFireAt);
+        reactivated.State.NextFireAt.Should().Be(armedFireAt);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchFireOverdueDetectedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenArmedFireWithinGrace_ShouldNotRecordOverdueDetection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        await ArmOverdueFireAsync(eventStore, dispatch, scheduler, overdueBy: TimeSpan.FromMinutes(1));
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        // A near-boundary catch-up (armed fire only seconds/minutes late, e.g. routine pod churn)
+        // is not an overdue detection: it stays within the grace window.
+        reactivated.State.OverdueFireDetectedCount.Should().Be(0);
+        reactivated.State.LastOverdueFireAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenOverdueAlreadyRecordedForSameOccurrence_ShouldNotDoubleCount()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var armedFireAt = await ArmOverdueFireAsync(eventStore, dispatch, scheduler, overdueBy: TimeSpan.FromMinutes(30));
+
+        var firstReactivation = CreateAgent(eventStore, dispatch, scheduler);
+        await firstReactivation.ActivateAsync();
+        firstReactivation.State.OverdueFireDetectedCount.Should().Be(1);
+
+        var secondReactivation = CreateAgent(eventStore, dispatch, scheduler);
+        await secondReactivation.ActivateAsync();
+
+        // Repeated reactivations against the same still-overdue armed occurrence must not
+        // inflate the counter: detection is once-per-occurrence via persisted LastOverdueFireAt.
+        secondReactivation.State.OverdueFireDetectedCount.Should().Be(1);
+        secondReactivation.State.LastOverdueFireAt.Should().Be(armedFireAt);
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenOverdueArmedFireAlreadyHasTerminalRecord_ShouldNotRecordOverdueDetection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        // The overdue occurrence already reached a terminal (dispatched) record via a manual fire,
+        // then gets armed as NextFireAt. Reactivation must not flag it as overdue: it did fire.
+        var occurrence = DateTimeOffset.UtcNow - TimeSpan.FromMinutes(30);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(occurrence),
+            Manual = true,
+        });
+        var firstRequest = scheduler.TimeoutRequests[0];
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: occurrence.AddSeconds(-1),
+            scheduledFireAt: occurrence));
+        agent.State.NextFireAt.Should().Be(occurrence);
+
+        var reactivated = CreateAgent(eventStore, dispatch, scheduler);
+        await reactivated.ActivateAsync();
+
+        reactivated.State.OverdueFireDetectedCount.Should().Be(0);
+        reactivated.State.LastOverdueFireAt.Should().BeNull();
+    }
+
+    private static async Task<DateTimeOffset> ArmOverdueFireAsync(
+        TestEventStore eventStore,
+        RecordingActorDispatchPort dispatch,
+        RecordingRuntimeCallbackScheduler scheduler,
+        TimeSpan overdueBy)
+    {
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
+
+        // Arm NextFireAt for a fire time in the past via the early-callback re-arm path, exactly
+        // like steady state after a normal arm (NextFireAt set, PendingNextFireAt cleared).
+        var armedFireAt = DateTimeOffset.UtcNow - overdueBy;
+        var firstRequest = scheduler.TimeoutRequests.Single();
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            firstRequest,
+            generation: 1,
+            fireIndex: 1,
+            firedAt: armedFireAt.AddSeconds(-1),
+            scheduledFireAt: armedFireAt));
+        agent.State.NextFireAt.Should().Be(armedFireAt);
+        agent.State.PendingNextFireAt.Should().BeNull();
+        agent.State.OverdueFireDetectedCount.Should().Be(0);
+        return armedFireAt;
+    }
+
+    [Fact]
     public void ScheduledDispatchStateReplay_ShouldUsePersistedNextFireScheduledAtForUpdatedAt()
     {
         var eventStore = new TestEventStore();
@@ -914,16 +1932,25 @@ public sealed class ScheduledDispatchGAgentTests
     private static EventEnvelope CreateFiredCallbackEnvelope(
         RuntimeCallbackTimeoutRequest request,
         long generation,
-        long fireIndex)
+        long fireIndex,
+        DateTimeOffset? firedAt = null,
+        DateTimeOffset? scheduledFireAt = null)
     {
         var envelope = request.TriggerEnvelope.Clone();
         envelope.Id = Guid.NewGuid().ToString("N");
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
+        if (scheduledFireAt.HasValue)
+        {
+            var fireCommand = envelope.Payload.Unpack<ScheduledDispatchFireCommand>();
+            fireCommand.ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt.Value);
+            envelope.Payload = Any.Pack(fireCommand);
+        }
+
         var callback = envelope.EnsureRuntime().EnsureCallback();
         callback.CallbackId = request.CallbackId;
         callback.Generation = generation;
         callback.FireIndex = fireIndex;
-        callback.FiredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        callback.FiredAtUnixTimeMs = (firedAt ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
         return envelope;
     }
 
@@ -942,7 +1969,8 @@ public sealed class ScheduledDispatchGAgentTests
         string cronExpression = "*/15 * * * *",
         bool enabled = false,
         EventEnvelope? triggerEnvelope = null,
-        ScheduledDispatchTargetState? target = null)
+        ScheduledDispatchTargetState? target = null,
+        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic)
     {
         return new ScheduledDispatchCreateCommand
         {
@@ -958,11 +1986,13 @@ public sealed class ScheduledDispatchGAgentTests
             Timezone = "UTC",
             Enabled = enabled,
             Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
+            ScheduleKind = scheduleKind,
         };
     }
 
     private static ScheduledDispatchUpdateCommand CreateUpdateCommand(
         string scheduleId = "schedule-1",
+        string displayName = "Test schedule",
         string targetActorId = "target-actor-1",
         string cronExpression = "*/15 * * * *",
         bool enabled = false,
@@ -972,7 +2002,7 @@ public sealed class ScheduledDispatchGAgentTests
         return new ScheduledDispatchUpdateCommand
         {
             ScheduleId = scheduleId,
-            DisplayName = "Test schedule",
+            DisplayName = displayName,
             TargetActorId = targetActorId,
             TriggerEnvelope = triggerEnvelope ?? CreateTriggerEnvelope(targetActorId, new ChatRequestEvent
             {
@@ -984,6 +2014,40 @@ public sealed class ScheduledDispatchGAgentTests
             Enabled = enabled,
             Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
         };
+    }
+
+    private static ScheduledDispatchEnsureCommand CreateEnsureCommand(
+        string scheduleId = "schedule-1",
+        string displayName = "Test schedule",
+        string targetActorId = "target-actor-1",
+        string cronExpression = "*/15 * * * *",
+        bool enabled = false,
+        EventEnvelope? triggerEnvelope = null,
+        ScheduledDispatchTargetState? target = null,
+        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic)
+    {
+        return new ScheduledDispatchEnsureCommand
+        {
+            ScheduleId = scheduleId,
+            DisplayName = displayName,
+            TargetActorId = targetActorId,
+            TriggerEnvelope = triggerEnvelope ?? CreateTriggerEnvelope(targetActorId, new ChatRequestEvent
+            {
+                Prompt = "hello",
+                SessionId = "template-session",
+            }),
+            CronExpression = cronExpression,
+            Timezone = "UTC",
+            Enabled = enabled,
+            Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
+            ScheduleKind = scheduleKind,
+        };
+    }
+
+    private static string CreateFarFutureCronExpression()
+    {
+        var farFutureMonth = DateTimeOffset.UtcNow.AddMonths(2).Month;
+        return $"0 0 1 {farFutureMonth} *";
     }
 
     private static ScheduledDispatchTargetState CreateTargetState(string targetActorId, EventEnvelope? triggerEnvelope) =>
@@ -1032,26 +2096,35 @@ public sealed class ScheduledDispatchGAgentTests
     private sealed class RecordingScheduledServiceInvocationDispatchPort : IScheduledServiceInvocationDispatchPort
     {
         public List<ServiceInvocationRequest> Requests { get; } = [];
+        public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
+        public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
+        public List<bool> ProjectNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
 
-        public Func<ServiceInvocationRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
-            request => new ScheduledServiceInvocationDispatchReceipt(
+        public Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
+            dispatch => new ScheduledServiceInvocationDispatchReceipt(
                 true,
-                request.CommandId,
+                dispatch.Request.CommandId,
                 "service-run-actor",
-                request.CorrelationId);
+                dispatch.Request.CorrelationId);
 
         public Exception? DispatchException { get; set; }
 
         public Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
-            ServiceInvocationRequest request,
+            ScheduledServiceInvocationDispatchRequest dispatch,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Requests.Add(request.Clone());
+            Requests.Add(dispatch.Request.Clone());
+            Auths.Add(dispatch.Auth);
+            Headers.Add(dispatch.Headers == null
+                ? null
+                : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));
+            ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Add(
+                dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
             if (DispatchException != null)
                 throw DispatchException;
 
-            return Task.FromResult(ReceiptFactory(request));
+            return Task.FromResult(ReceiptFactory(dispatch));
         }
     }
 
@@ -1135,6 +2208,14 @@ public sealed class ScheduledDispatchGAgentTests
             (_streams.GetValueOrDefault(agentId) ?? [])
             .Select(x => x.Clone())
             .ToArray();
+
+        public void RemoveEvents(string agentId, string eventType)
+        {
+            if (!_streams.TryGetValue(agentId, out var stream))
+                return;
+
+            stream.RemoveAll(x => string.Equals(x.EventType, eventType, StringComparison.Ordinal));
+        }
 
         public Task<EventStoreCommitResult> AppendAsync(
             string agentId,

@@ -96,6 +96,35 @@ public sealed class LlmSessionRegistrationAdapter : ILlmSessionRegistrationPort
         await _dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
     }
 
+    public async Task CancelRunAsync(
+        string sessionActorId,
+        string responseId,
+        string runId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionActorId))
+            throw new ArgumentException("sessionActorId is required.", nameof(sessionActorId));
+        if (string.IsNullOrWhiteSpace(responseId))
+            throw new ArgumentException("responseId is required.", nameof(responseId));
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new ArgumentException("runId is required.", nameof(runId));
+
+        var trimmedResponseId = responseId.Trim();
+        var trimmedRunId = runId.Trim();
+        var envelopeId = $"{trimmedResponseId}:run:{trimmedRunId}:cancelled";
+        var envelope = CreateEnvelope(
+            sessionActorId,
+            Any.Pack(new CancelLlmRunRequested
+            {
+                ResponseId = trimmedResponseId,
+                RunId = trimmedRunId,
+                CancelledAt = Timestamp.FromDateTime(DateTime.UtcNow),
+            }),
+            envelopeId);
+
+        await _dispatchPort.DispatchAsync(sessionActorId, envelope, ct);
+    }
+
     public async Task RecordForwardedToolCallAsync(
         string sessionActorId,
         string responseId,

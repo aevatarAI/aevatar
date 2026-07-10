@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 
@@ -39,10 +40,31 @@ public class BackpressureHelperTests
     }
 
     [Fact]
-    public void ResolveMaxConcurrent_ClampedToFallback()
+    public void ResolveMaxConcurrent_AllowsExplicitValueAboveDefault()
     {
         var parameters = new Dictionary<string, string> { ["max_concurrent_workers"] = "100" };
-        BackpressureHelper.ResolveMaxConcurrent(parameters, 20).Should().Be(20);
+        BackpressureHelper.ResolveMaxConcurrent(parameters, 20).Should().Be(100);
+    }
+
+    [Fact]
+    public void ResolveMaxConcurrent_ClampedToHardLimit()
+    {
+        var parameters = new Dictionary<string, string> { ["max_concurrent_workers"] = "999" };
+        BackpressureHelper.ResolveMaxConcurrent(parameters).Should().Be(BackpressureHelper.MaxConcurrentWorkersHardLimit);
+    }
+
+    [Fact]
+    public void ResolveMinConcurrent_WithValidParameter_ReturnsValue()
+    {
+        var parameters = new Dictionary<string, string> { ["min_concurrent_workers"] = "4" };
+        BackpressureHelper.ResolveMinConcurrent(parameters, 10).Should().Be(4);
+    }
+
+    [Fact]
+    public void ResolveMinConcurrent_ClampedToMaxConcurrent()
+    {
+        var parameters = new Dictionary<string, string> { ["min_concurrent_workers"] = "40" };
+        BackpressureHelper.ResolveMinConcurrent(parameters, 6).Should().Be(6);
     }
 
     [Fact]
@@ -54,6 +76,20 @@ public class BackpressureHelperTests
         BackpressureHelper.TryAdmit(bp, entry).Should().BeTrue();
         bp.ActiveWorkers.Should().Be(1);
         bp.Queue.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TryAdmit_WithMinConcurrentLowerThanMax_ShouldQueueAfterFloor()
+    {
+        var bp = BackpressureHelper.Initialize(5, 2);
+
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s1")).Should().BeTrue();
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s2")).Should().BeTrue();
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s3")).Should().BeFalse();
+
+        bp.ActiveWorkers.Should().Be(2);
+        BackpressureHelper.QueuedCount(bp).Should().Be(1);
+        bp.Queue[0].StepId.Should().Be("s3");
     }
 
     [Fact]
@@ -115,6 +151,23 @@ public class BackpressureHelperTests
 
         var third = BackpressureHelper.TryDrainOne(bp);
         third.Should().BeNull();
+    }
+
+    [Fact]
+    public void CompleteAndTopUp_ShouldRefillToConfiguredFloor()
+    {
+        var bp = BackpressureHelper.Initialize(6, 3);
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s1"));
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s2"));
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s3"));
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s4"));
+        BackpressureHelper.TryAdmit(bp, MakeEntry("s5"));
+
+        var topUps = BackpressureHelper.CompleteAndTopUp(bp);
+
+        topUps.Select(entry => entry.StepId).Should().Equal("s4");
+        bp.ActiveWorkers.Should().Be(3);
+        BackpressureHelper.QueuedCount(bp).Should().Be(1);
     }
 
     [Fact]
@@ -215,8 +268,62 @@ public class BackpressureHelperTests
         request.Parameters.Should().ContainKey("key").WhoseValue.Should().Be("val");
     }
 
+    [Fact]
+    public void ToStepRequest_ShouldRoundtripQueuedInputFileRefs()
+    {
+        var entry = new BackpressureQueueEntry
+        {
+            StepId = "s-file",
+            StepType = "tool_call",
+            RunId = "run-file",
+            Input = "payload",
+            TargetRole = "worker",
+        };
+        entry.InputFileRefs.Add(BuildWorkflowFileRef("file-a"));
+        entry.InputFileRefs.Add(BuildWorkflowFileRef("file-b"));
+
+        var request = BackpressureHelper.ToStepRequest(entry);
+
+        request.InputFileRefs.Select(fileRef => fileRef.FileId).Should().Equal("file-a", "file-b");
+    }
+
+    [Fact]
+    public void ToQueueEntry_ShouldCaptureInputFileRefsForQueuedDispatch()
+    {
+        var fileRefs = new[]
+        {
+            BuildWorkflowFileRef("file-a"),
+            BuildWorkflowFileRef("file-b"),
+        };
+
+        var entry = BackpressureHelper.ToQueueEntry(
+            "s-file",
+            "tool_call",
+            "run-file",
+            "payload",
+            "worker",
+            new Dictionary<string, string> { ["tool"] = "extract" },
+            fileRefs);
+
+        entry.InputFileRefs.Select(fileRef => fileRef.FileId).Should().Equal("file-a", "file-b");
+        entry.Parameters.Should().ContainKey("tool").WhoseValue.Should().Be("extract");
+    }
+
     private static BackpressureQueueEntry MakeEntry(string stepId) =>
         new() { StepId = stepId, StepType = "llm_call", RunId = "r1", Input = "test" };
+
+    private static WorkflowFileRef BuildWorkflowFileRef(string fileId) =>
+        new()
+        {
+            FileId = fileId,
+            ArtifactId = $"workflow-file://{fileId}",
+            SourceKind = WorkflowFileSourceKind.FormUpload,
+            FileName = $"{fileId}.txt",
+            MediaType = "text/plain",
+            SizeBytes = 12,
+            OwnerRunId = "run-file",
+            OwnerScopeId = "scope-file",
+        };
 
     private static string FindBackpressureHelperSource()
     {

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -63,6 +64,17 @@ internal static class ChatCompletionsApiEndpoints
             return Results.Empty;
         }
 
+        if (result.Completed is not null)
+        {
+            return Results.Json(
+                BuildCompletedChatCompletion(
+                    result.Completed.Normalized,
+                    result.Completed.CreatedAt,
+                    result.Completed.Completion),
+                JsonOptions,
+                statusCode: StatusCodes.Status200OK);
+        }
+
         if (result.Accepted is not null)
         {
             return Results.Json(
@@ -91,7 +103,19 @@ internal static class ChatCompletionsApiEndpoints
         response.Headers["X-Accel-Buffering"] = "no";
         await response.StartAsync(ct);
 
-        var completion = await commandFacade.StreamAsync(plan, ct);
+        var completion = await commandFacade.StreamAsync(
+            plan,
+            async (delta, token) =>
+            {
+                if (!string.IsNullOrEmpty(delta.TextDelta))
+                {
+                    await WriteDataFrameAsync(
+                        response,
+                        BuildStreamingContentChunk(normalized, createdAt, delta.TextDelta),
+                        token);
+                }
+            },
+            ct);
 
         if (completion.Error is not null)
         {
@@ -103,17 +127,26 @@ internal static class ChatCompletionsApiEndpoints
             return;
         }
 
-        if (completion.Accepted is not null)
+        if (completion.Completion is not null)
         {
+            var sessionCompletion = completion.Completion;
+            if (sessionCompletion.ToolCalls.Count > 0)
+            {
+                await WriteDataFrameAsync(
+                    response,
+                    BuildStreamingToolCallsSnapshotChunk(normalized, createdAt, sessionCompletion.ToolCalls),
+                    CancellationToken.None);
+            }
+
             await WriteDataFrameAsync(
                 response,
-                BuildStreamingStopChunk(normalized, createdAt, finishReason: null),
+                BuildStreamingStopChunk(normalized, createdAt, ResolveFinishReason(sessionCompletion)),
                 CancellationToken.None);
             if (normalized.IncludeUsageInStream)
             {
                 await WriteDataFrameAsync(
                     response,
-                    BuildStreamingUsageChunk(normalized, createdAt, usage: null),
+                    BuildStreamingUsageChunk(normalized, createdAt, sessionCompletion.Usage),
                     CancellationToken.None);
             }
 
@@ -149,6 +182,96 @@ internal static class ChatCompletionsApiEndpoints
             usage = (object?)null,
         };
 
+    private static object BuildCompletedChatCompletion(
+        NormalizedChatCompletionsCommand normalized,
+        long createdAt,
+        LlmSessionCompletionSnapshot completion) =>
+        new
+        {
+            id = normalized.CompletionId,
+            @object = "chat.completion",
+            created = createdAt,
+            model = normalized.Model,
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant",
+                        content = completion.OutputText,
+                        tool_calls = completion.ToolCalls.Count == 0 ? null : completion.ToolCalls.Select(MapToolCall).ToArray(),
+                    },
+                    finish_reason = ResolveFinishReason(completion),
+                },
+            },
+            usage = MapUsage(completion.Usage),
+        };
+
+    private static object BuildStreamingContentChunk(
+        NormalizedChatCompletionsCommand normalized,
+        long createdAt,
+        string deltaText) =>
+        new
+        {
+            id = normalized.CompletionId,
+            @object = "chat.completion.chunk",
+            created = createdAt,
+            model = normalized.Model,
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        content = deltaText,
+                    },
+                    finish_reason = (string?)null,
+                },
+            },
+        };
+
+    private static object BuildStreamingToolCallsSnapshotChunk(
+        NormalizedChatCompletionsCommand normalized,
+        long createdAt,
+        IReadOnlyList<LlmSessionCompletedToolCallSnapshot> toolCalls) =>
+        new
+        {
+            id = normalized.CompletionId,
+            @object = "chat.completion.chunk",
+            created = createdAt,
+            model = normalized.Model,
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        tool_calls = toolCalls.Select(MapStreamingToolCall).ToArray(),
+                    },
+                    finish_reason = (string?)null,
+                },
+            },
+        };
+
+    private static object MapStreamingToolCall(
+        LlmSessionCompletedToolCallSnapshot toolCall,
+        int index) =>
+        new
+        {
+            index,
+            id = toolCall.CallId,
+            type = "function",
+            function = new
+            {
+                name = toolCall.ToolName,
+                arguments = toolCall.ResultJson ?? "{}",
+            },
+        };
+
     private static object BuildStreamingStopChunk(
         NormalizedChatCompletionsCommand normalized,
         long createdAt,
@@ -169,6 +292,21 @@ internal static class ChatCompletionsApiEndpoints
                 },
             },
         };
+
+    private static object MapToolCall(LlmSessionCompletedToolCallSnapshot toolCall) =>
+        new
+        {
+            id = toolCall.CallId,
+            type = "function",
+            function = new
+            {
+                name = toolCall.ToolName,
+                arguments = toolCall.ResultJson ?? "{}",
+            },
+        };
+
+    private static string ResolveFinishReason(LlmSessionCompletionSnapshot completion) =>
+        completion.ToolCalls.Count > 0 ? "tool_calls" : "stop";
 
     private static object BuildStreamingUsageChunk(
         NormalizedChatCompletionsCommand normalized,

@@ -13,6 +13,7 @@ public enum ScheduledDispatchScheduleKind
 {
     Generic = 0,
     Workflow = 1,
+    SkillRunner = 2,
 }
 
 public sealed record ScheduledDispatchTargetDescriptor(
@@ -26,7 +27,38 @@ public sealed record ScheduledServiceInvocationTargetDescriptor(
     string EndpointId,
     Google.Protobuf.WellKnownTypes.Any Payload,
     string? RevisionId = null,
-    ServiceInvocationCaller? Caller = null);
+    ServiceInvocationCaller? Caller = null,
+    ScheduledServiceInvocationAuth? Auth = null);
+
+public sealed record ScheduledServiceInvocationNyxIdSubjectRef(
+    string Platform,
+    string Tenant,
+    string ExternalUserId);
+
+public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
+    ScheduledServiceInvocationNyxIdSubjectRef Subject,
+    string Scope);
+
+public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+    string Scope,
+    ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
+
+public sealed record ScheduledServiceInvocationAuth(
+    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
+    string? DurableSenderBearerToken = null,
+    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
+
+public sealed record ScheduledServiceInvocationCredentialExchangeResult(
+    bool Succeeded,
+    string? AccessToken = null,
+    string? Error = null)
+{
+    public static ScheduledServiceInvocationCredentialExchangeResult Success(string accessToken) =>
+        new(true, accessToken, null);
+
+    public static ScheduledServiceInvocationCredentialExchangeResult Failure(string error) =>
+        new(false, null, error);
+}
 
 public sealed record ScheduledDispatchConfiguration(
     string ScheduleId,
@@ -68,7 +100,11 @@ public sealed record ScheduledDispatchSummary(
     int FailureCount,
     IReadOnlyDictionary<string, string> Headers,
     string ScheduleActorId,
-    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic);
+    string? Prompt = null,
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
+    bool Deleted = false,
+    int OverdueFireDetectedCount = 0,
+    DateTimeOffset? LastOverdueFireAt = null);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,
@@ -140,12 +176,23 @@ public interface IScheduledDispatchActorPort
         PreparedScheduledDispatchTarget dispatch,
         CancellationToken ct = default);
 
+    Task<DispatchAdmission> DispatchEnsureAsync(
+        string actorId,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
+        CancellationToken ct = default);
+
     Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchDisableAsync(
+        string actorId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<DispatchAdmission> DispatchDeleteAsync(
         string actorId,
         string reason,
         CancellationToken ct = default);
@@ -186,16 +233,39 @@ public sealed record ScheduledServiceInvocationDispatchReceipt(
     string TargetActorId,
     string CorrelationId);
 
+public sealed record ScheduledServiceInvocationDispatchRequest(
+    ServiceInvocationRequest Request,
+    ScheduledServiceInvocationAuth? Auth = null,
+    IReadOnlyDictionary<string, string>? Headers = null,
+    bool ProjectNyxIdAccessTokenToWorkflowCallerCredential = false,
+    string? ScheduleId = null);
+
 public interface IScheduledServiceInvocationDispatchPort
 {
     Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
-        ServiceInvocationRequest request,
+        ScheduledServiceInvocationDispatchRequest dispatch,
+        CancellationToken ct = default);
+}
+
+public interface IScheduledServiceInvocationCredentialExchangePort
+{
+    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+        ScheduledServiceInvocationNyxIdCredentialSource source,
+        CancellationToken ct = default);
+
+    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
+        ServiceIdentity serviceIdentity,
         CancellationToken ct = default);
 }
 
 public interface IScheduledDispatchApplicationService
 {
     Task<ScheduledDispatchMutationReceipt> CreateAsync(
+        ScheduledDispatchConfiguration configuration,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> EnsureAsync(
         ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default);
 
@@ -210,6 +280,11 @@ public interface IScheduledDispatchApplicationService
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DisableAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
+    Task<ScheduledDispatchMutationReceipt> DeleteAsync(
         string scheduleId,
         string reason,
         CancellationToken ct = default);
