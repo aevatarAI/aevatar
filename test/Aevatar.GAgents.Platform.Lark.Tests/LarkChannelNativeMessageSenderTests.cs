@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.GAgents.Scheduled;
 using Shouldly;
 
 namespace Aevatar.GAgents.Platform.Lark.Tests;
@@ -64,12 +65,12 @@ public sealed class LarkChannelNativeMessageSenderTests
     }
 
     [Fact]
-    public async Task SendAsync_ShouldUseLarkAdapterRoute_WhenTargetCarriesScheduledRouteShape()
+    public async Task SendAsync_ShouldUseLarkAdapterRoute_WhenTargetCarriesUserAgentDeliveryTarget()
     {
         var dispatcher = new RecordingLarkOutboundDispatcher();
         var sender = new LarkChannelNativeMessageSender(dispatcher);
         var adapter = new LarkChannelNativeDeliveryTargetAdapter();
-        var target = adapter.Adapt(new TestScheduledDeliveryTarget(
+        var target = adapter.Adapt(new UserAgentDeliveryTarget(
             AgentId: "agent-1",
             Platform: "lark",
             ConversationId: "legacy-conversation",
@@ -78,7 +79,10 @@ public sealed class LarkChannelNativeMessageSenderTests
             LarkReceiveId: "oc_dm_chat_1",
             LarkReceiveIdType: "chat_id",
             LarkReceiveIdFallback: "on_user_1",
-            LarkReceiveIdTypeFallback: "union_id"));
+            LarkReceiveIdTypeFallback: "union_id",
+            OutputFormat: SkillRunnerOutputFormat.Auto,
+            TemplateName: string.Empty,
+            AgentType: string.Empty));
 
         await sender.SendAsync(
             target,
@@ -165,20 +169,4 @@ public sealed class LarkChannelNativeMessageSenderTests
             NyxApiKey),
             ILarkChannelNativeDeliveryRoute;
 
-    private sealed record TestScheduledDeliveryTarget(
-        string AgentId,
-        string Platform,
-        string ConversationId,
-        string NyxProviderSlug,
-        string NyxApiKey,
-        string LarkReceiveId,
-        string LarkReceiveIdType,
-        string LarkReceiveIdFallback,
-        string LarkReceiveIdTypeFallback)
-        : ChannelNativeDeliveryTarget(
-            AgentId,
-            Platform,
-            ConversationId,
-            NyxProviderSlug,
-            NyxApiKey);
 }
