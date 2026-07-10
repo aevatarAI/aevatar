@@ -1870,6 +1870,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             .Should().Contain("/open-apis/im/v1/messages?receive_id_type=chat_id");
         ExtractLarkMessageType(handler.Bodies[0]!).Should().Be("interactive");
         handler.Bodies[0].Should().Contain("abc");
+        CountOccurrences(handler.Bodies[0]!, "abc").Should().Be(1);
         var deliveries = await ReadDeliveryProducedEventsAsync(_store, "skill-runner-cardkit-auto");
         deliveries.Should().ContainSingle(delivery =>
             delivery.DeliveryKind == DeliveryKind.StreamingCard &&
@@ -2905,6 +2906,19 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         return contentDocument.RootElement.GetProperty("text").GetString()!;
     }
 
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
     private static string ExtractLarkMessageType(string body)
     {
         using var document = JsonDocument.Parse(body);
@@ -3244,7 +3258,12 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         private static MessageContent BuildContent(SkillRunnerOutboundDeliveryRequest request)
         {
-            var content = new MessageContent { Text = request.Text };
+            var content = new MessageContent
+            {
+                Text = request.Style == SkillRunnerOutboundDeliveryStyle.Card
+                    ? "Scheduled run output"
+                    : request.Text,
+            };
             if (request.Style == SkillRunnerOutboundDeliveryStyle.Card)
             {
                 content.Cards.Add(new CardBlock

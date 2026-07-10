@@ -248,7 +248,9 @@ internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunne
     {
         var content = new MessageContent
         {
-            Text = request.Text,
+            Text = request.Style == SkillRunnerOutboundDeliveryStyle.Card
+                ? "Scheduled run output"
+                : request.Text,
         };
 
         if (request.Style == SkillRunnerOutboundDeliveryStyle.Card)
