@@ -8,6 +8,12 @@ public interface ISkillRunnerOutboundDeliveryPort
     Task<SkillRunnerOutboundDeliveryReceipt> SendAsync(
         SkillRunnerOutboundDeliveryRequest request,
         CancellationToken ct);
+
+    Task<SkillRunnerOutboundDeliveryReceipt> UpdateAsync(
+        SkillRunnerOutboundDeliveryRequest request,
+        string platformMessageId,
+        bool isFinal,
+        CancellationToken ct);
 }
 
 public sealed record SkillRunnerOutboundDeliveryRequest(
@@ -58,6 +64,35 @@ internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunne
         SkillRunnerOutboundDeliveryRequest request,
         CancellationToken ct)
     {
+        return await DeliverAsync(
+            request,
+            platformMessageId: null,
+            isFinal: false,
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<SkillRunnerOutboundDeliveryReceipt> UpdateAsync(
+        SkillRunnerOutboundDeliveryRequest request,
+        string platformMessageId,
+        bool isFinal,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(platformMessageId))
+            throw new InvalidOperationException("SkillRunner streaming update requires a platform message id.");
+
+        return await DeliverAsync(
+            request,
+            platformMessageId.Trim(),
+            isFinal,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<SkillRunnerOutboundDeliveryReceipt> DeliverAsync(
+        SkillRunnerOutboundDeliveryRequest request,
+        string? platformMessageId,
+        bool isFinal,
+        CancellationToken ct)
+    {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.Text))
             throw new InvalidOperationException("SkillRunner outbound delivery requires non-empty text.");
@@ -93,7 +128,9 @@ internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunne
         }
 
         var nativeTarget = ToNativeDeliveryTarget(target);
-        var result = await sender.SendAsync(nativeTarget, nativeMessage, ct).ConfigureAwait(false);
+        var result = string.IsNullOrWhiteSpace(platformMessageId)
+            ? await sender.SendAsync(nativeTarget, nativeMessage, ct).ConfigureAwait(false)
+            : await sender.UpdateAsync(nativeTarget, platformMessageId, nativeMessage, ct).ConfigureAwait(false);
         if (!result.Success)
         {
             throw new InvalidOperationException(
@@ -103,15 +140,19 @@ internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunne
         }
 
         _logger.LogInformation(
-            "Delivered SkillRunner outbound message: agent={AgentId}, platform={Platform}, capability={Capability}, style={Style}",
+            "Delivered SkillRunner outbound message: agent={AgentId}, platform={Platform}, capability={Capability}, style={Style}, update={Update}, final={Final}",
             target.AgentId,
             target.Platform,
             result.Capability,
-            request.Style);
+            request.Style,
+            !string.IsNullOrWhiteSpace(platformMessageId),
+            isFinal);
 
         return new SkillRunnerOutboundDeliveryReceipt(
             result.SentActivityId,
-            result.PlatformMessageId,
+            string.IsNullOrWhiteSpace(result.PlatformMessageId)
+                ? result.SentActivityId
+                : result.PlatformMessageId,
             result.Capability);
     }
 

@@ -1892,8 +1892,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
         await agent.HandleInitializeAsync(initialize);
         var handler = new SequencedHandler(
-            """{"code":0,"msg":"success","data":{"message_id":"om_stream_1"}}""",
-            """{"code":0,"msg":"success","data":{"message_id":"om_stream_2"}}""");
+            """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
+            """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""");
         AttachNyxIdApiClient(agent, handler);
 
         var output = await InvokeExecuteSkillAsync(agent);
@@ -1901,7 +1901,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         output.Should().Be("abc");
         handler.Requests.Should().HaveCount(2);
         handler.Requests[0].Method.Method.Should().Be("POST");
-        handler.Requests[1].Method.Method.Should().Be("POST");
+        handler.Requests[1].Method.Method.Should().Be("PUT");
         ExtractLarkText(handler.Bodies[0]!).Should().Be("a");
         ExtractLarkText(handler.Bodies[1]!).Should().Be("abc");
     }
@@ -3141,6 +3141,14 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 request.PrimaryTarget,
                 usedFallback: false));
         }
+
+        public Task<LarkUpdateMessageResult> UpdateMessageAsync(
+            LarkUpdateMessageRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(LarkUpdateMessageResult.Updated(request.MessageId));
+        }
     }
 
     private sealed class SkillRunnerTestOutboundDeliveryPort : ISkillRunnerOutboundDeliveryPort
@@ -3162,6 +3170,24 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             SkillRunnerOutboundDeliveryRequest request,
             CancellationToken ct)
         {
+            return await DeliverAsync(request, platformMessageId: null, ct).ConfigureAwait(false);
+        }
+
+        public async Task<SkillRunnerOutboundDeliveryReceipt> UpdateAsync(
+            SkillRunnerOutboundDeliveryRequest request,
+            string platformMessageId,
+            bool isFinal,
+            CancellationToken ct)
+        {
+            _ = isFinal;
+            return await DeliverAsync(request, platformMessageId, ct).ConfigureAwait(false);
+        }
+
+        private async Task<SkillRunnerOutboundDeliveryReceipt> DeliverAsync(
+            SkillRunnerOutboundDeliveryRequest request,
+            string? platformMessageId,
+            CancellationToken ct)
+        {
             var dispatcher = ResolveDispatcher(request.AgentId);
             var sender = new LarkChannelNativeMessageSender(dispatcher);
             var producer = new LarkChannelNativeMessageProducer(new LarkMessageComposer());
@@ -3176,7 +3202,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             };
             var native = producer.Produce(content, context);
             var routedTarget = new LarkChannelNativeDeliveryTargetAdapter().Adapt(target);
-            var result = await sender.SendAsync(routedTarget, native, ct);
+            var result = string.IsNullOrWhiteSpace(platformMessageId)
+                ? await sender.SendAsync(routedTarget, native, ct)
+                : await sender.UpdateAsync(routedTarget, platformMessageId, native, ct);
             return new SkillRunnerOutboundDeliveryReceipt(
                 result.SentActivityId,
                 result.PlatformMessageId,

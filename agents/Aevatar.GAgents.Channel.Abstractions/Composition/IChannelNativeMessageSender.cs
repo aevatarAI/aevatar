@@ -18,4 +18,11 @@ public interface IChannelNativeMessageSender
         ChannelNativeDeliveryTarget target,
         ChannelNativeMessage message,
         CancellationToken cancellationToken);
+
+    /// <summary>Updates a previously sent native message identified by its platform message id.</summary>
+    Task<EmitResult> UpdateAsync(
+        ChannelNativeDeliveryTarget target,
+        string platformMessageId,
+        ChannelNativeMessage message,
+        CancellationToken cancellationToken);
 }

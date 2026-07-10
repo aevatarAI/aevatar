@@ -60,6 +60,40 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
             platformMessageId: result.MessageId);
     }
 
+    public async Task<EmitResult> UpdateAsync(
+        ChannelNativeDeliveryTarget target,
+        string platformMessageId,
+        ChannelNativeMessage message,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(message);
+        if (string.IsNullOrWhiteSpace(platformMessageId))
+            throw new InvalidOperationException("Lark native message update requires a platform message id.");
+        if (message.CardPayload is not null)
+            throw new NotSupportedException("Lark native message update currently supports text messages only.");
+
+        var contentJson = JsonSerializer.Serialize(new { text = message.Text ?? string.Empty });
+        var messageType = string.IsNullOrWhiteSpace(message.MessageType)
+            ? "text"
+            : message.MessageType;
+
+        var result = await _larkOutboundDispatcher.UpdateMessageAsync(
+            new LarkUpdateMessageRequest(
+                target.NyxApiKey,
+                target.NyxProviderSlug,
+                platformMessageId.Trim(),
+                messageType,
+                contentJson),
+            cancellationToken).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+            throw new InvalidOperationException(BuildRejectionMessage(result.LarkCode, result.Detail));
+
+        var messageId = result.MessageId ?? platformMessageId.Trim();
+        return EmitResult.Sent(messageId, platformMessageId: messageId);
+    }
+
     private static string SerializeNativePayload(object payload) =>
         payload switch
         {

@@ -22,6 +22,24 @@ public sealed class SkillRunnerStreamingReplySinkTests
     }
 
     [Fact]
+    public async Task DispatchAsync_WithExistingPlatformMessageId_ShouldUpdateThroughChannelNeutralPort()
+    {
+        var port = new RecordingOutboundDeliveryPort();
+        using var sink = CreateSink(port);
+
+        await sink.DispatchAsync("hello", isFinal: false, CancellationToken.None);
+        await sink.DispatchAsync("hello world", isFinal: true, CancellationToken.None);
+
+        port.Requests.Should().ContainSingle();
+        port.UpdateRequests.Should().ContainSingle();
+        port.UpdateRequests[0].Request.Text.Should().Be("hello world");
+        port.UpdateRequests[0].PlatformMessageId.Should().Be("platform-1");
+        port.UpdateRequests[0].IsFinal.Should().BeTrue();
+        sink.PlatformMessageId.Should().Be("platform-update-1");
+        sink.ChunksEmitted.Should().Be(2);
+    }
+
+    [Fact]
     public async Task DispatchAsync_WhenMidStreamSendThrows_ShouldRetryOnLaterSnapshot()
     {
         var port = new RecordingOutboundDeliveryPort { FailNext = true };
@@ -78,6 +96,7 @@ public sealed class SkillRunnerStreamingReplySinkTests
     private sealed class RecordingOutboundDeliveryPort : ISkillRunnerOutboundDeliveryPort
     {
         public List<SkillRunnerOutboundDeliveryRequest> Requests { get; } = [];
+        public List<(SkillRunnerOutboundDeliveryRequest Request, string PlatformMessageId, bool IsFinal)> UpdateRequests { get; } = [];
 
         public bool FailNext { get; set; }
 
@@ -96,6 +115,26 @@ public sealed class SkillRunnerStreamingReplySinkTests
             return Task.FromResult(new SkillRunnerOutboundDeliveryReceipt(
                 $"sent-{Requests.Count}",
                 $"platform-{Requests.Count}",
+                ComposeCapability.Exact));
+        }
+
+        public Task<SkillRunnerOutboundDeliveryReceipt> UpdateAsync(
+            SkillRunnerOutboundDeliveryRequest request,
+            string platformMessageId,
+            bool isFinal,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            UpdateRequests.Add((request, platformMessageId, isFinal));
+            if (FailNext)
+            {
+                FailNext = false;
+                throw new InvalidOperationException("send rejected");
+            }
+
+            return Task.FromResult(new SkillRunnerOutboundDeliveryReceipt(
+                $"sent-update-{UpdateRequests.Count}",
+                $"platform-update-{UpdateRequests.Count}",
                 ComposeCapability.Exact));
         }
     }

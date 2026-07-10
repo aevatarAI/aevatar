@@ -96,9 +96,36 @@ public sealed class LarkChannelNativeMessageSenderTests
             FellBackToPrefixInference: false));
     }
 
+    [Fact]
+    public async Task UpdateAsync_ShouldDelegateTextEditToLarkDispatcher()
+    {
+        var dispatcher = new RecordingLarkOutboundDispatcher();
+        var sender = new LarkChannelNativeMessageSender(dispatcher);
+        var target = new ChannelNativeDeliveryTarget(
+            AgentId: "agent-1",
+            Platform: "lark",
+            ConversationId: "oc_chat_1",
+            NyxProviderSlug: "api-lark-bot",
+            NyxApiKey: "nyx-api-key-1");
+
+        var result = await sender.UpdateAsync(
+            target,
+            "om_stream",
+            new ChannelNativeMessage("hello updated", CardPayload: null, MessageType: "text", ComposeCapability.Exact),
+            CancellationToken.None);
+
+        result.SentActivityId.ShouldBe("om_stream");
+        result.PlatformMessageId.ShouldBe("om_stream");
+        dispatcher.LastUpdateRequest.ShouldNotBeNull();
+        dispatcher.LastUpdateRequest!.MessageId.ShouldBe("om_stream");
+        dispatcher.LastUpdateRequest.MessageType.ShouldBe("text");
+        dispatcher.LastUpdateRequest.ContentJson.ShouldContain("hello updated");
+    }
+
     private sealed class RecordingLarkOutboundDispatcher : ILarkOutboundDispatcher
     {
         public LarkSendNewMessageRequest? LastRequest { get; private set; }
+        public LarkUpdateMessageRequest? LastUpdateRequest { get; private set; }
 
         public Task<LarkSendNewMessageResult> SendNewMessageAsync(
             LarkSendNewMessageRequest request,
@@ -109,6 +136,14 @@ public sealed class LarkChannelNativeMessageSenderTests
                 "om_1",
                 request.PrimaryTarget,
                 usedFallback: false));
+        }
+
+        public Task<LarkUpdateMessageResult> UpdateMessageAsync(
+            LarkUpdateMessageRequest request,
+            CancellationToken ct)
+        {
+            LastUpdateRequest = request;
+            return Task.FromResult(LarkUpdateMessageResult.Updated(request.MessageId));
         }
     }
 

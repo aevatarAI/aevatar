@@ -59,9 +59,10 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
 
         try
         {
-            var receipt = await _outboundDeliveryPort.SendAsync(
-                _requestTemplate with { Text = capped },
-                ct).ConfigureAwait(false);
+            var request = _requestTemplate with { Text = capped };
+            var receipt = string.IsNullOrWhiteSpace(_platformMessageId)
+                ? await _outboundDeliveryPort.SendAsync(request, ct).ConfigureAwait(false)
+                : await _outboundDeliveryPort.UpdateAsync(request, _platformMessageId, isFinal, ct).ConfigureAwait(false);
             _platformMessageId = string.IsNullOrWhiteSpace(receipt.PlatformMessageId)
                 ? receipt.SentActivityId
                 : receipt.PlatformMessageId;
@@ -71,7 +72,7 @@ internal sealed class SkillRunnerStreamingReplySink : IDisposable
         {
             _logger?.LogWarning(
                 ex,
-                "SkillRunner streaming sink: channel-native send threw mid-stream; will retry on next actor-approved snapshot.");
+                "SkillRunner streaming sink: channel-native delivery threw mid-stream; will retry on next actor-approved snapshot.");
         }
     }
 

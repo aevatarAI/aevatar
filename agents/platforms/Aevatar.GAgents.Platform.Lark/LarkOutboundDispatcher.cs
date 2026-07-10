@@ -58,6 +58,34 @@ public sealed class LarkOutboundDispatcher : ILarkOutboundDispatcher
             ct).ConfigureAwait(false);
     }
 
+    public async Task<LarkUpdateMessageResult> UpdateMessageAsync(
+        LarkUpdateMessageRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Validate(request);
+
+        var body = JsonSerializer.Serialize(new
+        {
+            msg_type = request.MessageType,
+            content = request.ContentJson,
+        });
+
+        var response = await _client.ProxyRequestAsync(
+            request.NyxApiKey,
+            request.NyxProviderSlug,
+            $"open-apis/im/v1/messages/{Uri.EscapeDataString(request.MessageId)}",
+            "PUT",
+            body,
+            extraHeaders: null,
+            ct).ConfigureAwait(false);
+
+        if (LarkProxyResponse.TryGetError(response, out var larkCode, out var detail))
+            return LarkUpdateMessageResult.Failed(larkCode, detail);
+
+        return LarkUpdateMessageResult.Updated(request.MessageId);
+    }
+
     private async Task<LarkSendNewMessageResult> SendPostAsync(
         LarkSendNewMessageRequest request,
         LarkReceiveTarget target,
@@ -132,5 +160,19 @@ public sealed class LarkOutboundDispatcher : ILarkOutboundDispatcher
             throw new ArgumentException("Lark primary receive_id is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.PrimaryTarget.ReceiveIdType))
             throw new ArgumentException("Lark primary receive_id_type is required.", nameof(request));
+    }
+
+    private static void Validate(LarkUpdateMessageRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.NyxApiKey))
+            throw new ArgumentException("NyxID API key is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.NyxProviderSlug))
+            throw new ArgumentException("NyxID provider slug is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.MessageId))
+            throw new ArgumentException("Lark message id is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.MessageType))
+            throw new ArgumentException("Lark message type is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.ContentJson))
+            throw new ArgumentException("Lark message content JSON is required.", nameof(request));
     }
 }

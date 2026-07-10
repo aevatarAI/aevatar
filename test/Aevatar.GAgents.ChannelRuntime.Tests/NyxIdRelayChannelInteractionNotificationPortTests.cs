@@ -407,5 +407,12 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             SendCallCount++;
             return Task.FromResult(EmitResult.Sent($"test:{platform}:{SendCallCount}"));
         }
+
+        public Task<EmitResult> UpdateAsync(
+            ChannelNativeDeliveryTarget target,
+            string platformMessageId,
+            ChannelNativeMessage message,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(EmitResult.Sent(platformMessageId, platformMessageId: platformMessageId));
     }
 }
