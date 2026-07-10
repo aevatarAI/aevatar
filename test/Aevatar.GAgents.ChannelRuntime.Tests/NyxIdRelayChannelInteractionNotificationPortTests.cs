@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -261,6 +262,26 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             .IsAssignableFrom(typeof(UserAgentDeliveryTarget))
             .Should()
             .BeFalse("platform route contracts must be adapted inside the Lark boundary");
+    }
+
+    [Fact]
+    public void ChannelDeliveryTargetResolver_ShouldNotExposeLarkShapedTargetMembers()
+    {
+        var memberNames = typeof(ChannelDeliveryTargetResolver)
+            .GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+            .Select(static member => member.Name)
+            .Concat(typeof(ChannelDeliveryTargetResolver)
+                .GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
+                .SelectMany(static type => type
+                    .GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+                    .Select(static member => member.Name)
+                    .Append(type.Name)))
+            .ToArray();
+
+        memberNames.Should().NotContain(static name =>
+                name.Contains("Lark", StringComparison.Ordinal) ||
+                name.Contains("RoutedChannelNativeDeliveryTarget", StringComparison.Ordinal),
+            "Lark receive target construction belongs to the Lark platform adapter");
     }
 
     private static ChannelInteractionNotificationRequest BuildApprovalRequest(string deliveryTargetId) =>
