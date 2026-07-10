@@ -5205,6 +5205,90 @@ describe("StudioPage", () => {
     expect(searchParams.get("focus")).toBeNull();
   });
 
+  it("builds Studio member delete confirmation from the targeted member identity", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "workspace-demo",
+        displayName: "workspace-demo",
+        teamId: "t-alpha",
+      },
+      {
+        ...mockStudioMembers[0],
+        memberId: "other-team-member",
+        displayName: "Other team member",
+        teamId: "t-alpha",
+      },
+    ];
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+          okText: "Delete member",
+          cancelText: "Keep member",
+          autoFocusButton: "cancel",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    expect(confirmConfig.icon).toBeTruthy();
+    expect(String(confirmConfig.content?.props?.children?.[0]?.props?.children?.[1]?.props?.children)).toBe(
+      "workspace-demo",
+    );
+
+    (Modal.confirm as jest.Mock).mockClear();
+
+    window.history.replaceState(
+      {},
+      "",
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aother-team-member&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aother-team-member&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete Other team member"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+        })
+      );
+    });
+
+    const otherConfirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    expect(String(otherConfirmConfig.content?.props?.children?.[0]?.props?.children?.[1]?.props?.children)).toBe(
+      "Other team member",
+    );
+
+    await act(async () => {
+      await otherConfirmConfig.onOk();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.deleteMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "other-team-member",
+      });
+    });
+
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Deleted member Other team member.",
+      );
+    });
+  });
+
   it("treats a missing workflow draft as already deleted from the inventory rail", async () => {
     (studioApi.deleteWorkflow as jest.Mock).mockRejectedValueOnce(
       new Error("Not Found"),

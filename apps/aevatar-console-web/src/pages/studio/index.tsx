@@ -1508,6 +1508,22 @@ function buildBackendMemberKey(memberId: string): `member:${string}` | '' {
   return normalizedMemberId ? `member:${normalizedMemberId}` : '';
 }
 
+function resolveStudioMemberSummaryFromKey(
+  memberKey: string,
+  publishedScopeMembers: readonly StudioScopeMemberSummary[],
+  studioScopeMembers: readonly StudioMemberSummary[],
+): StudioMemberSummary | null {
+  if (!trimOptional(memberKey).startsWith('member:')) {
+    return null;
+  }
+
+  return resolveStudioMemberSummaryFromMemberKey(
+    memberKey,
+    publishedScopeMembers,
+    studioScopeMembers,
+  );
+}
+
 function readScriptIdFromMemberKey(memberKey: string): string {
   const normalizedMemberKey = trimOptional(memberKey);
   if (!normalizedMemberKey.startsWith('script:')) {
@@ -9219,13 +9235,11 @@ const StudioPage: React.FC = () => {
   );
   const selectedInventoryMemberSummary = useMemo(
     () =>
-      selectedInventoryMemberKey.startsWith('member:')
-        ? resolveStudioMemberSummaryFromMemberKey(
-            selectedInventoryMemberKey,
-            publishedScopeMembers,
-            studioScopeMembers,
-          )
-        : null,
+      resolveStudioMemberSummaryFromKey(
+        selectedInventoryMemberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      ),
     [publishedScopeMembers, selectedInventoryMemberKey, studioScopeMembers],
   );
   const selectedInventoryResolvedMemberId =
@@ -9286,8 +9300,13 @@ const StudioPage: React.FC = () => {
       : 'Select a workflow draft member to delete.';
   const handleDeleteStudioMember = useCallback(
     (memberKey: string) => {
+      const targetMemberSummary = resolveStudioMemberSummaryFromKey(
+        memberKey,
+        publishedScopeMembers,
+        studioScopeMembers,
+      );
       const memberId =
-        trimOptional(selectedInventoryMemberSummary?.memberId) ||
+        trimOptional(targetMemberSummary?.memberId) ||
         readMemberIdFromMemberKey(memberKey);
       const scopeId = trimOptional(resolvedStudioScopeId);
       if (!scopeId || !memberId) {
@@ -9295,7 +9314,7 @@ const StudioPage: React.FC = () => {
       }
 
       const memberLabel =
-        trimOptional(selectedInventoryLabel) || memberId || 'this member';
+        trimOptional(targetMemberSummary?.displayName) || memberId || 'this member';
 
       Modal.confirm({
         autoFocusButton: 'cancel',
@@ -9462,16 +9481,16 @@ const StudioPage: React.FC = () => {
       });
     },
     [
+      publishedScopeMembers,
       queryClient,
       resolvedStudioScopeId,
       resolvedStudioTeamId,
       routeState.memberKey,
       routeState.returnTo,
       routeState.teamId,
-      selectedInventoryLabel,
       selectedInventoryMemberKey,
-      selectedInventoryMemberSummary?.memberId,
       studioMembersQueryKey,
+      studioScopeMembers,
       studioSurface,
       studioTeamSummaryQueryKey,
       workbenchMemberKey,
