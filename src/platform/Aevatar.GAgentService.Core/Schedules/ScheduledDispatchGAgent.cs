@@ -581,40 +581,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
         }
 
-<<<<<<< HEAD
-        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null && auth.DurableCredentialReference == null)
-            return null;
-
-        var senderNyxId = auth.SenderNyxId == null
-            ? null
-            : new ScheduledServiceInvocationNyxIdCredentialSource(
-                ToRuntimeSubject(auth.SenderNyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
-                    string.Empty,
-                    string.Empty,
-                    string.Empty),
-                auth.SenderNyxId.Scope ?? string.Empty);
-
-        var scopeOwnerNyxId = auth.ScopeOwnerNyxId == null
-            ? null
-            : new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                auth.ScopeOwnerNyxId.Scope ?? string.Empty,
-                ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
-
-        var durableCredentialReference = auth.DurableCredentialReference == null
-            ? null
-            : new ScheduledServiceInvocationDurableCredentialReference(
-                auth.DurableCredentialReference.CredentialId ?? string.Empty,
-                auth.DurableCredentialReference.SecretReference?.Clone() ?? new SecretReference());
-
-        return new ScheduledServiceInvocationAuth(
-            SenderNyxId: senderNyxId,
-            ScopeOwnerNyxId: scopeOwnerNyxId,
-            DurableCredentialReference: durableCredentialReference);
-=======
         if (auth.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.Durable)
         {
             return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
-                auth.Durable.CredentialId ?? string.Empty));
+                auth.Durable.CredentialId ?? string.Empty,
+                auth.Durable.SecretReference?.Clone() ?? new SecretReference()));
         }
 
         var nyxId = ResolveNyxIdSource(auth);
@@ -628,7 +599,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 string.Empty),
             nyxId.Scope ?? string.Empty,
             ToRuntimeRole(nyxId.Role)));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     private static ScheduledServiceInvocationNyxIdCredentialSourceState? ResolveNyxIdSource(
