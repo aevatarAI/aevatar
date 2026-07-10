@@ -270,6 +270,12 @@ Each record also exposes `occurredAtUtc` and `identityKeyId`. These fields descr
 artifact-store query freshness and must not imply strong consistency with writes that
 may still be in flight.
 
+Audit queries return the newest matching artifacts first, ordered by
+`occurredAtUtc DESC` with `auditId ASC` as the deterministic tie-breaker. A
+`nextCursor` continues toward older artifacts. `queryWatermark` is the greatest
+`occurredAtUtc` across the full filtered result set, independent of the current cursor
+page; it is null when the filtered result set is empty.
+
 Admin-only resolver reads and cross-scope audit trail reads carry endpoint metadata with
 `AccessLevel = ADMIN`. That metadata is for the host self-audit pipeline; it does not
 replace the runtime admin gate.
