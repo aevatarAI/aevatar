@@ -47,6 +47,7 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             Status = GarnetSecretRecordStatus.Active,
             Fingerprint = GarnetSecretRecordCrypto.Fingerprint(request.Secret, _keyring),
             CreatedAtUnixMs = now,
+            ExpiresAtUnixMs = request.ExpiresAt?.ToUniversalTime().ToUnixTimeMilliseconds() ?? 0,
         };
         record.EncryptedSecret = GarnetSecretRecordCrypto.Encrypt(
             request.Secret,
@@ -65,6 +66,7 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         var record = await ReadRecordAsync(request.Ref, ct);
         if (record == null ||
             record.Status != GarnetSecretRecordStatus.Active ||
+            IsExpired(record) ||
             !IsAuthorized(record, request.Purpose, request.OwnerScopeKey, request.SubjectId))
         {
             return new ResolveSecretResult(null, null);
@@ -136,7 +138,12 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         Version = record.Version,
         OwnerScopeKey = record.OwnerScopeKey,
         CreatedAtUnixMs = record.CreatedAtUnixMs,
+        ExpiresAtUnixMs = record.ExpiresAtUnixMs,
     };
+
+    private bool IsExpired(GarnetSecretVaultRecord record) =>
+        record.ExpiresAtUnixMs > 0 &&
+        record.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
     private static void ValidateStoreRequest(StoreSecretRequest request)
     {

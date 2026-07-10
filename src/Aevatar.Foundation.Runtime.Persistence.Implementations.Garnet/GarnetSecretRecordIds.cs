@@ -26,6 +26,7 @@ internal static class GarnetSecretRecordIds
             CreatedAtUnixMs = record.CreatedAtUnixMs,
             RotatedAtUnixMs = record.RotatedAtUnixMs,
             RevokedAtUnixMs = record.RevokedAtUnixMs,
+            ExpiresAtUnixMs = record.ExpiresAtUnixMs,
         }.ToByteArray();
     }
 

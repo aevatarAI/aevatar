@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules;
@@ -53,6 +54,12 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
     string Scope,
     ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
 
+public sealed record ScheduledInvocationAgentKeyCredentialReference(
+    SecretReference SecretReference,
+    string ApiKeyId,
+    long KeyExpiresAtUnixMs)
+    : ScheduledServiceInvocationCredentialSource;
+
 public sealed record ScheduledServiceInvocationDurableCredentialReference(
     string CredentialId)
     : ScheduledServiceInvocationCredentialSource;
@@ -79,6 +86,12 @@ public sealed record ScheduledServiceInvocationAuth
     {
     }
 
+    public ScheduledServiceInvocationAuth(ScheduledInvocationAgentKeyCredentialReference ScheduledInvocationAgentKey)
+        : this((ScheduledServiceInvocationCredentialSource)(ScheduledInvocationAgentKey ??
+                                                            throw new ArgumentNullException(nameof(ScheduledInvocationAgentKey))))
+    {
+    }
+
     public ScheduledServiceInvocationCredentialSource? Source { get; init; }
 
     public ScheduledServiceInvocationNyxIdCredentialSource? NyxId =>
@@ -86,6 +99,9 @@ public sealed record ScheduledServiceInvocationAuth
 
     public ScheduledServiceInvocationDurableCredentialReference? Durable =>
         Source as ScheduledServiceInvocationDurableCredentialReference;
+
+    public ScheduledInvocationAgentKeyCredentialReference? ScheduledInvocationAgentKey =>
+        Source as ScheduledInvocationAgentKeyCredentialReference;
 
     public ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId =>
         NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRole.Sender ? NyxId : null;
