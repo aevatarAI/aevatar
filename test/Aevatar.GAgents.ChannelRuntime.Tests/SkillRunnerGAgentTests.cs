@@ -1828,7 +1828,6 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         await agent.ActivateAsync();
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ApiKeyId = "key-scheduled-agent";
-        initialize.OutboundConfig.NyxApiKey = "inline-key-should-not-be-used";
         initialize.OutboundConfig.NyxApiKeyReference = stored.Reference;
         await agent.HandleInitializeAsync(initialize);
 

@@ -78,7 +78,6 @@ public sealed class UserAgentDeliveryTargetReaderTests
             {
                 Id = "agent-1",
                 ApiKeyId = "key-scheduled-agent",
-                NyxApiKey = "inline-key-should-not-be-used",
                 NyxApiKeyReference = stored.Reference,
             });
 
