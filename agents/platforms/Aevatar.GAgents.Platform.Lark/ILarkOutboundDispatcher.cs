@@ -17,6 +17,10 @@ public interface ILarkOutboundDispatcher
     Task<LarkSendNewMessageResult> SendNewMessageAsync(
         LarkSendNewMessageRequest request,
         CancellationToken ct);
+
+    Task<LarkUpdateMessageResult> UpdateMessageAsync(
+        LarkUpdateMessageRequest request,
+        CancellationToken ct);
 }
 
 public sealed record LarkSendNewMessageRequest(
@@ -57,6 +61,34 @@ public sealed record LarkSendNewMessageResult(
             MessageId: null,
             AttemptedTarget: attemptedTarget,
             UsedFallback: usedFallback,
+            LarkCode: larkCode,
+            Detail: detail);
+}
+
+public sealed record LarkUpdateMessageRequest(
+    string NyxApiKey,
+    string NyxProviderSlug,
+    string MessageId,
+    string MessageType,
+    string ContentJson);
+
+public sealed record LarkUpdateMessageResult(
+    bool Succeeded,
+    string? MessageId,
+    int? LarkCode,
+    string Detail)
+{
+    public static LarkUpdateMessageResult Updated(string messageId) =>
+        new(
+            Succeeded: true,
+            MessageId: messageId,
+            LarkCode: null,
+            Detail: string.Empty);
+
+    public static LarkUpdateMessageResult Failed(int? larkCode, string detail) =>
+        new(
+            Succeeded: false,
+            MessageId: null,
             LarkCode: larkCode,
             Detail: detail);
 }
