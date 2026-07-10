@@ -339,14 +339,9 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
             ScheduledServiceInvocationDurableCredentialReference durable =>
-<<<<<<< HEAD
                 new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable)),
-=======
-                new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
-                    NormalizeRequired(durable.CredentialId, nameof(durable.CredentialId)))),
             ScheduledInvocationAgentKeyCredentialReference agentKey =>
                 new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey)),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
         };
     }
@@ -371,7 +366,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             role));
     }
 
-<<<<<<< HEAD
     private static ScheduledServiceInvocationDurableCredentialReference NormalizeDurableCredentialReference(
         ScheduledServiceInvocationDurableCredentialReference reference)
     {
@@ -401,7 +395,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             CreatedAtUnixMs = reference.CreatedAtUnixMs,
         };
 
-=======
     private static ScheduledInvocationAgentKeyCredentialReference NormalizeScheduledInvocationAgentKey(
         ScheduledInvocationAgentKeyCredentialReference source)
     {
@@ -430,7 +423,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return new ScheduledInvocationAgentKeyCredentialReference(reference, apiKeyId, expiresAtUnixMs);
     }
 
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     private static string ToMissingSubjectMessage(ScheduledServiceInvocationNyxIdCredentialRole role) =>
         role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
             ? "Service invocation scope owner NyxID subject is required."

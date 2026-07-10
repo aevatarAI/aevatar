@@ -1204,7 +1204,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
             true,
             new Dictionary<string, string>());
 
-<<<<<<< HEAD
     private static ScheduledDispatchConfiguration CreateServiceInvocationConfiguration(
         string scheduleId,
         ScheduledServiceInvocationAuth auth) =>
@@ -1236,7 +1235,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 Purpose = purpose,
                 OwnerScopeKey = ownerScopeKey,
             });
-=======
+
     private static ScheduledInvocationAgentKeyCredentialReference CreateScheduledInvocationAgentKeyReference(
         string purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey)
     {
@@ -1255,7 +1254,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "key-schedule",
             expiresAtUnixMs);
     }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {

@@ -87,15 +87,15 @@ public sealed record ScheduledServiceInvocationAuth
     {
     }
 
-<<<<<<< HEAD
     public ScheduledServiceInvocationAuth(ScheduledServiceInvocationDurableCredentialReference DurableCredentialReference)
         : this((ScheduledServiceInvocationCredentialSource)(DurableCredentialReference ??
                                                             throw new ArgumentNullException(nameof(DurableCredentialReference))))
-=======
+    {
+    }
+
     public ScheduledServiceInvocationAuth(ScheduledInvocationAgentKeyCredentialReference ScheduledInvocationAgentKey)
         : this((ScheduledServiceInvocationCredentialSource)(ScheduledInvocationAgentKey ??
                                                             throw new ArgumentNullException(nameof(ScheduledInvocationAgentKey))))
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
     }
 
@@ -107,13 +107,11 @@ public sealed record ScheduledServiceInvocationAuth
     public ScheduledServiceInvocationDurableCredentialReference? Durable =>
         Source as ScheduledServiceInvocationDurableCredentialReference;
 
-<<<<<<< HEAD
     public ScheduledServiceInvocationDurableCredentialReference? DurableCredentialReference =>
         Durable;
-=======
+
     public ScheduledInvocationAgentKeyCredentialReference? ScheduledInvocationAgentKey =>
         Source as ScheduledInvocationAgentKeyCredentialReference;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     public ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId =>
         NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRole.Sender ? NyxId : null;

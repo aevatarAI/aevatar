@@ -99,14 +99,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
             !string.IsNullOrWhiteSpace(exchange.Result.AccessToken));
 
-<<<<<<< HEAD
         var token = NormalizeNyxIdAccessToken(exchange.Result.AccessToken, exchange.Role);
-        var durableCallerCredential = dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential
-=======
-        var token = NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role));
         var durableCallerCredential = dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential &&
                                       exchange.Role != CredentialRole.ScheduledInvocationAgentKey
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             ? await StoreDurableCallerCredentialAsync(dispatch, exchange.Role, token, ct)
             : null;
 
@@ -192,7 +187,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         throw new InvalidOperationException("Scheduled service invocation credential source is not supported.");
     }
 
-<<<<<<< HEAD
     private async Task<ScheduledServiceInvocationCredentialExchangeResult> ResolveDurableCredentialReferenceAsync(
         ScheduledServiceInvocationDurableCredentialReference credential,
         CancellationToken ct)
@@ -232,7 +226,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
 
         return ScheduledServiceInvocationCredentialExchangeResult.Success(resolved.Secret);
-=======
+    }
+
     private async Task<ScheduledServiceInvocationCredentialExchangeResult> ResolveScheduledInvocationAgentKeyAsync(
         ScheduledInvocationAgentKeyCredentialReference source,
         CancellationToken ct)
@@ -316,7 +311,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 "scheduled-service-invocation-dispatch"),
             ct);
         return resolved.Resolved ? resolved.Secret : null;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     private static ServiceInvocationRequest EnrichChatPayload(
@@ -359,19 +353,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     SenderNyxIdAccessToken = null,
                 }
                 : existingControl with
-<<<<<<< HEAD
-            {
-                NyxIdAccessToken = credential.Role == CredentialRole.ScopeOwner
-                    ? token
-                    : existingControl.NyxIdAccessToken,
-                NyxIdOrgToken = credential.Role == CredentialRole.ScopeOwner
-                    ? token
-                    : existingControl.NyxIdOrgToken,
-                SenderNyxIdAccessToken = IsSenderCredential(credential.Role)
-                    ? token
-                    : existingControl.SenderNyxIdAccessToken,
-            };
-=======
                 {
                     NyxIdAccessToken = ownerCredential
                         ? token
@@ -379,11 +360,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     NyxIdOrgToken = ownerCredential
                         ? token
                         : existingControl.NyxIdOrgToken,
-                    SenderNyxIdAccessToken = credential.Role == CredentialRole.Sender
+                    SenderNyxIdAccessToken = IsSenderCredential(credential.Role)
                         ? token
                         : existingControl.SenderNyxIdAccessToken,
                 };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             chatRequest.LlmControl = control.ToPayload();
             if (projectWorkflowCallerCredential)
             {
@@ -441,11 +421,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         Sender,
         ScopeOwner,
-<<<<<<< HEAD
         DurableSender,
-=======
         ScheduledInvocationAgentKey,
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     private sealed record CredentialExchange(
@@ -466,7 +443,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationAuth? auth,
         CredentialRole role)
     {
-<<<<<<< HEAD
         if (role == CredentialRole.DurableSender &&
             auth?.Source is ScheduledServiceInvocationDurableCredentialReference durable &&
             !string.IsNullOrWhiteSpace(durable.CredentialId))
@@ -474,24 +450,19 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             return durable.CredentialId.Trim();
         }
 
-=======
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         var subject = role == CredentialRole.ScopeOwner
             ? auth?.ScopeOwnerNyxId?.OwnerSubject
             : auth?.SenderNyxId?.Subject;
         if (subject == null)
-<<<<<<< HEAD
-            return role == CredentialRole.ScopeOwner ? "scope-owner" : ToErrorSubject(role);
-=======
         {
             return role switch
             {
                 CredentialRole.ScopeOwner => "scope-owner",
                 CredentialRole.ScheduledInvocationAgentKey => "scheduled-invocation-agent-key",
+                CredentialRole.DurableSender => "durable",
                 _ => "sender",
             };
         }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         return string.Join(
             ":",
@@ -505,12 +476,12 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         string AccessToken,
         DurableCallerCredentialRef? DurableCallerCredential);
 
-<<<<<<< HEAD
     private static string ToErrorSubject(CredentialRole role) =>
         role switch
         {
             CredentialRole.ScopeOwner => "scope owner",
             CredentialRole.DurableSender => "durable",
+            CredentialRole.ScheduledInvocationAgentKey => "scheduled invocation agent key",
             _ => "sender",
         };
 
@@ -518,30 +489,29 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         role is CredentialRole.Sender or CredentialRole.DurableSender;
 
     private static string ToEmptyTokenError(CredentialRole role) =>
-        role == CredentialRole.DurableSender
-            ? "Scheduled service invocation durable credential reference resolved an empty access token."
-            : $"Scheduled service invocation {ToErrorSubject(role)} NyxID credential exchange returned an empty access token.";
+        role switch
+        {
+            CredentialRole.DurableSender =>
+                "Scheduled service invocation durable credential reference resolved an empty access token.",
+            CredentialRole.ScheduledInvocationAgentKey =>
+                "Scheduled invocation agent key resolved an empty access token.",
+            _ =>
+                $"Scheduled service invocation {ToErrorSubject(role)} NyxID credential exchange returned an empty access token.",
+        };
 
     private static string ToInvalidTokenError(CredentialRole role) =>
-        role == CredentialRole.DurableSender
-            ? "Scheduled service invocation durable credential reference resolved an invalid access token."
-            : $"Scheduled service invocation {ToErrorSubject(role)} NyxID credential exchange returned an invalid access token.";
+        role switch
+        {
+            CredentialRole.DurableSender =>
+                "Scheduled service invocation durable credential reference resolved an invalid access token.",
+            CredentialRole.ScheduledInvocationAgentKey =>
+                "Scheduled invocation agent key resolved an invalid access token.",
+            _ =>
+                $"Scheduled service invocation {ToErrorSubject(role)} NyxID credential exchange returned an invalid access token.",
+        };
 
-=======
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     private static CredentialRole ToCredentialRole(ScheduledServiceInvocationNyxIdCredentialRole role) =>
         role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
             ? CredentialRole.ScopeOwner
             : CredentialRole.Sender;
-<<<<<<< HEAD
-=======
-
-    private static string ToErrorSubject(CredentialRole role) =>
-        role switch
-        {
-            CredentialRole.ScopeOwner => "scope owner",
-            CredentialRole.ScheduledInvocationAgentKey => "scheduled invocation agent key",
-            _ => "sender",
-        };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 }

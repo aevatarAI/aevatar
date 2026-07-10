@@ -195,11 +195,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             NormalizeTarget(target),
             isCreate);
         Logger.LogInformation(
-<<<<<<< HEAD
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
-=======
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
             NormalizeRequired(scheduleId, nameof(scheduleId)),
             isCreate,
             configuredTarget.Kind,
@@ -207,11 +203,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             HasServiceInvocationAuth(configuredTarget),
             HasScopeOwnerNyxId(configuredTarget),
             HasSenderNyxId(configuredTarget),
-<<<<<<< HEAD
             HasDurableCredentialReference(configuredTarget),
-=======
             HasScheduledInvocationAgentKey(configuredTarget),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             HasLegacyDurableSenderBearerBlocked(configuredTarget));
         var configured = new ScheduledDispatchConfiguredEvent
         {
@@ -429,21 +422,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
             var stateTarget = State.Target;
             Logger.LogInformation(
-<<<<<<< HEAD
-                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
-=======
-                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
                 ResolveScheduleId(),
                 State.ScheduleKind,
                 HasServiceInvocationAuth(stateTarget),
                 HasScopeOwnerNyxId(stateTarget),
                 HasSenderNyxId(stateTarget),
-<<<<<<< HEAD
                 HasDurableCredentialReference(stateTarget),
-=======
                 HasScheduledInvocationAgentKey(stateTarget),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
                 HasLegacyDurableSenderBearerBlocked(stateTarget),
                 State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
             if (HasLegacyDurableSenderBearerBlocked(stateTarget))
@@ -1119,13 +1105,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         target?.ServiceInvocation?.Auth is { } auth &&
         ResolveNyxIdSource(auth)?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.Sender;
 
-<<<<<<< HEAD
     private static bool HasDurableCredentialReference(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth?.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.Durable;
-=======
+
     private static bool HasScheduledInvocationAgentKey(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth?.ScheduledInvocationAgentKey != null;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private static bool HasLegacyDurableSenderBearerBlocked(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth?.LegacyDurableSenderBearerBlocked == true ||
