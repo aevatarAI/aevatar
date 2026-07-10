@@ -359,7 +359,11 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
 
     private byte[]? TryGetMasterKey()
     {
+<<<<<<< HEAD
         if (!_protectionOptions.AllowMasterKeyResolution)
+=======
+        if (!_protectionOptions.UseLocalMasterKeySources)
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         {
             return null;
         }

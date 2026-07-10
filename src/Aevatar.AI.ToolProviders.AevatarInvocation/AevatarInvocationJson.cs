@@ -112,7 +112,6 @@ internal static class AevatarInvocationJson
                 reply_message_id = EmptyToNull(receipt.ReplyMessageId),
                 platform_message_id = EmptyToNull(receipt.PlatformMessageId),
                 registration_scope_id = EmptyToNull(receipt.RegistrationScopeId),
-                durable_reply_credential_ref = EmptyToNull(receipt.DurableReplyCredentialRef),
             };
 
     private static object? TryParseJson(string value)

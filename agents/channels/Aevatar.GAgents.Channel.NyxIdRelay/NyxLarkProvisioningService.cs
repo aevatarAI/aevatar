@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 
@@ -22,7 +23,7 @@ public sealed record NyxLarkProvisioningResult(
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
     string? NyxConversationRouteId = null,
-    string? NyxReplyCredentialRef = null,
+    bool WorkflowResultDeliveryEnabled = false,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
@@ -51,7 +52,7 @@ public sealed record NyxChannelBotProvisioningResult(
     string? NyxChannelBotId = null,
     string? NyxAgentApiKeyId = null,
     string? NyxConversationRouteId = null,
-    string? NyxReplyCredentialRef = null,
+    bool WorkflowResultDeliveryEnabled = false,
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
@@ -84,17 +85,20 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     private readonly NyxIdApiClient _nyxClient;
     private readonly NyxIdToolOptions _nyxOptions;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
+    private readonly ISecretVault _secretVault;
     private readonly ILogger<NyxLarkProvisioningService> _logger;
 
     public NyxLarkProvisioningService(
         NyxIdApiClient nyxClient,
         NyxIdToolOptions nyxOptions,
         ChannelRegistrationCommandFacade commandFacade,
+        ISecretVault secretVault,
         ILogger<NyxLarkProvisioningService> logger)
     {
         _nyxClient = nyxClient ?? throw new ArgumentNullException(nameof(nyxClient));
         _nyxOptions = nyxOptions ?? throw new ArgumentNullException(nameof(nyxOptions));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
+        _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -135,20 +139,25 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string? apiKeyId = null;
         string? channelBotId = null;
         string? routeId = null;
-        // No relay api-key secret is persisted (see below); the local mirror's reply-credential ref
-        // is always empty. Kept as a field on the command/result for proto compatibility only.
-        var replyCredentialRef = string.Empty;
+        SecretReference? workflowResultDeliveryCredential = null;
         var localMirrorAccepted = false;
 
         try
         {
             var relayApiKeyResponse = await CreateRelayApiKeyAsync(request.AccessToken, relayCallbackUrl, registrationId, ct);
             apiKeyId = NyxApiResponseHelper.ExtractRequiredApiKeyId(relayApiKeyResponse);
-            // aevatar does NOT persist the relay api-key secret. The relay reply path authenticates via
-            // the NyxID-issued reply token / api-lark-bot proxy, never a locally-stored full_key, and the
-            // mainnet host's secrets store is read-only — persisting it here was the original registration
-            // 502. NyxTelegramProvisioningService never persisted it either; the local mirror's
-            // NyxReplyCredentialRef is left empty (it is not used by the live relay reply path).
+            // The one-time NyxID full_key goes ONLY into the distributed secret vault; the local
+            // mirror persists just the typed SecretReference handle. The interactive relay reply
+            // path keeps authenticating via NyxID-issued reply tokens; the vault handle exists so
+            // WorkflowRunDeliveryGAgent can deliver workflow terminal results in the background.
+            // The mainnet host's IAevatarSecretsStore stays read-only and untouched (its write was
+            // the original registration 502).
+            workflowResultDeliveryCredential = await StoreWorkflowResultDeliveryCredentialAsync(
+                relayApiKeyResponse,
+                request.ScopeId.Trim(),
+                apiKeyId,
+                registrationId,
+                ct);
 
             // Re-bind support: a fresh bot creates cleanly on the first try. But re-registering the
             // SAME Lark app hits NyxID's 409 already-exists (a stale channel-bot from the prior
@@ -206,7 +215,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 apiKeyId,
                 channelBotId,
                 routeId,
-                replyCredentialRef,
+                workflowResultDeliveryCredential,
                 ct);
             localMirrorAccepted = true;
 
@@ -217,7 +226,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 NyxChannelBotId: channelBotId,
                 NyxAgentApiKeyId: apiKeyId,
                 NyxConversationRouteId: routeId,
-                NyxReplyCredentialRef: replyCredentialRef,
+                WorkflowResultDeliveryEnabled: workflowResultDeliveryCredential is not null,
                 RelayCallbackUrl: relayCallbackUrl,
                 WebhookUrl: webhookUrl,
                 Note: "Provisioning completed in Nyx and the local mirror command was accepted. Configure the Lark developer console webhook URL to point at Nyx; local read model visibility is asynchronous.");
@@ -236,12 +245,91 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, ct), "channel_route", routeId, _logger);
             if (!localMirrorAccepted && channelBotId is not null)
                 await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId, _logger);
+            if (!localMirrorAccepted && workflowResultDeliveryCredential is not null && apiKeyId is not null)
+                await TryRevokeWorkflowResultDeliveryCredentialAsync(workflowResultDeliveryCredential, apiKeyId, registrationId);
             if (!localMirrorAccepted && apiKeyId is not null)
                 await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId, _logger);
 
             return Failure(localMirrorAccepted
                 ? "local_mirror_accepted_remote_cleanup_skipped"
                 : NyxApiResponseHelper.SanitizeFailureReason(ex));
+        }
+    }
+
+    /// <summary>
+    /// Captures the one-time NyxID <c>full_key</c> from the create-api-key response into the
+    /// distributed secret vault and returns the typed handle the registration persists. The raw
+    /// key never enters Protobuf state, events, read models, results, or logs. Degrades to
+    /// <c>null</c> (bot provisioned without workflow result delivery; workflow starts fail
+    /// closed) when the response carries no full_key or the vault write fails — chat relay
+    /// replies do not depend on this credential.
+    /// </summary>
+    private async Task<SecretReference?> StoreWorkflowResultDeliveryCredentialAsync(
+        string relayApiKeyResponse,
+        string scopeId,
+        string apiKeyId,
+        string registrationId,
+        CancellationToken ct)
+    {
+        var fullKey = NyxApiResponseHelper.ExtractOptionalApiKeyFullKey(relayApiKeyResponse);
+        if (fullKey is null)
+        {
+            _logger.LogWarning(
+                "NyxID create-api-key response carried no full_key; Lark bot is provisioned without workflow result delivery: reason=credential_material_unavailable registration={RegistrationId}",
+                registrationId);
+            return null;
+        }
+
+        try
+        {
+            var stored = await _secretVault.PutAsync(
+                new StoreSecretRequest(
+                    CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    scopeId,
+                    apiKeyId,
+                    fullKey,
+                    $"lark-channel-bot-provisioning:{registrationId}"),
+                ct);
+            return stored.Reference;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Secret vault write for the workflow result delivery agent key failed; Lark bot is provisioned without workflow result delivery: reason=credential_vault_put_failed registration={RegistrationId}",
+                registrationId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort vault compensation when provisioning fails after the vault write. The Garnet
+    /// vault's revoke lands with the CAS revoke/rotate infrastructure (#2689); until then a
+    /// failed revoke only orphans an inert record, because the NyxID api key itself is deleted
+    /// in the same rollback chain.
+    /// </summary>
+    private async Task TryRevokeWorkflowResultDeliveryCredentialAsync(
+        SecretReference credential,
+        string apiKeyId,
+        string registrationId)
+    {
+        try
+        {
+            await _secretVault.RevokeAsync(
+                new RevokeSecretRequest(
+                    credential.Ref,
+                    credential.Purpose,
+                    credential.OwnerScopeKey,
+                    apiKeyId,
+                    $"lark-channel-bot-provisioning-rollback:{registrationId}"),
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Secret vault revoke for the workflow result delivery agent key failed during provisioning rollback: reason=credential_vault_revoke_failed registration={RegistrationId}",
+                registrationId);
         }
     }
 
@@ -445,7 +533,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string apiKeyId,
         string channelBotId,
         string routeId,
-        string replyCredentialRef,
+        SecretReference? workflowResultDeliveryCredential,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -457,20 +545,14 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             Platform = "lark",
             NyxProviderSlug = nyxProviderSlug,
             ScopeId = scopeId,
-            WebhookUrl = webhookUrl,
             NyxAgentApiKeyId = apiKeyId,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
-            NyxReplyCredentialRef = replyCredentialRef,
+            WebhookUrl = webhookUrl,
+            WorkflowResultDeliveryCredential = workflowResultDeliveryCredential?.Clone(),
         };
 
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
-    }
-
-    private static string? NormalizeOptional(string? value)
-    {
-        var normalized = value?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static NyxLarkProvisioningResult Failure(string error) =>
@@ -488,7 +570,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             NyxChannelBotId: result.NyxChannelBotId,
             NyxAgentApiKeyId: result.NyxAgentApiKeyId,
             NyxConversationRouteId: result.NyxConversationRouteId,
-            NyxReplyCredentialRef: result.NyxReplyCredentialRef,
+            WorkflowResultDeliveryEnabled: result.WorkflowResultDeliveryEnabled,
             RelayCallbackUrl: result.RelayCallbackUrl,
             WebhookUrl: result.WebhookUrl,
             Error: result.Error,
