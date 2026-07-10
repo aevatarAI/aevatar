@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -393,6 +395,82 @@ public sealed class ScheduledDispatchServiceInvocationTests
         originalChat.Metadata.Should().Contain("trace", "kept");
         originalChat.Metadata.Should().NotContainKey("schedule");
         originalChat.Metadata.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithScheduledInvocationAgentKey_ShouldResolveAndInjectOwnerTokens()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new InMemorySecretVault();
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(7);
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-key",
+            "key-schedule",
+            "agent-key-token",
+            "test scheduled invocation",
+            expiresAt));
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
+        var auth = new ScheduledServiceInvocationAuth(
+            ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
+                stored.Reference,
+                "key-schedule",
+                expiresAt.ToUnixTimeMilliseconds()));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+
+        credentialExchange.Sources.Should().BeEmpty();
+        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
+        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("agent-key-token");
+        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("agent-key-token");
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithExpiredScheduledInvocationAgentKey_ShouldFailBeforeResolve()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-key",
+            "key-schedule",
+            "agent-key-token",
+            "test scheduled invocation",
+            DateTimeOffset.UtcNow.AddDays(7)));
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
+        var auth = new ScheduledServiceInvocationAuth(
+            ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
+                stored.Reference,
+                "key-schedule",
+                DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds()));
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Scheduled invocation agent key is expired.");
+        credentialExchange.Sources.Should().BeEmpty();
+        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
+        invocationPort.Requests.Should().BeEmpty();
     }
 
     [Fact]

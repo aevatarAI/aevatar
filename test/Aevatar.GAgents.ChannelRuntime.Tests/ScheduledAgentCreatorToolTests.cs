@@ -636,14 +636,8 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenRequiredServicesSpanOwners_ShouldMintPersonalAllowAllKey()
+    public async Task ExecuteAsync_WhenRequiredServicesSpanOwners_ShouldFailClosed()
     {
-        // Mixed ownership (org-shared api-lark-bot + personal services) cannot be expressed as a
-        // single *restricted* key, since NyxID validates every allowed_service_id against one owner
-        // (the HTTP 400 behind the 2026-06-15 Lark incident). Mint a personal allow-all key instead:
-        // NyxID resolves each call personal-first then falls back to the caller's org memberships,
-        // so one key reaches services across both owners without listing the org id under a personal
-        // owner. The tight allowlist and target_org_id are therefore omitted.
         var handler = CreateSuccessHandler(serviceListJson: """
             {
               "keys": [
@@ -660,14 +654,9 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-
-            var createRequest = handler.Requests.Single(request =>
+            document.RootElement.GetProperty("error").GetString().Should().Be("required_services_cross_owner");
+            handler.Requests.Should().NotContain(request =>
                 request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
-            using var createBody = JsonDocument.Parse(createRequest.Body!);
-            createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeTrue();
-            createBody.RootElement.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
-            createBody.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
         });
     }
 
@@ -796,7 +785,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.OutboundConfig.NyxApiKey.Should().BeEmpty();
             captured.OutboundConfig.ApiKeyId.Should().Be("key-created");
             captured.OutboundConfig.NyxApiKeyReference.Should().NotBeNull();
-            captured.OutboundConfig.NyxApiKeyReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+            captured.OutboundConfig.NyxApiKeyReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+            captured.OutboundConfig.NyxApiKeyReference.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             captured.OutboundConfig.NyxApiKeyReference.OwnerScopeKey.Should().NotBeNullOrWhiteSpace();
             captured.OutboundConfig.NyxApiKeyReference.Ref.Should().NotBe("full-secret-key");
             captured.OutboundConfig.NyxProviderSlug.Should().Be("api-lark-bot");
@@ -814,7 +804,9 @@ public sealed class ScheduledAgentCreatorToolTests
             var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
-            createBody.RootElement.GetProperty("scopes").GetString().Should().Be("read write proxy");
+            createBody.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+            createBody.RootElement.GetProperty("scopes").GetString().Should().Be("read proxy");
+            createBody.RootElement.GetProperty("expires_at").GetString().Should().NotBeNullOrWhiteSpace();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
             // Personal-owned services: target_org_id is omitted so the request stays byte-identical
@@ -831,7 +823,7 @@ public sealed class ScheduledAgentCreatorToolTests
 
             var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
                 captured.OutboundConfig.NyxApiKeyReference.Ref,
-                CredentialSecretPurposes.ScheduledNyxApiKey,
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
                 captured.OutboundConfig.NyxApiKeyReference.OwnerScopeKey,
                 "key-created",
                 "scheduled-agent-creator-test"));

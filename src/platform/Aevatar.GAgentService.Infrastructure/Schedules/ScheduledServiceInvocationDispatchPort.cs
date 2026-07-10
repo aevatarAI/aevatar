@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -16,16 +17,21 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
+    private readonly IScheduledInvocationAgentKeyResolvePort? _scheduledInvocationAgentKeyResolvePort;
     private readonly ILogger<ScheduledServiceInvocationDispatchPort> _logger;
 
     public ScheduledServiceInvocationDispatchPort(
         IServiceInvocationPort serviceInvocationPort,
         IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
+        ISecretVault? secretVault = null,
         ILogger<ScheduledServiceInvocationDispatchPort>? logger = null)
     {
         _serviceInvocationPort = serviceInvocationPort ?? throw new ArgumentNullException(nameof(serviceInvocationPort));
         _credentialExchangePort = credentialExchangePort
             ?? throw new ArgumentNullException(nameof(credentialExchangePort));
+        _scheduledInvocationAgentKeyResolvePort = secretVault == null
+            ? null
+            : new SecretVaultScheduledInvocationAgentKeyResolvePort(secretVault);
         _logger = logger ?? NullLogger<ScheduledServiceInvocationDispatchPort>.Instance;
     }
 
@@ -118,6 +124,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         if (dispatch.Auth == null)
             return null;
+        if (dispatch.Auth.ScheduledInvocationAgentKey != null)
+        {
+            var result = await ResolveScheduledInvocationAgentKeyAsync(
+                dispatch.Auth.ScheduledInvocationAgentKey,
+                ct);
+            return new CredentialExchange(CredentialRole.ScheduledInvocationAgentKey, result);
+        }
         if (dispatch.Auth.ScopeOwnerNyxId != null)
         {
             var result = await ExchangeScopeOwnerNyxIdAsync(
@@ -145,6 +158,52 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationNyxIdCredentialSource source,
         CancellationToken ct) =>
         await _credentialExchangePort.IssueSenderNyxIdAsync(source, ct);
+
+    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ResolveScheduledInvocationAgentKeyAsync(
+        ScheduledInvocationAgentKeyCredentialReference source,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ct.ThrowIfCancellationRequested();
+
+        if (_scheduledInvocationAgentKeyResolvePort == null)
+        {
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "Scheduled invocation agent key resolver is not configured.");
+        }
+
+        var reference = source.SecretReference;
+        var expiresAtUnixMs = source.KeyExpiresAtUnixMs > 0
+            ? source.KeyExpiresAtUnixMs
+            : reference.ExpiresAtUnixMs;
+        if (expiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+        {
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "Scheduled invocation agent key is expired.");
+        }
+
+        try
+        {
+            var resolved = await _scheduledInvocationAgentKeyResolvePort.ResolveAsync(source, ct);
+            if (!resolved.Succeeded || string.IsNullOrWhiteSpace(resolved.AccessToken))
+            {
+                return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                    resolved.Error ?? "Scheduled invocation agent key could not be resolved.");
+            }
+
+            return ScheduledServiceInvocationCredentialExchangeResult.Success(resolved.AccessToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Scheduled invocation agent key resolve failed.");
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "Scheduled invocation agent key resolve failed.");
+        }
+    }
 
     private static ServiceInvocationRequest EnrichChatPayload(
         ServiceInvocationRequest request,
@@ -174,12 +233,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         {
             var token = credential.AccessToken;
             var existingControl = LLMControlContextMapper.FromPayload(chatRequest.LlmControl);
+            var ownerCredential = credential.Role is CredentialRole.ScopeOwner or CredentialRole.ScheduledInvocationAgentKey;
             var control = existingControl with
             {
-                NyxIdAccessToken = credential.Role == CredentialRole.ScopeOwner
+                NyxIdAccessToken = ownerCredential
                     ? token
                     : existingControl.NyxIdAccessToken,
-                NyxIdOrgToken = credential.Role == CredentialRole.ScopeOwner
+                NyxIdOrgToken = ownerCredential
                     ? token
                     : existingControl.NyxIdOrgToken,
                 SenderNyxIdAccessToken = credential.Role == CredentialRole.Sender
@@ -187,8 +247,11 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     : existingControl.SenderNyxIdAccessToken,
             };
             chatRequest.LlmControl = control.ToPayload();
-            if (projectNyxIdAccessTokenToWorkflowCallerCredential)
+            if (projectNyxIdAccessTokenToWorkflowCallerCredential &&
+                credential.Role != CredentialRole.ScheduledInvocationAgentKey)
+            {
                 chatRequest.ConnectorHttpAuthorization = $"Bearer {token}";
+            }
         }
 
         cloned.Payload = Any.Pack(chatRequest);
@@ -240,6 +303,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         Sender,
         ScopeOwner,
+        ScheduledInvocationAgentKey,
     }
 
     private sealed record CredentialExchange(
@@ -249,5 +313,72 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private sealed record ExchangedCredential(CredentialRole Role, string AccessToken);
 
     private static string ToErrorSubject(CredentialRole role) =>
-        role == CredentialRole.ScopeOwner ? "scope owner" : "sender";
+        role switch
+        {
+            CredentialRole.ScopeOwner => "scope owner",
+            CredentialRole.ScheduledInvocationAgentKey => "scheduled invocation agent key",
+            _ => "sender",
+        };
+
+    private sealed class SecretVaultScheduledInvocationAgentKeyResolvePort : IScheduledInvocationAgentKeyResolvePort
+    {
+        private readonly ISecretVault _secretVault;
+
+        public SecretVaultScheduledInvocationAgentKeyResolvePort(ISecretVault secretVault)
+        {
+            _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
+        }
+
+        public async Task<ScheduledInvocationAgentKeyResolveResult> ResolveAsync(
+            ScheduledInvocationAgentKeyCredentialReference source,
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+
+            var reference = source.SecretReference;
+            if (string.IsNullOrWhiteSpace(reference.Ref))
+            {
+                return ScheduledInvocationAgentKeyResolveResult.Failure(
+                    "Scheduled invocation agent key secret reference is missing.");
+            }
+
+            if (!string.Equals(
+                    reference.Purpose,
+                    CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    StringComparison.Ordinal))
+            {
+                return ScheduledInvocationAgentKeyResolveResult.Failure(
+                    "Scheduled invocation agent key secret reference purpose is invalid.");
+            }
+
+            var apiKeyId = source.ApiKeyId?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(apiKeyId))
+            {
+                return ScheduledInvocationAgentKeyResolveResult.Failure(
+                    "Scheduled invocation agent key id is missing.");
+            }
+
+            var ownerScopeKey = reference.OwnerScopeKey?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(ownerScopeKey))
+            {
+                return ScheduledInvocationAgentKeyResolveResult.Failure(
+                    "Scheduled invocation agent key owner scope is missing.");
+            }
+
+            var resolved = await _secretVault.ResolveAsync(new ResolveSecretRequest(
+                    reference.Ref,
+                    CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    ownerScopeKey,
+                    apiKeyId,
+                    "scheduled-service-invocation-dispatch"),
+                ct);
+            if (!resolved.Resolved || string.IsNullOrWhiteSpace(resolved.Secret))
+            {
+                return ScheduledInvocationAgentKeyResolveResult.Failure(
+                    "Scheduled invocation agent key could not be resolved.");
+            }
+
+            return ScheduledInvocationAgentKeyResolveResult.Success(resolved.Secret);
+        }
+    }
 }

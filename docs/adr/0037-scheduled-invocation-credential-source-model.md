@@ -42,7 +42,7 @@ owner: eanzhao
 5. **create/update 期只做无副作用 validation**：不再用「真 mint」做预检；改用 binding 存在性（已有的 read-only `bindingQueryPort.ResolveAsync`）+ scope 归属判断；fire/run-now 才签发短 token（具体 introspection 机制见 Open Questions，受限于 NyxID 既有 surface）。
 6. **删除 legacy header/metadata auth 残留**：清理已无活写入路径的防御 strip 代码（保留 proto `reserved`）。
 
-`oneof` 草图见 Required Contract。无 opt-in 不变量：收敛后默认凭证语义对既有 schedule 保持等价（迁移期 reducer 双读旧格式）。
+`oneof` 草图见 Required Contract。无 opt-in 不变量：收敛后默认凭证语义对既有 schedule 保持等价（迁移期 reducer 双读旧格式），但历史 raw bearer 状态只允许 fail-closed，不允许继续成功调用。
 
 ## Locked Rules
 
@@ -53,14 +53,14 @@ owner: eanzhao
 5. **create 无副作用**：create/update 不得通过实际签发 access token 来做校验。
 6. **durable internal-only**：通用 HTTP `/api/schedules` 不接受 durable reference；只有 trusted provisioning 路径可写。
 7. **owner 不可伪造**：`SCOPE_OWNER` role 的 subject 只能来自认证 principal 的 claim，调用方不能在 body 指定（HTTP 现状已如此，下沉后 internal 入口也须遵守）。
-8. **wire-safe 迁移**：旧 tag `reserved`，新增统一字段；reducer 迁移期能读旧 3 字段格式（旧 schedule 不破，下次 update 迁移），不要求一次性回填。
+8. **wire-safe 迁移**：raw bearer 成功路径必须删除，但旧 wire tag 不能在缺少迁移证明前提前 `reserved`。当前过渡期保留 `durable_sender_bearer_token = 2` 与 `legacy_durable_sender_bearer_blocked = 4` 作为只读 fail-closed 哨兵；读取到旧 raw 状态必须拒绝调度/dispatch，不得解释为 no-auth。只有 #2405 / ADR cutover 完成，并拿到 live-state 或迁移证明后，才允许改为 `reserved 2, 4; reserved "durable_sender_bearer_token", "legacy_durable_sender_bearer_blocked";`。
 9. **legacy 删除优先**：无活路径的 legacy auth 代码直接删（FI-007），不留兼容空壳。
 10. **读侧诚实**：凭证来源可经 readmodel 暴露（不含 secret）；durable id 与 raw token 都不得投影（沿用现有 `ProjectAsync_ShouldNotProjectDurableSenderBearerToken` 的安全立场）。
 
 ## Required Contract（proto 收敛，wire-safe 演进）
 
 ```proto
-// scheduled_dispatch_state.proto — 收敛后
+// scheduled_dispatch_state.proto — 目标收敛后
 message ScheduledServiceInvocationAuthState {
   reserved 1, 2, 3;                 // 旧 sender_nyx_id / durable_sender_bearer_token / scope_owner_nyx_id
   reserved "sender_nyx_id", "durable_sender_bearer_token", "scope_owner_nyx_id";
@@ -87,6 +87,8 @@ message DurableCredentialReferenceState {
   string credential_id = 1;   // NyxID agent key handle；fire 时由 id 换短 token
 }
 ```
+
+过渡期若仍需保留旧 durable wire 读取能力，`durable_sender_bearer_token = 2` 与 `legacy_durable_sender_bearer_blocked = 4` 必须继续作为 fail-closed 迁移面存在；新的 scheduled invocation agent key 引用应使用新 tag（例如 `scheduled_invocation_agent_key = 5`），其 raw key material 只能通过 vault purpose `scheduled.invocation-agent-key` 存取，state/readmodel/log/API response 只保留 typed reference 与过期时间。
 
 应用层 record `ScheduledServiceInvocationAuth`（`ScheduledDispatchModels.cs:46-49`）同步收敛为 `oneof`-等价的判别联合；credential exchange port 收敛为单一 `IssueAsync(NyxIdCredentialSource source, ...)`（role 内含），删除 `IssueScopeOwnerNyxIdAsync` 与其被丢弃的 `serviceIdentity` 参数。
 

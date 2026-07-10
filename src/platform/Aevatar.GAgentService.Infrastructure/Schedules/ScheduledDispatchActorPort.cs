@@ -295,8 +295,17 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 nameof(auth));
         }
 
-        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null)
+        if (auth.SenderNyxId == null &&
+            auth.ScopeOwnerNyxId == null &&
+            auth.ScheduledInvocationAgentKey == null)
             return null;
+
+        if (Convert.ToInt32(auth.SenderNyxId != null) +
+            Convert.ToInt32(auth.ScopeOwnerNyxId != null) +
+            Convert.ToInt32(auth.ScheduledInvocationAgentKey != null) != 1)
+        {
+            throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth));
+        }
 
         var state = new ScheduledServiceInvocationAuthState();
 
@@ -315,6 +324,16 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             {
                 Scope = auth.ScopeOwnerNyxId.Scope,
                 OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
+            };
+        }
+
+        if (auth.ScheduledInvocationAgentKey != null)
+        {
+            state.ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+            {
+                SecretReference = auth.ScheduledInvocationAgentKey.SecretReference.Clone(),
+                ApiKeyId = auth.ScheduledInvocationAgentKey.ApiKeyId,
+                KeyExpiresAtUnixMs = auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs,
             };
         }
 

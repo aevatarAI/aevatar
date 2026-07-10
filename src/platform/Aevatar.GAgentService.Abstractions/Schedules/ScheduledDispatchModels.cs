@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules;
@@ -43,10 +44,16 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
     string Scope,
     ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
 
+public sealed record ScheduledInvocationAgentKeyCredentialReference(
+    SecretReference SecretReference,
+    string ApiKeyId,
+    long KeyExpiresAtUnixMs);
+
 public sealed record ScheduledServiceInvocationAuth(
     ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
     string? DurableSenderBearerToken = null,
-    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
+    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null,
+    ScheduledInvocationAgentKeyCredentialReference? ScheduledInvocationAgentKey = null);
 
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,
@@ -57,6 +64,18 @@ public sealed record ScheduledServiceInvocationCredentialExchangeResult(
         new(true, accessToken, null);
 
     public static ScheduledServiceInvocationCredentialExchangeResult Failure(string error) =>
+        new(false, null, error);
+}
+
+public sealed record ScheduledInvocationAgentKeyResolveResult(
+    bool Succeeded,
+    string? AccessToken = null,
+    string? Error = null)
+{
+    public static ScheduledInvocationAgentKeyResolveResult Success(string accessToken) =>
+        new(true, accessToken, null);
+
+    public static ScheduledInvocationAgentKeyResolveResult Failure(string error) =>
         new(false, null, error);
 }
 
@@ -256,6 +275,13 @@ public interface IScheduledServiceInvocationCredentialExchangePort
     Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
         ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
         ServiceIdentity serviceIdentity,
+        CancellationToken ct = default);
+}
+
+public interface IScheduledInvocationAgentKeyResolvePort
+{
+    Task<ScheduledInvocationAgentKeyResolveResult> ResolveAsync(
+        ScheduledInvocationAgentKeyCredentialReference source,
         CancellationToken ct = default);
 }
 
