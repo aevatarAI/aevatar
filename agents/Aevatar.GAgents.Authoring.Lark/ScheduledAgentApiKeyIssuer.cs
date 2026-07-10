@@ -58,29 +58,29 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         if (resolution.Error is not null)
             return ScheduledAgentApiKeyIssueResult.Failed(resolution.Error, resolution.Detail, resolution.Hint);
 
+        if (!TryResolveKeyExpiresAt(out var keyExpiresAtUtc, out var expiryError))
+            return ScheduledAgentApiKeyIssueResult.Failed(expiryError);
+
         var response = await client.CreateApiKeyAsync(
             token,
             JsonSerializer.Serialize(new
             {
                 name = $"aevatar-scheduled-agent-{agentId}",
-                scopes = "read write proxy",
+                scopes = "read proxy",
                 platform = "generic",
-                // Single-owner runs keep a tight allowlist (least privilege). Mixed-owner runs mint a
-                // personal allow-all key instead, because NyxID rejects an org service id in a
-                // personal key's allowed_service_ids (the HTTP 400 behind the 2026-06-15 Lark
-                // incident); the allowlist is then omitted and each service is resolved per request.
-                allow_all_services = resolution.AllowAllServices,
-                allow_all_nodes = true,
-                allowed_service_ids = resolution.AllowAllServices ? (IReadOnlyList<string>?)null : resolution.ServiceIds,
+                allow_all_services = false,
+                allow_all_nodes = false,
+                allowed_service_ids = resolution.ServiceIds,
                 // When every required service is shared through one organization, the scoped key
                 // must be created under that org (its user_id) so NyxID's per-owner allowed_service_id
-                // check passes. Null for all-personal and mixed-owner (personal allow-all) runs, and
-                // omitted from the payload by CreateKeyJsonOptions.
+                // check passes. Null for all-personal runs, and omitted from the payload by
+                // CreateKeyJsonOptions.
                 target_org_id = resolution.TargetOrgId,
+                expires_at = keyExpiresAtUtc.ToString("O"),
             }, CreateKeyJsonOptions),
             ct);
 
-        var issuedKey = ExtractIssuedKey(response);
+        var issuedKey = ExtractIssuedKey(response, keyExpiresAtUtc.ToUnixTimeMilliseconds());
         if (!issuedKey.Success)
             return issuedKey;
 
@@ -384,13 +384,8 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             return ScheduledAgentServiceResolution.Failed("required_service_ids_empty");
 
         // A NyxID API key has a single owner and every allowed_service_id is validated against it.
-        // When the required services span owners (e.g. personal ornn-api/api-github/chrono-llm plus an
-        // org-shared api-lark-bot), no single *restricted* key can list them all. Rather than failing,
-        // mint a personal-owned key with allow_all_services=true: NyxID resolves each call personal-
-        // first then falls back to the caller's org memberships, so the key reaches every service the
-        // caller can. This only holds if the caller can actually proxy each one — an org service the
-        // caller merely views (allowed=false) would 403 on every run, so refuse up front instead of
-        // minting a doomed key.
+        // Scheduled invocation keys must stay least-privilege, so cross-owner service sets fail
+        // closed instead of falling back to allow_all_services.
         if (distinctOwners.Count > 1)
         {
             var unreachable = ownerBySlug
@@ -405,12 +400,15 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
                     "Ask an organization admin to grant you member (not viewer) access to these services, then recreate the scheduled agent.");
             }
 
-            return ScheduledAgentServiceResolution.AllowAll(resolvedIds);
+            return ScheduledAgentServiceResolution.Failed(
+                "required_services_cross_owner",
+                "The scheduled agent requires services owned by different NyxID owners, which cannot be represented as one least-privilege agent key.",
+                "Move the required services under one owner or create separate scheduled agents.");
         }
 
         // Single owner: keep the tight allowlist (least privilege). Null target_org_id for all-personal
         // services; the org's user_id when every service is shared through one org.
-        return new ScheduledAgentServiceResolution(resolvedIds, distinctOwners.Values.Single().OrgId, false, null);
+        return new ScheduledAgentServiceResolution(resolvedIds, distinctOwners.Values.Single().OrgId, null);
     }
 
     private static ServiceOwner ReadServiceOwner(JsonElement item)
@@ -434,7 +432,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         return ServiceOwner.ForOrg(orgId, ReadString(source, "org_name"), reachable);
     }
 
-    private static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(string response)
+    private static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(string response, long keyExpiresAtUnixMs)
     {
         // NyxID's 400 reason (e.g. "UserService '<id>' not found or not owned by user") is carried
         // in the adapter error envelope's status/body. Surface it instead of collapsing every
@@ -465,7 +463,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             if (string.IsNullOrWhiteSpace(fullKey))
                 return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_full_key");
 
-            return ScheduledAgentApiKeyIssueResult.Succeeded(id.Trim(), fullKey.Trim());
+            return ScheduledAgentApiKeyIssueResult.Succeeded(id.Trim(), fullKey.Trim(), keyExpiresAtUnixMs);
         }
         catch (JsonException)
         {
@@ -569,24 +567,29 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
     private string GetOrnnServiceSlug() =>
         Normalize(_options.OrnnServiceSlug) ?? ScheduledAgentCreatorOptions.DefaultOrnnServiceSlug;
 
+    private bool TryResolveKeyExpiresAt(out DateTimeOffset expiresAtUtc, out string error)
+    {
+        expiresAtUtc = default;
+        error = string.Empty;
+        if (_options.ApiKeyLifetimeDays <= 0)
+        {
+            error = "api_key_lifetime_invalid";
+            return false;
+        }
+
+        expiresAtUtc = DateTimeOffset.UtcNow.AddDays(_options.ApiKeyLifetimeDays);
+        return true;
+    }
+
     private sealed record ScheduledAgentServiceResolution(
         IReadOnlyList<string> ServiceIds,
         string? TargetOrgId,
-        bool AllowAllServices,
         string? Error,
         string? Detail = null,
         string? Hint = null)
     {
         public static ScheduledAgentServiceResolution Failed(string error, string? detail = null, string? hint = null) =>
-            new([], null, false, error, detail, hint);
-
-        // Mixed-owner case: a single restricted key cannot list services across owners (NyxID
-        // validates every allowed_service_id against the key's one owner). A personal-owned key with
-        // allow_all_services=true instead reaches every service the caller can — personal directly,
-        // org-shared via membership fallback — resolved per request by NyxID, so no allowlist or
-        // target_org_id is sent.
-        public static ScheduledAgentServiceResolution AllowAll(IReadOnlyList<string> serviceIds) =>
-            new(serviceIds, null, true, null);
+            new([], null, error, detail, hint);
     }
 
     private sealed record ResolvedService(string Id, ServiceOwner Owner);

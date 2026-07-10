@@ -16,7 +16,8 @@ public sealed record StoreSecretRequest(
     string OwnerScopeKey,
     string SubjectId,
     string Secret,
-    string AuditReason);
+    string AuditReason,
+    DateTimeOffset? ExpiresAt = null);
 
 public sealed record StoreSecretResult(SecretReference Reference);
 

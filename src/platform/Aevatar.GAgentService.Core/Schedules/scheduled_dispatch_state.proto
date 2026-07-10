@@ -5,6 +5,7 @@ option csharp_namespace = "Aevatar.GAgentService.Core.Schedules";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/any.proto";
 import "agent_messages.proto";
+import "Credentials/credential_secret_references.proto";
 import "service_endpoint.proto";
 
 message ScheduledDispatchState
@@ -108,7 +109,15 @@ message ScheduledServiceInvocationAuthState
   oneof source {
     ScheduledServiceInvocationNyxIdCredentialSourceState nyx_id = 5;
     ScheduledServiceInvocationDurableCredentialReferenceState durable = 6;
+    ScheduledInvocationAgentKeyCredentialReferenceState scheduled_invocation_agent_key = 7;
   }
+}
+
+message ScheduledInvocationAgentKeyCredentialReferenceState
+{
+  aevatar.credentials.SecretReference secret_reference = 1;
+  string api_key_id = 2;
+  int64 key_expires_at_unix_ms = 3;
 }
 
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState

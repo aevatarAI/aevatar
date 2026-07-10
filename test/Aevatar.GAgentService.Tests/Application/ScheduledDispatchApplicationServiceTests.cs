@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Schedules;
@@ -153,6 +154,68 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var created = actorPort.Created.Should().ContainSingle().Which;
         created.Configuration.Target.ServiceInvocation!.Auth!.Durable!.CredentialId.Should().Be("durable-run-key");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldAcceptScheduledInvocationAgentKeyReference()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+        var reference = CreateScheduledInvocationAgentKeyReference();
+
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-agent-key-auth",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        var auth = actorPort.Created.Should().ContainSingle().Which.Configuration.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey!.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectScheduledInvocationAgentKeyReferenceWithWrongPurpose()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+        var reference = CreateScheduledInvocationAgentKeyReference(CredentialSecretPurposes.ScheduledNyxApiKey);
+
+        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-agent-key-auth",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*scheduled.invocation-agent-key*");
+        actorPort.Created.Should().BeEmpty();
     }
 
     [Fact]
@@ -606,6 +669,42 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldPersistScheduledInvocationAgentKeyReference()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var reference = CreateScheduledInvocationAgentKeyReference();
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-agent-key",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>(),
+            ScheduledDispatchScheduleKind.Workflow);
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        await port.DispatchCreateAsync("scheduled-dispatch:schedule-agent-key", configuration, prepared);
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
+        var auth = command.Target.ServiceInvocation.Auth;
+        auth.DurableSenderBearerToken.Should().BeEmpty();
+        auth.LegacyDurableSenderBearerBlocked.Should().BeFalse();
+        auth.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
+        auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(reference.KeyExpiresAtUnixMs);
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldPersistDurableCredentialReferenceAuth()
     {
         var dispatchPort = new RecordingActorDispatchPort();
@@ -1056,6 +1155,25 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "UTC",
             true,
             new Dictionary<string, string>());
+
+    private static ScheduledInvocationAgentKeyCredentialReference CreateScheduledInvocationAgentKeyReference(
+        string purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey)
+    {
+        var expiresAtUnixMs = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeMilliseconds();
+        return new ScheduledInvocationAgentKeyCredentialReference(
+            new SecretReference
+            {
+                Ref = "sec-schedule",
+                Purpose = purpose,
+                OwnerScopeKey = "scope-key",
+                Fingerprint = "sha256:abc",
+                Version = 1,
+                CreatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ExpiresAtUnixMs = expiresAtUnixMs,
+            },
+            "key-schedule",
+            expiresAtUnixMs);
+    }
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {

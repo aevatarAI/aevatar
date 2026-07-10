@@ -15,6 +15,7 @@ public sealed class AuditRecordSanitizer
         "cookie",
         "api_key",
         "apikey",
+        "full_key",
         "oauth",
         "credential",
         "private_key",
@@ -124,7 +125,7 @@ public sealed class AuditRecordSanitizer
             throw new ArgumentException($"Audit annotation key '{key}' is not allowed.");
         }
 
-        if (LooksLikeBearer(value) || LooksLikePrivateKey(value))
+        if (LooksLikeBearer(value) || LooksLikePrivateKey(value) || LooksLikeRawCredential(value))
         {
             throw new ArgumentException($"Audit annotation value for '{key}' looks secret-bearing.");
         }
@@ -138,5 +139,16 @@ public sealed class AuditRecordSanitizer
     private static bool LooksLikePrivateKey(string value)
     {
         return value.Contains("BEGIN PRIVATE KEY", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeRawCredential(string value)
+    {
+        var normalized = value.Trim();
+        if (normalized.Length < 16)
+            return false;
+
+        return normalized.StartsWith("nyx_", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("sk_", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("ek_", StringComparison.OrdinalIgnoreCase);
     }
 }
