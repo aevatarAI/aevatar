@@ -72,9 +72,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(dispatch.Auth?.DurableSenderBearerToken))
-            throw new InvalidOperationException("Scheduled service invocation durable bearer auth is no longer supported.");
-
         var exchange = await ExchangeCredentialAsync(dispatch, ct);
         if (exchange == null)
         {
@@ -119,7 +116,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
     private async Task<DurableCallerCredentialRef> StoreDurableCallerCredentialAsync(
         ScheduledServiceInvocationDispatchRequest dispatch,
-        CredentialRole role,
+        ScheduledServiceInvocationNyxIdCredentialRole role,
         string token,
         CancellationToken ct)
     {
@@ -163,35 +160,23 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        if (dispatch.Auth == null)
+        if (dispatch.Auth?.Source == null)
             return null;
-        if (dispatch.Auth.ScopeOwnerNyxId != null)
+
+        if (dispatch.Auth.Source is ScheduledServiceInvocationDurableCredentialReference)
         {
-            var result = await ExchangeScopeOwnerNyxIdAsync(
-                dispatch.Auth.ScopeOwnerNyxId,
-                dispatch.Request.Identity,
-                ct);
-            return new CredentialExchange(CredentialRole.ScopeOwner, result);
-        }
-        if (dispatch.Auth.SenderNyxId != null)
-        {
-            var result = await ExchangeSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
-            return new CredentialExchange(CredentialRole.Sender, result);
+            throw new InvalidOperationException(
+                "Scheduled service invocation durable credential reference exchange is not available in this phase.");
         }
 
-        return null;
+        if (dispatch.Auth.Source is ScheduledServiceInvocationNyxIdCredentialSource nyxId)
+        {
+            var result = await _credentialExchangePort.IssueNyxIdAsync(nyxId, ct);
+            return new CredentialExchange(nyxId.Role, result);
+        }
+
+        throw new InvalidOperationException("Scheduled service invocation credential source is not supported.");
     }
-
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeScopeOwnerNyxIdAsync(
-        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
-        ServiceIdentity serviceIdentity,
-        CancellationToken ct) =>
-        await _credentialExchangePort.IssueScopeOwnerNyxIdAsync(source, serviceIdentity, ct);
-
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeSenderNyxIdAsync(
-        ScheduledServiceInvocationNyxIdCredentialSource source,
-        CancellationToken ct) =>
-        await _credentialExchangePort.IssueSenderNyxIdAsync(source, ct);
 
     private static ServiceInvocationRequest EnrichChatPayload(
         ServiceInvocationRequest request,
@@ -230,13 +215,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 }
                 : existingControl with
             {
-                NyxIdAccessToken = credential.Role == CredentialRole.ScopeOwner
+                NyxIdAccessToken = credential.Role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
                     ? token
                     : existingControl.NyxIdAccessToken,
-                NyxIdOrgToken = credential.Role == CredentialRole.ScopeOwner
+                NyxIdOrgToken = credential.Role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
                     ? token
                     : existingControl.NyxIdOrgToken,
-                SenderNyxIdAccessToken = credential.Role == CredentialRole.Sender
+                SenderNyxIdAccessToken = credential.Role == ScheduledServiceInvocationNyxIdCredentialRole.Sender
                     ? token
                     : existingControl.SenderNyxIdAccessToken,
             };
@@ -293,14 +278,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         return parsed.NormalizedBearerToken!;
     }
 
-    private enum CredentialRole
-    {
-        Sender,
-        ScopeOwner,
-    }
-
     private sealed record CredentialExchange(
-        CredentialRole Role,
+        ScheduledServiceInvocationNyxIdCredentialRole Role,
         ScheduledServiceInvocationCredentialExchangeResult Result);
 
     private static string ResolveOwnerScopeKey(ScheduledServiceInvocationDispatchRequest dispatch)
@@ -315,13 +294,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
     private static string ResolveSubjectId(
         ScheduledServiceInvocationAuth? auth,
-        CredentialRole role)
+        ScheduledServiceInvocationNyxIdCredentialRole role)
     {
-        var subject = role == CredentialRole.ScopeOwner
+        var subject = role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
             ? auth?.ScopeOwnerNyxId?.OwnerSubject
             : auth?.SenderNyxId?.Subject;
         if (subject == null)
-            return role == CredentialRole.ScopeOwner ? "scope-owner" : "sender";
+            return role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner ? "scope-owner" : "sender";
 
         return string.Join(
             ":",
@@ -331,10 +310,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     }
 
     private sealed record ExchangedCredential(
-        CredentialRole Role,
+        ScheduledServiceInvocationNyxIdCredentialRole Role,
         string AccessToken,
         DurableCallerCredentialRef? DurableCallerCredential);
 
-    private static string ToErrorSubject(CredentialRole role) =>
-        role == CredentialRole.ScopeOwner ? "scope owner" : "sender";
+    private static string ToErrorSubject(ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner ? "scope owner" : "sender";
 }

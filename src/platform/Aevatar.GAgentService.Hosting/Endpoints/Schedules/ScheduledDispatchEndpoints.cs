@@ -272,15 +272,15 @@ public static class ScheduledDispatchEndpoints
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(bindingQueryPort);
 
-        var ownerSubject = configuration.Target.ServiceInvocation?.Auth?.ScopeOwnerNyxId?.OwnerSubject;
-        if (ownerSubject == null)
+        var source = ResolveScopeOwnerNyxIdSource(configuration);
+        if (source?.Subject == null)
             return;
 
         var externalSubject = new ExternalSubjectRef
         {
-            Platform = ownerSubject.Platform,
-            Tenant = ownerSubject.Tenant,
-            ExternalUserId = ownerSubject.ExternalUserId,
+            Platform = source.Subject.Platform,
+            Tenant = source.Subject.Tenant,
+            ExternalUserId = source.Subject.ExternalUserId,
         };
         if (await bindingQueryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false) != null)
             return;
@@ -298,14 +298,12 @@ public static class ScheduledDispatchEndpoints
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(credentialExchangePort);
 
-        var serviceInvocation = configuration.Target.ServiceInvocation;
-        var scopeOwnerNyxId = serviceInvocation?.Auth?.ScopeOwnerNyxId;
+        var scopeOwnerNyxId = ResolveScopeOwnerNyxIdSource(configuration);
         if (scopeOwnerNyxId == null)
             return;
 
-        var exchange = await credentialExchangePort.IssueScopeOwnerNyxIdAsync(
+        var exchange = await credentialExchangePort.IssueNyxIdAsync(
             scopeOwnerNyxId,
-            serviceInvocation!.Identity,
             ct).ConfigureAwait(false);
         if (exchange.Succeeded)
             return;
@@ -313,6 +311,18 @@ public static class ScheduledDispatchEndpoints
         throw new ArgumentException(string.IsNullOrWhiteSpace(exchange.Error)
             ? "NyxID binding does not grant the requested schedule scope."
             : exchange.Error.Trim(), nameof(configuration));
+    }
+
+    private static ScheduledServiceInvocationNyxIdCredentialSource? ResolveScopeOwnerNyxIdSource(
+        ScheduledDispatchConfiguration configuration)
+    {
+        var source = configuration.Target.ServiceInvocation?.Auth?.Source;
+        return source is ScheduledServiceInvocationNyxIdCredentialSource
+        {
+            Role: ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner,
+        } nyxId
+            ? nyxId
+            : null;
     }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
@@ -518,9 +528,10 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             ServiceInvocation = serviceInvocation with
             {
                 Auth = new ScheduledServiceInvocationAuth(
-                    ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                    new ScheduledServiceInvocationNyxIdCredentialSource(
+                        authenticatedOwnerSubject,
                         DefaultWorkflowScheduleNyxIdScope,
-                        authenticatedOwnerSubject)),
+                        ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner)),
             },
         };
     }
@@ -695,9 +706,9 @@ public sealed record ScheduledServiceInvocationAuthHttpRequest
         }
 
         if (hasScopeOwnerNyxId)
-            return new ScheduledServiceInvocationAuth(ScopeOwnerNyxId: ScopeOwnerNyxId!.ToSource(authenticatedOwnerSubject));
+            return new ScheduledServiceInvocationAuth(ScopeOwnerNyxId!.ToSource(authenticatedOwnerSubject));
 
-        return new ScheduledServiceInvocationAuth(SenderNyxId: SenderNyxId!.ToSource());
+        return new ScheduledServiceInvocationAuth(SenderNyxId!.ToSource());
     }
 }
 
@@ -705,9 +716,12 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHt
 {
     public required string Scope { get; init; }
 
-    public ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource ToSource(
+    public ScheduledServiceInvocationNyxIdCredentialSource ToSource(
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null) =>
-        new(NormalizeRequired(Scope, nameof(Scope)), RequireAuthenticatedOwnerSubject(authenticatedOwnerSubject));
+        new(
+            RequireAuthenticatedOwnerSubject(authenticatedOwnerSubject),
+            NormalizeRequired(Scope, nameof(Scope)),
+            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
 
     private static ScheduledServiceInvocationNyxIdSubjectRef RequireAuthenticatedOwnerSubject(
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject) =>

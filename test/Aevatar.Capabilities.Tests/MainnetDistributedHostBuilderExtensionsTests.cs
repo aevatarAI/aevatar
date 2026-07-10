@@ -202,13 +202,10 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
                 """
                 {
                   "activeKeyId": "key-1",
-                  "keys": [
-                    {
-                      "keyId": "key-1",
-                      "keyBase64": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
-                    }
-                  ],
-                  "fingerprintKeyBase64": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="
+                  "keys": {
+                    "key-1": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+                  },
+                  "fingerprintKey": "ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA="
                 }
                 """,
                 Encoding.UTF8);
