@@ -581,39 +581,64 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
         }
 
-        if (auth.SenderNyxId == null &&
-            auth.ScopeOwnerNyxId == null &&
-            auth.ScheduledInvocationAgentKey == null)
-            return null;
+        if (auth.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.Durable)
+        {
+            return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
+                auth.Durable.CredentialId ?? string.Empty));
+        }
 
-        var senderNyxId = auth.SenderNyxId == null
-            ? null
-            : new ScheduledServiceInvocationNyxIdCredentialSource(
-                ToRuntimeSubject(auth.SenderNyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
-                    string.Empty,
-                    string.Empty,
-                    string.Empty),
-                auth.SenderNyxId.Scope ?? string.Empty);
-
-        var scopeOwnerNyxId = auth.ScopeOwnerNyxId == null
-            ? null
-            : new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                auth.ScopeOwnerNyxId.Scope ?? string.Empty,
-                ToRuntimeSubject(auth.ScopeOwnerNyxId.OwnerSubject));
-
-        var scheduledInvocationAgentKey = auth.ScheduledInvocationAgentKey == null
-            ? null
-            : new ScheduledInvocationAgentKeyCredentialReference(
+        if (auth.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey)
+        {
+            return new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
                 auth.ScheduledInvocationAgentKey.SecretReference?.Clone() ?? new SecretReference(),
                 auth.ScheduledInvocationAgentKey.ApiKeyId ?? string.Empty,
-                auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs);
+                auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs));
+        }
 
-        return new ScheduledServiceInvocationAuth(
-            senderNyxId,
-            null,
-            scopeOwnerNyxId,
-            scheduledInvocationAgentKey);
+        var nyxId = ResolveNyxIdSource(auth);
+        if (nyxId == null)
+            return null;
+
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            ToRuntimeSubject(nyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
+                string.Empty,
+                string.Empty,
+                string.Empty),
+            nyxId.Scope ?? string.Empty,
+            ToRuntimeRole(nyxId.Role)));
     }
+
+    private static ScheduledServiceInvocationNyxIdCredentialSourceState? ResolveNyxIdSource(
+        ScheduledServiceInvocationAuthState auth)
+    {
+        if (auth.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.NyxId)
+            return auth.NyxId;
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            return new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = auth.ScopeOwnerNyxId.OwnerSubject?.Clone(),
+                Scope = auth.ScopeOwnerNyxId.Scope ?? string.Empty,
+                Role = ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
+            };
+        }
+
+        if (auth.SenderNyxId != null)
+        {
+            var sender = auth.SenderNyxId.Clone();
+            sender.Role = ScheduledServiceInvocationNyxIdCredentialRoleState.Sender;
+            return sender;
+        }
+
+        return null;
+    }
+
+    private static ScheduledServiceInvocationNyxIdCredentialRole ToRuntimeRole(
+        ScheduledServiceInvocationNyxIdCredentialRoleState role) =>
+        role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
+            ? ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
+            : ScheduledServiceInvocationNyxIdCredentialRole.Sender;
 
     private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
         ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
@@ -963,47 +988,76 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var hasLegacyDurableToken = !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken) ||
                                     auth.LegacyDurableSenderBearerBlocked;
-        if (auth.SenderNyxId == null &&
-            !hasLegacyDurableToken &&
-            auth.ScopeOwnerNyxId == null &&
-            auth.ScheduledInvocationAgentKey == null)
+        if (hasLegacyDurableToken)
+        {
+            return new ScheduledServiceInvocationAuthState
+            {
+                LegacyDurableSenderBearerBlocked = true,
+            };
+        }
+
+        if (auth.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.Durable)
+        {
+            return string.IsNullOrWhiteSpace(auth.Durable?.CredentialId)
+                ? null
+                : new ScheduledServiceInvocationAuthState
+                {
+                    Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+                    {
+                        CredentialId = NormalizeOptional(auth.Durable.CredentialId),
+                    },
+                };
+        }
+
+        if (auth.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey)
+        {
+            return auth.ScheduledInvocationAgentKey == null
+                ? null
+                : new ScheduledServiceInvocationAuthState
+                {
+                    ScheduledInvocationAgentKey = NormalizeScheduledInvocationAgentKey(auth.ScheduledInvocationAgentKey),
+                };
+        }
+
+        var nyxId = ResolveNyxIdSource(auth);
+        if (nyxId == null)
             return null;
 
         var normalized = new ScheduledServiceInvocationAuthState
         {
-            LegacyDurableSenderBearerBlocked = hasLegacyDurableToken,
+            NyxId = NormalizeNyxIdSource(nyxId),
         };
-
-        if (auth.SenderNyxId != null)
-        {
-            normalized.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
-            {
-                Subject = NormalizeSubject(auth.SenderNyxId.Subject),
-                Scope = NormalizeOptional(auth.SenderNyxId.Scope),
-            };
-        }
-
-        if (auth.ScopeOwnerNyxId != null)
-        {
-            normalized.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
-            {
-                Scope = NormalizeOptional(auth.ScopeOwnerNyxId.Scope),
-                OwnerSubject = NormalizeSubject(auth.ScopeOwnerNyxId.OwnerSubject),
-            };
-        }
-
-        if (auth.ScheduledInvocationAgentKey != null)
-        {
-            normalized.ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
-            {
-                SecretReference = auth.ScheduledInvocationAgentKey.SecretReference?.Clone(),
-                ApiKeyId = NormalizeOptional(auth.ScheduledInvocationAgentKey.ApiKeyId),
-                KeyExpiresAtUnixMs = auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs,
-            };
-        }
 
         return normalized;
     }
+
+    private static ScheduledServiceInvocationNyxIdCredentialSourceState NormalizeNyxIdSource(
+        ScheduledServiceInvocationNyxIdCredentialSourceState source)
+    {
+        var normalized = new ScheduledServiceInvocationNyxIdCredentialSourceState
+        {
+            Subject = NormalizeSubject(source.Subject),
+            Scope = NormalizeOptional(source.Scope),
+            Role = NormalizeRole(source.Role),
+        };
+
+        return normalized;
+    }
+
+    private static ScheduledServiceInvocationNyxIdCredentialRoleState NormalizeRole(
+        ScheduledServiceInvocationNyxIdCredentialRoleState role) =>
+        role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
+            ? ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
+            : ScheduledServiceInvocationNyxIdCredentialRoleState.Sender;
+
+    private static ScheduledInvocationAgentKeyCredentialReferenceState NormalizeScheduledInvocationAgentKey(
+        ScheduledInvocationAgentKeyCredentialReferenceState source) =>
+        new()
+        {
+            SecretReference = source.SecretReference?.Clone(),
+            ApiKeyId = NormalizeOptional(source.ApiKeyId),
+            KeyExpiresAtUnixMs = source.KeyExpiresAtUnixMs,
+        };
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? NormalizeSubject(
         ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
@@ -1020,10 +1074,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         target?.ServiceInvocation?.Auth != null;
 
     private static bool HasScopeOwnerNyxId(ScheduledDispatchTargetState? target) =>
-        target?.ServiceInvocation?.Auth?.ScopeOwnerNyxId != null;
+        target?.ServiceInvocation?.Auth is { } auth &&
+        ResolveNyxIdSource(auth)?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner;
 
     private static bool HasSenderNyxId(ScheduledDispatchTargetState? target) =>
-        target?.ServiceInvocation?.Auth?.SenderNyxId != null;
+        target?.ServiceInvocation?.Auth is { } auth &&
+        ResolveNyxIdSource(auth)?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.Sender;
 
     private static bool HasScheduledInvocationAgentKey(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth?.ScheduledInvocationAgentKey != null;

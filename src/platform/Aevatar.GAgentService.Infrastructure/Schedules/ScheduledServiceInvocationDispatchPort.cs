@@ -64,9 +64,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(dispatch.Auth?.DurableSenderBearerToken))
-            throw new InvalidOperationException("Scheduled service invocation durable bearer auth is no longer supported.");
-
         var exchange = await ExchangeCredentialAsync(dispatch, ct);
         if (exchange == null)
         {
@@ -120,42 +117,29 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        if (dispatch.Auth == null)
+        if (dispatch.Auth?.Source == null)
             return null;
-        if (dispatch.Auth.ScheduledInvocationAgentKey != null)
+
+        if (dispatch.Auth.Source is ScheduledInvocationAgentKeyCredentialReference agentKey)
         {
-            var result = await ResolveScheduledInvocationAgentKeyAsync(
-                dispatch.Auth.ScheduledInvocationAgentKey,
-                ct);
+            var result = await ResolveScheduledInvocationAgentKeyAsync(agentKey, ct);
             return new CredentialExchange(CredentialRole.ScheduledInvocationAgentKey, result);
         }
-        if (dispatch.Auth.ScopeOwnerNyxId != null)
+
+        if (dispatch.Auth.Source is ScheduledServiceInvocationDurableCredentialReference)
         {
-            var result = await ExchangeScopeOwnerNyxIdAsync(
-                dispatch.Auth.ScopeOwnerNyxId,
-                dispatch.Request.Identity,
-                ct);
-            return new CredentialExchange(CredentialRole.ScopeOwner, result);
-        }
-        if (dispatch.Auth.SenderNyxId != null)
-        {
-            var result = await ExchangeSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
-            return new CredentialExchange(CredentialRole.Sender, result);
+            throw new InvalidOperationException(
+                "Scheduled service invocation durable credential reference exchange is not available in this phase.");
         }
 
-        return null;
+        if (dispatch.Auth.Source is ScheduledServiceInvocationNyxIdCredentialSource nyxId)
+        {
+            var result = await _credentialExchangePort.IssueNyxIdAsync(nyxId, ct);
+            return new CredentialExchange(ToCredentialRole(nyxId.Role), result);
+        }
+
+        throw new InvalidOperationException("Scheduled service invocation credential source is not supported.");
     }
-
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeScopeOwnerNyxIdAsync(
-        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
-        ServiceIdentity serviceIdentity,
-        CancellationToken ct) =>
-        await _credentialExchangePort.IssueScopeOwnerNyxIdAsync(source, serviceIdentity, ct);
-
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeSenderNyxIdAsync(
-        ScheduledServiceInvocationNyxIdCredentialSource source,
-        CancellationToken ct) =>
-        await _credentialExchangePort.IssueSenderNyxIdAsync(source, ct);
 
     private async Task<ScheduledServiceInvocationCredentialExchangeResult> ResolveScheduledInvocationAgentKeyAsync(
         ScheduledInvocationAgentKeyCredentialReference source,
@@ -349,6 +333,11 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
     private sealed record ExchangedCredential(CredentialRole Role, string AccessToken);
 
+    private static CredentialRole ToCredentialRole(ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
+            ? CredentialRole.ScopeOwner
+            : CredentialRole.Sender;
+
     private static string ToErrorSubject(CredentialRole role) =>
         role switch
         {
@@ -356,5 +345,4 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             CredentialRole.ScheduledInvocationAgentKey => "scheduled invocation agent key",
             _ => "sender",
         };
-
 }

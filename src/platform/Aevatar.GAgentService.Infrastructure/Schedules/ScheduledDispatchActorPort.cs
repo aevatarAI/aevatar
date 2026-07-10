@@ -284,61 +284,56 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
     private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)
     {
-        if (auth == null)
+        if (auth?.Source == null)
             return null;
 
-        var durableToken = auth.DurableSenderBearerToken?.Trim() ?? string.Empty;
-        if (durableToken.Length > 0)
+        return auth.Source switch
         {
-            throw new ArgumentException(
-                "Durable sender bearer token schedule auth is no longer supported.",
-                nameof(auth));
-        }
-
-        if (auth.SenderNyxId == null &&
-            auth.ScopeOwnerNyxId == null &&
-            auth.ScheduledInvocationAgentKey == null)
-            return null;
-
-        if (Convert.ToInt32(auth.SenderNyxId != null) +
-            Convert.ToInt32(auth.ScopeOwnerNyxId != null) +
-            Convert.ToInt32(auth.ScheduledInvocationAgentKey != null) != 1)
-        {
-            throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth));
-        }
-
-        var state = new ScheduledServiceInvocationAuthState();
-
-        if (auth.SenderNyxId != null)
-        {
-            state.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            ScheduledServiceInvocationNyxIdCredentialSource nyxId => new ScheduledServiceInvocationAuthState
             {
-                Subject = CreateSubjectState(auth.SenderNyxId.Subject),
-                Scope = auth.SenderNyxId.Scope,
-            };
-        }
-
-        if (auth.ScopeOwnerNyxId != null)
-        {
-            state.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                NyxId = CreateNyxIdCredentialSourceState(nyxId),
+            },
+            ScheduledServiceInvocationDurableCredentialReference durable => new ScheduledServiceInvocationAuthState
             {
-                Scope = auth.ScopeOwnerNyxId.Scope,
-                OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
-            };
-        }
-
-        if (auth.ScheduledInvocationAgentKey != null)
-        {
-            state.ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+                Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+                {
+                    CredentialId = durable.CredentialId,
+                },
+            },
+            ScheduledInvocationAgentKeyCredentialReference agentKey => new ScheduledServiceInvocationAuthState
             {
-                SecretReference = auth.ScheduledInvocationAgentKey.SecretReference.Clone(),
-                ApiKeyId = auth.ScheduledInvocationAgentKey.ApiKeyId,
-                KeyExpiresAtUnixMs = auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs,
-            };
-        }
-
-        return state;
+                ScheduledInvocationAgentKey = CreateScheduledInvocationAgentKeyState(agentKey),
+            },
+            _ => throw new ArgumentException("Unsupported scheduled service invocation credential source.", nameof(auth)),
+        };
     }
+
+    private static ScheduledServiceInvocationNyxIdCredentialSourceState CreateNyxIdCredentialSourceState(
+        ScheduledServiceInvocationNyxIdCredentialSource source) =>
+        new()
+        {
+            Subject = CreateSubjectState(source.Subject),
+            Scope = source.Scope,
+            Role = ToStateRole(source.Role),
+        };
+
+    private static ScheduledServiceInvocationNyxIdCredentialRoleState ToStateRole(
+        ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        role switch
+        {
+            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner =>
+                ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
+            _ => ScheduledServiceInvocationNyxIdCredentialRoleState.Sender,
+        };
+
+    private static ScheduledInvocationAgentKeyCredentialReferenceState CreateScheduledInvocationAgentKeyState(
+        ScheduledInvocationAgentKeyCredentialReference source) =>
+        new()
+        {
+            SecretReference = source.SecretReference.Clone(),
+            ApiKeyId = source.ApiKeyId,
+            KeyExpiresAtUnixMs = source.KeyExpiresAtUnixMs,
+        };
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(
         ScheduledServiceInvocationNyxIdSubjectRef? subject) =>

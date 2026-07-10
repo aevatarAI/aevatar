@@ -1047,8 +1047,11 @@ public sealed class ScheduledDispatchGAgentTests
             .ContainSingle()
             .Which.Should().BeFalse();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
-        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
-        agent.State.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.ExternalUserId.Should().Be("owner-nyx-user");
+        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId.Should().BeNull();
+        agent.State.Target.ServiceInvocation.Auth.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("owner-proxy");
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Subject.ExternalUserId.Should().Be("owner-nyx-user");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }
@@ -1110,7 +1113,9 @@ public sealed class ScheduledDispatchGAgentTests
 
         eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
         agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
-        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        agent.State.Target.ServiceInvocation.Auth!.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
     }
 
     [Fact]
@@ -1172,7 +1177,9 @@ public sealed class ScheduledDispatchGAgentTests
         });
 
         agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
-        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        agent.State.Target.ServiceInvocation.Auth!.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
         auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
@@ -1360,6 +1367,65 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(1);
         agent.State.LastError.Should().Contain("legacy durable bearer auth");
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForDurableCredentialReferenceAuth_ShouldPassReferenceToDispatchAndRecordFailure()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = new InvalidOperationException(
+                "Scheduled service invocation durable credential reference exchange is not available in this phase."),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+                        {
+                            CredentialId = " durable-run-key ",
+                        },
+                    },
+                },
+            }));
+
+        var stateAuth = agent.State.Target!.ServiceInvocation!.Auth!;
+        stateAuth.Durable.Should().NotBeNull();
+        stateAuth.Durable!.CredentialId.Should().Be("durable-run-key");
+        stateAuth.SourceCase.Should().Be(ScheduledServiceInvocationAuthState.SourceOneofCase.Durable);
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var runtimeAuth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        runtimeAuth.Should().NotBeNull();
+        runtimeAuth!.Durable.Should().NotBeNull();
+        runtimeAuth.Durable!.CredentialId.Should().Be("durable-run-key");
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be(
+            "Scheduled service invocation durable credential reference exchange is not available in this phase.");
     }
 
     [Fact]

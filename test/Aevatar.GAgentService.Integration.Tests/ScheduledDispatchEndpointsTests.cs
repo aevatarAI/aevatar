@@ -886,7 +886,7 @@ public sealed class ScheduledDispatchEndpointsTests
         var auth = configuration.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
         auth!.SenderNyxId.Should().NotBeNull();
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.Durable.Should().BeNull();
     }
 
     [Fact]
@@ -1919,20 +1919,19 @@ public sealed class ScheduledDispatchEndpointsTests
         public ScheduledServiceInvocationCredentialExchangeResult ScopeOwnerExchangeResult { get; init; } =
             ScheduledServiceInvocationCredentialExchangeResult.Success("owner-token");
 
-        public List<ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource> ScopeOwnerSources { get; } = [];
+        public List<ScheduledServiceInvocationNyxIdCredentialSource> ScopeOwnerSources { get; } = [];
 
-        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueNyxIdAsync(
             ScheduledServiceInvocationNyxIdCredentialSource source,
-            CancellationToken ct = default) =>
-            Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
-
-        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
-            ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
-            ServiceIdentity serviceIdentity,
             CancellationToken ct = default)
         {
-            ScopeOwnerSources.Add(source);
-            return Task.FromResult(ScopeOwnerExchangeResult);
+            if (source.Role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner)
+            {
+                ScopeOwnerSources.Add(source);
+                return Task.FromResult(ScopeOwnerExchangeResult);
+            }
+
+            return Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
         }
     }
 
