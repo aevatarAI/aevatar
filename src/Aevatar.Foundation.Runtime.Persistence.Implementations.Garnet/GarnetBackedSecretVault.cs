@@ -6,9 +6,6 @@ namespace Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 
 public sealed class GarnetBackedSecretVault : ISecretVault
 {
-    private const string AtomicVersionedTransitionsUnsupportedMessage =
-        "Garnet secret vault rotate/revoke requires atomic versioned transitions and is not enabled in this implementation.";
-
     private readonly IGarnetSecretKeyValueStore _store;
     private readonly GarnetSecretStoreOptions _options;
     private readonly GarnetSecretStoreKeyring _keyring;
@@ -63,62 +60,161 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         ValidateResolveRequest(request);
         ct.ThrowIfCancellationRequested();
 
-        var record = await ReadRecordAsync(request.Ref, ct);
-        if (record == null ||
-            record.Status != GarnetSecretRecordStatus.Active ||
-            IsExpired(record) ||
-            !IsAuthorized(record, request.Purpose, request.OwnerScopeKey, request.SubjectId))
+        var read = await ReadRecordAsync(request.Ref, ct);
+        if (read.FailureReason is not SecretResolutionFailureReason.None)
         {
-            return new ResolveSecretResult(null, null);
+            return new ResolveSecretResult(null, null, read.FailureReason);
+        }
+
+        var record = read.Record!;
+        if (record.Status != GarnetSecretRecordStatus.Active)
+        {
+            return new ResolveSecretResult(null, null, SecretResolutionFailureReason.Revoked);
+        }
+
+        if (!IsAuthorized(record, request.Purpose, request.OwnerScopeKey, request.SubjectId))
+        {
+            return new ResolveSecretResult(null, null, SecretResolutionFailureReason.Unauthorized);
+        }
+
+        if (IsExpired(record))
+        {
+            return new ResolveSecretResult(null, null, SecretResolutionFailureReason.NotFound);
         }
 
         var secret = TryDecrypt(record);
-        return secret == null
-            ? new ResolveSecretResult(null, null)
-            : new ResolveSecretResult(ToReference(record), secret);
+        return secret.FailureReason == SecretResolutionFailureReason.None
+            ? new ResolveSecretResult(ToReference(record), secret.Secret)
+            : new ResolveSecretResult(null, null, secret.FailureReason);
     }
 
     public async Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default)
     {
         ValidateRotateRequest(request);
         ct.ThrowIfCancellationRequested();
-        await Task.CompletedTask;
-        throw new InvalidOperationException(AtomicVersionedTransitionsUnsupportedMessage);
+
+        var read = await ReadRecordBytesAsync(request.Ref, ct);
+        var record = EnsureActiveAuthorizedRecord(
+            read,
+            request.Purpose,
+            request.OwnerScopeKey,
+            request.SubjectId,
+            "rotate");
+
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var updated = record.Clone();
+        updated.Version++;
+        updated.Fingerprint = GarnetSecretRecordCrypto.Fingerprint(request.Secret, _keyring);
+        updated.RotatedAtUnixMs = now;
+        updated.EncryptedSecret = GarnetSecretRecordCrypto.Encrypt(
+            request.Secret,
+            _keyring,
+            GarnetSecretRecordIds.VaultAssociatedData(updated));
+
+        var replaced = await _store.CompareSetAsync(
+            BuildKey(record.Ref),
+            read.Bytes!,
+            updated.ToByteArray(),
+            ct);
+        if (!replaced)
+            throw new InvalidOperationException("Secret reference changed before rotate could be committed.");
+
+        return new RotateSecretResult(ToReference(updated));
     }
 
     public async Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default)
     {
         ValidateRevokeRequest(request);
         ct.ThrowIfCancellationRequested();
-        await Task.CompletedTask;
-        throw new InvalidOperationException(AtomicVersionedTransitionsUnsupportedMessage);
+
+        var read = await ReadRecordBytesAsync(request.Ref, ct);
+        if (read.Record is null || read.FailureReason is not SecretResolutionFailureReason.None)
+            return new RevokeSecretResult(false);
+
+        var record = read.Record;
+        if (record.Status != GarnetSecretRecordStatus.Active ||
+            !IsAuthorized(record, request.Purpose, request.OwnerScopeKey, request.SubjectId))
+        {
+            return new RevokeSecretResult(false);
+        }
+
+        var revoked = await _store.CompareDeleteAsync(
+            BuildKey(record.Ref),
+            read.Bytes!,
+            ct);
+        return new RevokeSecretResult(revoked);
     }
 
-    private async Task<GarnetSecretVaultRecord?> ReadRecordAsync(string reference, CancellationToken ct)
+    private async Task<ReadVaultRecordResult> ReadRecordAsync(string reference, CancellationToken ct)
+    {
+        var read = await ReadRecordBytesAsync(reference, ct);
+        return new ReadVaultRecordResult(read.Record, read.FailureReason);
+    }
+
+    private async Task<ReadVaultRecordBytesResult> ReadRecordBytesAsync(string reference, CancellationToken ct)
     {
         var bytes = await _store.GetAsync(BuildKey(reference), ct);
-        return bytes == null ? null : GarnetSecretVaultRecord.Parser.ParseFrom(bytes);
+        if (bytes == null)
+            return new ReadVaultRecordBytesResult(null, null, SecretResolutionFailureReason.NotFound);
+
+        try
+        {
+            return new ReadVaultRecordBytesResult(
+                GarnetSecretVaultRecord.Parser.ParseFrom(bytes),
+                bytes,
+                SecretResolutionFailureReason.None);
+        }
+        catch (InvalidProtocolBufferException)
+        {
+            return new ReadVaultRecordBytesResult(null, bytes, SecretResolutionFailureReason.InvalidRecord);
+        }
     }
 
     private string BuildKey(string reference) => $"{_options.NormalizedSecretVaultPrefix}:{reference}";
 
-    private string? TryDecrypt(GarnetSecretVaultRecord record)
+    private DecryptVaultRecordResult TryDecrypt(GarnetSecretVaultRecord record)
     {
         try
         {
-            return GarnetSecretRecordCrypto.Decrypt(
-                record.EncryptedSecret,
-                _keyring,
-                GarnetSecretRecordIds.VaultAssociatedData(record));
+            return new DecryptVaultRecordResult(
+                GarnetSecretRecordCrypto.Decrypt(
+                    record.EncryptedSecret,
+                    _keyring,
+                    GarnetSecretRecordIds.VaultAssociatedData(record)),
+                SecretResolutionFailureReason.None);
         }
         catch (CryptographicException)
         {
-            return null;
+            return new DecryptVaultRecordResult(null, SecretResolutionFailureReason.AuthenticationFailed);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            return null;
+            return new DecryptVaultRecordResult(
+                null,
+                ex.Message.Contains("keyring does not contain key", StringComparison.Ordinal)
+                    ? SecretResolutionFailureReason.KeyringMismatch
+                    : SecretResolutionFailureReason.UnsupportedAlgorithm);
         }
+    }
+
+    private static GarnetSecretVaultRecord EnsureActiveAuthorizedRecord(
+        ReadVaultRecordBytesResult read,
+        string purpose,
+        string ownerScopeKey,
+        string subjectId,
+        string operation)
+    {
+        if (read.Record is null || read.FailureReason is not SecretResolutionFailureReason.None)
+            throw new InvalidOperationException($"Secret reference is not available for {operation}: {read.FailureReason}.");
+
+        var record = read.Record;
+        if (record.Status != GarnetSecretRecordStatus.Active ||
+            !IsAuthorized(record, purpose, ownerScopeKey, subjectId))
+        {
+            throw new InvalidOperationException($"Secret reference is not active for the requested owner and purpose during {operation}.");
+        }
+
+        return record;
     }
 
     private static bool IsAuthorized(
@@ -181,4 +277,17 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OwnerScopeKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SubjectId);
     }
+
+    private readonly record struct ReadVaultRecordResult(
+        GarnetSecretVaultRecord? Record,
+        SecretResolutionFailureReason FailureReason);
+
+    private readonly record struct ReadVaultRecordBytesResult(
+        GarnetSecretVaultRecord? Record,
+        byte[]? Bytes,
+        SecretResolutionFailureReason FailureReason);
+
+    private readonly record struct DecryptVaultRecordResult(
+        string? Secret,
+        SecretResolutionFailureReason FailureReason);
 }
