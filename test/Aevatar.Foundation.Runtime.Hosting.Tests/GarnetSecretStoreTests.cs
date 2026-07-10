@@ -343,7 +343,7 @@ public sealed class GarnetSecretStoreTests
     }
 
     [Fact]
-    public void GarnetSecretStoreKeyring_ShouldRejectMissingMalformedAndNon32ByteKeys()
+    public void GarnetSecretStoreKeyring_ShouldRejectMissingMalformedNon32ByteAndMissingFingerprintKeys()
     {
         var missingPath = Path.Combine(Path.GetTempPath(), $"missing-keyring-{Guid.NewGuid():N}.json");
         var missing = () => GarnetSecretStoreKeyring.LoadFromFile(missingPath);
@@ -374,6 +374,17 @@ public sealed class GarnetSecretStoreTests
         """);
         var shortKeyLoad = () => GarnetSecretStoreKeyring.LoadFromFile(shortKey.Path);
         shortKeyLoad.Should().Throw<InvalidOperationException>().WithMessage("*32-byte*");
+
+        using var missingFingerprint = new TempFile($$"""
+        {
+          "activeKeyId": "key-1",
+          "keys": {
+            "key-1": "{{Base64Key(1)}}"
+          }
+        }
+        """);
+        var missingFingerprintLoad = () => GarnetSecretStoreKeyring.LoadFromFile(missingFingerprint.Path);
+        missingFingerprintLoad.Should().Throw<InvalidOperationException>().WithMessage("*fingerprintKey*");
 
         using var valid = new TempFile($$"""
         {
