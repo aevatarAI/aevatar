@@ -2235,7 +2235,6 @@ public sealed class ConversationReplyGeneratorTests
         var agentBuilderSource = new AgentBuilderToolSource(
             Substitute.For<IUserAgentCatalogQueryPort>(),
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
-            nyxClientFactory,
             Substitute.For<ISkillRunnerCommandPort>(),
             Substitute.For<IUserAgentCatalogCommandPort>(),
             Substitute.For<ICallerScopeResolver>(),
