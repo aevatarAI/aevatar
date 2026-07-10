@@ -203,6 +203,40 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRecordApiKeyRevocationAttemptAsync_IgnoresFourthFailedAttempt()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-retry-limit",
+            ConversationId = "conv-a",
+            ApiKeyId = "key-retry-limit",
+            OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+        });
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand { AgentId = "agent-retry-limit" });
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            await _agent.HandleRecordApiKeyRevocationAttemptAsync(BuildFailedRevocationAttempt());
+        }
+
+        var eventsBeforeFourthAttempt = await _store.GetEventsAsync(_agent.Id);
+        eventsBeforeFourthAttempt.Count(static evt =>
+                evt.EventData.Is(UserAgentCatalogApiKeyRevocationAttemptRecordedEvent.Descriptor))
+            .Should().Be(3);
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
+            .Which.AttemptCount.Should().Be(3);
+
+        await _agent.HandleRecordApiKeyRevocationAttemptAsync(BuildFailedRevocationAttempt());
+
+        var eventsAfterFourthAttempt = await _store.GetEventsAsync(_agent.Id);
+        eventsAfterFourthAttempt.Count(static evt =>
+                evt.EventData.Is(UserAgentCatalogApiKeyRevocationAttemptRecordedEvent.Descriptor))
+            .Should().Be(3);
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
+            .Which.AttemptCount.Should().Be(3);
+    }
+
+    [Fact]
     public async Task HandleUpsertAsync_CopiesOwnerScopeFromCommand()
     {
         // Issue #466 regression: HandleUpsertAsync must copy command.OwnerScope onto the
@@ -505,6 +539,17 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         _agent.State.Entries[0].AgentId.Should().Be("agent-b");
         _agent.State.Entries[0].Tombstoned.Should().BeFalse();
     }
+
+    private static UserAgentCatalogRecordApiKeyRevocationAttemptCommand BuildFailedRevocationAttempt() =>
+        new()
+        {
+            AgentId = "agent-retry-limit",
+            ApiKeyId = "key-retry-limit",
+            Completed = false,
+            HttpStatus = 503,
+            Error = "upstream unavailable",
+            FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+        };
 
     private sealed class InMemoryEventStore : IEventStore
     {

@@ -761,6 +761,73 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_Delete_WithPendingApiKeyRevocation_RecordsFailureDetails()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-pending-revoke", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "agent-pending-revoke",
+                ConversationId = "oc_chat_pending",
+                NyxProviderSlug = "api-lark-bot",
+                ApiKeyId = "key-pending-revoke",
+                OwnerScope = caller,
+            }));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.TombstoneAsync("agent-pending-revoke", Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        commandPort.RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var issuer = new RecordingApiKeyIssuer
+        {
+            RevokeResult = ScheduledAgentApiKeyRevokeResult.Pending(
+                403,
+                "api key owner mismatch",
+                UserAgentApiKeyRevocationFailureKind.Unauthorized),
+        };
+
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(callerScopeResolver);
+        services.AddSingleton<IScheduledAgentApiKeyIssuer>(issuer);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-pending-revoke","confirm":true}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
+            await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                    command.AgentId == "agent-pending-revoke" &&
+                    command.ApiKeyId == "key-pending-revoke" &&
+                    !command.Completed &&
+                    command.HttpStatus == 403 &&
+                    command.Error == "api key owner mismatch" &&
+                    command.FailureKind == UserAgentApiKeyRevocationFailureKind.Unauthorized),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Delete_ReturnsAccepted_WhenCommandPortAccepts()
     {
         // Refactor (iter4/cluster-009):
@@ -1178,6 +1245,7 @@ public sealed class AgentDeliveryTargetToolTests
     {
         public List<IssueCall> Issues { get; } = [];
         public List<string> RevokedApiKeyIds { get; } = [];
+        public ScheduledAgentApiKeyRevokeResult RevokeResult { get; init; } = ScheduledAgentApiKeyRevokeResult.Complete();
 
         public Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
             string token,
@@ -1194,7 +1262,7 @@ public sealed class AgentDeliveryTargetToolTests
         public Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct)
         {
             RevokedApiKeyIds.Add(apiKeyId);
-            return Task.FromResult(ScheduledAgentApiKeyRevokeResult.Complete());
+            return Task.FromResult(RevokeResult);
         }
 
         public Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)

@@ -16,7 +16,7 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
     public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
-    public const int MaxApiKeyRevocationAttempts = 3;
+    private const int MaxApiKeyRevocationAttempts = 3;
 
     protected override UserAgentCatalogState TransitionState(UserAgentCatalogState current, IMessage evt) =>
         StateTransitionMatcher
