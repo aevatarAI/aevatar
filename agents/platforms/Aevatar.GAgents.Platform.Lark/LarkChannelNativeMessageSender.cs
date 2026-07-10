@@ -17,7 +17,7 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
 
     public ChannelId Channel => ChannelId.From("lark");
 
-    public async Task SendAsync(
+    public async Task<EmitResult> SendAsync(
         ChannelNativeDeliveryTarget target,
         ChannelNativeMessage message,
         CancellationToken cancellationToken)
@@ -54,6 +54,10 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
 
         if (!result.Succeeded)
             throw new InvalidOperationException(BuildRejectionMessage(result.LarkCode, result.Detail));
+
+        return EmitResult.Sent(
+            result.MessageId ?? $"lark:{primaryTarget.ReceiveId}",
+            platformMessageId: result.MessageId);
     }
 
     private static string SerializeNativePayload(object payload) =>

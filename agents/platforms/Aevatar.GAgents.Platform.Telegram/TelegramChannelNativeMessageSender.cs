@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -16,7 +17,7 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
 
     public ChannelId Channel => ChannelId.From("telegram");
 
-    public async Task SendAsync(
+    public async Task<EmitResult> SendAsync(
         ChannelNativeDeliveryTarget target,
         ChannelNativeMessage message,
         CancellationToken cancellationToken)
@@ -58,6 +59,39 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
 
         if (TryGetTelegramError(response, out var detail))
             throw new InvalidOperationException($"Telegram interaction notification delivery failed: {detail}");
+
+        return EmitResult.Sent(
+            TryReadTelegramMessageId(response) ?? $"telegram:{target.ConversationId}");
+    }
+
+    private static string? TryReadTelegramMessageId(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("result", out var result) ||
+                result.ValueKind != JsonValueKind.Object ||
+                !result.TryGetProperty("message_id", out var messageId))
+            {
+                return null;
+            }
+
+            return messageId.ValueKind switch
+            {
+                JsonValueKind.Number when messageId.TryGetInt64(out var id) => id.ToString(CultureInfo.InvariantCulture),
+                JsonValueKind.String => messageId.GetString()?.Trim(),
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static bool TryGetTelegramError(string? response, out string detail)

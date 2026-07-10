@@ -14,7 +14,7 @@ public interface IChannelNativeMessageSender
     ChannelId Channel { get; }
 
     /// <summary>Sends the native message to the resolved delivery target.</summary>
-    Task SendAsync(
+    Task<EmitResult> SendAsync(
         ChannelNativeDeliveryTarget target,
         ChannelNativeMessage message,
         CancellationToken cancellationToken);
