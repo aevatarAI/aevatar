@@ -72,6 +72,7 @@ Endpoint owners declare audit intent with strongly typed endpoint metadata:
 | `target_kind` | Safe target resource family. |
 | `target_resolver` | Safe target id/display resolver from route values or other allowlisted values. |
 | `request_sanitizer` / `result_sanitizer` | Allowlist summary builders; they must not copy request bodies, headers, tokens, cookies, prompts, credentials, raw subjects, or other forbidden material. |
+| `capture_unauthenticated` | Opt-in for explicitly `AllowAnonymous` ingress surfaces (signature/token trust boundary). When set, unauthenticated attempts are recorded under a fixed anonymous canonical actor key. Defaults to false. |
 
 The endpoint filter runs only for annotated endpoints. It captures safe
 request/result summaries and target resolution for handler executions. The
@@ -82,8 +83,19 @@ The boundary capture middleware is registered by `Aevatar.Bootstrap` after
 `UseAuthentication()` and before `UseAuthorization()`. That placement lets the
 host record authenticated attempts and the terminal outcome even when
 authorization middleware short-circuits with `403` before endpoint filters or
-handlers run. Unauthenticated `401` challenges are not recorded because there is
-no authenticated actor to hash.
+handlers run. Unauthenticated `401` challenges are not recorded by default
+because there is no authenticated actor to hash.
+
+Anonymous ingress surfaces are the exception. Endpoints whose trust boundary is
+a request signature or a stateless token rather than a platform user — OAuth
+callbacks, HMAC-signed webhooks, and relay ingress — are explicitly
+`AllowAnonymous` yet still perform security-relevant work. Such an endpoint opts
+in with `capture_unauthenticated` on its endpoint audit metadata. When set, the
+middleware records the attempt and terminal outcome even for an unauthenticated
+caller, hashing a fixed anonymous canonical actor key (never a request-supplied
+value) and marking the record as a system-captured governance fact. The opt-in
+is per endpoint; ordinary endpoints keep the default posture so `401` challenge
+floods are not recorded.
 
 The middleware is host glue only:
 
@@ -257,6 +269,12 @@ Audit query responses expose `readTimestampUtc`, `queryWatermark`, and `nextCurs
 Each record also exposes `occurredAtUtc` and `identityKeyId`. These fields describe
 artifact-store query freshness and must not imply strong consistency with writes that
 may still be in flight.
+
+Audit queries return the newest matching artifacts first, ordered by
+`occurredAtUtc DESC` with `auditId ASC` as the deterministic tie-breaker. A
+`nextCursor` continues toward older artifacts. `queryWatermark` is the greatest
+`occurredAtUtc` across the full filtered result set, independent of the current cursor
+page; it is null when the filtered result set is empty.
 
 Admin-only resolver reads and cross-scope audit trail reads carry endpoint metadata with
 `AccessLevel = ADMIN`. That metadata is for the host self-audit pipeline; it does not

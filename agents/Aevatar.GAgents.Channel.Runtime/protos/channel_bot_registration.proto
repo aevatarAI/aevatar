@@ -5,6 +5,7 @@ package aevatar.gagents.channel.runtime;
 option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 
 // ─── Persistent State ───
 
@@ -24,13 +25,18 @@ message ChannelBotRegistrationEntry {
   string nyx_channel_bot_id = 9;
   string nyx_agent_api_key_id = 10;
   string nyx_conversation_route_id = 11;
-  reserved 12;
-  reserved "credential_ref";
-  string nyx_reply_credential_ref = 13;
+  reserved 12, 13;
+  reserved "credential_ref", "nyx_reply_credential_ref";
   // Last verified inbound observed by aevatar's relay for this bot. Set the first
   // time the relay accepts an inbound; powers cross-account "active/pending" status
   // when NyxID's owner-scoped channel-bot API can't be queried (admin all-view).
   google.protobuf.Timestamp last_inbound_at_utc = 14;
+  // Typed vault handle for the workflow terminal-result delivery agent key
+  // (purpose channel.workflow-result-delivery-agent-key). The vault subject is
+  // nyx_agent_api_key_id. Absent when the registration was provisioned without
+  // capturing the NyxID full_key; such bots fail closed for wait=stream workflow
+  // background delivery until re-registered.
+  aevatar.credentials.SecretReference workflow_result_delivery_credential = 15;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -57,9 +63,9 @@ message ChannelBotRegisterCommand {
   string nyx_channel_bot_id = 6;
   string nyx_agent_api_key_id = 7;
   string nyx_conversation_route_id = 8;
-  reserved 9;
-  reserved "credential_ref";
-  string nyx_reply_credential_ref = 10;
+  reserved 9, 10;
+  reserved "credential_ref", "nyx_reply_credential_ref";
+  aevatar.credentials.SecretReference workflow_result_delivery_credential = 11;
 }
 
 message ChannelBotUnregisterCommand {
@@ -124,12 +130,12 @@ message ChannelBotRegistrationDocument {
   string nyx_channel_bot_id = 10;
   string nyx_agent_api_key_id = 11;
   string nyx_conversation_route_id = 12;
-  reserved 13;
-  reserved "credential_ref";
-  string nyx_reply_credential_ref = 14;
+  reserved 13, 14;
+  reserved "credential_ref", "nyx_reply_credential_ref";
   // Mirrors ChannelBotRegistrationEntry.last_inbound_at_utc into the read model so
   // the /channels status endpoint can report active/pending without a NyxID call.
   google.protobuf.Timestamp last_inbound_at_utc = 15;
+  aevatar.credentials.SecretReference workflow_result_delivery_credential = 16;
 }
 
 // ─── Relay / conversation normalization ───

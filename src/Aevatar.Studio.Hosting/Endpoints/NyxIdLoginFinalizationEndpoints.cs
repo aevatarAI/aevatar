@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -26,6 +28,12 @@ public static class NyxIdLoginFinalizationEndpoints
 
         app.MapPost("/api/auth/nyxid/finalize", HandleFinalizeAsync)
             .WithTags("Auth")
+            .WithEndpointAudit(
+                "identity.login.finalize",
+                AuditSensitivityLevel.Confidential,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "login-finalize"),
+                captureUnauthenticated: true)
             .AllowAnonymous()
             .Produces<NyxIdLoginFinalizationResponse>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
