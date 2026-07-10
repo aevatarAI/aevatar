@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -16,7 +17,7 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
 
     public ChannelId Channel => ChannelId.From("telegram");
 
-    public async Task SendAsync(
+    public async Task<EmitResult> SendAsync(
         ChannelNativeDeliveryTarget target,
         ChannelNativeMessage message,
         CancellationToken cancellationToken)
@@ -58,6 +59,101 @@ public sealed class TelegramChannelNativeMessageSender : IChannelNativeMessageSe
 
         if (TryGetTelegramError(response, out var detail))
             throw new InvalidOperationException($"Telegram interaction notification delivery failed: {detail}");
+
+        return EmitResult.Sent(
+            TryReadTelegramMessageId(response) ?? $"telegram:{target.ConversationId}");
+    }
+
+    public async Task<EmitResult> UpdateAsync(
+        ChannelNativeDeliveryTarget target,
+        string platformMessageId,
+        ChannelNativeMessage message,
+        bool isFinal,
+        CancellationToken cancellationToken)
+    {
+        _ = isFinal;
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(message);
+        if (string.IsNullOrWhiteSpace(platformMessageId))
+            throw new InvalidOperationException("Telegram native message update requires a platform message id.");
+
+        var text = message.Text;
+        if (string.IsNullOrWhiteSpace(text))
+            throw new InvalidOperationException("Telegram interaction notification update requires a non-empty text payload.");
+
+        var body = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["chat_id"] = target.ConversationId,
+            ["message_id"] = NormalizeTelegramMessageId(platformMessageId),
+            ["text"] = text,
+            ["parse_mode"] = "Markdown",
+        };
+
+        if (message.CardPayload is not null)
+        {
+            using var document = JsonDocument.Parse(SerializeNativePayload(message.CardPayload));
+            if (document.RootElement.TryGetProperty("reply_markup", out var replyMarkup))
+                body["reply_markup"] = replyMarkup.Clone();
+        }
+
+        var response = await _nyxIdApiClient.ProxyRequestAsync(
+            target.NyxApiKey,
+            target.NyxProviderSlug,
+            "editMessageText",
+            "POST",
+            JsonSerializer.Serialize(body),
+            extraHeaders: null,
+            cancellationToken).ConfigureAwait(false);
+        if (LooksLikeErrorEnvelope(response))
+        {
+            throw new InvalidOperationException(
+                $"Telegram interaction notification update failed: {ExtractErrorDetail(response)}");
+        }
+
+        if (TryGetTelegramError(response, out var detail))
+            throw new InvalidOperationException($"Telegram interaction notification update failed: {detail}");
+
+        return EmitResult.Sent(
+            TryReadTelegramMessageId(response) ?? platformMessageId.Trim(),
+            platformMessageId: platformMessageId.Trim());
+    }
+
+    private static string? TryReadTelegramMessageId(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("result", out var result) ||
+                result.ValueKind != JsonValueKind.Object ||
+                !result.TryGetProperty("message_id", out var messageId))
+            {
+                return null;
+            }
+
+            return messageId.ValueKind switch
+            {
+                JsonValueKind.Number when messageId.TryGetInt64(out var id) => id.ToString(CultureInfo.InvariantCulture),
+                JsonValueKind.String => messageId.GetString()?.Trim(),
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static object NormalizeTelegramMessageId(string value)
+    {
+        var trimmed = value.Trim();
+        return long.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id)
+            ? id
+            : trimmed;
     }
 
     private static bool TryGetTelegramError(string? response, out string detail)
