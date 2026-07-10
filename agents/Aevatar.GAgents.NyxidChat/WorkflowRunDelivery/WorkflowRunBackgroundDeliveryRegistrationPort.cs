@@ -51,7 +51,8 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPort
             ReplyMessageId = registration.ReplyMessageId ?? string.Empty,
             PlatformMessageId = registration.PlatformMessageId ?? string.Empty,
             RegistrationScopeId = registration.RegistrationScopeId ?? string.Empty,
-            DurableReplyCredentialRef = registration.DurableReplyCredentialRef ?? string.Empty,
+            WorkflowResultDeliveryCredential = registration.WorkflowResultDeliveryCredential?.Clone(),
+            BotRegistrationId = registration.BotRegistrationId ?? string.Empty,
         };
         var envelope = new EventEnvelope
         {
@@ -87,7 +88,6 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPort
             ReplyMessageId = registration.ReplyMessageId ?? string.Empty,
             PlatformMessageId = registration.PlatformMessageId ?? string.Empty,
             RegistrationScopeId = registration.RegistrationScopeId ?? string.Empty,
-            DurableReplyCredentialRef = registration.DurableReplyCredentialRef ?? string.Empty,
         };
     }
 }

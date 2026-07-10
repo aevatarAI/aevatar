@@ -19,5 +19,6 @@ public sealed record WorkflowRunBackgroundDeliveryRegistration(
     string ChannelPlatform,
     string ReplyMessageId,
     string PlatformMessageId,
-    string DurableReplyCredentialRef,
-    string RegistrationScopeId);
+    ChannelWorkflowResultDeliveryCredential WorkflowResultDeliveryCredential,
+    string RegistrationScopeId,
+    string BotRegistrationId);

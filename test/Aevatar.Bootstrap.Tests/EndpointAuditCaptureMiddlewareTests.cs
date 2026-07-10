@@ -180,6 +180,29 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     }
 
     [Fact]
+    public async Task AnnotatedAnonymousIngress_WhenUnauthenticatedAndOptedIn_ShouldAppendRecordsWithAnonymousActor()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateHostAsync(appender);
+
+        // No Authorization header -> unauthenticated caller, but the ingress
+        // endpoint opts into anonymous capture, so the attempt is still recorded.
+        var response = await app.GetTestClient().PostAsync(
+            "/audited/anon-ingress/ingress-1",
+            new StringContent("{}", Encoding.UTF8, "application/json"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        appender.Records.Should().HaveCount(2);
+        appender.Records.Should().OnlyContain(record =>
+            record.AuditActorId == "hashed-anonymous" &&
+            record.IdentityKeyId == "kid-test" &&
+            record.ActorKind == AuditActorKind.System &&
+            record.CredentialSource == AuditCredentialSource.System &&
+            record.CapturePlane == AuditCapturePlane.BoundaryEndpoint &&
+            record.OperationName.StartsWith("test.anon.ingress", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task TokenShapedRequestValue_ShouldNotEnterAppendedRecords()
     {
         var appender = new RecordingAuditTrailAppender();
@@ -352,6 +375,15 @@ public sealed class EndpointAuditCaptureMiddlewareTests
                 EndpointAuditTargetResolvers.FromRouteValues("workflow-run", "scopeId", "memberId", "runId"),
                 EndpointAuditSanitizers.WithRouteValues("scopeId", "memberId", "runId"))
             .RequireAuthorization();
+        app.MapPost("/audited/anon-ingress/{ingressId}", (string ingressId) => Results.Accepted($"/audited/anon-ingress/{ingressId}"))
+            .WithEndpointAudit(
+                "test.anon.ingress",
+                AuditSensitivityLevel.Confidential,
+                "anon-ingress",
+                EndpointAuditTargetResolvers.FromRouteValue("anon-ingress", "ingressId"),
+                EndpointAuditSanitizers.WithRouteValues("ingressId"),
+                captureUnauthenticated: true)
+            .AllowAnonymous();
         app.MapGet("/plain", () => Results.Ok()).RequireAuthorization();
 
         await app.StartAsync();
@@ -459,8 +491,12 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     {
         public AuditActorIdentity Hash(string canonicalActorKey)
         {
-            canonicalActorKey.Should().Be("nyxid:user-123");
-            return new AuditActorIdentity("hashed-user-123", "kid-test");
+            return canonicalActorKey switch
+            {
+                "nyxid:user-123" => new AuditActorIdentity("hashed-user-123", "kid-test"),
+                "system:endpoint-audit-anonymous" => new AuditActorIdentity("hashed-anonymous", "kid-test"),
+                _ => throw new InvalidOperationException($"Unexpected canonical actor key: {canonicalActorKey}"),
+            };
         }
 
         public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId)

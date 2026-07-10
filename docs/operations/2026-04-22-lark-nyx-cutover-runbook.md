@@ -22,7 +22,7 @@ Cut production Lark webhook ingress over to `Lark -> NyxID -> Aevatar` and remov
 - Nyx relay JWT validation is enabled in Aevatar.
 - Lark turn replies already go through Nyx `channel-relay/reply`.
 - Lark bot provisioning is done with:
-  - `channel_registrations action=register_lark_via_nyx ...`
+  - `channel_registrations action=register_channel_via_nyx platform=lark ...`
 
 ## Provisioning Output
 

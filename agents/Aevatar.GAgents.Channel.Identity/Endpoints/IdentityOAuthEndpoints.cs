@@ -1,3 +1,5 @@
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -32,9 +34,21 @@ public static class IdentityOAuthEndpoints
 
         app.MapGet("/api/oauth/nyxid-callback", HandleNyxIdOAuthCallbackAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.oauth.callback",
+                AuditSensitivityLevel.Confidential,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "callback"),
+                captureUnauthenticated: true)
             .AllowAnonymous();
         app.MapPost("/api/webhooks/nyxid-broker-revocation", HandleBrokerRevocationWebhookAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.binding.broker-revocation",
+                AuditSensitivityLevel.Restricted,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "broker-revocation"),
+                captureUnauthenticated: true)
             .AllowAnonymous();
         app.MapGet("/api/oauth/aevatar-client/status", HandleAevatarOAuthClientStatusAsync)
             .WithTags("ChannelIdentity")
@@ -44,6 +58,12 @@ public static class IdentityOAuthEndpoints
         // inline because this module does not own an ASP.NET auth scheme.
         app.MapPost("/api/oauth/aevatar-client/rebuild", HandleAevatarOAuthClientRebuildAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.oauth-client.rebuild",
+                AuditSensitivityLevel.Restricted,
+                "aevatar_oauth_client",
+                EndpointAuditTargetResolvers.Static("aevatar_oauth_client", "rebuild"),
+                captureUnauthenticated: true)
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
         // Operator-only: rebuild a wiped/reset current-state readmodel for one NyxID
@@ -51,6 +71,12 @@ public static class IdentityOAuthEndpoints
         // no browser round-trip. Same admin gate as the client rebuild.
         app.MapPost("/api/oauth/nyxid-binding/rebuild", HandleNyxIdBindingRebuildAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.binding.rebuild",
+                AuditSensitivityLevel.Restricted,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "rebuild"),
+                captureUnauthenticated: true)
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
 

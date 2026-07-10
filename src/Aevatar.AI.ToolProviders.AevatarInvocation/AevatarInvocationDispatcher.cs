@@ -29,7 +29,7 @@ public sealed class AevatarInvocationDispatcher
     private const string DeletedGAgentActorNameAlias = "actor_name";
     private const string ChannelWorkflowDeliveryUnavailableCode = "channel_workflow_delivery_unavailable";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
-        "This channel bot is not configured for workflow result delivery. The workflow was not started because its terminal result could not be delivered to this chat. Enable workflow result delivery for the bot, or invoke the workflow from a surface that can observe the run result.";
+        "This channel bot is not provisioned for workflow result delivery, so the workflow was not started: its terminal result could not be delivered back to this chat. Start the workflow from a surface that can observe the run result, or re-register the channel bot to enable workflow result delivery.";
     private static readonly string[] ProtectedCallerMetadataKeys =
     [
         LLMRequestMetadataKeys.ScopeId,
@@ -386,7 +386,7 @@ public sealed class AevatarInvocationDispatcher
                     receipt,
                     receipt.CommandId,
                     streamTopic,
-                    backgroundDelivery.DurableReplyCredentialRef!,
+                    backgroundDelivery.WorkflowResultDeliveryCredential!,
                     AgentToolRequestContext.Current,
                     ct)
                 .ConfigureAwait(false);
@@ -669,7 +669,7 @@ public sealed class AevatarInvocationDispatcher
                     receipt,
                     serviceRunId,
                     streamTopic,
-                    backgroundDelivery.DurableReplyCredentialRef!,
+                    backgroundDelivery.WorkflowResultDeliveryCredential!,
                     AgentToolRequestContext.Current,
                     ct)
                 .ConfigureAwait(false);
@@ -893,7 +893,7 @@ public sealed class AevatarInvocationDispatcher
         WorkflowChatRunAcceptedReceipt receipt,
         string serviceRunId,
         string streamTopic,
-        string durableReplyCredentialRef,
+        ChannelWorkflowResultDeliveryCredential workflowResultDeliveryCredential,
         AgentToolExecutionContext? context,
         CancellationToken ct)
     {
@@ -901,7 +901,7 @@ public sealed class AevatarInvocationDispatcher
             receipt,
             serviceRunId,
             streamTopic,
-            durableReplyCredentialRef,
+            workflowResultDeliveryCredential,
             context);
         if (registration is null)
         {
@@ -958,14 +958,14 @@ public sealed class AevatarInvocationDispatcher
         WorkflowChatRunAcceptedReceipt receipt,
         string serviceRunId,
         string streamTopic,
-        string durableReplyCredentialRef,
+        ChannelWorkflowResultDeliveryCredential workflowResultDeliveryCredential,
         AgentToolExecutionContext? context)
     {
         context ??= AgentToolExecutionContext.Empty;
         var platform = Normalize(context.Channel.Platform);
         var replyMessageId = Normalize(context.Channel.MessageId);
-        var normalizedCredentialRef = Normalize(durableReplyCredentialRef);
-        if (platform is null || replyMessageId is null || normalizedCredentialRef is null)
+        if (platform is null || replyMessageId is null ||
+            !IsUsableWorkflowResultDeliveryCredential(workflowResultDeliveryCredential))
             return null;
 
         var platformMessageId = Normalize(context.Channel.PlatformMessageId) ??
@@ -987,14 +987,15 @@ public sealed class AevatarInvocationDispatcher
             ChannelPlatform: platform,
             ReplyMessageId: replyMessageId,
             PlatformMessageId: platformMessageId,
-            DurableReplyCredentialRef: normalizedCredentialRef,
-            RegistrationScopeId: registrationScopeId);
+            WorkflowResultDeliveryCredential: workflowResultDeliveryCredential.Clone(),
+            RegistrationScopeId: registrationScopeId,
+            BotRegistrationId: Normalize(context.Channel.BotRegistrationId) ?? string.Empty);
     }
 
     private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>
         Error(ChannelWorkflowDeliveryUnavailableCode, ChannelWorkflowDeliveryUnavailableMessage);
 
-    private static WorkflowBackgroundDeliveryResolution ResolveWorkflowBackgroundDelivery(
+    private WorkflowBackgroundDeliveryResolution ResolveWorkflowBackgroundDelivery(
         InvocationWaitMode wait,
         AgentToolExecutionContext? context)
     {
@@ -1005,12 +1006,21 @@ public sealed class AevatarInvocationDispatcher
         if (Normalize(context.Channel.Platform) is null || Normalize(context.Channel.MessageId) is null)
             return WorkflowBackgroundDeliveryResolution.Disabled();
 
-        var credentialRef = Normalize(context.Channel.DurableReplyCredentialRef);
-        if (credentialRef is not null)
-            return WorkflowBackgroundDeliveryResolution.Enabled(credentialRef);
+        var credential = context.Channel.WorkflowResultDeliveryCredential;
+        if (IsUsableWorkflowResultDeliveryCredential(credential))
+            return WorkflowBackgroundDeliveryResolution.Enabled(credential!);
 
+        _logger.LogInformation(
+            "Channel workflow background delivery is unavailable: reason=credential_handle_missing platform={Platform} registrationScopeId={RegistrationScopeId}",
+            context.Channel.Platform,
+            context.Channel.RegistrationScopeId);
         return WorkflowBackgroundDeliveryResolution.Failed(ChannelWorkflowDeliveryUnavailableError());
     }
+
+    private static bool IsUsableWorkflowResultDeliveryCredential(
+        ChannelWorkflowResultDeliveryCredential? credential) =>
+        !string.IsNullOrWhiteSpace(credential?.SecretReference?.Ref) &&
+        !string.IsNullOrWhiteSpace(credential.SubjectId);
 
     private StaticGAgentStreamInvocationRequest BuildStaticInvocationRequest(
         TeamEntryMemberResolution resolution,
@@ -1625,14 +1635,15 @@ public sealed class AevatarInvocationDispatcher
 
     private sealed record WorkflowBackgroundDeliveryResolution(
         bool ShouldRegister,
-        string? DurableReplyCredentialRef,
+        ChannelWorkflowResultDeliveryCredential? WorkflowResultDeliveryCredential,
         InvocationToolError? Error)
     {
         public static WorkflowBackgroundDeliveryResolution Disabled() =>
             new(false, null, null);
 
-        public static WorkflowBackgroundDeliveryResolution Enabled(string durableReplyCredentialRef) =>
-            new(true, durableReplyCredentialRef, null);
+        public static WorkflowBackgroundDeliveryResolution Enabled(
+            ChannelWorkflowResultDeliveryCredential workflowResultDeliveryCredential) =>
+            new(true, workflowResultDeliveryCredential, null);
 
         public static WorkflowBackgroundDeliveryResolution Failed(InvocationToolError error) =>
             new(false, null, error);
