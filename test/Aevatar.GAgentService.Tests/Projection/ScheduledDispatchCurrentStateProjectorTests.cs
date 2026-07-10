@@ -143,7 +143,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         var state = CreateServiceInvocationState("schedule-durable-reference", identity);
         state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
         {
-            DurableCredentialReference = new ScheduledServiceInvocationDurableCredentialReferenceState
+            Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
             {
                 CredentialId = "credential-projector-1",
                 SecretReference = new SecretReference

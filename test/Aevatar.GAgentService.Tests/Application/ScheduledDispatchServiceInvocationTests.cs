@@ -444,11 +444,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-<<<<<<< HEAD
     public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReference_ShouldResolveVaultAndInjectSenderToken()
-=======
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableReference_ShouldRejectBeforeExchange()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
@@ -464,12 +460,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 LlmControl = new LLMControlContextPayload { ModelOverride = "opus" },
             }),
         };
-        var auth = new ScheduledServiceInvocationAuth(
-<<<<<<< HEAD
-            DurableCredentialReference: CreateDurableCredentialReference());
-=======
-            new ScheduledServiceInvocationDurableCredentialReference("durable-run-key"));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference());
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
@@ -477,9 +468,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             Headers: null,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
-<<<<<<< HEAD
         credentialExchange.Sources.Should().BeEmpty();
-        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
         var resolve = secretVault.ResolveRequests.Should().ContainSingle().Which;
         resolve.Ref.Should().Be("sec-1");
         resolve.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
@@ -490,36 +479,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
         invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer durable-run-key");
         invokedChat.LlmControl.ModelOverride.Should().Be("opus");
-    }
-
-    [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableReferenceAndSubjectRef_ShouldRejectBeforeExchange()
-    {
-        var invocationPort = new RecordingServiceInvocationPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("subject-token");
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
-        var original = new ServiceInvocationRequest
-        {
-            CommandId = "cmd-invoke",
-            CorrelationId = "corr-invoke",
-            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
-        };
-        var auth = new ScheduledServiceInvocationAuth(
-            new ScheduledServiceInvocationNyxIdCredentialSource(
-                new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "user-42"),
-                "proxy"),
-            DurableCredentialReference: CreateDurableCredentialReference());
-
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*exactly one credential source*");
-=======
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*durable credential reference exchange is not available*");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
-        credentialExchange.Sources.Should().BeEmpty();
-        invocationPort.Requests.Should().BeEmpty();
     }
 
     [Theory]

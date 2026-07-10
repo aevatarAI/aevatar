@@ -832,11 +832,7 @@ public sealed class ScheduledDispatchEndpointsTests
         var auth = configuration.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
         auth!.SenderNyxId.Should().NotBeNull();
-<<<<<<< HEAD
-        auth.DurableCredentialReference.Should().BeNull();
-=======
         auth.Durable.Should().BeNull();
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]

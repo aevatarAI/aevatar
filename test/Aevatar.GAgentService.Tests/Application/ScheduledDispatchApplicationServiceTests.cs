@@ -145,29 +145,23 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(
-<<<<<<< HEAD
-                        DurableCredentialReference: CreateDurableCredentialReference(
+                    Auth: new ScheduledServiceInvocationAuth(CreateDurableCredentialReference(
                             " credential-1 ",
                             " sec-1 ",
                             " owner-scope-1 ")))),
-=======
-                        new ScheduledServiceInvocationDurableCredentialReference(" durable-run-key ")))),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
         var created = actorPort.Created.Should().ContainSingle().Which;
-<<<<<<< HEAD
-        var auth = created.Configuration.Target.ServiceInvocation!.Auth!.DurableCredentialReference;
+        var auth = created.Configuration.Target.ServiceInvocation!.Auth!.Durable;
         auth.Should().NotBeNull();
         auth!.CredentialId.Should().Be("credential-1");
         auth.SecretReference.Ref.Should().Be("sec-1");
         auth.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
         auth.SecretReference.OwnerScopeKey.Should().Be("owner-scope-1");
-        var stateAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.DurableCredentialReference;
+        var stateAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.Durable;
         stateAuth.Should().BeEquivalentTo(auth);
     }
 
@@ -185,8 +179,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
             "schedule-durable-auth",
-            new ScheduledServiceInvocationAuth(
-                DurableCredentialReference: CreateDurableCredentialReference(
+            new ScheduledServiceInvocationAuth(CreateDurableCredentialReference(
                     credentialId,
                     secretRef,
                     ownerScopeKey))));
@@ -202,51 +195,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
             "schedule-durable-auth",
-            new ScheduledServiceInvocationAuth(
-                DurableCredentialReference: CreateDurableCredentialReference(purpose: "other-purpose"))));
+            new ScheduledServiceInvocationAuth(CreateDurableCredentialReference(purpose: "other-purpose"))));
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage($"*{CredentialSecretPurposes.ScheduledNyxApiKey}*");
-    }
-
-    [Fact]
-    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceMixedWithSenderNyxId()
-    {
-        var service = CreateService();
-
-        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
-            "schedule-durable-auth",
-            new ScheduledServiceInvocationAuth(
-                SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
-                    new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-                    "proxy"),
-                DurableCredentialReference: CreateDurableCredentialReference())));
-
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Exactly one service invocation credential source is required*");
-    }
-
-    [Fact]
-    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceMixedWithScopeOwnerNyxId()
-    {
-        var service = CreateService();
-
-        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
-            "schedule-durable-auth",
-            new ScheduledServiceInvocationAuth(
-                DurableCredentialReference: CreateDurableCredentialReference(),
-                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                    "owner-proxy",
-                    new ScheduledServiceInvocationNyxIdSubjectRef(
-                        OwnerScope.NyxIdPlatform,
-                        string.Empty,
-                        "owner-nyx-user")))));
-
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Exactly one service invocation credential source is required*");
-=======
-        created.Configuration.Target.ServiceInvocation!.Auth!.Durable!.CredentialId.Should().Be("durable-run-key");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]
@@ -522,27 +474,15 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     Auth: new ScheduledServiceInvocationAuth(
                         new ScheduledServiceInvocationNyxIdCredentialSource(
                             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-<<<<<<< HEAD
-                            "proxy"),
-                        DurableCredentialReference: CreateDurableCredentialReference(),
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                            "owner-proxy",
-                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
-=======
                             "proxy",
                             (ScheduledServiceInvocationNyxIdCredentialRole)999)))),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-<<<<<<< HEAD
-            .WithMessage("*Exactly one service invocation credential source is required*");
-=======
             .WithMessage("*NyxID credential role is required*");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]
@@ -725,12 +665,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(
-<<<<<<< HEAD
-                        DurableCredentialReference: CreateDurableCredentialReference()))),
-=======
-                        new ScheduledServiceInvocationDurableCredentialReference("durable-run-key")))),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+                    Auth: new ScheduledServiceInvocationAuth(CreateDurableCredentialReference()))),
             "0 9 * * *",
             "UTC",
             true,
@@ -742,14 +677,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
         await port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
 
         var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
-<<<<<<< HEAD
-        command.Target.ServiceInvocation.Auth.DurableCredentialReference.Should().NotBeNull();
-        command.Target.ServiceInvocation.Auth.DurableCredentialReference.CredentialId.Should().Be("credential-1");
-        command.Target.ServiceInvocation.Auth.DurableCredentialReference.SecretReference.Ref.Should().Be("sec-1");
-        command.Target.ServiceInvocation.Auth.DurableCredentialReference.SecretReference.OwnerScopeKey.Should().Be("owner-scope-1");
-=======
-        command.Target.ServiceInvocation.Auth.Durable.CredentialId.Should().Be("durable-run-key");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+        command.Target.ServiceInvocation.Auth.SourceCase.Should().Be(ScheduledServiceInvocationAuthState.SourceOneofCase.Durable);
+        command.Target.ServiceInvocation.Auth.Durable.Should().NotBeNull();
+        command.Target.ServiceInvocation.Auth.Durable.CredentialId.Should().Be("credential-1");
+        command.Target.ServiceInvocation.Auth.Durable.SecretReference.Ref.Should().Be("sec-1");
+        command.Target.ServiceInvocation.Auth.Durable.SecretReference.OwnerScopeKey.Should().Be("owner-scope-1");
     }
 
     [Fact]

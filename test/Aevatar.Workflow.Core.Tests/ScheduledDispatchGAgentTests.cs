@@ -1082,7 +1082,7 @@ public sealed class ScheduledDispatchGAgentTests
                     }),
                     Auth = new ScheduledServiceInvocationAuthState
                     {
-                        DurableCredentialReference = new ScheduledServiceInvocationDurableCredentialReferenceState
+                        Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
                         {
                             CredentialId = "credential-1",
                             SecretReference = new SecretReference
@@ -1107,11 +1107,11 @@ public sealed class ScheduledDispatchGAgentTests
         auth.Should().NotBeNull();
         auth!.SenderNyxId.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
-        auth.DurableCredentialReference.Should().NotBeNull();
-        auth.DurableCredentialReference!.CredentialId.Should().Be("credential-1");
-        auth.DurableCredentialReference.SecretReference.Ref.Should().Be("sec-1");
+        auth.Durable.Should().NotBeNull();
+        auth.Durable!.CredentialId.Should().Be("credential-1");
+        auth.Durable.SecretReference.Ref.Should().Be("sec-1");
         serviceInvocationDispatch.Requests.Should().ContainSingle();
-        agent.State.Target!.ServiceInvocation!.Auth!.DurableCredentialReference!.CredentialId.Should().Be("credential-1");
+        agent.State.Target!.ServiceInvocation!.Auth!.Durable!.CredentialId.Should().Be("credential-1");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }
