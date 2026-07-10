@@ -1247,27 +1247,30 @@ public sealed class ScheduledDispatchGAgentTests
             dispatch,
             serviceInvocationDispatch: serviceInvocationDispatch);
         await agent.ActivateAsync();
-        await agent.HandleConfigureAsync(CreateConfigureCommand(
-            enabled: false,
-            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
-            target: new ScheduledDispatchTargetState
+        agent.State.ScheduleId = "schedule-1";
+        agent.State.CronExpression = "0 9 * * *";
+        agent.State.Timezone = "UTC";
+        agent.State.ScheduleKind = ScheduledDispatchScheduleKindState.Workflow;
+        agent.State.TriggerEnvelope = new EventEnvelope { Payload = Any.Pack(new ServiceInvocationRequest()) };
+        agent.State.Target = new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+            CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService,
+            ServiceInvocation = new ScheduledServiceInvocationTargetState
             {
-                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
-                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                EndpointId = "chat",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                Auth = new ScheduledServiceInvocationAuthState
                 {
-                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
-                    EndpointId = "chat",
-                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
-                    Auth = new ScheduledServiceInvocationAuthState
-                    {
-                        DurableSenderBearerToken = "durable-run-key",
-                    },
+                    DurableSenderBearerToken = "durable-run-key",
                 },
-            }));
+            },
+        };
 
         var stateAuth = agent.State.Target.ServiceInvocation!.Auth!;
-        stateAuth.DurableSenderBearerToken.Should().BeEmpty();
-        stateAuth.LegacyDurableSenderBearerBlocked.Should().BeTrue();
+        stateAuth.DurableSenderBearerToken.Should().Be("durable-run-key");
+        stateAuth.LegacyDurableSenderBearerBlocked.Should().BeFalse();
 
         var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
@@ -1920,7 +1923,8 @@ public sealed class ScheduledDispatchGAgentTests
     {
         var agent = new ScheduledDispatchGAgent(
             dispatch,
-            serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort())
+            serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort(),
+            new TestScheduledDispatchCredentialRequirementPolicy())
         {
             Services = new TestServiceProvider(callbackScheduler),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
@@ -2125,6 +2129,44 @@ public sealed class ScheduledDispatchGAgentTests
                 throw DispatchException;
 
             return Task.FromResult(ReceiptFactory(dispatch));
+        }
+    }
+
+    private sealed class TestScheduledDispatchCredentialRequirementPolicy : IScheduledDispatchCredentialRequirementPolicy
+    {
+        public ScheduledDispatchCredentialRequirementDecision Evaluate(
+            ScheduledDispatchCredentialRequirementRequest request)
+        {
+            var credentialRequired = request.TargetKind is
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService or
+                ScheduledDispatchCredentialRequirementTargetKind.Connector;
+            if (request.PayloadCredentialSignal.HasCurrentSessionCredential)
+            {
+                return ScheduledDispatchCredentialRequirementDecision.Deny(
+                    credentialRequired,
+                    ScheduledDispatchCredentialViolationCode.CurrentSessionCredential,
+                    "Scheduled dispatch cannot persist current-session credentials.");
+            }
+
+            if (request.CredentialSource.Kind is ScheduledDispatchCredentialSourceKind.LegacyDurableSenderBearer
+                or ScheduledDispatchCredentialSourceKind.Multiple)
+            {
+                return ScheduledDispatchCredentialRequirementDecision.Deny(
+                    credentialRequired,
+                    ScheduledDispatchCredentialViolationCode.UnsupportedCredentialSource,
+                    "Scheduled dispatch credential source is not supported.");
+            }
+
+            if (credentialRequired &&
+                request.CredentialSource.Kind == ScheduledDispatchCredentialSourceKind.None)
+            {
+                return ScheduledDispatchCredentialRequirementDecision.Deny(
+                    credentialRequired,
+                    ScheduledDispatchCredentialViolationCode.CredentialRequired,
+                    "Scheduled dispatch target requires senderNyxId or scopeOwnerNyxId credential source.");
+            }
+
+            return ScheduledDispatchCredentialRequirementDecision.Allow(credentialRequired);
         }
     }
 

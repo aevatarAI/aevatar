@@ -10,15 +10,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private readonly IScheduledDispatchActorPort _actorPort;
     private readonly IScheduledDispatchQueryPort _queryPort;
     private readonly IScheduledDispatchTargetPreparationService _targetPreparationService;
+    private readonly IScheduledDispatchCredentialRequirementPolicy _credentialRequirementPolicy;
 
     public ScheduledDispatchApplicationService(
         IScheduledDispatchActorPort actorPort,
         IScheduledDispatchQueryPort queryPort,
-        IScheduledDispatchTargetPreparationService targetPreparationService)
+        IScheduledDispatchTargetPreparationService targetPreparationService,
+        IScheduledDispatchCredentialRequirementPolicy? credentialRequirementPolicy = null)
     {
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _targetPreparationService = targetPreparationService ?? throw new ArgumentNullException(nameof(targetPreparationService));
+        _credentialRequirementPolicy = credentialRequirementPolicy ??
+            DefaultScheduledDispatchCredentialRequirementPolicy.Instance;
     }
 
     public async Task<ScheduledDispatchMutationReceipt> CreateAsync(
@@ -28,6 +32,9 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalized = NormalizeConfiguration(configuration, requireScheduleId: false);
         ValidateSchedule(normalized);
         await EnsureCreatableAsync(normalized.ScheduleId, ct);
+        normalized = AdmitCredentialRequirement(
+            normalized,
+            ScheduledDispatchCredentialRequirementOperation.Create);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -51,6 +58,9 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         // a schedule that never materializes. Surface the tombstone as the same
         // typed not-found the mutators throw, so callers can pick a fresh id.
         await EnsureMutableAsync(normalized.ScheduleId, ct);
+        normalized = AdmitCredentialRequirement(
+            normalized,
+            ScheduledDispatchCredentialRequirementOperation.Ensure);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -73,6 +83,9 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             requireScheduleId: true);
         ValidateSchedule(normalized);
         await EnsureMutableAsync(normalized.ScheduleId, ct);
+        normalized = AdmitCredentialRequirement(
+            normalized,
+            ScheduledDispatchCredentialRequirementOperation.Update);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -170,7 +183,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
-        await EnsureMutableAsync(normalizedScheduleId, ct);
+        var detail = await GetMutableScheduleAsync(normalizedScheduleId, ct);
+        if (detail == null)
+            throw new ScheduledDispatchNotFoundException(normalizedScheduleId);
+
+        AdmitRunNowCredentialRequirement(detail.Schedule);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var scheduledFireAt = DateTimeOffset.UtcNow;
         var admission = await _actorPort.DispatchRunNowAsync(actorId, scheduledFireAt, ct);
@@ -195,9 +212,18 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
     private async Task EnsureMutableAsync(string scheduleId, CancellationToken ct)
     {
+        var existing = await GetMutableScheduleAsync(scheduleId, ct);
+        if (existing?.Schedule.Deleted == true)
+            throw new ScheduledDispatchNotFoundException(scheduleId);
+    }
+
+    private async Task<ScheduledDispatchDetail?> GetMutableScheduleAsync(string scheduleId, CancellationToken ct)
+    {
         var existing = await _queryPort.GetAsync(scheduleId, ct);
         if (existing?.Schedule.Deleted == true)
             throw new ScheduledDispatchNotFoundException(scheduleId);
+
+        return existing;
     }
 
     private static ScheduledDispatchMutationReceipt CreateMutationReceipt(
@@ -212,6 +238,35 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             admission.CorrelationId,
             admission.AckedAt,
             "accepted");
+
+    private ScheduledDispatchConfiguration AdmitCredentialRequirement(
+        ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchCredentialRequirementOperation operation)
+    {
+        var request = ScheduledDispatchCredentialRequirementRequests.FromConfiguration(configuration, operation);
+        var decision = _credentialRequirementPolicy.Evaluate(request);
+        if (!decision.Allowed)
+            throw new ArgumentException(decision.Message, nameof(configuration));
+
+        return configuration with
+        {
+            CredentialRequirementTargetKind = request.TargetKind,
+        };
+    }
+
+    private void AdmitRunNowCredentialRequirement(ScheduledDispatchSummary schedule)
+    {
+        var request = new ScheduledDispatchCredentialRequirementRequest(
+            schedule.ScheduleId,
+            ScheduledDispatchCredentialRequirementOperation.Fire,
+            schedule.ScheduleKind,
+            schedule.CredentialRequirementTargetKind,
+            new ScheduledDispatchCredentialSourceSummary(schedule.CredentialSourceKind),
+            ScheduledDispatchPayloadCredentialSignal.None);
+        var decision = _credentialRequirementPolicy.Evaluate(request);
+        if (!decision.Allowed)
+            throw new ArgumentException(decision.Message, nameof(schedule));
+    }
 
     private async Task<string> ResolveScheduleActorAsync(string scheduleId, CancellationToken ct)
     {

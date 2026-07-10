@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -69,8 +68,6 @@ public static class ScheduledDispatchEndpoints
         [FromServices] IScheduledDispatchApplicationService schedules,
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
-        [FromServices] IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
         CancellationToken ct = default)
     {
         ScheduledDispatchConfiguration configuration;
@@ -84,10 +81,6 @@ public static class ScheduledDispatchEndpoints
                 ownerSubject,
                 defaultMissingWorkflowScheduleAuth: true,
                 ct);
-            await EnsureScopeOwnerNyxIdBindingExistsAsync(configuration, bindingQueryPort, ct)
-                .ConfigureAwait(false);
-            await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
-                .ConfigureAwait(false);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -112,8 +105,6 @@ public static class ScheduledDispatchEndpoints
         [FromServices] IScheduledDispatchApplicationService schedules,
         [FromServices] IServiceCatalogQueryReader catalogReader,
         [FromServices] IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
-        [FromServices] IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
         CancellationToken ct = default)
     {
         ScheduledDispatchConfiguration configuration;
@@ -127,10 +118,6 @@ public static class ScheduledDispatchEndpoints
                 ownerSubject,
                 defaultMissingWorkflowScheduleAuth: false,
                 ct);
-            await EnsureScopeOwnerNyxIdBindingExistsAsync(configuration, bindingQueryPort, ct)
-                .ConfigureAwait(false);
-            await EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(configuration, credentialExchangePort, ct)
-                .ConfigureAwait(false);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -262,57 +249,6 @@ public static class ScheduledDispatchEndpoints
         }
     }
 
-    private static async Task EnsureScopeOwnerNyxIdBindingExistsAsync(
-        ScheduledDispatchConfiguration configuration,
-        IExternalIdentityBindingQueryPort bindingQueryPort,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(bindingQueryPort);
-
-        var ownerSubject = configuration.Target.ServiceInvocation?.Auth?.ScopeOwnerNyxId?.OwnerSubject;
-        if (ownerSubject == null)
-            return;
-
-        var externalSubject = new ExternalSubjectRef
-        {
-            Platform = ownerSubject.Platform,
-            Tenant = ownerSubject.Tenant,
-            ExternalUserId = ownerSubject.ExternalUserId,
-        };
-        if (await bindingQueryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false) != null)
-            return;
-
-        throw new ArgumentException(
-            "Authenticated NyxID owner binding is required for scope owner schedule auth; complete or refresh NyxID login before creating a scope owner schedule.",
-            nameof(configuration));
-    }
-
-    private static async Task EnsureScopeOwnerNyxIdScopeCanBeIssuedAsync(
-        ScheduledDispatchConfiguration configuration,
-        IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentNullException.ThrowIfNull(credentialExchangePort);
-
-        var serviceInvocation = configuration.Target.ServiceInvocation;
-        var scopeOwnerNyxId = serviceInvocation?.Auth?.ScopeOwnerNyxId;
-        if (scopeOwnerNyxId == null)
-            return;
-
-        var exchange = await credentialExchangePort.IssueScopeOwnerNyxIdAsync(
-            scopeOwnerNyxId,
-            serviceInvocation!.Identity,
-            ct).ConfigureAwait(false);
-        if (exchange.Succeeded)
-            return;
-
-        throw new ArgumentException(string.IsNullOrWhiteSpace(exchange.Error)
-            ? "NyxID binding does not grant the requested schedule scope."
-            : exchange.Error.Trim(), nameof(configuration));
-    }
-
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
     {
         ArgumentNullException.ThrowIfNull(http);
@@ -435,7 +371,10 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduleKind: scheduleKind);
+            ScheduleKind: scheduleKind)
+        {
+            CredentialRequirementTargetKind = resolvedTarget.CredentialRequirementTargetKind,
+        };
     }
 
     private async Task<ResolvedScheduledDispatchTarget> ResolveTargetAsync(
@@ -450,7 +389,13 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             throw new ArgumentException("Exactly one scheduled dispatch target is required.");
 
         if (Envelope != null)
-            return new ResolvedScheduledDispatchTarget(Envelope.ToTarget(), IsWorkflowServiceTarget: false);
+        {
+            return new ResolvedScheduledDispatchTarget(
+                Envelope.ToTarget(),
+                IsWorkflowServiceTarget: false,
+                ScheduledDispatchCredentialRequirementTargetKind.Envelope);
+        }
+
         return await ServiceInvocation!.ToResolvedTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
     }
 
@@ -511,7 +456,8 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
 
     internal sealed record ResolvedScheduledDispatchTarget(
         ScheduledDispatchTargetDescriptor Target,
-        bool IsWorkflowServiceTarget);
+        bool IsWorkflowServiceTarget,
+        ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind);
 }
 
 public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
@@ -556,7 +502,8 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
         var implementationRevision = await ResolveImplementationRevisionAsync(catalogReader, revisionCatalogReader, revisionId, ct);
         return new ScheduledDispatchConfigurationHttpRequest.ResolvedScheduledDispatchTarget(
             target,
-            IsWorkflowRevision(implementationRevision));
+            IsWorkflowRevision(implementationRevision),
+            ResolveCredentialRequirementTargetKind(implementationRevision));
     }
 
     public ScheduledDispatchTargetDescriptor ToTarget(
@@ -641,6 +588,36 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
              ServiceEndpointContractMath.ImplementationKindWorkflow,
              StringComparison.OrdinalIgnoreCase) ||
          revision.Implementation?.Workflow != null);
+
+    private static ScheduledDispatchCredentialRequirementTargetKind ResolveCredentialRequirementTargetKind(
+        ServiceRevisionSnapshot? revision)
+    {
+        if (revision == null)
+            return ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+
+        if (IsWorkflowRevision(revision))
+            return ScheduledDispatchCredentialRequirementTargetKind.WorkflowService;
+
+        if (string.Equals(
+                revision.ImplementationKind,
+                ServiceEndpointContractMath.ImplementationKindStatic,
+                StringComparison.OrdinalIgnoreCase) ||
+            revision.Implementation?.Static != null)
+        {
+            return ScheduledDispatchCredentialRequirementTargetKind.StaticService;
+        }
+
+        if (string.Equals(
+                revision.ImplementationKind,
+                ServiceEndpointContractMath.ImplementationKindScripting,
+                StringComparison.OrdinalIgnoreCase) ||
+            revision.Implementation?.Scripting != null)
+        {
+            return ScheduledDispatchCredentialRequirementTargetKind.ScriptingService;
+        }
+
+        return ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+    }
 }
 
 public sealed record ScheduledServiceInvocationAuthHttpRequest

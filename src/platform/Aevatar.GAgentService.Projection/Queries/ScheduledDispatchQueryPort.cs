@@ -100,11 +100,21 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
                 .OrderByDescending(static x => x.CompletedAt)
                 .ToArray());
 
-    private static ScheduledDispatchSummary MapSummary(ScheduledDispatchDocument document) =>
-        new(
+    private static ScheduledDispatchSummary MapSummary(ScheduledDispatchDocument document)
+    {
+        var targetKind = ParseTargetKind(document.TargetKind);
+        var scheduleKind = ParseScheduleKind(document.ScheduleKind);
+        var credentialRequirementTargetKind =
+            ParseCredentialRequirementTargetKind(document.CredentialRequirementTargetKind);
+        if (credentialRequirementTargetKind == ScheduledDispatchCredentialRequirementTargetKind.Unspecified)
+        {
+            credentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(targetKind, scheduleKind);
+        }
+
+        return new ScheduledDispatchSummary(
             document.ScheduleId,
             document.DisplayName ?? string.Empty,
-            ParseTargetKind(document.TargetKind),
+            targetKind,
             document.TargetActorId ?? string.Empty,
             document.PayloadTypeUrl ?? string.Empty,
             document.ServiceKey ?? string.Empty,
@@ -126,10 +136,13 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.Headers.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
             document.ScheduleActorId ?? string.Empty,
             document.Prompt ?? string.Empty,
-            ParseScheduleKind(document.ScheduleKind),
+            scheduleKind,
             document.Deleted,
             document.OverdueFireDetectedCount,
-            document.LastOverdueFireAt);
+            document.LastOverdueFireAt,
+            credentialRequirementTargetKind,
+            ParseCredentialSourceKind(document.CredentialSourceKind));
+    }
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
         new(
@@ -151,4 +164,28 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
         Enum.TryParse<ScheduledDispatchScheduleKind>(value, ignoreCase: true, out var parsed)
             ? parsed
             : ScheduledDispatchScheduleKind.Generic;
+
+    private static ScheduledDispatchCredentialRequirementTargetKind ParseCredentialRequirementTargetKind(
+        string? value) =>
+        Enum.TryParse<ScheduledDispatchCredentialRequirementTargetKind>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+
+    private static ScheduledDispatchCredentialSourceKind ParseCredentialSourceKind(string? value) =>
+        Enum.TryParse<ScheduledDispatchCredentialSourceKind>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : ScheduledDispatchCredentialSourceKind.None;
+
+    private static ScheduledDispatchCredentialRequirementTargetKind ResolveCredentialRequirementTargetKind(
+        ScheduledDispatchTargetKind targetKind,
+        ScheduledDispatchScheduleKind scheduleKind)
+    {
+        if (targetKind == ScheduledDispatchTargetKind.Envelope)
+            return ScheduledDispatchCredentialRequirementTargetKind.Envelope;
+
+        return targetKind == ScheduledDispatchTargetKind.ServiceInvocation &&
+               scheduleKind == ScheduledDispatchScheduleKind.Workflow
+            ? ScheduledDispatchCredentialRequirementTargetKind.WorkflowService
+            : ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+    }
 }

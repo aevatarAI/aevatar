@@ -65,6 +65,10 @@ public sealed class ScheduledDispatchCurrentStateProjector
             DisplayName = state.DisplayName ?? string.Empty,
             TargetKind = ToApplicationTargetKind(target.Kind).ToString(),
             ScheduleKind = ToApplicationScheduleKind(state.ScheduleKind).ToString(),
+            CredentialRequirementTargetKind = ToApplicationCredentialRequirementTargetKind(
+                target,
+                state.ScheduleKind).ToString(),
+            CredentialSourceKind = ToApplicationCredentialSourceKind(target.ServiceInvocation?.Auth).ToString(),
             PayloadTypeUrl = state.PayloadTypeUrl ?? string.Empty,
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
@@ -169,6 +173,69 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
+
+    private static ScheduledDispatchCredentialRequirementTargetKind ToApplicationCredentialRequirementTargetKind(
+        ScheduledDispatchTargetState target,
+        ScheduledDispatchScheduleKindState scheduleKind)
+    {
+        var configuredKind = target.CredentialRequirementTargetKind switch
+        {
+            ScheduledDispatchCredentialRequirementTargetKindState.Envelope =>
+                ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            ScheduledDispatchCredentialRequirementTargetKindState.StaticService =>
+                ScheduledDispatchCredentialRequirementTargetKind.StaticService,
+            ScheduledDispatchCredentialRequirementTargetKindState.ScriptingService =>
+                ScheduledDispatchCredentialRequirementTargetKind.ScriptingService,
+            ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService =>
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialRequirementTargetKindState.Connector =>
+                ScheduledDispatchCredentialRequirementTargetKind.Connector,
+            _ => ScheduledDispatchCredentialRequirementTargetKind.Unspecified,
+        };
+        if (configuredKind != ScheduledDispatchCredentialRequirementTargetKind.Unspecified)
+            return configuredKind;
+
+        if (target.Kind == ScheduledDispatchTargetKindState.Envelope)
+            return ScheduledDispatchCredentialRequirementTargetKind.Envelope;
+
+        return target.Kind == ScheduledDispatchTargetKindState.ServiceInvocation &&
+               scheduleKind == ScheduledDispatchScheduleKindState.Workflow
+            ? ScheduledDispatchCredentialRequirementTargetKind.WorkflowService
+            : ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+    }
+
+    private static ScheduledDispatchCredentialSourceKind ToApplicationCredentialSourceKind(
+        ScheduledServiceInvocationAuthState? auth)
+    {
+        if (auth == null)
+            return ScheduledDispatchCredentialSourceKind.None;
+        if (auth.LegacyDurableSenderBearerBlocked ||
+            !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken))
+        {
+            return ScheduledDispatchCredentialSourceKind.LegacyDurableSenderBearer;
+        }
+
+        var sourceCount = 0;
+        var sourceKind = ScheduledDispatchCredentialSourceKind.None;
+        if (auth.SenderNyxId != null)
+        {
+            sourceCount++;
+            sourceKind = ScheduledDispatchCredentialSourceKind.SenderNyxId;
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            sourceCount++;
+            sourceKind = ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId;
+        }
+
+        return sourceCount switch
+        {
+            0 => ScheduledDispatchCredentialSourceKind.None,
+            1 => sourceKind,
+            _ => ScheduledDispatchCredentialSourceKind.Multiple,
+        };
+    }
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
         timestamp?.Seconds ?? 0;

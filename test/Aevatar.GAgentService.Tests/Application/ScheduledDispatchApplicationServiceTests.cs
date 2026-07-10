@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -152,6 +153,101 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
+        actorPort.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowServiceInvocationWithoutCredentialSource()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-workflow-no-auth",
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*requires senderNyxId or scopeOwnerNyxId*");
+        actorPort.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRejectWorkflowServiceInvocationWithoutCredentialSource()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        var act = () => service.UpdateAsync(
+            "schedule-workflow-no-auth",
+            CreateServiceInvocationConfiguration(
+                "schedule-workflow-no-auth",
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*requires senderNyxId or scopeOwnerNyxId*");
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldAllowStaticServiceInvocationWithoutCredentialSource()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        await service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-static-no-auth",
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService));
+
+        actorPort.Created.Should().ContainSingle()
+            .Which.Configuration.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.StaticService);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectCurrentSessionCredentialsBeforeActorDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService());
+
+        var payloadCredential = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-payload-credential",
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService,
+            payload: Any.Pack(new ChatRequestEvent
+            {
+                LlmControl = new LLMControlContextPayload
+                {
+                    SenderNyxIdAccessToken = "sender-token",
+                },
+            })));
+        var headerCredential = () => service.CreateAsync(CreateEnvelopeConfiguration("schedule-header-credential") with
+        {
+            CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            Headers = new Dictionary<string, string>
+            {
+                [ScheduledDispatchCredentialRequirementRequests.LegacyConnectorHttpAuthorizationHeader] = "Bearer current-token",
+            },
+        });
+
+        await payloadCredential.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*current-session credentials*");
+        await headerCredential.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*current-session credentials*");
         actorPort.Created.Should().BeEmpty();
     }
 
@@ -544,7 +640,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "UTC",
             true,
             new Dictionary<string, string> { ["trace"] = "scheduled" },
-            ScheduledDispatchScheduleKind.Workflow);
+            ScheduledDispatchScheduleKind.Workflow)
+        {
+            CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+        };
         var prepared = await new ScheduledDispatchTargetPreparationService()
             .PrepareAsync(configuration, "cmd-1", "corr-1");
 
@@ -558,6 +657,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         command.ScheduleId.Should().Be("schedule-1");
         command.Headers.Should().Contain("trace", "scheduled");
         command.Target.Kind.Should().Be(ScheduledDispatchTargetKindState.ServiceInvocation);
+        command.Target.CredentialRequirementTargetKind.Should().Be(
+            ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService);
         command.Target.ServiceInvocation.EndpointId.Should().Be("run");
         command.Target.ServiceInvocation.Auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         command.ScheduleKind.Should().Be(ScheduledDispatchScheduleKindState.Workflow);
@@ -710,9 +811,18 @@ public sealed class ScheduledDispatchApplicationServiceTests
     public async Task EnableDisableDeleteRunNow_ShouldResolveExistingActorAndReturnNotFoundWhenMissing()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = CreateSummaryDetail(
+                "schedule-1",
+                ScheduledDispatchTargetKind.Envelope,
+                ScheduledDispatchScheduleKind.Generic,
+                ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+                ScheduledDispatchCredentialSourceKind.None),
+        };
         var service = new ScheduledDispatchApplicationService(
             actorPort,
-            new RecordingScheduledDispatchQueryPort(),
+            queryPort,
             new ScheduledDispatchTargetPreparationService());
 
         var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
@@ -827,6 +937,31 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.Enabled.Should().BeEmpty();
         actorPort.Disabled.Should().BeEmpty();
         actorPort.Deleted.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunNowAsync_ShouldRejectWorkflowScheduleWithoutCredentialBeforeActorDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = CreateSummaryDetail(
+                "schedule-workflow-no-auth",
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+                ScheduledDispatchCredentialSourceKind.None),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService());
+
+        var act = () => service.RunNowAsync("schedule-workflow-no-auth");
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*requires senderNyxId or scopeOwnerNyxId*");
         actorPort.RunNow.Should().BeEmpty();
     }
 
@@ -1055,6 +1190,65 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "UTC",
             true,
             new Dictionary<string, string>());
+
+    private static ScheduledDispatchConfiguration CreateServiceInvocationConfiguration(
+        string scheduleId,
+        ScheduledDispatchScheduleKind scheduleKind,
+        ScheduledDispatchCredentialRequirementTargetKind credentialRequirementTargetKind,
+        Any? payload = null) =>
+        new ScheduledDispatchConfiguration(
+            scheduleId,
+            string.Empty,
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    payload ?? Any.Pack(new Empty()))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>(),
+            scheduleKind)
+        {
+            CredentialRequirementTargetKind = credentialRequirementTargetKind,
+        };
+
+    private static ScheduledDispatchDetail CreateSummaryDetail(
+        string scheduleId,
+        ScheduledDispatchTargetKind targetKind,
+        ScheduledDispatchScheduleKind scheduleKind,
+        ScheduledDispatchCredentialRequirementTargetKind credentialRequirementTargetKind,
+        ScheduledDispatchCredentialSourceKind credentialSourceKind) =>
+        new(
+            new ScheduledDispatchSummary(
+                scheduleId,
+                string.Empty,
+                targetKind,
+                targetKind == ScheduledDispatchTargetKind.Envelope ? "actor-1" : string.Empty,
+                Any.Pack(new Empty()).TypeUrl,
+                string.Empty,
+                string.Empty,
+                targetKind == ScheduledDispatchTargetKind.ServiceInvocation ? "chat" : string.Empty,
+                "0 9 * * *",
+                "UTC",
+                true,
+                DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch,
+                null,
+                null,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                0,
+                0,
+                new Dictionary<string, string>(),
+                $"actor:{scheduleId}",
+                ScheduleKind: scheduleKind,
+                CredentialRequirementTargetKind: credentialRequirementTargetKind,
+                CredentialSourceKind: credentialSourceKind),
+            []);
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {

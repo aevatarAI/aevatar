@@ -200,7 +200,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.Timezone = configuration.Timezone;
         command.Enabled = configuration.Enabled;
         command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
-        command.Target = CreateTargetState(dispatch.Descriptor);
+        command.Target = CreateTargetState(dispatch.Descriptor, configuration.CredentialRequirementTargetKind);
         command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
@@ -219,7 +219,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.Timezone = configuration.Timezone;
         command.Enabled = configuration.Enabled;
         command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
-        command.Target = CreateTargetState(dispatch.Descriptor);
+        command.Target = CreateTargetState(dispatch.Descriptor, configuration.CredentialRequirementTargetKind);
         command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
@@ -238,13 +238,15 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.Timezone = configuration.Timezone;
         command.Enabled = configuration.Enabled;
         command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
-        command.Target = CreateTargetState(dispatch.Descriptor);
+        command.Target = CreateTargetState(dispatch.Descriptor, configuration.CredentialRequirementTargetKind);
         command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
     }
 
-    private static ScheduledDispatchTargetState CreateTargetState(ScheduledDispatchTargetDescriptor descriptor)
+    private static ScheduledDispatchTargetState CreateTargetState(
+        ScheduledDispatchTargetDescriptor descriptor,
+        ScheduledDispatchCredentialRequirementTargetKind credentialRequirementTargetKind)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
 
@@ -254,16 +256,35 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             {
                 Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
                 ServiceInvocation = CreateServiceInvocationTarget(descriptor.ServiceInvocation),
+                CredentialRequirementTargetKind = ToStateCredentialRequirementTargetKind(credentialRequirementTargetKind),
             },
             ScheduledDispatchTargetKind.Envelope => new ScheduledDispatchTargetState
             {
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = descriptor.ActorId ?? string.Empty,
                 Envelope = descriptor.Envelope?.Clone(),
+                CredentialRequirementTargetKind = ToStateCredentialRequirementTargetKind(credentialRequirementTargetKind),
             },
             _ => throw new ArgumentException($"Unsupported scheduled dispatch target kind '{descriptor.Kind}'.", nameof(descriptor)),
         };
     }
+
+    private static ScheduledDispatchCredentialRequirementTargetKindState ToStateCredentialRequirementTargetKind(
+        ScheduledDispatchCredentialRequirementTargetKind targetKind) =>
+        targetKind switch
+        {
+            ScheduledDispatchCredentialRequirementTargetKind.Envelope =>
+                ScheduledDispatchCredentialRequirementTargetKindState.Envelope,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService =>
+                ScheduledDispatchCredentialRequirementTargetKindState.StaticService,
+            ScheduledDispatchCredentialRequirementTargetKind.ScriptingService =>
+                ScheduledDispatchCredentialRequirementTargetKindState.ScriptingService,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService =>
+                ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService,
+            ScheduledDispatchCredentialRequirementTargetKind.Connector =>
+                ScheduledDispatchCredentialRequirementTargetKindState.Connector,
+            _ => ScheduledDispatchCredentialRequirementTargetKindState.Unspecified,
+        };
 
     private static ScheduledServiceInvocationTargetState CreateServiceInvocationTarget(
         ScheduledServiceInvocationTargetDescriptor? descriptor)

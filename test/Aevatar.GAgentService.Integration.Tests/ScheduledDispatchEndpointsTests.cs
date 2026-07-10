@@ -3,13 +3,13 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -50,7 +50,10 @@ public sealed class ScheduledDispatchEndpointsTests
                 "0 9 * * *",
                 "UTC",
                 true,
-                new Dictionary<string, string> { ["trace"] = "1" }));
+                new Dictionary<string, string> { ["trace"] = "1" })
+            {
+                CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            });
     }
 
     [Fact]
@@ -187,7 +190,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser_WhenDurableBindingExists()
+    public async Task Create_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser()
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -197,14 +200,10 @@ public sealed class ScheduledDispatchEndpointsTests
                 Scope = " proxy ",
             },
         });
-        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
-        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
-
         var result = await CreateAsync(
             request,
             service,
-            CreateHttpContext(scopeId: "scope-1", uid: "owner-user-1", sub: "owner-user-subject"),
-            bindingQuery);
+            CreateHttpContext(scopeId: "scope-1", uid: "owner-user-1", sub: "owner-user-subject"));
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -222,7 +221,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_ShouldRejectScopeOwnerNyxId_WhenDurableOwnerBindingIsMissing()
+    public async Task Create_ShouldForwardScopeOwnerNyxIdFromAuthenticatedUserWithoutEndpointBindingGate()
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -241,12 +240,19 @@ public sealed class ScheduledDispatchEndpointsTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        service.Created.Should().BeEmpty();
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
     }
 
     [Fact]
-    public async Task Create_ShouldRejectScopeOwnerNyxId_WhenRequestedScopeCannotBeIssued()
+    public async Task Create_ShouldForwardScopeOwnerNyxIdScopeWithoutEndpointExchangeGate()
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -256,32 +262,27 @@ public sealed class ScheduledDispatchEndpointsTests
                 Scope = "schedule:workflow",
             },
         });
-        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
-        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
-        var credentialExchange = new FakeScheduledServiceInvocationCredentialExchangePort
-        {
-            ScopeOwnerExchangeResult = ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "NyxID binding does not grant the requested schedule scope."),
-        };
-
         var result = await CreateAsync(
             request,
             service,
-            CreateHttpContext(uid: "owner-user-1"),
-            bindingQuery,
-            credentialExchange);
+            CreateHttpContext(uid: "owner-user-1"));
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        service.Created.Should().BeEmpty();
-        credentialExchange.ScopeOwnerSources.Should().ContainSingle()
-            .Which.Scope.Should().Be("schedule:workflow");
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        auth.ScopeOwnerNyxId!.Scope.Should().Be("schedule:workflow");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
     }
 
     [Fact]
-    public async Task Update_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser_WhenDurableBindingExists()
+    public async Task Update_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser()
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -291,15 +292,11 @@ public sealed class ScheduledDispatchEndpointsTests
                 Scope = "proxy",
             },
         });
-        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
-        bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-existing";
-
         var result = await UpdateAsync(
             "schedule-owner",
             request,
             service,
-            CreateHttpContext(uid: "owner-user-1"),
-            bindingQuery);
+            CreateHttpContext(uid: "owner-user-1"));
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -347,7 +344,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Update_ShouldRejectScopeOwnerNyxId_WhenDurableOwnerBindingIsMissing()
+    public async Task Update_ShouldForwardScopeOwnerNyxIdFromAuthenticatedUserWithoutEndpointBindingGate()
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -367,8 +364,15 @@ public sealed class ScheduledDispatchEndpointsTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        service.Updated.Should().BeEmpty();
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var auth = service.Updated.Should().ContainSingle().Which.Configuration.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScopeOwnerNyxId.Should().NotBeNull();
+        auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+            OwnerScope.NyxIdPlatform,
+            string.Empty,
+            "owner-user-1"));
     }
 
     [Fact]
@@ -968,7 +972,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldLeaveAuthOmittedForActorPreservation()
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldReturnBadRequest()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
         host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
@@ -1000,10 +1004,8 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        var configuration = host.Schedules.Updated.Should().ContainSingle().Which.Configuration;
-        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
-        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Updated.Should().BeEmpty();
     }
 
     [Fact]
@@ -1036,6 +1038,19 @@ public sealed class ScheduledDispatchEndpointsTests
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
                 revisionId = "rev-chat",
+                auth = new
+                {
+                    senderNyxId = new
+                    {
+                        subject = new
+                        {
+                            platform = "nyxid",
+                            tenant = "tenant-1",
+                            externalUserId = "user-42",
+                        },
+                        scope = "proxy",
+                    },
+                },
             },
         });
 
@@ -1048,7 +1063,8 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
-        invocation.Auth.Should().BeNull();
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
@@ -1342,34 +1358,26 @@ public sealed class ScheduledDispatchEndpointsTests
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
-        HttpContext? http = null,
-        IExternalIdentityBindingQueryPort? bindingQueryPort = null,
-        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
+        HttpContext? http = null) =>
         ScheduledDispatchEndpoints.Create(
             http ?? CreateHttpContext(),
             request,
             service,
             new FakeServiceCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader(),
-            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
-            credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
+            new FakeServiceRevisionCatalogQueryReader());
 
     private static Task<IResult> UpdateAsync(
         string scheduleId,
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
-        HttpContext? http = null,
-        IExternalIdentityBindingQueryPort? bindingQueryPort = null,
-        IScheduledServiceInvocationCredentialExchangePort? credentialExchangePort = null) =>
+        HttpContext? http = null) =>
         ScheduledDispatchEndpoints.Update(
             http ?? CreateHttpContext(),
             scheduleId,
             request,
             service,
             new FakeServiceCatalogQueryReader(),
-            new FakeServiceRevisionCatalogQueryReader(),
-            bindingQueryPort ?? new FakeExternalIdentityBindingQueryPort(),
-            credentialExchangePort ?? new FakeScheduledServiceInvocationCredentialExchangePort());
+            new FakeServiceRevisionCatalogQueryReader());
 
     private static ServiceCatalogSnapshot CreateServiceCatalog(
         string activeRevisionId,
@@ -1532,13 +1540,9 @@ public sealed class ScheduledDispatchEndpointsTests
             var schedules = new RecordingScheduledDispatchApplicationService();
             var catalogReader = new FakeServiceCatalogQueryReader();
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
-            var bindingQuery = new FakeExternalIdentityBindingQueryPort();
-            bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
             builder.Services.AddSingleton<IScheduledDispatchApplicationService>(schedules);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
-            builder.Services.AddSingleton<IExternalIdentityBindingQueryPort>(bindingQuery);
-            builder.Services.AddSingleton<IScheduledServiceInvocationCredentialExchangePort, FakeScheduledServiceInvocationCredentialExchangePort>();
 
             var app = builder.Build();
             app.Use(static (context, next) =>
@@ -1666,6 +1670,7 @@ public sealed class ScheduledDispatchEndpointsTests
             ScheduledDispatchConfiguration configuration,
             CancellationToken ct = default)
         {
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Create);
             Created.Add(configuration);
             if (CreateException != null)
                 throw CreateException;
@@ -1684,6 +1689,7 @@ public sealed class ScheduledDispatchEndpointsTests
             ScheduledDispatchConfiguration configuration,
             CancellationToken ct = default)
         {
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Ensure);
             Ensured.Add(configuration);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 configuration.ScheduleId,
@@ -1700,6 +1706,7 @@ public sealed class ScheduledDispatchEndpointsTests
             ScheduledDispatchConfiguration configuration,
             CancellationToken ct = default)
         {
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Update);
             Updated.Add((scheduleId, configuration));
             if (UpdateException != null)
                 throw UpdateException;
@@ -1835,50 +1842,15 @@ public sealed class ScheduledDispatchEndpointsTests
                 AckedAt: DateTimeOffset.UtcNow,
                 AckStage: "accepted"));
         }
-    }
 
-    private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
-        new()
+        private static void AdmitCredentialRequirement(
+            ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchCredentialRequirementOperation operation)
         {
-            Platform = OwnerScope.NyxIdPlatform,
-            Tenant = string.Empty,
-            ExternalUserId = externalUserId,
-        };
-
-    private static string SubjectKey(ExternalSubjectRef subject) =>
-        $"{subject.Platform}:{subject.Tenant}:{subject.ExternalUserId}";
-
-    private sealed class FakeExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
-    {
-        public Dictionary<string, string> Bindings { get; } = new(StringComparer.Ordinal);
-
-        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
-        {
-            return Task.FromResult(Bindings.TryGetValue(SubjectKey(externalSubject), out var bindingId)
-                ? new BindingId { Value = bindingId }
-                : null);
-        }
-    }
-
-    private sealed class FakeScheduledServiceInvocationCredentialExchangePort : IScheduledServiceInvocationCredentialExchangePort
-    {
-        public ScheduledServiceInvocationCredentialExchangeResult ScopeOwnerExchangeResult { get; init; } =
-            ScheduledServiceInvocationCredentialExchangeResult.Success("owner-token");
-
-        public List<ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource> ScopeOwnerSources { get; } = [];
-
-        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
-            ScheduledServiceInvocationNyxIdCredentialSource source,
-            CancellationToken ct = default) =>
-            Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
-
-        public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
-            ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
-            ServiceIdentity serviceIdentity,
-            CancellationToken ct = default)
-        {
-            ScopeOwnerSources.Add(source);
-            return Task.FromResult(ScopeOwnerExchangeResult);
+            var request = ScheduledDispatchCredentialRequirementRequests.FromConfiguration(configuration, operation);
+            var decision = DefaultScheduledDispatchCredentialRequirementPolicy.Instance.Evaluate(request);
+            if (!decision.Allowed)
+                throw new ArgumentException(decision.Message, nameof(configuration));
         }
     }
 

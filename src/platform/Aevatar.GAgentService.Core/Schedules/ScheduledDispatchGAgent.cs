@@ -27,14 +27,18 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
+    private readonly IScheduledDispatchCredentialRequirementPolicy _credentialRequirementPolicy;
 
     public ScheduledDispatchGAgent(
         IActorDispatchPort dispatchPort,
-        IScheduledServiceInvocationDispatchPort serviceInvocationDispatchPort)
+        IScheduledServiceInvocationDispatchPort serviceInvocationDispatchPort,
+        IScheduledDispatchCredentialRequirementPolicy credentialRequirementPolicy)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _serviceInvocationDispatchPort = serviceInvocationDispatchPort
             ?? throw new ArgumentNullException(nameof(serviceInvocationDispatchPort));
+        _credentialRequirementPolicy = credentialRequirementPolicy
+            ?? throw new ArgumentNullException(nameof(credentialRequirementPolicy));
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -147,7 +151,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Target,
             command.TriggerEnvelope,
             command.CronExpression,
-            command.Timezone);
+            command.Timezone,
+            command.ScheduleKind);
         if (MatchesConfiguredDefinition(command))
             return;
 
@@ -187,18 +192,25 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
-        EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone);
+        EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone, scheduleKind);
 
         var now = DateTimeOffset.UtcNow;
         var configuredTarget = PreserveExistingServiceInvocationAuth(
-            NormalizeTarget(target),
+            NormalizeTarget(target, scheduleKind),
             isCreate);
+        EnsureCredentialRequirementAllowed(
+            ResolveCredentialRequirementOperation(command),
+            NormalizeRequired(scheduleId, nameof(scheduleId)),
+            scheduleKind,
+            configuredTarget,
+            headers);
         Logger.LogInformation(
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} credentialRequirementTargetKind={CredentialRequirementTargetKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
             NormalizeRequired(scheduleId, nameof(scheduleId)),
             isCreate,
             configuredTarget.Kind,
             scheduleKind,
+            configuredTarget.CredentialRequirementTargetKind,
             HasServiceInvocationAuth(configuredTarget),
             HasScopeOwnerNyxId(configuredTarget),
             HasSenderNyxId(configuredTarget),
@@ -440,6 +452,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 throw new InvalidOperationException(LegacyDurableSenderBearerBlockedError);
             }
 
+            EnsureCredentialRequirementAllowed(
+                ScheduledDispatchCredentialRequirementOperation.Fire,
+                ResolveScheduleId(),
+                State.ScheduleKind,
+                NormalizeTarget(stateTarget, State.ScheduleKind),
+                prepared.Headers ?? EmptyHeaders);
+
             var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
                 new ScheduledServiceInvocationDispatchRequest(
                     request,
@@ -607,6 +626,108 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 subject.Platform ?? string.Empty,
                 subject.Tenant ?? string.Empty,
                 subject.ExternalUserId ?? string.Empty);
+
+    private void EnsureCredentialRequirementAllowed(
+        ScheduledDispatchCredentialRequirementOperation operation,
+        string scheduleId,
+        ScheduledDispatchScheduleKindState scheduleKind,
+        ScheduledDispatchTargetState target,
+        IEnumerable<KeyValuePair<string, string>> headers)
+    {
+        var request = new ScheduledDispatchCredentialRequirementRequest(
+            scheduleId,
+            operation,
+            ToRuntimeScheduleKind(scheduleKind),
+            ToRuntimeCredentialRequirementTargetKind(target.CredentialRequirementTargetKind),
+            SummarizeAuth(target.ServiceInvocation?.Auth),
+            SummarizePayloadCredentialSignal(target, headers));
+        var decision = _credentialRequirementPolicy.Evaluate(request);
+        if (!decision.Allowed)
+            throw new InvalidOperationException(decision.Message);
+    }
+
+    private static ScheduledDispatchCredentialRequirementOperation ResolveCredentialRequirementOperation(
+        IMessage command) =>
+        command switch
+        {
+            ScheduledDispatchCreateCommand => ScheduledDispatchCredentialRequirementOperation.Create,
+            ScheduledDispatchEnsureCommand => ScheduledDispatchCredentialRequirementOperation.Ensure,
+            ScheduledDispatchUpdateCommand => ScheduledDispatchCredentialRequirementOperation.Update,
+            _ => ScheduledDispatchCredentialRequirementOperation.Fire,
+        };
+
+    private static ScheduledDispatchScheduleKind ToRuntimeScheduleKind(
+        ScheduledDispatchScheduleKindState scheduleKind) =>
+        scheduleKind switch
+        {
+            ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
+            _ => ScheduledDispatchScheduleKind.Generic,
+        };
+
+    private static ScheduledDispatchCredentialRequirementTargetKind ToRuntimeCredentialRequirementTargetKind(
+        ScheduledDispatchCredentialRequirementTargetKindState targetKind) =>
+        targetKind switch
+        {
+            ScheduledDispatchCredentialRequirementTargetKindState.Envelope =>
+                ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            ScheduledDispatchCredentialRequirementTargetKindState.StaticService =>
+                ScheduledDispatchCredentialRequirementTargetKind.StaticService,
+            ScheduledDispatchCredentialRequirementTargetKindState.ScriptingService =>
+                ScheduledDispatchCredentialRequirementTargetKind.ScriptingService,
+            ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService =>
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialRequirementTargetKindState.Connector =>
+                ScheduledDispatchCredentialRequirementTargetKind.Connector,
+            _ => ScheduledDispatchCredentialRequirementTargetKind.Unspecified,
+        };
+
+    private static ScheduledDispatchCredentialSourceSummary SummarizeAuth(
+        ScheduledServiceInvocationAuthState? auth)
+    {
+        if (auth == null)
+            return new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.None);
+        if (auth.LegacyDurableSenderBearerBlocked ||
+            !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken))
+        {
+            return new ScheduledDispatchCredentialSourceSummary(
+                ScheduledDispatchCredentialSourceKind.LegacyDurableSenderBearer);
+        }
+
+        var sourceCount = 0;
+        var kind = ScheduledDispatchCredentialSourceKind.None;
+        if (auth.SenderNyxId != null)
+        {
+            sourceCount++;
+            kind = ScheduledDispatchCredentialSourceKind.SenderNyxId;
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            sourceCount++;
+            kind = ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId;
+        }
+
+        return sourceCount switch
+        {
+            0 => new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.None),
+            1 => new ScheduledDispatchCredentialSourceSummary(kind),
+            _ => new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.Multiple),
+        };
+    }
+
+    private static ScheduledDispatchPayloadCredentialSignal SummarizePayloadCredentialSignal(
+        ScheduledDispatchTargetState target,
+        IEnumerable<KeyValuePair<string, string>> headers)
+    {
+        var normalizedHeaders = NormalizeHeaders(headers);
+        var payload = target.Kind == ScheduledDispatchTargetKindState.ServiceInvocation
+            ? target.ServiceInvocation?.Payload
+            : target.Envelope?.Payload;
+        return ScheduledDispatchCredentialRequirementRequests.SummarizePayloadCredentialSignal(
+            payload,
+            normalizedHeaders);
+    }
 
     private static IReadOnlyDictionary<string, string> ReadOnlyCopy(IReadOnlyDictionary<string, string> headers) =>
         new Dictionary<string, string>(headers, StringComparer.Ordinal);
@@ -823,7 +944,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private bool MatchesConfiguredDefinition(ScheduledDispatchEnsureCommand command)
     {
         var normalizedTarget = PreserveExistingServiceInvocationAuth(
-            NormalizeTarget(command.Target),
+            NormalizeTarget(command.Target, command.ScheduleKind),
             isCreate: false);
         var normalizedHeaders = NormalizeHeaders(command.Headers);
         var normalizedScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
@@ -842,7 +963,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                State.ScheduleKind == command.ScheduleKind &&
                DictionaryEquals(State.Headers, normalizedHeaders) &&
                EnvelopePayloadEquals(State.TriggerEnvelope, command.TriggerEnvelope) &&
-               TargetEquals(NormalizeTarget(State.Target), normalizedTarget);
+               TargetEquals(NormalizeTarget(State.Target, State.ScheduleKind), normalizedTarget);
     }
 
     private void EnsureConfiguredForWrite(string operation)
@@ -857,11 +978,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         ScheduledDispatchTargetState? target,
         EventEnvelope? triggerEnvelope,
         string cronExpression,
-        string timezone)
+        string timezone,
+        ScheduledDispatchScheduleKindState scheduleKind)
     {
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
-        _ = NormalizeTarget(target);
+        _ = NormalizeTarget(target, scheduleKind);
         _ = NormalizeRequired(targetActorId, nameof(targetActorId));
         _ = NormalizeRequired(cronExpression, nameof(cronExpression));
 
@@ -876,7 +998,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
     }
 
-    private static ScheduledDispatchTargetState NormalizeTarget(ScheduledDispatchTargetState? target)
+    private static ScheduledDispatchTargetState NormalizeTarget(
+        ScheduledDispatchTargetState? target,
+        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic)
     {
         if (target == null)
             return new ScheduledDispatchTargetState();
@@ -887,20 +1011,50 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
                 ServiceInvocation = NormalizeServiceInvocationTarget(target.ServiceInvocation),
+                CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
+                    target.CredentialRequirementTargetKind,
+                    ScheduledDispatchTargetKindState.ServiceInvocation,
+                    scheduleKind),
             },
             ScheduledDispatchTargetKindState.Envelope => new ScheduledDispatchTargetState
             {
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
                 Envelope = target.Envelope?.Clone(),
+                CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
+                    target.CredentialRequirementTargetKind,
+                    ScheduledDispatchTargetKindState.Envelope,
+                    scheduleKind),
             },
             _ => new ScheduledDispatchTargetState
             {
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
                 Envelope = target.Envelope?.Clone(),
+                CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
+                    target.CredentialRequirementTargetKind,
+                    ScheduledDispatchTargetKindState.Envelope,
+                    scheduleKind),
             },
         };
+    }
+
+    private static ScheduledDispatchCredentialRequirementTargetKindState ResolveCredentialRequirementTargetKind(
+        ScheduledDispatchCredentialRequirementTargetKindState configuredKind,
+        ScheduledDispatchTargetKindState targetKind,
+        ScheduledDispatchScheduleKindState scheduleKind)
+    {
+        if (configuredKind != ScheduledDispatchCredentialRequirementTargetKindState.Unspecified)
+            return configuredKind;
+        if (targetKind == ScheduledDispatchTargetKindState.Envelope)
+            return ScheduledDispatchCredentialRequirementTargetKindState.Envelope;
+        if (targetKind == ScheduledDispatchTargetKindState.ServiceInvocation &&
+            scheduleKind == ScheduledDispatchScheduleKindState.Workflow)
+        {
+            return ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService;
+        }
+
+        return ScheduledDispatchCredentialRequirementTargetKindState.Unspecified;
     }
 
     private static ScheduledServiceInvocationTargetState NormalizeServiceInvocationTarget(
@@ -1025,7 +1179,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.Headers.Clear();
         foreach (var (key, value) in NormalizeHeaders(evt.Headers))
             next.Headers[key] = value;
-        next.Target = NormalizeTarget(evt.Target);
+        next.Target = NormalizeTarget(evt.Target, evt.ScheduleKind);
         next.ScheduleKind = evt.ScheduleKind;
         if (!next.Enabled)
         {
