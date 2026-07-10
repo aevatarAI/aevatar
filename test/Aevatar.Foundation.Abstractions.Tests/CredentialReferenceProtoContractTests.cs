@@ -53,4 +53,25 @@ public sealed class CredentialReferenceProtoContractTests
         parsed.OwnerRunId.ShouldBe(reference.OwnerRunId);
         parsed.OwnerStepId.ShouldBe(reference.OwnerStepId);
     }
+
+    [Fact]
+    public void DurableCallerCredentialRef_ShouldRoundTripTypedHandleThroughProtobuf()
+    {
+        var reference = new DurableCallerCredentialRef
+        {
+            Ref = "sec_scheduled",
+            Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            OwnerScopeKey = "schedule:schedule-1",
+            SubjectId = "lark:tenant:user-1",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
+
+        var parsed = DurableCallerCredentialRef.Parser.ParseFrom(reference.ToByteArray());
+
+        parsed.Ref.ShouldBe(reference.Ref);
+        parsed.Purpose.ShouldBe(reference.Purpose);
+        parsed.OwnerScopeKey.ShouldBe(reference.OwnerScopeKey);
+        parsed.SubjectId.ShouldBe(reference.SubjectId);
+        parsed.SourceKind.ShouldBe(DurableCallerCredentialSourceKind.ScheduledDispatch);
+    }
 }
