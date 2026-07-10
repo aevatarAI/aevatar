@@ -6,7 +6,7 @@ owner: eanzhao
 
 # ADR-0037: 定时任务调用凭证的权威来源模型
 
-> 跟踪 epic：[#2404](https://github.com/aevatarAI/aevatar/issues/2404) · 来源讨论：[discussion #2402](https://github.com/aevatarAI/aevatar/discussions/2402) · 关联：ADR-0018（per-user NyxID binding / 零 secret material 边界）、`SecretReference` / `ISecretVault`（Aevatar 加密 vault 引用边界）、#375（线上零 secret material）
+> 跟踪 epic：[#2404](https://github.com/aevatarAI/aevatar/issues/2404) · 来源讨论：[discussion #2402](https://github.com/aevatarAI/aevatar/discussions/2402) · 关联：ADR-0018（per-user NyxID binding / 零 secret material 边界）、ADR-0033（NyxID ephemeral broker，fire 时重签短 token 同范式）、#375（线上零 secret material）
 
 ## Context
 
@@ -36,7 +36,7 @@ owner: eanzhao
 把定时任务调用凭证收敛为**单一 typed 权威来源模型**：存「凭证来源 / 引用」，而非可直接使用的 raw token；用 `oneof` 在类型层面保证互斥；统一 Sender 与 ScopeOwner 为一个来源 + `role` 维度；校验下沉到 application/domain 使所有入口语义一致。
 
 1. **统一 NyxID 来源 + role**：`SenderNyxId` 与 `ScopeOwnerNyxId` 合并为一个 `NyxIdCredentialSource(subject, scope, role)`，`role ∈ {SENDER, SCOPE_OWNER}`。role 决定：① subject 解析与归属校验（`SCOPE_OWNER` 必须 = 认证 caller 的 owner subject，不可由 body 伪造；`SENDER` 为目标 subject 但仍需 binding）② fire 时注入目标字段。消除「两个 record 表达同一次 broker 调用」的冗余。
-2. **Durable 降级为 vault 引用、且 internal-only**：删除「raw bearer token 持久化进 state」；改为 `DurableNyxApiKeyCredentialSource(nyx_api_key_id, secret_ref, key_expires_at_unix_ms)`。`nyx_api_key_id` 是 NyxID api key / agent key 的非秘密标识，用于审计、吊销与 allowlist 对账；`secret_ref` 是 Aevatar 加密 vault 中保存 raw key 的 `aevatar.credentials.SecretReference`；`key_expires_at_unix_ms` 是必须校验的过期水位。fire / run-now 每次在 dispatch/provider 边界经 `ISecretVault.ResolveAsync` 解出 raw key，用完即丢弃；**不**通过 NyxID broker 把 key id 换短 token。**通用 HTTP API 不再接受 durable**——durable source 只能由 internal trusted provisioning（Studio）写入。
+2. **Durable 降级为引用、且 internal-only**：删除新写路径中的「raw bearer token 持久化进 state」；改为 `DurableCredentialReference(credential_id)`，id 是 NyxID agent key 的 handle（Studio minted 本就产出有 id 的 agent key，`ScheduledAgentKeyStudioRunCredentialIssuer.cs:44`）。本结构阶段只落 typed reference，fire 时由 id 经 broker 换短 token 的行为留给后续行为阶段；迁移期旧 raw durable replay 必须 fail closed。**通用 HTTP API 不再接受 durable**——durable reference 只能由 internal trusted provisioning（Studio）写入。
 3. **无 auth + required-credential policy**：保留 no-auth，但由 typed policy 按 target/implementation 声明「是否必须带 credential」，避免运行到下游才失败（discussion E）。
 4. **校验下沉**：把当前困在 endpoint private static 的 binding/owner 校验下沉到 application/domain 统一路径，HTTP 与 internal 入口走同一套校验语义。
 5. **create/update 期只做无副作用 validation**：NyxId source 不再用「真 mint」做预检；改用 binding 存在性（已有的 read-only `bindingQueryPort.ResolveAsync`）+ scope 归属判断；只有 fire/run-now 才为 NyxId source 签发短 token（具体 introspection 机制见 Open Questions，受限于 NyxID 既有 surface）。
@@ -47,57 +47,51 @@ owner: eanzhao
 ## Locked Rules
 
 1. **类型层互斥**：凭证用 `oneof`，禁止「三个独立字段靠注释互斥」。
-2. **存来源/引用，不存 raw token**：actor state / proto / log / readmodel 不落任何可直接使用的 bearer；durable 只存 NyxID api key id、vault `SecretReference` 与过期水位，raw key 只存在 Aevatar 加密 vault。
+2. **存来源/引用，不存 raw token**：actor state / proto / log / readmodel 不落任何可直接使用的 bearer；durable 只存 NyxID agent key 的 id。
 3. **来源统一、role 区分**：Sender 与 ScopeOwner 共用一个 `NyxIdCredentialSource`，差异由 `role` 表达；fire 时注入由 role 决定，不为每个 role 复制一条 source 类型。
 4. **校验单一路径**：binding/owner/scope 校验属 application/domain，HTTP 与 internal 入口共用；endpoint 不得私藏只对单一变体生效的 gate。
 5. **create 无副作用**：create/update 不得通过实际签发 access token 来做校验。
-6. **durable internal-only**：通用 HTTP `/api/schedules` 不接受 durable source；只有 trusted provisioning 路径可写，且必须把 `nyx_api_key_id` 绑定到目标 service / scope 的 allowlist。
+6. **durable internal-only**：通用 HTTP `/api/schedules` 不接受 durable reference；只有 trusted provisioning 路径可写。
 7. **owner 不可伪造**：`SCOPE_OWNER` role 的 subject 只能来自认证 principal 的 claim，调用方不能在 body 指定（HTTP 现状已如此，下沉后 internal 入口也须遵守）。
-8. **wire-safe 迁移**：旧字段 1/2/3 在迁移窗口保持 deprecated 可读，不能先 `reserved`；现有 tag 4 保留给 `legacy_durable_sender_bearer_blocked`，新 typed `oneof` 使用 tag 5/6。reducer 迁移期能读旧 3 字段格式（旧 schedule 不破，下次 update 迁移），不要求一次性回填。
+8. **wire-safe 迁移**：旧 tag `1/2/3` 迁移期只标记 deprecated 并双读，不能 reserve；现有 tag `4` 保留给 `legacy_durable_sender_bearer_blocked`，新写只写 `oneof source` 的 tag `5/6`。旧 schedule 不破，下次 update 迁移，不要求一次性回填。
 9. **legacy 删除优先**：无活路径的 legacy auth 代码直接删（FI-007），不留兼容空壳。
-10. **读侧诚实**：凭证来源可经 readmodel 暴露（不含 secret）；durable 的 raw key、`secret_ref` 与完整 key id 都不得投影（沿用现有 `ProjectAsync_ShouldNotProjectDurableSenderBearerToken` 的安全立场）。
-11. **过期与吊销 fail closed**：fire / run-now 前必须检查 `key_expires_at_unix_ms`；vault ref 缺失、purpose / owner / schedule 不匹配、key 已吊销或过期时，dispatch 失败关闭并要求重新 provisioning，不降级到 no-auth 或 broker exchange。
+10. **读侧诚实**：凭证来源可经 readmodel 暴露（不含 secret）；durable id 与 raw token 都不得投影（沿用现有 `ProjectAsync_ShouldNotProjectDurableSenderBearerToken` 的安全立场）。
 
 ## Required Contract（proto 收敛，wire-safe 演进）
 
 ```proto
 // scheduled_dispatch_state.proto — 收敛后
-import "Credentials/credential_secret_references.proto";
 
 message ScheduledServiceInvocationAuthState {
-  // 旧字段迁移窗口保持可读；确认迁移完成后才能 reserve。
   ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1 [deprecated = true];
-  string durable_sender_bearer_token = 2 [deprecated = true];
+  string durable_sender_bearer_token = 2 [deprecated = true];  // read only; never copy to current state
   ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3 [deprecated = true];
-  bool legacy_durable_sender_bearer_blocked = 4; // 现有 tag，不复用。
-
+  bool legacy_durable_sender_bearer_blocked = 4;
   oneof source {
-    NyxIdCredentialSourceState nyx_id = 5;
-    DurableNyxApiKeyCredentialSourceState durable_nyx_api_key = 6;
+    ScheduledServiceInvocationNyxIdCredentialSourceState nyx_id = 5;
+    ScheduledServiceInvocationDurableCredentialReferenceState durable = 6;
   }
   // 未设 source = no-auth（合法性由 required-credential policy 判定）
 }
 
-message NyxIdCredentialSourceState {
+message ScheduledServiceInvocationNyxIdCredentialSourceState {
   ScheduledServiceInvocationNyxIdSubjectRefState subject = 1;  // platform/tenant/external_user_id
   string scope = 2;
-  NyxIdCredentialRoleState role = 3;
+  ScheduledServiceInvocationNyxIdCredentialRoleState role = 3;
 }
 
-enum NyxIdCredentialRoleState {
-  NYX_ID_CREDENTIAL_ROLE_STATE_UNSPECIFIED  = 0;
-  NYX_ID_CREDENTIAL_ROLE_STATE_SENDER       = 1;
-  NYX_ID_CREDENTIAL_ROLE_STATE_SCOPE_OWNER  = 2;
+enum ScheduledServiceInvocationNyxIdCredentialRoleState {
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_UNSPECIFIED = 0;
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_SENDER = 1;
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_SCOPE_OWNER = 2;
 }
 
-message DurableNyxApiKeyCredentialSourceState {
-  string nyx_api_key_id = 1;                         // NyxID api key / agent key id；非 secret。
-  aevatar.credentials.SecretReference secret_ref = 2; // raw key 在 Aevatar 加密 vault 中逐次解析。
-  int64 key_expires_at_unix_ms = 3;                  // <= now 时 fail closed。
+message ScheduledServiceInvocationDurableCredentialReferenceState {
+  string credential_id = 1;   // NyxID agent key handle；fire 兑换由后续行为阶段接入
 }
 ```
 
-应用层 record `ScheduledServiceInvocationAuth`（`ScheduledDispatchModels.cs:46-49`）同步收敛为 `oneof`-等价的判别联合；credential exchange port 收敛为单一 `IssueAsync(NyxIdCredentialSource source, ...)`（role 内含），删除 `IssueScopeOwnerNyxIdAsync` 与其被丢弃的 `serviceIdentity` 参数。
+应用层 record `ScheduledServiceInvocationAuth`（`ScheduledDispatchModels.cs:46-49`）同步收敛为 `oneof`-等价的判别联合；credential exchange port 收敛为单一 `IssueNyxIdAsync(NyxIdCredentialSource source, ...)`（role 内含），删除 `IssueScopeOwnerNyxIdAsync` 与其被丢弃的 `serviceIdentity` 参数。
 
 ## Entry-Point Alignment（discussion C）
 
@@ -105,15 +99,15 @@ message DurableNyxApiKeyCredentialSourceState {
 |---|---|---|
 | HTTP `/api/schedules` | Sender / Durable(裸奔) / ScopeOwner | NyxId source（role 二选一）；**不接受 durable**；走下沉的统一校验 |
 | workflow mapper | Sender / ScopeOwner（类型无 durable） | NyxId source（role 二选一）；与 HTTP 同校验 |
-| Studio provisioning | Durable / Sender（从不 ScopeOwner） | NyxId source(SENDER) / DurableNyxApiKeySource（trusted-only，含 api key id + vault `SecretReference` + expires）；保留 recurring gate |
+| Studio provisioning | Durable / Sender（从不 ScopeOwner） | NyxId source(SENDER) / DurableReference（trusted-only）；保留 recurring gate |
 | internal app service | 全部、绕过所有 gate | 经下沉的统一校验，与 HTTP 等价 |
 
 ## Consequences
 
 - 凭证模型从「3 字段 + 注释互斥 + 5 路径」收敛为「1 个 oneof + role + reference」，类型层不可能再出现非法组合或 raw secret 持久化。
-- 安全缺口闭合：通用 API 不再能写入任意 bearer；durable 全部走 NyxID api key id + Aevatar encrypted vault `SecretReference`，raw key 只在 fire / run-now 边界短时出现。
+- 安全缺口闭合：通用 API 不再能写入任意 bearer；durable 全部走有 id 的 NyxID agent key reference。
 - 入口能力一致：Studio 有的保护通用 API 也有，反之亦然；不再「校验只在 HTTP endpoint」。
-- 与 ADR-0018 / #375 不变量对齐：actor state、readmodel 与日志不保存长期 raw secret material；durable raw key 由 Aevatar vault 边界逐次解引用。
+- 与 ADR-0018 / ADR-0033 / #375 不变量对齐：零长期 secret material；NyxID role source 继续在 fire 时重签短 token，durable reference 的 fire 兑换留到后续行为阶段。
 - 成本诚实暴露：proto/接口/多入口/测试均要动，是 epic 级重构（见 Cutover Order）；无副作用 validation 的可达性受限于 NyxID 既有 introspection surface（见 Open Questions）。
 - 行为变更点：HTTP 关闭 durable、create 预检不再真 mint——均为**有意行为变更**，需迁移既有正面测试（如 `Create_ShouldAcceptDurableSenderBearerTokenWithoutOwnerBinding`）。
 
@@ -122,16 +116,16 @@ message DurableNyxApiKeyCredentialSourceState {
 分阶段交付，每步 build + 定向测试 + 对应 `tools/ci/*guard*.sh`，详见 epic [#2404](https://github.com/aevatarAI/aevatar/issues/2404)：
 
 1. 接受本 ADR（proposed → accepted）。
-2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableNyxApiKeyCredentialSource`；旧字段 1/2/3 deprecated 可读，tag 4 保留，新字段用 5/6；reducer 迁移期双读旧格式；proto 重生 + reducer/replay 测试。
+2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableCredentialReference`；旧 tag `1/2/3` deprecated 双读，tag `4` 保留，新写只用 `5/6`；proto 重生 + reducer/replay 测试。
 3. **Phase 1 校验下沉**：binding/owner/scope 校验从 endpoint private static 下沉 application/domain；HTTP 与 internal 入口对齐；create 改无副作用 validation。
-4. **Phase 2 durable 收敛**：HTTP 关闭 durable；raw token → `DurableNyxApiKeyCredentialSource(nyx_api_key_id, secret_ref, key_expires_at_unix_ms)`；Studio minted/provisioned key 写入 vault reference；补 allowlist、expiry、revoke 与迁移相关测试。
-5. **Phase 3 注入与 legacy 收敛**：fire 时注入由 role 决定；核实并收敛 `NyxIdAccessToken`+`NyxIdOrgToken` 双写；`ConnectorHttpAuthorization` 下沉 workflow adapter；删 legacy strip 残留。
+4. **Phase 2 durable 收敛**：HTTP 关闭 durable；raw token → `DurableCredentialReference(id)`；Studio minted 走 reference；旧 raw durable replay fail closed；迁移相关测试。
+5. **Phase 3 注入与 legacy 收敛**：fire 时注入由 role 决定；接入 durable reference 的 broker 兑换；核实并收敛 `NyxIdAccessToken`+`NyxIdOrgToken` 双写；`ConnectorHttpAuthorization` 下沉 workflow adapter；删 legacy strip 残留。
 6. **Phase 4 policy + 硬化**：required-credential policy；ephemeral-not-for-recurring 在通用 API 也生效；补 discussion 步骤 6 的测试矩阵（create/update validation、run-now、recurring fire、revoked binding、scope mismatch、ephemeral 不允许 recurring）；canon 更新。
 
 ## Open Questions（待 Phase 1 评审定稿，不锁定）
 
 - **无副作用 validation 的机制**：依赖 NyxID 是否暴露「检查 scope 可签发但不签发」的 introspection surface。若无，降级为「binding 存在（`ResolveAsync`）+ binding 元数据 scope 匹配」，scope 真实可签发性仍留待首次 fire——本 ADR 不假设 NyxID 新增 surface（外部仓库无改动权）。
-- **`NyxIdAccessToken` + `NyxIdOrgToken` 双写是否保留**：仅适用于 NyxId source 短 token 注入路径。需先核实 org token 的下游消费方（schedule 链路外）是否仍依赖同写；确认前不删（discussion D）。
+- **`NyxIdAccessToken` + `NyxIdOrgToken` 双写是否保留**：需先核实 org token 的下游消费方（schedule 链路外）是否仍依赖同写；确认前不删（discussion D）。
 - **`ConnectorHttpAuthorization` 下沉边界**：是否能完全收进 workflow adapter 内部生成，使其退化为纯边界产物。
 
 ## Non-Goals
@@ -139,8 +133,8 @@ message DurableNyxApiKeyCredentialSourceState {
 - 改 NyxID（任何形态）。
 - per-user 身份穿透（与 ADR-0018 边界一致）。
 - 改动 schedule 的 cron/lease/fire 调度机制（与凭证模型正交；re-arm/fire 语义另属其他工作）。
-- NyxId source 的 exactly-once token 签发；重签是 fire 时 at-least-once + 短 TTL。
+- exactly-once 签发；重签是 fire 时 at-least-once + 短 TTL。
 
 ## Outcome
 
-接受并实现后，定时任务调用凭证只有一个权威 typed 来源（`oneof`：NyxId source + role / durable Nyx api key source），无 raw secret 落 state，durable 通过 Aevatar encrypted vault `SecretReference` 逐次解出 raw key，所有入口共用同一套下沉校验，通用 API 不再能写入裸 bearer——在 aevatar-only 边界内闭合 discussion #2402 的 5 路径，并与 ADR-0018 / #375 的零 secret material 范式归一。
+接受并实现后，定时任务调用凭证只有一个权威 typed 来源（`oneof`：NyxId source + role / durable reference），无 raw secret 落 state，所有入口共用同一套下沉校验，通用 API 不再能写入裸 bearer——在 aevatar-only 边界内闭合 discussion #2402 的 5 路径，并与 ADR-0018 / 0033 的零 secret material 范式归一。
