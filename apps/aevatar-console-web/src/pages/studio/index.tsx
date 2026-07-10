@@ -91,6 +91,7 @@ import {
 import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
+import type { ScopeWorkflowSummary } from '@/shared/models/scopes';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
@@ -1510,17 +1511,24 @@ function buildBackendMemberKey(memberId: string): `member:${string}` | '' {
 
 function resolveStudioMemberSummaryFromKey(
   memberKey: string,
-  publishedScopeMembers: readonly StudioScopeMemberSummary[],
+  publishedScopeMembers: readonly {
+    readonly memberSummary: StudioMemberSummary | null;
+  }[],
   studioScopeMembers: readonly StudioMemberSummary[],
 ): StudioMemberSummary | null {
-  if (!trimOptional(memberKey).startsWith('member:')) {
+  const routeMemberId = readMemberIdFromMemberKey(memberKey);
+  if (!routeMemberId) {
     return null;
   }
 
-  return resolveStudioMemberSummaryFromMemberKey(
-    memberKey,
-    publishedScopeMembers,
-    studioScopeMembers,
+  return (
+    studioScopeMembers.find(
+      (member) => trimOptional(member.memberId) === routeMemberId,
+    ) ??
+    publishedScopeMembers.find(
+      ({ memberSummary }) => trimOptional(memberSummary?.memberId) === routeMemberId,
+    )?.memberSummary ??
+    null
   );
 }
 

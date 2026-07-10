@@ -48,6 +48,11 @@ type TeamRosterMemberRow = {
   readonly workflowSupported: boolean;
 };
 
+export type TeamMembersDeleteTarget = Pick<
+  TeamRosterMemberRow,
+  "isEntryMember" | "memberId" | "name"
+>;
+
 type TeamMembersTabProps = {
   readonly rosterError?: boolean;
   readonly rosterLoading?: boolean;
@@ -57,7 +62,7 @@ type TeamMembersTabProps = {
   readonly deletingMemberId?: string;
   readonly entryActionBusyMemberId?: string;
   readonly onClearEntry?: () => void;
-  readonly onDeleteMember?: (memberId: string) => void;
+  readonly onDeleteMember?: (target: TeamMembersDeleteTarget) => void;
   readonly onNavigate?: (href: string) => void;
   readonly onSetEntry?: (memberId: string) => void;
 };
@@ -834,7 +839,13 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                                 }
                                 icon={<DeleteOutlined />}
                                 loading={rowDeleting}
-                                onClick={() => onDeleteMember(row.memberId)}
+                                onClick={() =>
+                                  onDeleteMember({
+                                    isEntryMember: row.isEntryMember,
+                                    memberId: row.memberId,
+                                    name: row.name,
+                                  })
+                                }
                                 size="small"
                                 style={buildMemberActionButtonStyle("danger")}
                                 type="default"

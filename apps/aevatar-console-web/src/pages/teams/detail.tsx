@@ -49,7 +49,7 @@ import {
   isAbortLikeError,
   type TeamTestErrorDescription,
 } from "./components/teamTestErrors";
-import TeamMembersTab from "./tabs/TeamMembersTab";
+import TeamMembersTab, { type TeamMembersDeleteTarget } from "./tabs/TeamMembersTab";
 import TeamAutomationsTab from "./tabs/TeamAutomationsTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
@@ -1772,16 +1772,13 @@ const TeamDetailPage: React.FC = () => {
   ]);
 
   const handleDeleteMember = React.useCallback(
-    (memberId: string) => {
-      const normalizedMemberId = trimText(memberId);
+    (target: TeamMembersDeleteTarget) => {
+      const normalizedMemberId = trimText(target.memberId);
       if (!scopeId || !selectedTeamId || !normalizedMemberId) {
         return;
       }
 
-      const memberRow =
-        teamRosterRows.find((row) => trimText(row.memberId) === normalizedMemberId) ??
-        null;
-      const memberLabel = trimText(memberRow?.name) || normalizedMemberId;
+      const memberLabel = trimText(target.name) || normalizedMemberId;
 
       Modal.confirm({
         autoFocusButton: "cancel",
@@ -1795,7 +1792,7 @@ const TeamDetailPage: React.FC = () => {
               {t("teams.members.delete.confirm.body.suffix", "from this Team?")}
             </Typography.Text>
             <Typography.Text type="secondary">
-              {memberRow?.isEntryMember
+              {target.isEntryMember
                 ? t("teams.members.delete.entry.warning", "This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.")
                 : t("teams.members.delete.warning", "This removes the Studio member authority and Team roster entry. Published service artifacts, revisions, and historical runs stay intact.")}
             </Typography.Text>
@@ -1873,7 +1870,6 @@ const TeamDetailPage: React.FC = () => {
       scopeId,
       selectedTeamId,
       teamMembersQueryKey,
-      teamRosterRows,
     ],
   );
 
