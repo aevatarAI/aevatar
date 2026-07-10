@@ -131,6 +131,41 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
+    public async Task RecordApiKeyRevocationAttemptAsync_WithNullCommand_Throws()
+    {
+        var fixture = new Fixture();
+        var act = () => fixture.Port.RecordApiKeyRevocationAttemptAsync(null!, CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Theory]
+    [InlineData(null, "key-1")]
+    [InlineData("", "key-1")]
+    [InlineData("   ", "key-1")]
+    [InlineData("agent-1", null)]
+    [InlineData("agent-1", "")]
+    [InlineData("agent-1", "   ")]
+    public async Task RecordApiKeyRevocationAttemptAsync_WithInvalidIds_Throws(
+        string? agentId,
+        string? apiKeyId)
+    {
+        var fixture = new Fixture();
+        var command = new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+        {
+            AgentId = agentId ?? string.Empty,
+            ApiKeyId = apiKeyId ?? string.Empty,
+            Completed = false,
+            FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+        };
+
+        var act = () => fixture.Port.RecordApiKeyRevocationAttemptAsync(command, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        fixture.Captured.Should().BeEmpty();
+        await fixture.Dispatch.DidNotReceiveWithAnyArgs().DispatchAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task ShareAsync_DispatchesCommand_AndCompletes()
     {
         var fixture = new Fixture();

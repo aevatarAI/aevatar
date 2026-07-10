@@ -320,6 +320,82 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_DeleteAgent_StillRecordsCurrentRevocation_WhenPendingRevocationProjectionHasSchemaDrift()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("skill-runner-drift-revoke", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "skill-runner-drift-revoke",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "summary",
+                ApiKeyId = "key-current",
+                OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+            }));
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
+        queryPort.QueryPendingApiKeyRevocationsByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>>(
+                CreateRevocationProjectionDrift()));
+
+        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        catalogCommandPort.TombstoneAsync("skill-runner-drift-revoke", Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-current", """{"ok":true}""");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(catalogCommandPort);
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "delete_agent",
+                  "agent_id": "skill-runner-drift-revoke",
+                  "confirm": true
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
+            doc.RootElement.GetProperty("api_key_revocation_retry_count").GetInt32().Should().Be(0);
+            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                    command.AgentId == "skill-runner-drift-revoke" &&
+                    command.ApiKeyId == "key-current" &&
+                    command.Completed),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DeleteAgent_ReturnsAcceptedWithPropagatingHint()
     {
         // Refactor (iter4/cluster-009):
@@ -1619,6 +1695,13 @@ public sealed class AgentBuilderToolTests
             "aevatar-mainnet-skill-runner-execution",
             "aevatar-mainnet-skill-runner-execution-vold",
             "aevatar-mainnet-skill-runner-execution-vnew");
+
+    private static ProjectionIndexSchemaDriftException CreateRevocationProjectionDrift() =>
+        new(
+            "Elasticsearch",
+            "aevatar-mainnet-user-agent-api-key-revocation",
+            "aevatar-mainnet-user-agent-api-key-revocation-vold",
+            "aevatar-mainnet-user-agent-api-key-revocation-vnew");
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
     {
