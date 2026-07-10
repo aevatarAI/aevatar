@@ -13,6 +13,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
@@ -1808,6 +1809,33 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         control.NyxIdRoutePreference.Should().BeNull();
         control.MaxToolRoundsOverride.Should().BeNull();
         control.NyxIdAccessToken.Should().Be("nyx-api-key");
+    }
+
+    [Fact]
+    public async Task BuildExecutionLlmControl_ShouldResolveScheduledInvocationAgentKeyPurpose()
+    {
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "owner-scope:scheduled-agent",
+            "key-scheduled-agent",
+            "scheduled-agent-key",
+            "test"));
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services => services.AddSingleton<ISecretVault>(secretVault));
+        var agent = CreateAgent("skill-runner-scheduled-agent-key", provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.ApiKeyId = "key-scheduled-agent";
+        initialize.OutboundConfig.NyxApiKey = "inline-key-should-not-be-used";
+        initialize.OutboundConfig.NyxApiKeyReference = stored.Reference;
+        await agent.HandleInitializeAsync(initialize);
+
+        var control = await InvokeBuildExecutionLlmControlAsync(agent);
+
+        control.NyxIdAccessToken.Should().Be("scheduled-agent-key");
+        control.NyxIdOrgToken.Should().Be("scheduled-agent-key");
     }
 
     [Fact]
