@@ -1451,7 +1451,7 @@ const TeamDetailPage: React.FC = () => {
       onClearEntry={handleClearEntry}
       onNavigate={(href) => history.push(href)}
       onPromptChange={setTeamTestPrompt}
-      onSetEntryAndTest={(memberId) => void handleSetEntry(memberId, { test: true })}
+      onSetEntry={(memberId, options) => void handleSetEntry(memberId, options)}
       onStop={handleStopTeamTest}
       onTest={() => void streamTeamTest()}
       prompt={teamTestPrompt}

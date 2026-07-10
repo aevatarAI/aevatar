@@ -1425,6 +1425,36 @@ describe("TeamDetailPage", () => {
     });
   });
 
+  it("sets a ready member as entry before prompt entry when the Team has no entry", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await openTeamTestDialog();
+    const startTestButton = within(dialog).getByRole("button", {
+      name: "开始测试",
+    });
+    const setEntryButton = within(dialog).getByRole("button", {
+      name: "设为入口成员",
+    });
+
+    expect(startTestButton).toBeDisabled();
+    expect(setEntryButton).toBeEnabled();
+    fireEvent.click(setEntryButton);
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-team-alpha",
+      );
+    });
+    expect(runtimeRunsApi.streamTeamChat).not.toHaveBeenCalled();
+  });
+
   it("waits for the entry read model before invoking Team Test", async () => {
     (studioApi.getTeam as jest.Mock)
       .mockResolvedValueOnce({
