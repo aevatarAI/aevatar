@@ -106,23 +106,26 @@ public sealed class InMemoryAuditTrailStoreTests
     }
 
     [Fact]
-    public async Task QueryAsync_PaginatesInOccurrenceOrder()
+    public async Task QueryAsync_PaginatesNewestFirstAndKeepsMatchingWatermark()
     {
         var store = new InMemoryAuditTrailStore();
         await store.AppendManyAsync(
         [
             CreateRecord("audit-3", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 3),
             CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 1),
-            CreateRecord("audit-2", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 2)
+            CreateRecord("audit-2", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 2),
+            CreateRecord("audit-other-scope", "scope-b", "actor-a", "api.call", AuditOutcome.Success, seconds: 10)
         ]);
 
         var first = await store.QueryAsync(new AuditTrailQuery { ScopeId = "scope-a", Take = 2 });
         var second = await store.QueryAsync(new AuditTrailQuery { ScopeId = "scope-a", Cursor = first.NextCursor, Take = 2 });
 
-        first.Records.Select(static record => record.AuditId).ShouldBe(["audit-1", "audit-2"]);
+        first.Records.Select(static record => record.AuditId).ShouldBe(["audit-3", "audit-2"]);
         first.NextCursor.ShouldNotBeNull();
-        second.Records.Select(static record => record.AuditId).ShouldBe(["audit-3"]);
+        first.Watermark.ShouldBe(DateTimeOffset.Parse("2026-01-02T03:04:08Z"));
+        second.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
         second.NextCursor.ShouldBeNull();
+        second.Watermark.ShouldBe(first.Watermark);
     }
 
     [Fact]
