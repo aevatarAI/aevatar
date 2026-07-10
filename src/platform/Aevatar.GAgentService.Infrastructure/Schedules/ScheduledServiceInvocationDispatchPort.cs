@@ -117,45 +117,25 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
-        if (dispatch.Auth == null)
+        if (dispatch.Auth?.Source == null)
             return null;
-        var sourceCount =
-            (dispatch.Auth.ScopeOwnerNyxId != null ? 1 : 0) +
-            (dispatch.Auth.SenderNyxId != null ? 1 : 0) +
-            (dispatch.Auth.DurableCredentialReference != null ? 1 : 0);
-        if (sourceCount == 0)
-            return null;
-        if (sourceCount != 1)
-            throw new InvalidOperationException("Scheduled service invocation auth must contain exactly one credential source.");
 
-        if (dispatch.Auth.ScopeOwnerNyxId != null)
+        if (dispatch.Auth.Source is ScheduledServiceInvocationDurableCredentialReference)
         {
-            var result = await ExchangeScopeOwnerNyxIdAsync(
-                dispatch.Auth.ScopeOwnerNyxId,
-                dispatch.Request.Identity,
+            var durableResult = await ResolveDurableCredentialReferenceAsync(
+                (ScheduledServiceInvocationDurableCredentialReference)dispatch.Auth.Source,
                 ct);
-            return new CredentialExchange(CredentialRole.ScopeOwner, result);
+            return new CredentialExchange(CredentialRole.DurableSender, durableResult);
         }
-        if (dispatch.Auth.SenderNyxId != null)
+
+        if (dispatch.Auth.Source is ScheduledServiceInvocationNyxIdCredentialSource nyxId)
         {
-            var result = await ExchangeSenderNyxIdAsync(dispatch.Auth.SenderNyxId, ct);
-            return new CredentialExchange(CredentialRole.Sender, result);
+            var result = await _credentialExchangePort.IssueNyxIdAsync(nyxId, ct);
+            return new CredentialExchange(ToCredentialRole(nyxId.Role), result);
         }
 
-        var durableResult = await ResolveDurableCredentialReferenceAsync(dispatch.Auth.DurableCredentialReference!, ct);
-        return new CredentialExchange(CredentialRole.DurableSender, durableResult);
+        throw new InvalidOperationException("Scheduled service invocation credential source is not supported.");
     }
-
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeScopeOwnerNyxIdAsync(
-        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
-        ServiceIdentity serviceIdentity,
-        CancellationToken ct) =>
-        await _credentialExchangePort.IssueScopeOwnerNyxIdAsync(source, serviceIdentity, ct);
-
-    private async Task<ScheduledServiceInvocationCredentialExchangeResult> ExchangeSenderNyxIdAsync(
-        ScheduledServiceInvocationNyxIdCredentialSource source,
-        CancellationToken ct) =>
-        await _credentialExchangePort.IssueSenderNyxIdAsync(source, ct);
 
     private async Task<ScheduledServiceInvocationCredentialExchangeResult> ResolveDurableCredentialReferenceAsync(
         ScheduledServiceInvocationDurableCredentialReference credential,
@@ -321,4 +301,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         role == CredentialRole.DurableSender
             ? "Scheduled service invocation durable credential reference resolved an invalid access token."
             : $"Scheduled service invocation {ToErrorSubject(role)} NyxID credential exchange returned an invalid access token.";
+
+    private static CredentialRole ToCredentialRole(ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
+            ? CredentialRole.ScopeOwner
+            : CredentialRole.Sender;
 }

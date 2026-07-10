@@ -115,7 +115,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-9");
         auth.SenderNyxId.Scope.Should().Be("proxy");
+<<<<<<< HEAD
         auth.DurableCredentialReference.Should().BeNull();
+=======
+        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.Sender);
+        auth.Durable.Should().BeNull();
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         AssertExactlyOneCredentialSource(auth);
     }
 
@@ -132,7 +137,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
+<<<<<<< HEAD
         auth!.DurableCredentialReference.Should().BeNull();
+=======
+        auth!.Durable.Should().BeNull();
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         auth.SenderNyxId.Should().NotBeNull();
         AssertExactlyOneCredentialSource(auth);
     }
@@ -157,7 +166,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.SenderNyxId.Should().NotBeNull();
+<<<<<<< HEAD
         auth.DurableCredentialReference.Should().BeNull();
+=======
+        auth.Durable.Should().BeNull();
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         AssertExactlyOneCredentialSource(auth);
     }
 
@@ -176,7 +189,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
         response.ScheduleId.Should().Be(ScheduleId);
         member.GetBindingRunCallCount.Should().Be(0);
+<<<<<<< HEAD
         schedule.Configuration!.Target.ServiceInvocation!.Auth!.DurableCredentialReference.Should().BeNull();
+=======
+        schedule.Configuration!.Target.ServiceInvocation!.Auth!.Durable.Should().BeNull();
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Fact]
@@ -494,10 +511,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static void AssertExactlyOneCredentialSource(ScheduledServiceInvocationAuth? auth)
     {
         auth.Should().NotBeNull();
+<<<<<<< HEAD
         var sources =
             (auth!.SenderNyxId != null ? 1 : 0) +
             (auth.DurableCredentialReference != null ? 1 : 0) +
             (auth.ScopeOwnerNyxId != null ? 1 : 0);
+=======
+        var sources = auth!.Source == null ? 0 : 1;
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         sources.Should().Be(1, "a scheduled dispatch must carry exactly one credential source");
     }
 

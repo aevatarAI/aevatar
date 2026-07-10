@@ -285,43 +285,44 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
     private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)
     {
-        if (auth == null)
+        if (auth?.Source == null)
             return null;
 
-        if (auth.SenderNyxId == null && auth.ScopeOwnerNyxId == null && auth.DurableCredentialReference == null)
-            return null;
-
-        var state = new ScheduledServiceInvocationAuthState();
-
-        if (auth.SenderNyxId != null)
+        return auth.Source switch
         {
-            state.SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            ScheduledServiceInvocationNyxIdCredentialSource nyxId => new ScheduledServiceInvocationAuthState
             {
-                Subject = CreateSubjectState(auth.SenderNyxId.Subject),
-                Scope = auth.SenderNyxId.Scope,
-            };
-        }
-
-        if (auth.ScopeOwnerNyxId != null)
-        {
-            state.ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                NyxId = CreateNyxIdCredentialSourceState(nyxId),
+            },
+            ScheduledServiceInvocationDurableCredentialReference durable => new ScheduledServiceInvocationAuthState
             {
-                Scope = auth.ScopeOwnerNyxId.Scope,
-                OwnerSubject = CreateSubjectState(auth.ScopeOwnerNyxId.OwnerSubject),
-            };
-        }
-
-        if (auth.DurableCredentialReference != null)
-        {
-            state.DurableCredentialReference = new ScheduledServiceInvocationDurableCredentialReferenceState
-            {
-                CredentialId = auth.DurableCredentialReference.CredentialId,
-                SecretReference = auth.DurableCredentialReference.SecretReference.Clone(),
-            };
-        }
-
-        return state;
+                Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+                {
+                    CredentialId = durable.CredentialId,
+                    SecretReference = durable.SecretReference.Clone(),
+                },
+            },
+            _ => throw new ArgumentException("Unsupported scheduled service invocation credential source.", nameof(auth)),
+        };
     }
+
+    private static ScheduledServiceInvocationNyxIdCredentialSourceState CreateNyxIdCredentialSourceState(
+        ScheduledServiceInvocationNyxIdCredentialSource source) =>
+        new()
+        {
+            Subject = CreateSubjectState(source.Subject),
+            Scope = source.Scope,
+            Role = ToStateRole(source.Role),
+        };
+
+    private static ScheduledServiceInvocationNyxIdCredentialRoleState ToStateRole(
+        ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        role switch
+        {
+            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner =>
+                ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
+            _ => ScheduledServiceInvocationNyxIdCredentialRoleState.Sender,
+        };
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(
         ScheduledServiceInvocationNyxIdSubjectRef? subject) =>
