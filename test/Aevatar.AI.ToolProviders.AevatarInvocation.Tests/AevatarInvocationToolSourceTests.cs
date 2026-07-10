@@ -1102,15 +1102,19 @@ public sealed class AevatarInvocationToolSourceTests
         registration.ChannelPlatform.Should().Be("telegram");
         registration.ReplyMessageId.Should().Be("message-1");
         registration.PlatformMessageId.Should().Be("platform-message-1");
-        registration.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        registration.WorkflowResultDeliveryCredential.SecretReference.Ref.Should().Be("secrets://nyx/reply-1");
         registration.RegistrationScopeId.Should().Be("registration-scope-1");
+        registration.BotRegistrationId.Should().Be("bot-reg-1");
 
         using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
         var delivery = resultJson.RootElement.GetProperty("workflow_run_delivery");
         delivery.GetProperty("delivery_actor_id").GetString().Should().Be("registered-delivery-actor");
         delivery.GetProperty("workflow_actor_id").GetString().Should().Be("workflow-actor");
         delivery.GetProperty("workflow_command_id").GetString().Should().Be("wf-command");
-        delivery.GetProperty("durable_reply_credential_ref").GetString().Should().Be("secrets://nyx/reply-1");
+        // The boundary JSON must not echo any credential handle.
+        delivery.TryGetProperty("durable_reply_credential_ref", out var credentialProperty).Should().BeFalse();
+        credentialProperty.ValueKind.Should().Be(JsonValueKind.Undefined);
+        result.ToolExecutionResultJson.Should().NotContain("secrets://nyx/reply-1");
     }
 
     [Fact]
@@ -1222,7 +1226,8 @@ public sealed class AevatarInvocationToolSourceTests
         receipt.WorkflowRunDelivery.DeliveryActorId.Should().Be("registered-delivery-actor");
         receipt.WorkflowRunDelivery.WorkflowActorId.Should().Be("workflow-actor");
         receipt.WorkflowRunDelivery.WorkflowCommandId.Should().Be("wf-command");
-        receipt.WorkflowRunDelivery.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        // The receipt intentionally carries no credential handle.
+        receipt.WorkflowRunDelivery.ToString().Should().NotContain("secrets://nyx/reply-1");
     }
 
     [Fact]
@@ -2462,13 +2467,28 @@ public sealed class AevatarInvocationToolSourceTests
                 "message-1",
                 "platform-message-1",
                 null,
-                durableReplyCredentialRef),
+                ToDeliveryCredential(durableReplyCredentialRef),
+                "bot-reg-1"),
             new AgentToolSenderBindingContext("binding-1", senderNyxUserId),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
             workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
             AgentSkillRecoveryContext.Empty,
             BuildExternalMetadata(externalMetadata)));
+
+    private static ChannelWorkflowResultDeliveryCredential? ToDeliveryCredential(string? secretRef) =>
+        string.IsNullOrWhiteSpace(secretRef)
+            ? null
+            : new ChannelWorkflowResultDeliveryCredential
+            {
+                SecretReference = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+                {
+                    Ref = secretRef,
+                    Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    OwnerScopeKey = "registration-scope-1",
+                },
+                SubjectId = "nyx-api-key-1",
+            };
 
     private static IReadOnlyDictionary<string, string> BuildExternalMetadata(
         IReadOnlyDictionary<string, string>? externalMetadata)
@@ -2866,7 +2886,6 @@ public sealed class AevatarInvocationToolSourceTests
                 ReplyMessageId = registration.ReplyMessageId,
                 PlatformMessageId = registration.PlatformMessageId,
                 RegistrationScopeId = registration.RegistrationScopeId,
-                DurableReplyCredentialRef = registration.DurableReplyCredentialRef,
             });
         }
     }
