@@ -95,6 +95,11 @@ type LocalAutomationCredentialState = {
   readonly credentialRef: AutomationCredentialRef | null;
 };
 
+type AutomationCredentialReadiness = Pick<
+  AutomationCredentialStatusResult,
+  "credentialRef" | "status"
+>;
+
 type ManualRunFeedback = Pick<
   ScheduledDispatchRunNowReceipt,
   "ackedAt" | "commandId" | "correlationId" | "scheduledFireAt"
@@ -376,6 +381,28 @@ function buildServiceIdentityKey(identity: ServiceIdentity | null | undefined): 
   ].map(trimText);
 
   return parts.every(Boolean) ? parts.join(":") : "";
+}
+
+function buildAutomationCredentialStatusQueryKey(
+  scopeId: string,
+  memberId: string,
+  serviceId: string,
+) {
+  return [
+    "automation-api-key-status",
+    scopeId,
+    memberId,
+    serviceId,
+  ] as const;
+}
+
+function isAutomationCredentialReady(
+  credential: AutomationCredentialReadiness,
+): credential is AutomationCredentialReadiness & {
+  readonly credentialRef: AutomationCredentialRef;
+  readonly status: "active";
+} {
+  return credential.status === "active" && Boolean(credential.credentialRef);
 }
 
 function buildScheduleServiceKey(schedule: ScheduledDispatchSummary): string {
@@ -781,12 +808,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const activeFormMemberId = trimText(activeFormMember?.memberId);
   const activeAutomationCredentialQueryKey = React.useMemo(
     () =>
-      [
-        "automation-api-key-status",
+      buildAutomationCredentialStatusQueryKey(
         scopeId,
         activeFormMemberId,
         activeFormServiceId,
-      ] as const,
+      ),
     [activeFormMemberId, activeFormServiceId, scopeId],
   );
   const automationCredentialStatusQuery = useQuery({
@@ -1343,6 +1369,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       return {
         apiKey: result.apiKey,
         credentialRef: result.credentialRef,
+        memberId:
+          trimText(result.apiKey.allowedMemberId) || trimText(member.memberId),
+        serviceId:
+          trimText(result.apiKey.allowedServiceId) ||
+          trimText(member.serviceIdentity?.serviceId),
       };
     },
     onError: (error) => {
@@ -1356,20 +1387,19 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ),
       );
     },
-    onSuccess: (result, member) => {
-      const memberId =
-        trimText(result.apiKey.allowedMemberId) || trimText(member.memberId);
-      const serviceId =
-        trimText(result.apiKey.allowedServiceId) ||
-        trimText(member.serviceIdentity?.serviceId);
+    onSuccess: (result) => {
       setLocalAutomationCredential({
-        memberId,
-        serviceId,
+        memberId: result.memberId,
+        serviceId: result.serviceId,
         status: "active",
         credentialRef: result.credentialRef,
       });
       queryClient.setQueryData<AutomationCredentialStatusResult>(
-        activeAutomationCredentialQueryKey,
+        buildAutomationCredentialStatusQueryKey(
+          scopeId,
+          result.memberId,
+          result.serviceId,
+        ),
         {
           status: "active",
           apiKey: result.apiKey,
@@ -1514,7 +1544,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       );
       return;
     }
-    if (!activeAutomationCredentialStatus.credentialRef) {
+    if (!isAutomationCredentialReady(activeAutomationCredentialStatus)) {
       void message.error(
         intl.formatMessage({
           id: "teams.automations.credential.missingMessage",
@@ -1559,7 +1589,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     await createMutation.mutateAsync({ input, member });
   }, [
     activeFormMember,
-    activeAutomationCredentialStatus.credentialRef,
+    activeAutomationCredentialStatus,
     createMutation,
     editingScheduleId,
     formState.cronExpression,
@@ -2163,7 +2193,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     intl,
   );
   const canCreateAutomation = Boolean(activeFormMember?.serviceIdentity);
-  const credentialReady = Boolean(activeAutomationCredentialStatus.credentialRef);
+  const credentialReady = isAutomationCredentialReady(
+    activeAutomationCredentialStatus,
+  );
   const credentialLoading =
     automationCredentialStatusQuery.isLoading ||
     authorizeAutomationCredentialMutation.isPending;

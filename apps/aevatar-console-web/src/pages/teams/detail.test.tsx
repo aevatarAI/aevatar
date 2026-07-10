@@ -209,6 +209,25 @@ function mockCreateServiceCatalog() {
   ];
 }
 
+function mockCreateBetaServiceSummary() {
+  return {
+    serviceKey: "scope-1:default:default:beta-service",
+    tenantId: "scope-1",
+    appId: "default",
+    namespace: "default",
+    serviceId: "beta-service",
+    displayName: "Team Beta Runtime",
+    defaultServingRevisionId: "rev-beta",
+    activeServingRevisionId: "rev-beta",
+    deploymentId: "dep-beta",
+    primaryActorId: "actor-beta",
+    deploymentStatus: "Active",
+    endpoints: [],
+    policyIds: [],
+    updatedAt: "2026-04-09T09:00:00Z",
+  };
+}
+
 function mockCreateMembersCatalog() {
   return {
     scopeId: "scope-1",
@@ -254,6 +273,27 @@ function mockCreateTeamMembersCatalog() {
       },
     ],
     nextPageToken: null,
+  };
+}
+
+function mockCreateTeamBetaMember() {
+  return {
+    memberId: "member-team-beta",
+    scopeId: "scope-1",
+    teamId: "t-alpha",
+    displayName: "Team Beta Operator",
+    description: "负责处理二线升级",
+    implementationKind: "workflow",
+    implementationRef: {
+      implementationKind: "workflow",
+      workflowId: "wf-team-beta",
+      workflowRevision: "rev-beta",
+    },
+    lifecycleStage: "bind_ready",
+    publishedServiceId: "beta-service",
+    lastBoundRevisionId: "rev-beta",
+    createdAt: "2026-04-09T08:00:00Z",
+    updatedAt: "2026-04-09T09:00:00Z",
   };
 }
 
@@ -1842,19 +1882,7 @@ describe("TeamDetailPage", () => {
       scopeId: "scope-1",
       members: [
         ...mockCreateTeamMembersCatalog().members,
-        {
-          memberId: "member-team-beta",
-          scopeId: "scope-1",
-          teamId: "t-alpha",
-          displayName: "Team Beta Operator",
-          description: "负责处理二线升级",
-          implementationKind: "workflow",
-          lifecycleStage: "bind_ready",
-          publishedServiceId: "beta-service",
-          lastBoundRevisionId: "rev-beta",
-          createdAt: "2026-04-09T08:00:00Z",
-          updatedAt: "2026-04-09T09:00:00Z",
-        },
+        mockCreateTeamBetaMember(),
       ],
       nextPageToken: null,
     }));
@@ -2733,6 +2761,146 @@ describe("TeamDetailPage", () => {
     );
     expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
     expect(JSON.stringify(payload)).not.toContain("aevatar_automation_secret_once");
+  });
+
+  it("does not treat revoked credential refs as ready for member recurring work", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (automationApiKeysApi.getStatus as jest.Mock).mockResolvedValueOnce({
+      status: "revoked",
+      apiKey: mockCreateAutomationApiKeyMetadata({
+        revokedAt: "2026-07-09T09:00:00Z",
+        status: "revoked",
+      }),
+      credentialRef: mockCreateAutomationCredentialRef(),
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
+    });
+
+    expect(await within(dialog).findByText("3. 自动化凭证")).toBeTruthy();
+    expect(within(dialog).getByText("当前成员还没有可用于计划运行的授权 API key。")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "创建自动化" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "授权自动化 API key" })).toBeEnabled();
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps authorization results scoped to the member that requested them", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (studioApi.listTeamMembers as jest.Mock).mockImplementation(async () => ({
+      scopeId: "scope-1",
+      members: [
+        ...mockCreateTeamMembersCatalog().members,
+        mockCreateTeamBetaMember(),
+      ],
+      nextPageToken: null,
+    }));
+    (scopeRuntimeApi.listServices as jest.Mock).mockImplementation(async () => [
+      ...mockCreateServiceCatalog(),
+      mockCreateBetaServiceSummary(),
+    ]);
+    (automationApiKeysApi.getStatus as jest.Mock).mockImplementation(
+      async (_input: { readonly memberId?: string }) => ({
+        status: "missing",
+        apiKey: null,
+        credentialRef: null,
+      }),
+    );
+    let resolveAuthorize:
+      | ((value: ReturnType<typeof mockCreateAutomationApiKeyCreateResult>) => void)
+      | null = null;
+    (automationApiKeysApi.create as jest.Mock).mockImplementation(
+      async () =>
+        new Promise((resolve) => {
+          resolveAuthorize = resolve;
+        }),
+    );
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(TeamDetailPage),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
+    });
+    const authorizeButton = await within(dialog).findByRole("button", {
+      name: "授权自动化 API key",
+    });
+    await waitFor(() => {
+      expect(authorizeButton).toBeEnabled();
+    });
+    fireEvent.click(authorizeButton);
+
+    await waitFor(() => {
+      expect(automationApiKeysApi.create).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        displayName: "Team Alpha Operator automation key",
+        allowedMemberId: "member-team-alpha",
+        allowedServiceId: "alpha-service",
+        scopes: ["proxy"],
+      });
+    });
+
+    const memberSelectInput = within(dialog).getByLabelText("自动化成员");
+    fireEvent.mouseDown(
+      memberSelectInput.closest(".ant-select-selector") ?? memberSelectInput,
+    );
+    const betaOption = await screen.findByText("Team Beta Operator");
+    fireEvent.click(betaOption.closest(".ant-select-item-option") ?? betaOption);
+
+    await waitFor(() => {
+      expect(automationApiKeysApi.getStatus).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "member-team-beta",
+        serviceId: "beta-service",
+      });
+    });
+
+    await act(async () => {
+      resolveAuthorize?.(mockCreateAutomationApiKeyCreateResult());
+    });
+
+    await waitFor(() => {
+      expect(
+        queryClient.getQueryData([
+          "automation-api-key-status",
+          "scope-1",
+          "member-team-alpha",
+          "alpha-service",
+        ]),
+      ).toEqual(
+        expect.objectContaining({
+          credentialRef: mockCreateAutomationCredentialRef(),
+          status: "active",
+        }),
+      );
+    });
+    expect(
+      queryClient.getQueryData([
+        "automation-api-key-status",
+        "scope-1",
+        "member-team-beta",
+        "beta-service",
+      ]),
+    ).toEqual(
+      expect.objectContaining({
+        credentialRef: null,
+        status: "missing",
+      }),
+    );
+    expect(within(dialog).getByRole("button", { name: "创建自动化" })).toBeDisabled();
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
   });
 
   it("previews next runs from the automation form", async () => {
