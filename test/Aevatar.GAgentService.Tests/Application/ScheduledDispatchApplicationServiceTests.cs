@@ -127,7 +127,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectDurableSenderBearerTokenAuth()
+    public async Task CreateAsync_ShouldNormalizeDurableCredentialReferenceAuth()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
         var service = new ScheduledDispatchApplicationService(
@@ -135,7 +135,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService());
 
-        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-durable-auth",
             "Invoke",
             new ScheduledDispatchTargetDescriptor(
@@ -144,15 +144,15 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: " durable-run-key "))),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        new ScheduledServiceInvocationDurableCredentialReference(" durable-run-key ")))),
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
-        actorPort.Created.Should().BeEmpty();
+        var created = actorPort.Created.Should().ContainSingle().Which;
+        created.Configuration.Target.ServiceInvocation!.Auth!.Durable!.CredentialId.Should().Be("durable-run-key");
     }
 
     [Fact]
@@ -412,7 +412,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectServiceInvocationAuthWithMultipleCredentialSources()
+    public async Task CreateAsync_ShouldRejectServiceInvocationAuthWithInvalidNyxIdRole()
     {
         var service = CreateService();
 
@@ -426,20 +426,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new Empty()),
                     Auth: new ScheduledServiceInvocationAuth(
-                        SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+                        new ScheduledServiceInvocationNyxIdCredentialSource(
                             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-                            "proxy"),
-                        DurableSenderBearerToken: "durable-run-key",
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                            "owner-proxy",
-                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
+                            "proxy",
+                            (ScheduledServiceInvocationNyxIdCredentialRole)999)))),
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
+            .WithMessage("*NyxID credential role is required*");
     }
 
     [Fact]
@@ -495,14 +492,15 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new Dictionary<string, string>()));
 
         var created = actorPort.Created.Should().ContainSingle().Which;
-        created.Configuration.Target.ServiceInvocation!.Auth!.SenderNyxId.Should().BeNull();
-        var configurationOwnerAuth = created.Configuration.Target.ServiceInvocation.Auth.ScopeOwnerNyxId!;
+        var configurationOwnerAuth = created.Configuration.Target.ServiceInvocation!.Auth!.NyxId!;
+        configurationOwnerAuth.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
         configurationOwnerAuth.Scope.Should().Be("owner-proxy");
-        configurationOwnerAuth.OwnerSubject.Should().BeEquivalentTo(
+        configurationOwnerAuth.Subject.Should().BeEquivalentTo(
             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
-        var dispatchOwnerAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.ScopeOwnerNyxId!;
+        var dispatchOwnerAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.NyxId!;
+        dispatchOwnerAuth.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
         dispatchOwnerAuth.Scope.Should().Be("owner-proxy");
-        dispatchOwnerAuth.OwnerSubject.Should().BeEquivalentTo(
+        dispatchOwnerAuth.Subject.Should().BeEquivalentTo(
             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
     }
 
@@ -511,9 +509,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
     {
         var port = new NoopScheduledServiceInvocationCredentialExchangePort();
 
-        var result = await port.IssueScopeOwnerNyxIdAsync(
-            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy"),
-            new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" });
+        var result = await port.IssueNyxIdAsync(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"),
+            "owner-proxy",
+            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
 
         result.Succeeded.Should().BeFalse();
         result.AccessToken.Should().BeNull();
@@ -559,7 +558,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         command.Headers.Should().Contain("trace", "scheduled");
         command.Target.Kind.Should().Be(ScheduledDispatchTargetKindState.ServiceInvocation);
         command.Target.ServiceInvocation.EndpointId.Should().Be("run");
-        command.Target.ServiceInvocation.Auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
+        command.Target.ServiceInvocation.Auth.NyxId.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRoleState.Sender);
+        command.Target.ServiceInvocation.Auth.NyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         command.ScheduleKind.Should().Be(ScheduledDispatchScheduleKindState.Workflow);
     }
 
@@ -593,9 +593,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
         command.Target.ServiceInvocation.Auth.SenderNyxId.Should().BeNull();
-        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
-        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Scope.Should().Be("proxy");
-        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().BeNull();
+        command.Target.ServiceInvocation.Auth.NyxId.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        command.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
+        command.Target.ServiceInvocation.Auth.NyxId.Subject.Should().BeEquivalentTo(
             new ScheduledServiceInvocationNyxIdSubjectRefState
             {
                 Platform = OwnerScope.NyxIdPlatform,
@@ -605,7 +606,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldRejectDurableSenderBearerTokenAuth()
+    public async Task ScheduledDispatchActorPort_ShouldPersistDurableCredentialReferenceAuth()
     {
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
@@ -618,7 +619,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: "durable-run-key"))),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        new ScheduledServiceInvocationDurableCredentialReference("durable-run-key")))),
             "0 9 * * *",
             "UTC",
             true,
@@ -627,11 +629,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var prepared = await new ScheduledDispatchTargetPreparationService()
             .PrepareAsync(configuration, "cmd-1", "corr-1");
 
-        var act = () => port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
+        await port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
 
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
-        dispatchPort.Envelopes.Should().BeEmpty();
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
+        command.Target.ServiceInvocation.Auth.Durable.CredentialId.Should().Be("durable-run-key");
     }
 
     [Fact]

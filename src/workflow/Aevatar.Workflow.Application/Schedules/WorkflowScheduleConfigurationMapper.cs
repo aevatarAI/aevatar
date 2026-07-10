@@ -75,16 +75,17 @@ internal static class WorkflowScheduleConfigurationMapper
                 throw new ArgumentException("Scope owner NyxID subject is required.", nameof(configuration.Auth));
 
             return new ScheduledServiceInvocationAuth(
-                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                new ScheduledServiceInvocationNyxIdCredentialSource(
+                    MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject),
                     NormalizeRequired(scopeOwnerNyxId.Scope, nameof(scopeOwnerNyxId.Scope)),
-                    MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject)));
+                    ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
         }
 
         var senderNyxId = configuration.Auth.SenderNyxId!;
         if (senderNyxId.Subject == null)
             throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
 
-        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             MapNyxIdSubject(senderNyxId.Subject),
             NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
     }

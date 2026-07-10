@@ -1046,8 +1046,11 @@ public sealed class ScheduledDispatchGAgentTests
             .ContainSingle()
             .Which.Should().BeFalse();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
-        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
-        agent.State.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.ExternalUserId.Should().Be("owner-nyx-user");
+        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId.Should().BeNull();
+        agent.State.Target.ServiceInvocation.Auth.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("owner-proxy");
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Subject.ExternalUserId.Should().Be("owner-nyx-user");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }
@@ -1109,7 +1112,9 @@ public sealed class ScheduledDispatchGAgentTests
 
         eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
         agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
-        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        agent.State.Target.ServiceInvocation.Auth!.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
     }
 
     [Fact]
@@ -1171,7 +1176,9 @@ public sealed class ScheduledDispatchGAgentTests
         });
 
         agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
-        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        agent.State.Target.ServiceInvocation.Auth!.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
         auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
