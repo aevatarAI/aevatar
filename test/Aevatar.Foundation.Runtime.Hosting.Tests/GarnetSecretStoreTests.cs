@@ -135,6 +135,41 @@ public sealed class GarnetSecretStoreTests
         afterRevoke.FailureReason.Should().Be(SecretResolutionFailureReason.NotFound);
     }
 
+    [GarnetIntegrationFact]
+    public async Task GarnetSecretKeyValueStore_ShouldCompareSetAndCompareDeleteWithExactBytes()
+    {
+        var options = CreateOptions();
+        options.ConnectionString = RequireGarnetConnectionString();
+        using var connection = new GarnetSecretConnectionMultiplexer(options);
+        var store = new GarnetSecretKeyValueStore(connection, options);
+        var key = $"{options.SecretVaultPrefix}:compare:{Guid.NewGuid():N}";
+        byte[] original = [0x00, 0x01, 0xFE, 0xFF];
+        byte[] wrongExpected = [0x00, 0x01, 0xFE, 0x00];
+        byte[] updated = [0x10, 0x20, 0x30, 0x40];
+
+        await store.SetAsync(key, original, null);
+
+        var rejectedSet = await store.CompareSetAsync(key, wrongExpected, updated);
+
+        rejectedSet.Should().BeFalse();
+        (await store.GetAsync(key)).Should().Equal(original);
+
+        var acceptedSet = await store.CompareSetAsync(key, original, updated);
+
+        acceptedSet.Should().BeTrue();
+        (await store.GetAsync(key)).Should().Equal(updated);
+
+        var rejectedDelete = await store.CompareDeleteAsync(key, original);
+
+        rejectedDelete.Should().BeFalse();
+        (await store.GetAsync(key)).Should().Equal(updated);
+
+        var acceptedDelete = await store.CompareDeleteAsync(key, updated);
+
+        acceptedDelete.Should().BeTrue();
+        (await store.GetAsync(key)).Should().BeNull();
+    }
+
     [Fact]
     public async Task GarnetBackedSecretVault_ShouldRejectNewlineDelimitedAadCollisionAfterRecordTampering()
     {
@@ -529,6 +564,10 @@ public sealed class GarnetSecretStoreTests
         var bytes = keyValueStore.Values.Should().ContainSingle().Subject.Value;
         return Encoding.UTF8.GetString(bytes);
     }
+
+    private static string RequireGarnetConnectionString() =>
+        Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
+        ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
 
     private static string Base64Key(byte seed)
     {
