@@ -2017,10 +2017,17 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
+    expect(within(dialog).getByRole("button", { name: "开始测试" })).toBeDisabled();
+
     fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Route this customer question" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
+    const setAndTestButton = within(dialog).getByRole("button", {
+      name: "设为入口并测试",
+    });
+
+    expect(setAndTestButton).toBeEnabled();
+    fireEvent.click(setAndTestButton);
 
     await waitFor(() => {
       expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
@@ -2040,6 +2047,36 @@ describe("TeamDetailPage", () => {
         expect.any(AbortSignal),
       );
     });
+  });
+
+  it("sets a ready member as entry before prompt entry when the Team has no entry", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await openTeamTestDialog();
+    const startTestButton = within(dialog).getByRole("button", {
+      name: "开始测试",
+    });
+    const setEntryButton = within(dialog).getByRole("button", {
+      name: "设为入口成员",
+    });
+
+    expect(startTestButton).toBeDisabled();
+    expect(setEntryButton).toBeEnabled();
+    fireEvent.click(setEntryButton);
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-team-alpha",
+      );
+    });
+    expect(runtimeRunsApi.streamTeamChat).not.toHaveBeenCalled();
   });
 
   it("waits for the entry read model before invoking Team Test", async () => {
