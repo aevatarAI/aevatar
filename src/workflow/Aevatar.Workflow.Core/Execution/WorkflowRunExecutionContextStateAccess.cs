@@ -366,6 +366,8 @@ internal static class WorkflowRunExecutionContextStateAccess
         var clone = source?.Clone() ?? new WorkflowRunExecutionContextState();
         if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.BearerToken))
             clone.CallerCredential.BearerToken = string.Empty;
+        if (clone.CallerCredential?.DurableCallerCredential != null)
+            clone.CallerCredential.DurableCallerCredential = null;
         return clone;
     }
 

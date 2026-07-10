@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
@@ -199,6 +200,16 @@ public sealed class WorkflowExecutionRuntimeContextTests
         durableDelta.CallerCredential.RuntimeSecretReference.Should().BeNull();
         durableDelta.CallerCredential.DurableCallerCredential.Should().NotBeNull();
         durableDelta.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
+
+        FluentActions.Invoking(() => WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+                new WorkflowCallerCredential
+                {
+                    BearerToken = "secret",
+                    DurableCallerCredential = durableRef,
+                }))
+            .Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*must not carry both durable and bearer credentials*");
     }
 
     [Fact]
@@ -231,6 +242,18 @@ public sealed class WorkflowExecutionRuntimeContextTests
             new WorkflowCallerCredential { BearerToken = "secret" });
         await WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(host);
 
+        host.ExecutionContextState.CallerCredential.Should().BeNull();
+
+        await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+                host,
+                new WorkflowCallerCredential
+                {
+                    BearerToken = "secret",
+                    DurableCallerCredential = CreateDurableCallerCredentialRef(),
+                }))
+            .Should()
+            .ThrowAsync<ArgumentException>()
+            .WithMessage("*must not carry both durable and bearer credentials*");
         host.ExecutionContextState.CallerCredential.Should().BeNull();
 
         await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
@@ -282,6 +305,136 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         credential.Found.Should().BeTrue();
         credential.Credential.BearerToken.Should().Be("durable-token");
+    }
+
+    [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldFailClosed_WhenDurableHandleCannotResolve()
+    {
+        var noVaultHost = new RecordingStateHost();
+        noVaultHost.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = CreateDurableCallerCredentialRef(),
+        };
+        var missingVaultCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(noVaultHost);
+        missingVaultCredential.Found.Should().BeFalse();
+        missingVaultCredential.Credential.BearerToken.Should().BeEmpty();
+
+        var vault = new InMemorySecretVault();
+        var incompleteReferenceHost = new RecordingStateHost(secretVault: vault);
+        incompleteReferenceHost.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = CreateDurableCallerCredentialRef(ownerScopeKey: string.Empty),
+        };
+        var incompleteReferenceCredential =
+            await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(incompleteReferenceHost);
+        incompleteReferenceCredential.Found.Should().BeFalse();
+        incompleteReferenceCredential.Credential.BearerToken.Should().BeEmpty();
+
+        var unresolvedHost = new RecordingStateHost(secretVault: vault);
+        unresolvedHost.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = CreateDurableCallerCredentialRef(reference: "missing"),
+        };
+        var unresolvedCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(unresolvedHost);
+        unresolvedCredential.Found.Should().BeFalse();
+        unresolvedCredential.Credential.BearerToken.Should().BeEmpty();
+
+        var invalidSecret = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            "schedule:schedule-invalid",
+            "lark:tenant:user-invalid",
+            "Bearer invalid",
+            "test"));
+        var invalidSecretHost = new RecordingStateHost(secretVault: vault);
+        invalidSecretHost.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = CreateDurableCallerCredentialRef(
+                invalidSecret.Reference.Ref,
+                invalidSecret.Reference.Purpose,
+                invalidSecret.Reference.OwnerScopeKey,
+                "lark:tenant:user-invalid"),
+        };
+        var invalidSecretCredential =
+            await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(invalidSecretHost);
+        invalidSecretCredential.Found.Should().BeFalse();
+        invalidSecretCredential.Credential.BearerToken.Should().BeEmpty();
+
+        var emptySecret = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            "schedule:schedule-empty",
+            "lark:tenant:user-empty",
+            " ",
+            "test"));
+        var emptySecretHost = new RecordingStateHost(secretVault: vault);
+        emptySecretHost.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            DurableCallerCredential = CreateDurableCallerCredentialRef(
+                emptySecret.Reference.Ref,
+                emptySecret.Reference.Purpose,
+                emptySecret.Reference.OwnerScopeKey,
+                "lark:tenant:user-empty"),
+        };
+        var emptySecretCredential =
+            await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(emptySecretHost);
+        emptySecretCredential.Found.Should().BeFalse();
+        emptySecretCredential.Credential.BearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunCommittedStateRedactionHook_ShouldClearDurableCallerCredentialFromDeltaAndStateRoot()
+    {
+        var durableRef = CreateDurableCallerCredentialRef();
+        var published = new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = "evt-1",
+                Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+                Version = 1,
+                AgentId = "run-1",
+                EventType = nameof(WorkflowRunExecutionContextUpdatedEvent),
+                EventData = Any.Pack(new WorkflowRunExecutionContextUpdatedEvent
+                {
+                    RunId = "run-1",
+                    ExecutionContextDelta = new WorkflowRunExecutionContextDelta
+                    {
+                        ClearCallerCredential = true,
+                        CallerCredential = new WorkflowCallerCredential
+                        {
+                            BearerToken = "secret",
+                            DurableCallerCredential = durableRef.Clone(),
+                        },
+                    },
+                }),
+            },
+            StateRoot = Any.Pack(new WorkflowRunState
+            {
+                RunId = "run-1",
+                ExecutionContext = new WorkflowRunExecutionContextState
+                {
+                    CallerCredential = new WorkflowCallerCredentialState
+                    {
+                        BearerToken = "secret",
+                        DurableCallerCredential = durableRef.Clone(),
+                    },
+                },
+            }),
+        };
+        var hook = new WorkflowRunCommittedStateRedactionHook();
+
+        await hook.BeforePublishAsync(new CommittedStatePublicationContext
+        {
+            ActorId = "run-1",
+            ActorType = typeof(WorkflowRunGAgent),
+            Published = published,
+        }, CancellationToken.None);
+
+        var updateEvent = published.StateEvent.EventData.Unpack<WorkflowRunExecutionContextUpdatedEvent>();
+        updateEvent.ExecutionContextDelta.CallerCredential!.BearerToken.Should().BeEmpty();
+        updateEvent.ExecutionContextDelta.CallerCredential.DurableCallerCredential.Should().BeNull();
+        var stateRoot = published.StateRoot.Unpack<WorkflowRunState>();
+        stateRoot.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
+        stateRoot.ExecutionContext.CallerCredential.DurableCallerCredential.Should().BeNull();
     }
 
     [Fact]
@@ -508,6 +661,20 @@ public sealed class WorkflowExecutionRuntimeContextTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+        };
+
+    private static DurableCallerCredentialRef CreateDurableCallerCredentialRef(
+        string reference = "sec_scheduled",
+        string purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+        string ownerScopeKey = "schedule:schedule-1",
+        string subjectId = "lark:tenant:user-1") =>
+        new()
+        {
+            Ref = reference,
+            Purpose = purpose,
+            OwnerScopeKey = ownerScopeKey,
+            SubjectId = subjectId,
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
         };
 
     private sealed class RecordingStateHost : IWorkflowExecutionStateHost, IRuntimeSecretStoreAccessor, ISecretVaultAccessor

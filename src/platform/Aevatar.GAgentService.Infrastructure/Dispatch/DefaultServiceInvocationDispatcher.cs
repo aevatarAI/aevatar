@@ -103,6 +103,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     {
         var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
             ?? throw new InvalidOperationException("Workflow services require ChatRequestEvent payload.");
+        var callerCredential = BuildWorkflowCallerCredential(chatRequest, request);
         var plan = target.Artifact.DeploymentPlan.WorkflowPlan;
         var definitionActorId = ResolveWorkflowServiceDefinitionActorId(target, plan);
         var run = await _workflowRunProvisioningPort.CreateRunAsync(
@@ -121,7 +122,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var correlationId = ResolveCorrelationId(request, commandId);
         var serviceRunId = run.ActorId;
         await RegisterRunAsync(target, request, serviceRunId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
-        var workflowChatRequest = ToWorkflowChatRequest(chatRequest, request, target, run.ActorId);
+        var workflowChatRequest = ToWorkflowChatRequest(chatRequest, request, target, run.ActorId, callerCredential);
         var envelope = CreateEnvelope(run.ActorId, Any.Pack(workflowChatRequest), commandId, correlationId);
         await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
         return CreateReceipt(target, run.ActorId, commandId, correlationId, serviceRunId);
@@ -142,9 +143,9 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ChatRequestEvent source,
         ServiceInvocationRequest invocationRequest,
         ServiceInvocationResolvedTarget target,
-        string workflowRunActorId)
+        string workflowRunActorId,
+        Aevatar.Workflow.Abstractions.WorkflowCallerCredential callerCredential)
     {
-        var callerCredential = BuildWorkflowCallerCredential(source, invocationRequest);
         _logger.LogInformation(
             "Workflow service invocation caller credential prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} workflowRunActorId={WorkflowRunActorId} hasConnectorAuthorization={HasConnectorAuthorization} hasLlmOwnerToken={HasLlmOwnerToken} callerCredentialSourceKind={CallerCredentialSourceKind} hasCallerBearerToken={HasCallerBearerToken}",
             invocationRequest.ScheduleId ?? string.Empty,
