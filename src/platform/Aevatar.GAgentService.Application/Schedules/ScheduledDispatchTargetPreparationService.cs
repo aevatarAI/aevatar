@@ -129,6 +129,9 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
             chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
         }
 
+        chatRequest.ConnectorHttpAuthorization = string.Empty;
+        chatRequest.CallerDurableCredential = null;
+
         if (chatRequest.ToolContext?.Credentials != null)
         {
             chatRequest.ToolContext.Credentials.NyxIdAccessToken = string.Empty;

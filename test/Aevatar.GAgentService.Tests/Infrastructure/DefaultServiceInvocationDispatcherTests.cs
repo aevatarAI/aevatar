@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
@@ -208,6 +209,154 @@ public sealed class DefaultServiceInvocationDispatcherTests
         var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
             .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
         workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapScheduledDurableCallerCredentialToWorkflowCallerCredential()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-durable",
+            ScheduleId = "schedule-1",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerDurableCredential = new DurableCallerCredentialRef
+                {
+                    Ref = "sec_scheduled",
+                    Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                    OwnerScopeKey = "schedule:schedule-1",
+                    SubjectId = "lark:tenant:user",
+                    SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().BeEmpty();
+        workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
+        workflowRequest.CallerCredential.DurableCallerCredential.SourceKind
+            .Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectCallerDurableCredentialWithoutScheduledDispatch()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-forged-durable",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerDurableCredential = new DurableCallerCredentialRef
+                {
+                    Ref = "sec_forged",
+                    Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                    OwnerScopeKey = "schedule:schedule-1",
+                    SubjectId = "subject",
+                    SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                },
+            }),
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*caller_durable_credential*scheduled dispatch*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        dispatchPort.Calls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DispatchAsync_ShouldRejectScheduledDurableCallerCredential_WhenRawCredentialOrReferenceIsInvalid(
+        bool includeRawCredential)
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = "hello",
+            CallerDurableCredential = includeRawCredential
+                ? CreateDurableCallerCredentialRef()
+                : new DurableCallerCredentialRef(),
+        };
+        if (includeRawCredential)
+            chatRequest.ConnectorHttpAuthorization = "Bearer raw-token";
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-durable-reject",
+            ScheduleId = "schedule-1",
+            Payload = Any.Pack(chatRequest),
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(includeRawCredential
+                ? "*caller_durable_credential*must not be combined*"
+                : "*caller_durable_credential*durable secret reference*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        dispatchPort.Calls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -719,6 +868,16 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 RequestTypeUrl = requestTypeUrl,
             });
     }
+
+    private static DurableCallerCredentialRef CreateDurableCallerCredentialRef() =>
+        new()
+        {
+            Ref = "sec_scheduled",
+            Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            OwnerScopeKey = "schedule:schedule-1",
+            SubjectId = "lark:tenant:user",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
 
     private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
     {

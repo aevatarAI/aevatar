@@ -23,7 +23,15 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     public ScheduledServiceInvocationDispatchPort(
         IServiceInvocationPort serviceInvocationPort,
         IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
-        ISecretVault? secretVault = null,
+        ILogger<ScheduledServiceInvocationDispatchPort>? logger = null)
+        : this(serviceInvocationPort, credentialExchangePort, secretVault: null, logger)
+    {
+    }
+
+    public ScheduledServiceInvocationDispatchPort(
+        IServiceInvocationPort serviceInvocationPort,
+        IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
+        ISecretVault? secretVault,
         ILogger<ScheduledServiceInvocationDispatchPort>? logger = null)
     {
         _serviceInvocationPort = serviceInvocationPort ?? throw new ArgumentNullException(nameof(serviceInvocationPort));
@@ -91,13 +99,49 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
             !string.IsNullOrWhiteSpace(exchange.Result.AccessToken));
 
+        var token = NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role));
+        var durableCallerCredential = dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential &&
+                                      exchange.Role != CredentialRole.ScheduledInvocationAgentKey
+            ? await StoreDurableCallerCredentialAsync(dispatch, exchange.Role, token, ct)
+            : null;
+
         return EnrichChatPayload(
             dispatch.Request,
             dispatch.Headers,
             new ExchangedCredential(
                 exchange.Role,
-                NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role))),
+                token,
+                durableCallerCredential),
             dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
+    }
+
+    private async Task<DurableCallerCredentialRef> StoreDurableCallerCredentialAsync(
+        ScheduledServiceInvocationDispatchRequest dispatch,
+        CredentialRole role,
+        string token,
+        CancellationToken ct)
+    {
+        if (_secretVault == null)
+            throw new InvalidOperationException("Scheduled workflow caller credential vault is not configured.");
+
+        var ownerScopeKey = ResolveOwnerScopeKey(dispatch);
+        var subjectId = ResolveSubjectId(dispatch.Auth, role);
+        var stored = await _secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            ownerScopeKey,
+            subjectId,
+            token,
+            "scheduled-workflow-caller-credential"),
+            ct);
+
+        return new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = subjectId,
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
     }
 
     private static ServiceInvocationRequest WithScheduleId(ServiceInvocationRequest request, string? scheduleId)
@@ -255,23 +299,33 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             var token = credential.AccessToken;
             var existingControl = LLMControlContextMapper.FromPayload(chatRequest.LlmControl);
             var ownerCredential = credential.Role is CredentialRole.ScopeOwner or CredentialRole.ScheduledInvocationAgentKey;
-            var control = existingControl with
-            {
-                NyxIdAccessToken = ownerCredential
-                    ? token
-                    : existingControl.NyxIdAccessToken,
-                NyxIdOrgToken = ownerCredential
-                    ? token
-                    : existingControl.NyxIdOrgToken,
-                SenderNyxIdAccessToken = credential.Role == CredentialRole.Sender
-                    ? token
-                    : existingControl.SenderNyxIdAccessToken,
-            };
+            var projectWorkflowCallerCredential =
+                projectNyxIdAccessTokenToWorkflowCallerCredential &&
+                credential.Role != CredentialRole.ScheduledInvocationAgentKey;
+            var control = projectWorkflowCallerCredential
+                ? existingControl with
+                {
+                    NyxIdAccessToken = null,
+                    NyxIdOrgToken = null,
+                    SenderNyxIdAccessToken = null,
+                }
+                : existingControl with
+                {
+                    NyxIdAccessToken = ownerCredential
+                        ? token
+                        : existingControl.NyxIdAccessToken,
+                    NyxIdOrgToken = ownerCredential
+                        ? token
+                        : existingControl.NyxIdOrgToken,
+                    SenderNyxIdAccessToken = credential.Role == CredentialRole.Sender
+                        ? token
+                        : existingControl.SenderNyxIdAccessToken,
+                };
             chatRequest.LlmControl = control.ToPayload();
-            if (projectNyxIdAccessTokenToWorkflowCallerCredential &&
-                credential.Role != CredentialRole.ScheduledInvocationAgentKey)
+            if (projectWorkflowCallerCredential)
             {
-                chatRequest.ConnectorHttpAuthorization = $"Bearer {token}";
+                chatRequest.ConnectorHttpAuthorization = string.Empty;
+                chatRequest.CallerDurableCredential = credential.DurableCallerCredential?.Clone();
             }
         }
 
@@ -331,7 +385,44 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         CredentialRole Role,
         ScheduledServiceInvocationCredentialExchangeResult Result);
 
-    private sealed record ExchangedCredential(CredentialRole Role, string AccessToken);
+    private static string ResolveOwnerScopeKey(ScheduledServiceInvocationDispatchRequest dispatch)
+    {
+        if (!string.IsNullOrWhiteSpace(dispatch.ScheduleId))
+            return $"schedule:{dispatch.ScheduleId.Trim()}";
+        if (!string.IsNullOrWhiteSpace(dispatch.Request.Identity?.TenantId))
+            return $"tenant:{dispatch.Request.Identity.TenantId.Trim()}";
+
+        return $"service:{FormatServiceKey(dispatch.Request.Identity)}";
+    }
+
+    private static string ResolveSubjectId(
+        ScheduledServiceInvocationAuth? auth,
+        CredentialRole role)
+    {
+        var subject = role == CredentialRole.ScopeOwner
+            ? auth?.ScopeOwnerNyxId?.OwnerSubject
+            : auth?.SenderNyxId?.Subject;
+        if (subject == null)
+        {
+            return role switch
+            {
+                CredentialRole.ScopeOwner => "scope-owner",
+                CredentialRole.ScheduledInvocationAgentKey => "scheduled-invocation-agent-key",
+                _ => "sender",
+            };
+        }
+
+        return string.Join(
+            ":",
+            (subject.Platform ?? string.Empty).Trim(),
+            (subject.Tenant ?? string.Empty).Trim(),
+            (subject.ExternalUserId ?? string.Empty).Trim());
+    }
+
+    private sealed record ExchangedCredential(
+        CredentialRole Role,
+        string AccessToken,
+        DurableCallerCredentialRef? DurableCallerCredential);
 
     private static CredentialRole ToCredentialRole(ScheduledServiceInvocationNyxIdCredentialRole role) =>
         role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
