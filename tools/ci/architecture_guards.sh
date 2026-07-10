@@ -68,6 +68,8 @@ if [ -d "src/Aevatar.Host.Api" ] || [ -d "src/Aevatar.Host.Gateway" ]; then
   exit 1
 fi
 
+bash "${SCRIPT_DIR}/required_ci_workflow_event_guard.sh"
+
 # Refactor (v1/issue1454-first):
 #   Old: 无中央 .NET 版本源,各项目自带或默认 1.0.0.0,无中央事实
 #   New: Directory.Build.props 中央 v0.1.0-beta + guard 防回归
