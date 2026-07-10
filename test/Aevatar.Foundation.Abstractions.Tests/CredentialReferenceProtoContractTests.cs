@@ -17,6 +17,7 @@ public sealed class CredentialReferenceProtoContractTests
             Version = 7,
             OwnerScopeKey = "scope-a",
             CreatedAtUnixMs = 123456,
+            ExpiresAtUnixMs = 789012,
         };
 
         var parsed = SecretReference.Parser.ParseFrom(reference.ToByteArray());
@@ -27,6 +28,7 @@ public sealed class CredentialReferenceProtoContractTests
         parsed.Version.ShouldBe(reference.Version);
         parsed.OwnerScopeKey.ShouldBe(reference.OwnerScopeKey);
         parsed.CreatedAtUnixMs.ShouldBe(reference.CreatedAtUnixMs);
+        parsed.ExpiresAtUnixMs.ShouldBe(reference.ExpiresAtUnixMs);
     }
 
     [Fact]

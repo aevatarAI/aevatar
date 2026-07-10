@@ -87,7 +87,7 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         {
             var resolved = await _secretVault.ResolveAsync(new ResolveSecretRequest(
                 credential.NyxApiKeyReference.Ref,
-                CredentialSecretPurposes.ScheduledNyxApiKey,
+                ResolveScheduledAgentKeyPurpose(credential.NyxApiKeyReference),
                 credential.NyxApiKeyReference.OwnerScopeKey,
                 ResolveApiKeyId(document, credential),
                 "scheduled-delivery-target"),
@@ -104,6 +104,11 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         string.IsNullOrWhiteSpace(credential.ApiKeyId)
             ? document.ApiKeyId ?? string.Empty
             : credential.ApiKeyId.Trim();
+
+    private static string ResolveScheduledAgentKeyPurpose(SecretReference reference) =>
+        string.IsNullOrWhiteSpace(reference.Purpose)
+            ? CredentialSecretPurposes.ScheduledNyxApiKey
+            : reference.Purpose.Trim();
 
     private static string ResolveDeliveryPlatform(UserAgentCatalogDocument document)
     {
