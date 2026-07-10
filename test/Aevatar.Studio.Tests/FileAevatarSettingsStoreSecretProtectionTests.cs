@@ -2,6 +2,7 @@ using Aevatar.Configuration;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.Storage;
 using FluentAssertions;
+using System.Security.Cryptography;
 
 namespace Aevatar.Studio.Tests;
 
@@ -15,7 +16,8 @@ public sealed class FileAevatarSettingsStoreSecretProtectionTests
 
         try
         {
-            var store = new FileAevatarSettingsStore(path, LocalSecretProtectionOptions.NoPlaintextNoKeychain);
+            WriteSiblingMasterKey(path);
+            var store = new FileAevatarSettingsStore(path, NoPlaintextNoLocalMasterKeySources);
             var settings = new StoredAevatarSettings(
                 path,
                 "openai",
@@ -52,7 +54,8 @@ public sealed class FileAevatarSettingsStoreSecretProtectionTests
 
         try
         {
-            var store = new FileAevatarSettingsStore(path, LocalSecretProtectionOptions.DevelopmentPlaintextNoKeychain);
+            WriteSiblingMasterKey(path);
+            var store = new FileAevatarSettingsStore(path, PlaintextAllowedNoLocalMasterKeySources);
             var settings = new StoredAevatarSettings(
                 path,
                 "openai",
@@ -78,5 +81,18 @@ public sealed class FileAevatarSettingsStoreSecretProtectionTests
             if (Directory.Exists(dir))
                 Directory.Delete(dir, recursive: true);
         }
+    }
+
+    private static LocalSecretProtectionOptions NoPlaintextNoLocalMasterKeySources =>
+        new(false, LocalSecretMasterKeySource.Disabled);
+
+    private static LocalSecretProtectionOptions PlaintextAllowedNoLocalMasterKeySources =>
+        new(true, LocalSecretMasterKeySource.Disabled);
+
+    private static void WriteSiblingMasterKey(string secretsPath)
+    {
+        var directory = Path.GetDirectoryName(secretsPath);
+        Directory.CreateDirectory(directory!);
+        File.WriteAllBytes(Path.Combine(directory!, "masterkey.bin"), RandomNumberGenerator.GetBytes(32));
     }
 }

@@ -15,6 +15,14 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 {
+    private static Aevatar.Foundation.Abstractions.Credentials.SecretReference TestDeliverySecretReference(string registrationId) =>
+        new()
+        {
+            Ref = $"sec_delivery_{registrationId}",
+            Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-x",
+        };
+
     private ChannelBotRegistrationGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
 
@@ -81,7 +89,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxChannelBotId = "bot-1",
             NyxAgentApiKeyId = "key-1",
             NyxConversationRouteId = "route-1",
-            NyxReplyCredentialRef = "secrets://channel/nyxid/lark/reg-1/reply-api-key",
+            WorkflowResultDeliveryCredential = TestDeliverySecretReference("reg-1"),
         });
 
         _agent.State.Registrations.Should().ContainSingle();
@@ -94,7 +102,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.NyxChannelBotId.Should().Be("bot-1");
         entry.NyxAgentApiKeyId.Should().Be("key-1");
         entry.NyxConversationRouteId.Should().Be("route-1");
-        entry.NyxReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/reg-1/reply-api-key");
+        entry.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("reg-1"));
         entry.Tombstoned.Should().BeFalse();
     }
 

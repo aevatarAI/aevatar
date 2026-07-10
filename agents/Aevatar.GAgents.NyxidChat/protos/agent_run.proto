@@ -562,8 +562,8 @@ enum WorkflowRunDeliveryStatus {
 }
 
 message WorkflowRunDeliveryGAgentState {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 10, 25;
+  reserved "bot_agent_key_id", "durable_reply_credential_ref";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -587,12 +587,16 @@ message WorkflowRunDeliveryGAgentState {
   string terminal_text = 22;
   string terminal_error_code = 23;
   int64 terminal_observed_at_unix_ms = 24;
-  string durable_reply_credential_ref = 25;
+  aevatar.ai.ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 26;
+  // Stable channel bot registration identity used for the terminal reply
+  // ConversationReference; identity is deliberately separate from the
+  // delivery credential handle above.
+  string bot_registration_id = 27;
 }
 
 message WorkflowRunDeliveryStartRequested {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 10, 12;
+  reserved "bot_agent_key_id", "durable_reply_credential_ref";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -603,12 +607,13 @@ message WorkflowRunDeliveryStartRequested {
   string reply_message_id = 8;
   string platform_message_id = 9;
   string registration_scope_id = 11;
-  string durable_reply_credential_ref = 12;
+  aevatar.ai.ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 13;
+  string bot_registration_id = 14;
 }
 
 message WorkflowRunDeliveryStartedEvent {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 10, 13;
+  reserved "bot_agent_key_id", "durable_reply_credential_ref";
   string delivery_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -620,7 +625,8 @@ message WorkflowRunDeliveryStartedEvent {
   string platform_message_id = 9;
   string registration_scope_id = 11;
   int64 started_at_unix_ms = 12;
-  string durable_reply_credential_ref = 13;
+  aevatar.ai.ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 14;
+  string bot_registration_id = 15;
 }
 
 message WorkflowRunDeliveryTerminalFrameObserved {

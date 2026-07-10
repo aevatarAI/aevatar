@@ -1,4 +1,3 @@
-using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
@@ -53,33 +52,4 @@ public sealed class ChannelDeliveryTargetResolver
 
         return target;
     }
-
-    public static ChannelNativeDeliveryTarget ToNativeDeliveryTarget(UserAgentDeliveryTarget target) =>
-        new RoutedChannelNativeDeliveryTarget(
-            target.AgentId,
-            target.Platform,
-            target.ConversationId,
-            target.NyxProviderSlug,
-            target.NyxApiKey,
-            target.LarkReceiveId,
-            target.LarkReceiveIdType,
-            target.LarkReceiveIdFallback,
-            target.LarkReceiveIdTypeFallback);
-
-    private sealed record RoutedChannelNativeDeliveryTarget(
-        string AgentId,
-        string Platform,
-        string ConversationId,
-        string NyxProviderSlug,
-        string NyxApiKey,
-        string LarkReceiveId,
-        string LarkReceiveIdType,
-        string LarkReceiveIdFallback,
-        string LarkReceiveIdTypeFallback)
-        : ChannelNativeDeliveryTarget(
-            AgentId,
-            Platform,
-            ConversationId,
-            NyxProviderSlug,
-            NyxApiKey);
 }
