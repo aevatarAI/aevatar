@@ -41,13 +41,6 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
         _logger = logger;
     }
 
-    public UserAgentCatalogQueryPort(
-        IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
-        ILogger<UserAgentCatalogQueryPort>? logger = null)
-        : this(documentReader, new EmptyRevocationDocumentReader(), logger)
-    {
-    }
-
     public async Task<UserAgentCatalogReadModelEntry?> GetForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(agentId)) return null;
@@ -461,20 +454,4 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             CatalogLastEventId = document.LastEventId ?? string.Empty,
         };
 
-    private sealed class EmptyRevocationDocumentReader : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>
-    {
-        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(string key, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<UserAgentApiKeyRevocationDocument?>(null);
-        }
-
-        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
-            ProjectionDocumentQuery query,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>());
-        }
-    }
 }

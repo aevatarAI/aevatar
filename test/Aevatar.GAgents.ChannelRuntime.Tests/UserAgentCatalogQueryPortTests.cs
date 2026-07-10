@@ -19,7 +19,7 @@ public sealed class UserAgentCatalogQueryPortTests
             BuildSharedDocument("shared-agent", alice, allowTrigger: true),
             BuildDocument("bob-agent", bob),
         ]);
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var visible = await port.QueryVisibleByCallerAsync(alice, CancellationToken.None);
 
@@ -42,7 +42,7 @@ public sealed class UserAgentCatalogQueryPortTests
             BuildDocument("owner-private-agent", owner),
             BuildSharedDocument("shared-agent", owner, allowTrigger: false),
         ]);
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var visible = await port.QueryVisibleByCallerAsync(teammate, CancellationToken.None);
 
@@ -58,7 +58,7 @@ public sealed class UserAgentCatalogQueryPortTests
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
         var teammate = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
-        var port = new UserAgentCatalogQueryPort(new RecordingDocumentReader(
+        var port = CreatePort(new RecordingDocumentReader(
         [
             BuildSharedDocument("shared-agent", owner, allowTrigger: false),
         ]));
@@ -74,7 +74,7 @@ public sealed class UserAgentCatalogQueryPortTests
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
         var teammate = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
-        var port = new UserAgentCatalogQueryPort(new RecordingDocumentReader(
+        var port = CreatePort(new RecordingDocumentReader(
         [
             BuildSharedDocument("view-only-agent", owner, allowTrigger: false),
             BuildSharedDocument("trigger-agent", owner, allowTrigger: true),
@@ -93,7 +93,7 @@ public sealed class UserAgentCatalogQueryPortTests
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
         var otherScope = OwnerScope.ForChannel("user-B", "lark", "bot-2", "bob");
-        var port = new UserAgentCatalogQueryPort(new RecordingDocumentReader(
+        var port = CreatePort(new RecordingDocumentReader(
         [
             BuildSharedDocument("shared-agent", owner, allowTrigger: true),
         ]));
@@ -139,6 +139,9 @@ public sealed class UserAgentCatalogQueryPortTests
             StateVersion = 1,
             ActorId = UserAgentCatalogGAgent.WellKnownId,
         };
+
+    private static UserAgentCatalogQueryPort CreatePort(RecordingDocumentReader reader) =>
+        new(reader, new ThrowingRevocationDocumentReader());
 
     private static UserAgentCatalogDocument BuildSharedDocument(
         string agentId,
@@ -229,6 +232,17 @@ public sealed class UserAgentCatalogQueryPortTests
             };
             return string.Equals(actual, filter.Value.RawValue as string, StringComparison.Ordinal);
         }
+    }
+
+    private sealed class ThrowingRevocationDocumentReader : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>
+    {
+        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(string key, CancellationToken ct = default) =>
+            throw new InvalidOperationException("This test fixture does not exercise API key revocation documents.");
+
+        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("This test fixture does not exercise API key revocation documents.");
     }
 
     private sealed class RecordingRevocationDocumentReader : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>
