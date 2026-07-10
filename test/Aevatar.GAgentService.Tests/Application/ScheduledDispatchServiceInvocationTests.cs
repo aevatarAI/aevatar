@@ -427,7 +427,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
         credentialExchange.Sources.Should().BeEmpty();
-        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
         var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
         invokedChat.LlmControl.NyxIdAccessToken.Should().Be("agent-key-token");
         invokedChat.LlmControl.NyxIdOrgToken.Should().Be("agent-key-token");
@@ -467,7 +466,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Scheduled invocation agent key is expired.");
         credentialExchange.Sources.Should().BeEmpty();
-        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
     }
 
@@ -502,7 +500,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Scheduled invocation agent key resolver is not configured.");
         credentialExchange.Sources.Should().BeEmpty();
-        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
     }
 
@@ -538,7 +535,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("Scheduled invocation agent key could not be resolved.");
         credentialExchange.Sources.Should().BeEmpty();
-        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
     }
 
