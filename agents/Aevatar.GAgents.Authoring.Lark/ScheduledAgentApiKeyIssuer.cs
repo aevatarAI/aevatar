@@ -102,6 +102,38 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             skillName.Trim());
     }
 
+    public async Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return ScheduledAgentApiKeyRevokeResult.Pending(
+                0,
+                "missing_access_token",
+                UserAgentApiKeyRevocationFailureKind.Unauthorized);
+        }
+
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+        {
+            return ScheduledAgentApiKeyRevokeResult.Pending(
+                0,
+                "missing_api_key_id",
+                UserAgentApiKeyRevocationFailureKind.ProviderError);
+        }
+
+        var response = await _nyxClientFactory.CreateClient().DeleteApiKeyAsync(token, apiKeyId.Trim(), ct);
+        if (!TryReadErrorEnvelope(response, out var status, out var body, out var message))
+            return ScheduledAgentApiKeyRevokeResult.Complete();
+
+        if (status == 404)
+            return ScheduledAgentApiKeyRevokeResult.Complete(404);
+
+        var detail = Normalize(body) ?? Normalize(message) ?? "nyxid_api_key_revoke_failed";
+        return ScheduledAgentApiKeyRevokeResult.Pending(
+            status ?? 0,
+            detail,
+            ClassifyRevocationFailure(status));
+    }
+
     public async Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(apiKeyId))
@@ -109,13 +141,15 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
 
         try
         {
-            var response = await _nyxClientFactory.CreateClient().DeleteApiKeyAsync(token, apiKeyId.Trim(), ct);
-            if (LooksLikeErrorEnvelope(response))
+            var result = await RevokeAsync(token, apiKeyId, ct);
+            if (!result.Completed)
             {
                 _logger?.LogWarning(
-                    "Scheduled agent API key rollback returned an error envelope: apiKeyId={ApiKeyId}, response={Response}",
+                    "Scheduled agent API key rollback remains pending: apiKeyId={ApiKeyId} status={Status} failureKind={FailureKind} error={Error}",
                     apiKeyId,
-                    response);
+                    result.HttpStatus,
+                    result.FailureKind,
+                    result.Error);
             }
         }
         catch (Exception ex)
@@ -123,6 +157,15 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             _logger?.LogWarning(ex, "Scheduled agent API key rollback failed: apiKeyId={ApiKeyId}", apiKeyId);
         }
     }
+
+    private static UserAgentApiKeyRevocationFailureKind ClassifyRevocationFailure(int? status) =>
+        status switch
+        {
+            401 or 403 => UserAgentApiKeyRevocationFailureKind.Unauthorized,
+            429 => UserAgentApiKeyRevocationFailureKind.Transient,
+            >= 500 => UserAgentApiKeyRevocationFailureKind.Transient,
+            _ => UserAgentApiKeyRevocationFailureKind.ProviderError,
+        };
 
     private IEnumerable<string> RequiredSlugs(ScheduledAgentServiceSlugs serviceSlugs, string? ownerLlmRouteSlug)
     {

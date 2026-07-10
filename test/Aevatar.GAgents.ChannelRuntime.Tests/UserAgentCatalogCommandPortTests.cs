@@ -103,6 +103,69 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
+    public async Task RecordApiKeyRevocationAttemptAsync_DispatchesCommand_AndCompletes()
+    {
+        var fixture = new Fixture();
+
+        await fixture.Port.RecordApiKeyRevocationAttemptAsync(
+            new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+            {
+                AgentId = "agent-1",
+                ApiKeyId = "key-1",
+                Completed = false,
+                HttpStatus = 503,
+                Error = "upstream unavailable",
+                FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+            },
+            CancellationToken.None);
+
+        fixture.Captured.Should().ContainSingle();
+        var command = fixture.Captured[0].Payload.Unpack<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>();
+        command.AgentId.Should().Be("agent-1");
+        command.ApiKeyId.Should().Be("key-1");
+        command.Completed.Should().BeFalse();
+        command.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        fixture.Captured[0].Route.PublisherActorId.Should().Be(ExpectedPublisher);
+        fixture.Captured[0].Route.Direct.TargetActorId.Should().Be(CatalogActorId);
+        await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RecordApiKeyRevocationAttemptAsync_WithNullCommand_Throws()
+    {
+        var fixture = new Fixture();
+        var act = () => fixture.Port.RecordApiKeyRevocationAttemptAsync(null!, CancellationToken.None);
+        await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Theory]
+    [InlineData(null, "key-1")]
+    [InlineData("", "key-1")]
+    [InlineData("   ", "key-1")]
+    [InlineData("agent-1", null)]
+    [InlineData("agent-1", "")]
+    [InlineData("agent-1", "   ")]
+    public async Task RecordApiKeyRevocationAttemptAsync_WithInvalidIds_Throws(
+        string? agentId,
+        string? apiKeyId)
+    {
+        var fixture = new Fixture();
+        var command = new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+        {
+            AgentId = agentId ?? string.Empty,
+            ApiKeyId = apiKeyId ?? string.Empty,
+            Completed = false,
+            FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+        };
+
+        var act = () => fixture.Port.RecordApiKeyRevocationAttemptAsync(command, CancellationToken.None);
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        fixture.Captured.Should().BeEmpty();
+        await fixture.Dispatch.DidNotReceiveWithAnyArgs().DispatchAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task ShareAsync_DispatchesCommand_AndCompletes()
     {
         var fixture = new Fixture();

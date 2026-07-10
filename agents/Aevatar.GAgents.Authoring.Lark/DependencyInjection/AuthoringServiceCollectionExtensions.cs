@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,7 +46,6 @@ public static class AuthoringServiceCollectionExtensions
         new AgentBuilderToolSource(
             sp.GetRequiredService<IUserAgentCatalogQueryPort>(),
             sp.GetRequiredService<ISkillRunnerExecutionQueryPort>(),
-            sp.GetRequiredService<INyxIdApiClientFactory>(),
             sp.GetRequiredService<ISkillRunnerCommandPort>(),
             sp.GetRequiredService<IUserAgentCatalogCommandPort>(),
             sp.GetRequiredService<ICallerScopeResolver>(),

@@ -19,7 +19,7 @@ public sealed class UserAgentCatalogQueryPortTests
             BuildSharedDocument("shared-agent", alice, allowTrigger: true),
             BuildDocument("bob-agent", bob),
         ]);
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var visible = await port.QueryVisibleByCallerAsync(alice, CancellationToken.None);
 
@@ -42,7 +42,7 @@ public sealed class UserAgentCatalogQueryPortTests
             BuildDocument("owner-private-agent", owner),
             BuildSharedDocument("shared-agent", owner, allowTrigger: false),
         ]);
-        var port = new UserAgentCatalogQueryPort(reader);
+        var port = CreatePort(reader);
 
         var visible = await port.QueryVisibleByCallerAsync(teammate, CancellationToken.None);
 
@@ -58,7 +58,7 @@ public sealed class UserAgentCatalogQueryPortTests
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
         var teammate = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
-        var port = new UserAgentCatalogQueryPort(new RecordingDocumentReader(
+        var port = CreatePort(new RecordingDocumentReader(
         [
             BuildSharedDocument("shared-agent", owner, allowTrigger: false),
         ]));
@@ -74,7 +74,7 @@ public sealed class UserAgentCatalogQueryPortTests
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
         var teammate = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
-        var port = new UserAgentCatalogQueryPort(new RecordingDocumentReader(
+        var port = CreatePort(new RecordingDocumentReader(
         [
             BuildSharedDocument("view-only-agent", owner, allowTrigger: false),
             BuildSharedDocument("trigger-agent", owner, allowTrigger: true),
@@ -93,7 +93,7 @@ public sealed class UserAgentCatalogQueryPortTests
     {
         var owner = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
         var otherScope = OwnerScope.ForChannel("user-B", "lark", "bot-2", "bob");
-        var port = new UserAgentCatalogQueryPort(new RecordingDocumentReader(
+        var port = CreatePort(new RecordingDocumentReader(
         [
             BuildSharedDocument("shared-agent", owner, allowTrigger: true),
         ]));
@@ -103,6 +103,30 @@ public sealed class UserAgentCatalogQueryPortTests
 
         visible.Should().BeNull();
         triggerable.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task QueryPendingApiKeyRevocationsByCallerAsync_ReturnsCallerScopedRows()
+    {
+        var alice = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");
+        var bob = OwnerScope.ForChannel("user-B", "lark", "bot-1", "bob");
+        var revocationReader = new RecordingRevocationDocumentReader(
+        [
+            BuildRevocationDocument("alice-agent", "key-alice", alice),
+            BuildRevocationDocument("bob-agent", "key-bob", bob),
+            BuildRevocationDocument("missing-key", string.Empty, alice),
+        ]);
+        var port = new UserAgentCatalogQueryPort(new RecordingDocumentReader([]), revocationReader);
+
+        var pending = await port.QueryPendingApiKeyRevocationsByCallerAsync(alice, CancellationToken.None);
+
+        pending.Should().ContainSingle();
+        pending[0].AgentId.Should().Be("alice-agent");
+        pending[0].ApiKeyId.Should().Be("key-alice");
+        pending[0].OwnerScope!.MatchesStrictly(alice).Should().BeTrue();
+        revocationReader.Queries.Should().ContainSingle();
+        revocationReader.Queries[0].Filters.Select(static filter => filter.FieldPath)
+            .Should().Contain($"{nameof(UserAgentApiKeyRevocationDocument.OwnerScope)}.{nameof(OwnerScope.SenderId)}");
     }
 
     private static UserAgentCatalogDocument BuildDocument(string agentId, OwnerScope ownerScope) =>
@@ -115,6 +139,9 @@ public sealed class UserAgentCatalogQueryPortTests
             StateVersion = 1,
             ActorId = UserAgentCatalogGAgent.WellKnownId,
         };
+
+    private static UserAgentCatalogQueryPort CreatePort(RecordingDocumentReader reader) =>
+        new(reader, new ThrowingRevocationDocumentReader());
 
     private static UserAgentCatalogDocument BuildSharedDocument(
         string agentId,
@@ -132,6 +159,24 @@ public sealed class UserAgentCatalogQueryPortTests
         document.TriggerSharingAudienceKey = allowTrigger ? document.VisibleSharingAudienceKey : string.Empty;
         return document;
     }
+
+    private static UserAgentApiKeyRevocationDocument BuildRevocationDocument(
+        string agentId,
+        string apiKeyId,
+        OwnerScope ownerScope) =>
+        new()
+        {
+            Id = agentId,
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            OwnerScope = ownerScope.Clone(),
+            AttemptCount = 1,
+            LastHttpStatus = 503,
+            LastError = "upstream unavailable",
+            FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+            StateVersion = 3,
+            LastEventId = "evt-3",
+        };
 
     private sealed class RecordingDocumentReader : IProjectionDocumentReader<UserAgentCatalogDocument, string>
     {
@@ -183,6 +228,70 @@ public sealed class UserAgentCatalogQueryPortTests
                 "OwnerScope.SenderId" => document.OwnerScope?.SenderId ?? string.Empty,
                 nameof(UserAgentCatalogDocument.VisibleSharingAudienceKey) => document.VisibleSharingAudienceKey,
                 nameof(UserAgentCatalogDocument.TriggerSharingAudienceKey) => document.TriggerSharingAudienceKey,
+                _ => string.Empty,
+            };
+            return string.Equals(actual, filter.Value.RawValue as string, StringComparison.Ordinal);
+        }
+    }
+
+    private sealed class ThrowingRevocationDocumentReader : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>
+    {
+        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(string key, CancellationToken ct = default) =>
+            throw new InvalidOperationException("This test fixture does not exercise API key revocation documents.");
+
+        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("This test fixture does not exercise API key revocation documents.");
+    }
+
+    private sealed class RecordingRevocationDocumentReader : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>
+    {
+        private readonly IList<UserAgentApiKeyRevocationDocument> _items;
+
+        public List<ProjectionDocumentQuery> Queries { get; } = [];
+
+        public RecordingRevocationDocumentReader(IList<UserAgentApiKeyRevocationDocument> items)
+        {
+            _items = items;
+        }
+
+        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(string key, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var match = _items.FirstOrDefault(item => string.Equals(item.Id, key, StringComparison.Ordinal));
+            return Task.FromResult(match?.Clone());
+        }
+
+        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Queries.Add(query);
+            IEnumerable<UserAgentApiKeyRevocationDocument> filtered = _items.Select(static item => item.Clone());
+            foreach (var filter in query.Filters)
+            {
+                filtered = filtered.Where(item => MatchesFilter(item, filter));
+            }
+
+            return Task.FromResult(new ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>
+            {
+                Items = filtered.Take(query.Take).ToArray(),
+            });
+        }
+
+        private static bool MatchesFilter(UserAgentApiKeyRevocationDocument document, ProjectionDocumentFilter filter)
+        {
+            if (filter.Operator != ProjectionDocumentFilterOperator.Eq)
+                return true;
+
+            var actual = filter.FieldPath switch
+            {
+                "OwnerScope.NyxUserId" => document.OwnerScope?.NyxUserId ?? string.Empty,
+                "OwnerScope.Platform" => document.OwnerScope?.Platform ?? string.Empty,
+                "OwnerScope.RegistrationScopeId" => document.OwnerScope?.RegistrationScopeId ?? string.Empty,
+                "OwnerScope.SenderId" => document.OwnerScope?.SenderId ?? string.Empty,
                 _ => string.Empty,
             };
             return string.Equals(actual, filter.Value.RawValue as string, StringComparison.Ordinal);

@@ -35,6 +35,8 @@ public interface IUserAgentCatalogQueryPort
 
     Task<IReadOnlyList<UserAgentCatalogReadModelEntry>> QueryVisibleByCallerAsync(OwnerScope caller, CancellationToken ct = default);
 
+    Task<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>> QueryPendingApiKeyRevocationsByCallerAsync(OwnerScope caller, CancellationToken ct = default);
+
     /// <summary>
     /// Returns the projected state version for an agent the caller owns; <c>null</c> when
     /// the agent does not exist OR the caller does not own it. Both conditions collapse

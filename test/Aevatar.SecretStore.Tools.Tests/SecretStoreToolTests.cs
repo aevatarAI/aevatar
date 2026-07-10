@@ -763,6 +763,41 @@ public sealed class SecretStoreToolTests
             Expirations[key] = expiry;
             return Task.CompletedTask;
         }
+
+        public Task<bool> CompareSetAsync(
+            string key,
+            ReadOnlyMemory<byte> expectedValue,
+            ReadOnlyMemory<byte> newValue,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Values.TryGetValue(key, out var current) ||
+                !current.SequenceEqual(expectedValue.ToArray()))
+            {
+                return Task.FromResult(false);
+            }
+
+            Values[key] = newValue.ToArray();
+            Expirations[key] = null;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> CompareDeleteAsync(
+            string key,
+            ReadOnlyMemory<byte> expectedValue,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!Values.TryGetValue(key, out var current) ||
+                !current.SequenceEqual(expectedValue.ToArray()))
+            {
+                return Task.FromResult(false);
+            }
+
+            Values.Remove(key);
+            Expirations.Remove(key);
+            return Task.FromResult(true);
+        }
     }
 
     private sealed class TempDirectory : IDisposable
