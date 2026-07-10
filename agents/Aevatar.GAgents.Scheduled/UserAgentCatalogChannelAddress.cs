@@ -45,7 +45,15 @@ public static class UserAgentCatalogChannelAddress
         ChannelDeliveryAddress? existing,
         string? platform,
         string? providerSlug,
-        string? conversationId)
+        string? conversationId,
+        string? incomingAddressId = null,
+        string? incomingAddressType = null,
+        string? incomingFallbackAddressId = null,
+        string? incomingFallbackAddressType = null,
+        string? existingAddressId = null,
+        string? existingAddressType = null,
+        string? existingFallbackAddressId = null,
+        string? existingFallbackAddressType = null)
     {
         var merged = incoming?.Clone() ?? existing?.Clone() ?? new ChannelDeliveryAddress();
         merged.Platform = MergeNonEmpty(merged.Platform, platform);
@@ -53,8 +61,27 @@ public static class UserAgentCatalogChannelAddress
         merged.ConversationId = MergeNonEmpty(merged.ConversationId, conversationId);
 
         var primary = merged.Primary ?? new ChannelDeliveryAddressEndpoint();
-        primary.AddressId = MergeNonEmpty(primary.AddressId, merged.ConversationId);
+        primary.AddressId = MergeNonEmpty(primary.AddressId, incomingAddressId, existingAddressId, merged.ConversationId);
+        primary.AddressType = MergeNonEmpty(primary.AddressType, incomingAddressType, existingAddressType);
         merged.Primary = primary;
+
+        var fallbackId = MergeNonEmpty(
+            merged.Fallback?.AddressId,
+            incomingFallbackAddressId,
+            existingFallbackAddressId);
+        var fallbackType = MergeNonEmpty(
+            merged.Fallback?.AddressType,
+            incomingFallbackAddressType,
+            existingFallbackAddressType);
+        if (!string.IsNullOrWhiteSpace(fallbackId) || !string.IsNullOrWhiteSpace(fallbackType))
+        {
+            merged.Fallback = new ChannelDeliveryAddressEndpoint
+            {
+                AddressId = fallbackId,
+                AddressType = fallbackType,
+            };
+        }
+
         return merged;
     }
 
@@ -62,17 +89,21 @@ public static class UserAgentCatalogChannelAddress
         ChannelDeliveryAddress? address,
         string? platform,
         string? providerSlug,
-        string? conversationId)
+        string? conversationId,
+        string? legacyAddressId = null,
+        string? legacyAddressType = null,
+        string? legacyFallbackAddressId = null,
+        string? legacyFallbackAddressType = null)
     {
         var resolvedPlatform = Normalize(address?.Platform) ?? Normalize(platform) ?? string.Empty;
         var resolvedProviderSlug = Normalize(address?.ProviderSlug) ?? Normalize(providerSlug) ?? string.Empty;
         var resolvedConversationId = Normalize(address?.ConversationId) ?? Normalize(conversationId) ?? string.Empty;
         var primary = address?.Primary;
-        var primaryAddressId = Normalize(primary?.AddressId) ?? resolvedConversationId;
-        var primaryAddressType = Normalize(primary?.AddressType) ?? string.Empty;
+        var primaryAddressId = Normalize(primary?.AddressId) ?? Normalize(legacyAddressId) ?? resolvedConversationId;
+        var primaryAddressType = Normalize(primary?.AddressType) ?? Normalize(legacyAddressType) ?? string.Empty;
         var fallback = address?.Fallback;
-        var fallbackAddressId = Normalize(fallback?.AddressId);
-        var fallbackAddressType = Normalize(fallback?.AddressType);
+        var fallbackAddressId = Normalize(fallback?.AddressId) ?? Normalize(legacyFallbackAddressId);
+        var fallbackAddressType = Normalize(fallback?.AddressType) ?? Normalize(legacyFallbackAddressType);
 
         return new ChannelAddressModel(
             resolvedPlatform,
@@ -84,8 +115,47 @@ public static class UserAgentCatalogChannelAddress
                 : new ChannelAddressEndpointModel(fallbackAddressId ?? string.Empty, fallbackAddressType ?? string.Empty));
     }
 
-    private static string MergeNonEmpty(string? preferred, string? fallback) =>
-        Normalize(preferred) ?? Normalize(fallback) ?? string.Empty;
+    public static ChannelDeliveryAddress ToProto(
+        ChannelDeliveryAddress? address,
+        string? platform,
+        string? providerSlug,
+        string? conversationId,
+        string? legacyAddressId = null,
+        string? legacyAddressType = null,
+        string? legacyFallbackAddressId = null,
+        string? legacyFallbackAddressType = null)
+    {
+        var model = ToModel(
+            address,
+            platform,
+            providerSlug,
+            conversationId,
+            legacyAddressId,
+            legacyAddressType,
+            legacyFallbackAddressId,
+            legacyFallbackAddressType);
+
+        return FromParts(
+            model.Platform,
+            model.ProviderSlug,
+            model.ConversationId,
+            model.Primary.AddressId,
+            model.Primary.AddressType,
+            model.Fallback?.AddressId,
+            model.Fallback?.AddressType);
+    }
+
+    private static string MergeNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            var normalized = Normalize(value);
+            if (normalized is not null)
+                return normalized;
+        }
+
+        return string.Empty;
+    }
 
     private static string? Normalize(string? value)
     {

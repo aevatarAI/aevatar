@@ -133,6 +133,45 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_WithLegacyLarkAddressFields_MapsToChannelAddress()
+    {
+        var state = new UserAgentCatalogState
+        {
+            Entries =
+            {
+                new UserAgentCatalogEntry
+                {
+                    AgentId = "agent-legacy-address",
+                    ConversationId = "oc_dm_chat_1",
+                    NyxProviderSlug = "api-lark-bot",
+                    AgentType = "skill_runner",
+                    TemplateName = "summary",
+                    TargetPlatform = "lark",
+#pragma warning disable CS0612 // legacy fields simulate state persisted before channel_address existed
+                    LarkReceiveId = "oc_dm_chat_1",
+                    LarkReceiveIdType = "chat_id",
+                    LarkReceiveIdFallback = "on_user_1",
+                    LarkReceiveIdTypeFallback = "union_id",
+#pragma warning restore CS0612
+                },
+            },
+        };
+
+        await _projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-legacy-address", 6, state), CancellationToken.None);
+
+        var document = _dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.ChannelAddress.Should().NotBeNull();
+        document.ChannelAddress!.Platform.Should().Be("lark");
+        document.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot");
+        document.ChannelAddress.ConversationId.Should().Be("oc_dm_chat_1");
+        document.ChannelAddress.Primary.AddressId.Should().Be("oc_dm_chat_1");
+        document.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+        document.ChannelAddress.Fallback.Should().NotBeNull();
+        document.ChannelAddress.Fallback!.AddressId.Should().Be("on_user_1");
+        document.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
+    }
+
+    [Fact]
     public async Task ProjectAsync_WithSharingGrant_MaterializesAudienceKeys()
     {
         var ownerScope = OwnerScope.ForChannel("user-A", "lark", "bot-1", "alice");

@@ -59,8 +59,12 @@ message UserAgentCatalogEntry {
   reserved 16, 17, 18, 19, 20;
   reserved "status", "last_run_at", "next_run_at", "error_count", "last_error";
   int64 tombstone_state_version = 21;
-  reserved 22, 23, 24, 25;
-  reserved "lark_receive_id", "lark_receive_id_type", "lark_receive_id_fallback", "lark_receive_id_type_fallback";
+  // Deprecated compatibility bridge for state serialized before channel_address.
+  // New writes leave these empty and map reads into channel_address.
+  string lark_receive_id = 22 [deprecated = true];
+  string lark_receive_id_type = 23 [deprecated = true];
+  string lark_receive_id_fallback = 24 [deprecated = true];
+  string lark_receive_id_type_fallback = 25 [deprecated = true];
   // Caller scope captured at create time. New writes always populate this;
   // the deprecated platform/owner_nyx_user_id fields are kept readable for
   // legacy state (issue #466 migration plan).
@@ -102,8 +106,12 @@ message UserAgentCatalogUpsertCommand {
   string schedule_timezone = 12;
   reserved 13;
   reserved "status";
-  reserved 14, 15, 16, 17;
-  reserved "lark_receive_id", "lark_receive_id_type", "lark_receive_id_fallback", "lark_receive_id_type_fallback";
+  // Deprecated compatibility bridge for command envelopes emitted before
+  // channel_address. New callers must set channel_address instead.
+  string lark_receive_id = 14 [deprecated = true];
+  string lark_receive_id_type = 15 [deprecated = true];
+  string lark_receive_id_fallback = 16 [deprecated = true];
+  string lark_receive_id_type_fallback = 17 [deprecated = true];
   // Caller scope captured at create time. Required for new writes.
   aevatar.OwnerScope owner_scope = 18;
   SkillRunnerOutputFormat output_format = 19;
@@ -180,8 +188,13 @@ message UserAgentCatalogDocument {
   string schedule_timezone = 18;
   reserved 19, 20, 21, 22, 23;
   reserved "status", "last_run_at_utc", "next_run_at_utc", "error_count", "last_error";
-  reserved 24, 25, 26, 27;
-  reserved "lark_receive_id", "lark_receive_id_type", "lark_receive_id_fallback", "lark_receive_id_type_fallback";
+  // Deprecated compatibility bridge for documents materialized before
+  // channel_address. New projections leave these empty and map reads into
+  // channel_address.
+  string lark_receive_id = 24 [deprecated = true];
+  string lark_receive_id_type = 25 [deprecated = true];
+  string lark_receive_id_fallback = 26 [deprecated = true];
+  string lark_receive_id_type_fallback = 27 [deprecated = true];
   // Caller scope materialized from the upserted entry. New rows always carry
   // this; legacy rows may have only owner_nyx_user_id+platform set, in which
   // case the caller-scoped query port lazily synthesizes owner_scope on read
