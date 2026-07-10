@@ -749,6 +749,44 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Theory]
+    [MemberData(nameof(DurableCredentialReferenceFailureCases))]
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReferenceFailure_ShouldFailBeforeInvocation(
+        string scenario,
+        ISecretVault? secretVault,
+        ScheduledServiceInvocationDurableCredentialReference credential,
+        string expectedMessage,
+        int expectedResolveCount)
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
+        var port = secretVault == null
+            ? new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange)
+            : new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
+        var auth = new ScheduledServiceInvocationAuth(credential);
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-durable"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(expectedMessage, because: scenario);
+        credentialExchange.Sources.Should().BeEmpty();
+        invocationPort.Requests.Should().BeEmpty();
+        if (secretVault is RecordingSecretVault recordingSecretVault)
+        {
+            recordingSecretVault.ResolveRequests.Should().HaveCount(expectedResolveCount);
+            recordingSecretVault.StoreRequests.Should().BeEmpty();
+        }
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData(" ")]
     [InlineData("Bearer sender-token")]
@@ -928,19 +966,70 @@ public sealed class ScheduledDispatchServiceInvocationTests
             .NotBeAssignableTo<IActorDispatchPort>();
     }
 
+    public static TheoryData<string, ISecretVault?, ScheduledServiceInvocationDurableCredentialReference, string, int>
+        DurableCredentialReferenceFailureCases() => new()
+        {
+            {
+                "missing-vault",
+                null,
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential vault is not configured.",
+                0
+            },
+            {
+                "incomplete-reference",
+                new RecordingSecretVault("durable-run-key"),
+                CreateDurableCredentialReference(referenceRef: " "),
+                "Scheduled service invocation durable credential reference is incomplete.",
+                0
+            },
+            {
+                "wrong-purpose",
+                new RecordingSecretVault("durable-run-key"),
+                CreateDurableCredentialReference(purpose: "wrong-purpose"),
+                "Scheduled service invocation durable credential reference purpose is invalid.",
+                0
+            },
+            {
+                "unresolved-secret",
+                new RecordingSecretVault(null),
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential reference could not be resolved.",
+                1
+            },
+            {
+                "empty-secret",
+                new RecordingSecretVault(string.Empty, resolveWhitespaceSecret: true),
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential reference resolved an empty access token.",
+                1
+            },
+            {
+                "malformed-secret",
+                new RecordingSecretVault("Bearer durable-run-key"),
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential reference resolved an invalid access token.",
+                1
+            },
+        };
+
     private static ScheduledServiceInvocationNyxIdCredentialSource CreateCredentialSource() =>
         new(
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy");
 
-    private static ScheduledServiceInvocationDurableCredentialReference CreateDurableCredentialReference() =>
+    private static ScheduledServiceInvocationDurableCredentialReference CreateDurableCredentialReference(
+        string credentialId = "credential-1",
+        string referenceRef = "sec-1",
+        string purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+        string ownerScopeKey = "owner-scope-1") =>
         new(
-            "credential-1",
+            credentialId,
             new SecretReference
             {
-                Ref = "sec-1",
-                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
-                OwnerScopeKey = "owner-scope-1",
+                Ref = referenceRef,
+                Purpose = purpose,
+                OwnerScopeKey = ownerScopeKey,
             });
 
     private static DurableCallerCredentialRef CreateDurableCallerCredentialRef() =>
@@ -992,7 +1081,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 : ScheduledServiceInvocationCredentialExchangeResult.Failure(error);
     }
 
-    private sealed class RecordingSecretVault(string? secret) : ISecretVault
+    private sealed class RecordingSecretVault(
+        string? secret,
+        bool resolveWhitespaceSecret = false) : ISecretVault
     {
         public List<ResolveSecretRequest> ResolveRequests { get; } = [];
         public List<StoreSecretRequest> StoreRequests { get; } = [];
@@ -1029,7 +1120,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 return Task.FromResult(new ResolveSecretResult(_storedReference.Clone(), _storedSecret));
             }
 
-            return Task.FromResult(string.IsNullOrWhiteSpace(secret)
+            return Task.FromResult(secret == null || (string.IsNullOrWhiteSpace(secret) && !resolveWhitespaceSecret)
                 ? new ResolveSecretResult(null, null)
                 : new ResolveSecretResult(CreateDurableCredentialReference().SecretReference.Clone(), secret));
         }

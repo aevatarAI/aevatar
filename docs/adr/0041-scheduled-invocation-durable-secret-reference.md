@@ -25,7 +25,8 @@ Durable scheduled invocation credential state is:
 - `credential_id`, the NyxID agent key handle and vault subject id.
 - `SecretReference`, the opaque vault reference for the full key.
 
-`ScheduledServiceInvocationAuthState.durable_credential_reference` is final proto tag `5`.
+`ScheduledServiceInvocationAuthState.durable` is final proto tag `6`; the unified
+`nyx_id` credential source remains proto tag `5`.
 The old raw `durable_sender_bearer_token` field `2` remains parse-only and fail-closed for
 historical events; reducers and runtime dispatch must not copy or use its value.
 
@@ -33,8 +34,8 @@ The usable full key is resolved only at fire time through `ISecretVault` with pu
 `scheduled.nyx-api-key`. HTTP request DTOs, application readmodels, actor state logs, and
 projection documents never carry raw bearer material.
 
-If a future issue completes the unified NyxID credential source model, it must not move or
-reuse durable tag `5`; the new NyxID source field uses tag `6`.
+Future credential-source fields must not move or reuse `nyx_id` tag `5`, `durable` tag `6`,
+or the scheduled invocation agent-key tag `7`; the next new source tag starts at `8`.
 
 ## Consequences
 
