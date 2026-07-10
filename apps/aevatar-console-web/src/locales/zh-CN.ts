@@ -564,6 +564,7 @@ const zhCNMessages = {
   'teams.members.actions.createFirst': '创建第一个成员',
   'teams.members.actions.createFirstWorkflow': '创建第一个工作流成员',
   'teams.members.actions.createWorkflowMember': '创建工作流成员',
+  'teams.members.actions.delete': '删除成员',
   'teams.members.actions.editInStudio': '在 Studio 中编辑',
   'teams.members.actions.automate': '自动化',
   'teams.members.actions.invokeRequiresBinding': '请先绑定这个 Workflow 成员再调用。',
@@ -724,6 +725,16 @@ const zhCNMessages = {
   'teams.members.columns.role': '职责',
   'teams.members.columns.service': '服务',
   'teams.members.count': '{count} 个成员',
+  'teams.members.delete.confirm.body': '删除',
+  'teams.members.delete.confirm.body.suffix': '从这个团队中删除？',
+  'teams.members.delete.entry.warning':
+    '这个成员是团队入口成员。删除后会移除成员权威状态并从团队成员列表中清除；已发布服务产物、修订和历史运行记录会保留。',
+  'teams.members.delete.failed': '删除成员失败。',
+  'teams.members.delete.keep': '保留成员',
+  'teams.members.delete.success': '已删除成员 {member}。',
+  'teams.members.delete.title': '删除成员',
+  'teams.members.delete.warning':
+    '这会移除 Studio 成员权威状态并从团队成员列表中清除；已发布服务产物、修订和历史运行记录会保留。',
   'teams.members.description':
     '在这里查看团队成员、选择团队入口，并进入 Workflow Studio 编辑成员。只有已经绑定到发布服务的 Workflow 成员才可以调用。',
   'teams.members.empty.description':

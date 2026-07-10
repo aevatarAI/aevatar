@@ -493,6 +493,7 @@ const TeamDetailPage: React.FC = () => {
     React.useState<TeamTestLastResult | null>(null);
   const [teamTestModalOpen, setTeamTestModalOpen] = React.useState(false);
   const [entryActionBusyMemberId, setEntryActionBusyMemberId] = React.useState("");
+  const [deletingMemberId, setDeletingMemberId] = React.useState("");
   const teamTestAbortRef = React.useRef<AbortController | null>(null);
   const { token } = theme.useToken();
 
@@ -533,6 +534,7 @@ const TeamDetailPage: React.FC = () => {
     setTeamTestStatus("idle");
     setTeamTestModalOpen(routeState.testTeam);
     setEntryActionBusyMemberId("");
+    setDeletingMemberId("");
   }, [routeState.testTeam, scopeId, selectedTeamId]);
 
   React.useEffect(
@@ -1221,7 +1223,7 @@ const TeamDetailPage: React.FC = () => {
   const tabOptions: TeamTabOption[] = [
     { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
     { label: t("teams.detail.tabs.automations", "Automations"), value: "automations" },
-    { label: t("pages.teams.detail.copy.46", "team member"), value: "members" },
+    { label: t("pages.teams.detail.copy.46", "Team members"), value: "members" },
   ];
 
   const initialLoading =
@@ -1640,6 +1642,112 @@ const TeamDetailPage: React.FC = () => {
     teamSummaryQueryKey,
   ]);
 
+  const handleDeleteMember = React.useCallback(
+    (memberId: string) => {
+      const normalizedMemberId = trimText(memberId);
+      if (!scopeId || !selectedTeamId || !normalizedMemberId) {
+        return;
+      }
+
+      const memberRow =
+        teamRosterRows.find((row) => trimText(row.memberId) === normalizedMemberId) ??
+        null;
+      const memberLabel = trimText(memberRow?.name) || normalizedMemberId;
+
+      Modal.confirm({
+        autoFocusButton: "cancel",
+        cancelText: t("teams.members.delete.keep", "Keep member"),
+        centered: true,
+        content: (
+          <div style={{ display: "grid", gap: 12 }}>
+            <Typography.Text>
+              {t("teams.members.delete.confirm.body", "Delete")}{" "}
+              <Typography.Text strong>{memberLabel}</Typography.Text>{" "}
+              {t("teams.members.delete.confirm.body.suffix", "from this Team?")}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {memberRow?.isEntryMember
+                ? t("teams.members.delete.entry.warning", "This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.")
+                : t("teams.members.delete.warning", "This removes the Studio member authority and Team roster entry. Published service artifacts, revisions, and historical runs stay intact.")}
+            </Typography.Text>
+          </div>
+        ),
+        okButtonProps: { danger: true },
+        okText: t("teams.members.actions.delete", "Delete member"),
+        title: t("teams.members.delete.title", "Delete member"),
+        onOk: async () => {
+          setDeletingMemberId(normalizedMemberId);
+          try {
+            try {
+              await studioApi.deleteMember({
+                scopeId,
+                memberId: normalizedMemberId,
+              });
+            } catch (error) {
+              if (!isStudioApiStatus(error, 404)) {
+                throw error;
+              }
+            }
+
+            queryClient.setQueryData<StudioMemberRoster | undefined>(
+              teamMembersQueryKey,
+              (current) =>
+                current
+                  ? {
+                      ...current,
+                      members: current.members.filter(
+                        (member) =>
+                          trimText(member.memberId) !== normalizedMemberId,
+                      ),
+                    }
+                  : current,
+            );
+            await refreshTeamAuthority();
+            if (
+              trimText(routeState.memberId) === normalizedMemberId ||
+              trimText(preferredMemberId) === normalizedMemberId
+            ) {
+              setPreferredMemberId("");
+              setPreferredServiceId("");
+              setPreferredRunId("");
+              history.replace(
+                buildTeamDetailHref({
+                  scopeId,
+                  teamId: selectedTeamId,
+                  tab: "members",
+                }),
+              );
+            }
+            void message.success(
+              t("teams.members.delete.success", "Deleted member {member}.", {
+                member: memberLabel,
+              }),
+            );
+          } catch (error) {
+            void message.error(
+              describeError(
+                error,
+                t("teams.members.delete.failed", "Failed to delete member."),
+              ),
+            );
+          } finally {
+            setDeletingMemberId("");
+          }
+        },
+      });
+    },
+    [
+      preferredMemberId,
+      queryClient,
+      refreshTeamAuthority,
+      routeState.memberId,
+      scopeId,
+      selectedTeamId,
+      teamMembersQueryKey,
+      teamRosterRows,
+    ],
+  );
+
   const teamTestPanel = (
     <TeamTestPanel
       createMemberHref={createMemberHref}
@@ -1714,10 +1822,16 @@ const TeamDetailPage: React.FC = () => {
     return (
       <TeamMembersTab
         createMemberHref={createMemberHref}
+        deletingMemberId={deletingMemberId}
         entryActionBusyMemberId={entryActionBusyMemberId}
         onClearEntry={
           teamSummaryQuery.data && !isTeamArchived && entryMemberId
             ? () => void handleClearEntry()
+            : undefined
+        }
+        onDeleteMember={
+          teamSummaryQuery.data && !isTeamArchived
+            ? (memberId) => handleDeleteMember(memberId)
             : undefined
         }
         onNavigate={(href) => history.push(href)}

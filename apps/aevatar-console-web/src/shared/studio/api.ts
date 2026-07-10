@@ -1647,12 +1647,34 @@ function normalizeStudioMemberBindingRunRole(
 function normalizeStudioMemberCommandStatus(
   value: string | number | null | undefined
 ): StudioMemberCommandStatus {
-  return normalizeCommandReceiptStatus(value);
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "no_change",
+    "3": "delete_accepted",
+    accepted: "accepted",
+    delete_accepted: "delete_accepted",
+    deleteaccepted: "delete_accepted",
+    no_change: "no_change",
+    nochange: "no_change",
+    unchanged: "no_change",
+    unknown: "unknown",
+  });
+
+  return normalized === "accepted" ||
+    normalized === "delete_accepted" ||
+    normalized === "no_change"
+    ? normalized
+    : "unknown";
 }
 
 function normalizeCommandReceiptStatus(
   value: string | number | null | undefined
-): StudioMemberCommandStatus | StudioTeamCommandStatus {
+): StudioTeamCommandStatus {
   if (value == null) {
     return "unknown";
   }
@@ -2127,6 +2149,20 @@ export const studioApi = {
             agentKind: trimOptional(input.implementationRef.agentKind),
           }),
         }),
+      }
+    );
+  },
+
+  deleteMember(input: {
+    scopeId: string;
+    memberId: string;
+  }): Promise<StudioMemberCommandResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberCommandResponse,
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
       }
     );
   },

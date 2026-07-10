@@ -4672,7 +4672,7 @@ const projectMessages = {
   "pages.teams.detail.copy.43": "After the test team, the most recent runs will be displayed.",
   "pages.teams.detail.copy.44": "main service",
   "pages.teams.detail.copy.45": "Overview",
-  "pages.teams.detail.copy.46": "team member",
+  "pages.teams.detail.copy.46": "Team members",
   "pages.teams.detail.copy.47": "Editorial Team",
   "pages.teams.detail.copy.48": "test team",
   "pages.teams.detail.copy.49": "save team",

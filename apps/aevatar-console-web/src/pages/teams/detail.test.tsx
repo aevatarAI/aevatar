@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { setLocale } from "@umijs/max";
-import { message } from "antd";
+import { message, Modal } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
@@ -34,6 +34,9 @@ jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
   return {
     ...actual,
+    Modal: Object.assign(actual.Modal, {
+      confirm: jest.fn(),
+    }),
     message: {
       ...actual.message,
       success: jest.fn(),
@@ -890,6 +893,14 @@ jest.mock("@/shared/studio/api", () => ({
       ...mockCreateTeamSummary(),
       lifecycleStage: "archived",
     })),
+    deleteMember: jest.fn(async (_input: { scopeId: string; memberId: string }) => ({
+      ackedAt: "2026-05-01T08:08:00Z",
+      commandId: "cmd-delete-member",
+      correlationId: "corr-delete-member",
+      memberId: _input.memberId,
+      scopeId: _input.scopeId,
+      status: "delete_accepted",
+    })),
     listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
@@ -1038,12 +1049,26 @@ describe("TeamDetailPage", () => {
       correlationId: "corr-team-archive",
       ackedAt: "2026-05-01T08:07:00Z",
     }));
+    (studioApi.deleteMember as jest.Mock).mockReset();
+    (studioApi.deleteMember as jest.Mock).mockImplementation(
+      async (_input: { scopeId: string; memberId: string }) => ({
+        ackedAt: "2026-05-01T08:08:00Z",
+        commandId: "cmd-delete-member",
+        correlationId: "corr-delete-member",
+        memberId: _input.memberId,
+        scopeId: _input.scopeId,
+        status: "delete_accepted",
+      }),
+    );
     (studioApi.listTeamMembers as jest.Mock).mockReset();
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(
       async () => mockCreateTeamMembersCatalog(),
     );
     (runtimeRunsApi.streamTeamChat as jest.Mock).mockClear();
+    (Modal.confirm as jest.Mock).mockClear();
     (message.success as jest.Mock).mockClear();
+    (message.info as jest.Mock).mockClear();
+    (message.warning as jest.Mock).mockClear();
     (message.error as jest.Mock).mockClear();
   });
 
@@ -1653,6 +1678,53 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
       expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("deletes a Studio member authority from the members tab", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "删除成员" }));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cancelText: "保留成员",
+          okButtonProps: { danger: true },
+          okText: "删除成员",
+          title: "删除成员",
+        }),
+      );
+    });
+
+    const confirmCalls = (Modal.confirm as jest.Mock).mock.calls;
+    const confirmConfig = confirmCalls[confirmCalls.length - 1]?.[0] as {
+      onOk?: () => Promise<void>;
+    };
+
+    await act(async () => {
+      await confirmConfig.onOk?.();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.deleteMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "member-team-alpha",
+      });
+    });
+    expect(message.success).toHaveBeenCalledWith(
+      "已删除成员 Team Alpha Operator。",
+    );
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("memberId")).toBeNull();
+      expect(new URLSearchParams(window.location.search).get("tab")).toBe("members");
     });
   });
 

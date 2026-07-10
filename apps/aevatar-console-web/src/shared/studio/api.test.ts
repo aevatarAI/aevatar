@@ -2273,6 +2273,52 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('deletes an existing member with the member delete endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        status: 'delete_accepted',
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        ackedAt: '2026-07-09T08:12:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.deleteMember({
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+      }),
+    ).resolves.toEqual({
+      status: 'delete_accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: '2026-07-09T08:12:00Z',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/m-alpha',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'DELETE',
+      }),
+    );
+  });
+
   it('synthesizes a member command response from legacy member detail for team patch responses', async () => {
     persistAuthSession({
       tokens: {

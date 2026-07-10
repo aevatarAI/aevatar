@@ -1102,6 +1102,17 @@ jest.mock("@/shared/studio/api", () => ({
       }
       return undefined;
     }),
+    deleteMember: jest.fn(async (input: { scopeId: string; memberId: string }) => {
+      mockStudioMembers = mockStudioMembers.filter(
+        (member) => member.memberId !== input.memberId,
+      );
+      return {
+        status: "delete_accepted",
+        scopeId: input.scopeId,
+        memberId: input.memberId,
+        ackedAt: "2026-07-09T08:12:00Z",
+      };
+    }),
     parseYaml: jest.fn(async (input: { yaml: string }) => ({
       document: input.yaml.includes("name: legacy_draft")
         ? {
@@ -5149,6 +5160,49 @@ describe("StudioPage", () => {
         "Deleted workflow member workspace-demo.",
       );
     });
+  });
+
+  it("deletes a synced Studio member from the inventory rail", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+          okText: "Delete member",
+          cancelText: "Keep member",
+          autoFocusButton: "cancel",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    expect(confirmConfig.icon).toBeTruthy();
+    await act(async () => {
+      await confirmConfig.onOk();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.deleteMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "workspace-demo",
+      });
+    });
+    expect(studioApi.deleteWorkflow).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Deleted member workspace-demo.",
+      );
+    });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("member")).toBeNull();
+    expect(searchParams.get("focus")).toBeNull();
   });
 
   it("treats a missing workflow draft as already deleted from the inventory rail", async () => {

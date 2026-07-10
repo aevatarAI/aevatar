@@ -596,6 +596,7 @@ const enUSMessages = {
   'teams.members.actions.createFirst': 'Create first member',
   'teams.members.actions.createFirstWorkflow': 'Create first workflow member',
   'teams.members.actions.createWorkflowMember': 'Create workflow member',
+  'teams.members.actions.delete': 'Delete member',
   'teams.members.actions.editInStudio': 'Edit in Studio',
   'teams.members.actions.automate': 'Automate',
   'teams.members.actions.invokeRequiresBinding':
@@ -781,6 +782,16 @@ const enUSMessages = {
   'teams.members.columns.role': 'Role',
   'teams.members.columns.service': 'Service',
   'teams.members.count': '{count, plural, one {# member} other {# members}}',
+  'teams.members.delete.confirm.body': 'Delete',
+  'teams.members.delete.confirm.body.suffix': 'from this Team?',
+  'teams.members.delete.entry.warning':
+    'This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.',
+  'teams.members.delete.failed': 'Failed to delete member.',
+  'teams.members.delete.keep': 'Keep member',
+  'teams.members.delete.success': 'Deleted member {member}.',
+  'teams.members.delete.title': 'Delete member',
+  'teams.members.delete.warning':
+    'This removes the Studio member authority and Team roster entry. Published service artifacts, revisions, and historical runs stay intact.',
   'teams.members.description':
     'Review team members, choose the Team entry member, and open workflow members in Studio. Invoke is available only after a workflow member is bound to a published service.',
   'teams.members.empty.description':
