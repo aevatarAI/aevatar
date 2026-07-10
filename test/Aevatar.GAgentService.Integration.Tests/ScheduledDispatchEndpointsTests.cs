@@ -261,7 +261,6 @@ public sealed class ScheduledDispatchEndpointsTests
                 Scope = "schedule:workflow",
             },
         });
-        var credentialExchange = new FakeScheduledServiceInvocationCredentialExchangePort();
 
         var result = await CreateAsync(
             request,
@@ -273,7 +272,6 @@ public sealed class ScheduledDispatchEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         service.Created.Should().BeEmpty();
-        credentialExchange.ScopeOwnerSources.Should().BeEmpty();
     }
 
     [Fact]

@@ -614,6 +614,35 @@ public sealed class ScheduledDispatchApplicationServiceTests
     [InlineData(nameof(ScheduleMutationKind.Create))]
     [InlineData(nameof(ScheduleMutationKind.Ensure))]
     [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_WithNoopAdmission_ShouldRejectBeforeDispatch(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateScopeOwnerConfiguration();
+        var context = CreateScopeOwnerContext();
+
+        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*admission is not configured*");
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+        queryPort.GetScheduleIds.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
     public async Task ScopeOwnerMutations_ShouldRejectTargetScopeMismatchBeforeAdmission(string mutationName)
     {
         var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
