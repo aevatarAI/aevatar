@@ -115,6 +115,35 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
             },
         };
 
+<<<<<<< HEAD
+=======
+    private static Any StripCredentialBearingLlmControl(Any payload)
+    {
+        if (!payload.Is(ChatRequestEvent.Descriptor))
+            return payload.Clone();
+
+        var chatRequest = payload.Unpack<ChatRequestEvent>();
+        if (chatRequest.LlmControl != null)
+        {
+            chatRequest.LlmControl.NyxIdAccessToken = string.Empty;
+            chatRequest.LlmControl.NyxIdOrgToken = string.Empty;
+            chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
+        }
+
+        chatRequest.ConnectorHttpAuthorization = string.Empty;
+        chatRequest.CallerDurableCredential = null;
+
+        if (chatRequest.ToolContext?.Credentials != null)
+        {
+            chatRequest.ToolContext.Credentials.NyxIdAccessToken = string.Empty;
+            chatRequest.ToolContext.Credentials.NyxIdOrgToken = string.Empty;
+            chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken = string.Empty;
+        }
+
+        return Any.Pack(chatRequest);
+    }
+
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     private static string ResolveTargetActorId(string? configuredActorId, EventEnvelope envelope)
     {
         if (!string.IsNullOrWhiteSpace(configuredActorId))

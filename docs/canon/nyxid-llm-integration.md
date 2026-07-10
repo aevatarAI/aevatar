@@ -60,6 +60,10 @@ Workflow 层只承载 provider-neutral 调用者凭据与路由偏好。`Workflo
 
 Host/Infrastructure 只负责从 HTTP header 提取 bearer scheme，并把 raw token 交给 workflow-owned `WorkflowCallerCredentialTokens.ParseOptional` 做一次规范化与 fail-closed 校验。进入 Workflow Application/Core 后，调用者凭据继续作为 typed workflow credential 在 command、actor state 与 LLM execution intent 中传递；不得在 workflow 中间层通过 headers、metadata 或 provider-specific 字段回填身份语义。
 
+定时 workflow 调度不把 fire-time 换出的短期 NyxID bearer 写入 `connector_http_authorization`、`llm_control` 或 run 级 runtime secret。Scheduled Dispatch 在可信 fire 链路中把短期 token 存入 durable vault，向 `ChatRequestEvent.caller_durable_credential` 只传 typed `DurableCallerCredentialRef`；`WorkflowRunGAgent` 只把该 handle 保存到 `WorkflowCallerCredentialState`。LLM、tool 与 connector 外呼继续走统一 `TryGetCallerCredentialAsync` 漏斗，每次外呼前用 handle 现场解析 raw bearer。旧 run 若没有 handle，仍走原 runtime-secret / legacy bearer fallback，不做热替换。
+
+外部 API 不接受 `caller_durable_credential`；该字段只能由 Scheduled Dispatch 内部生成。Projection、readmodel、日志与诊断只允许展示 caller credential 的 source kind，不回显 durable ref、vault ref、fingerprint 或 raw bearer。
+
 NyxID 专有映射只发生在 `Workflow.Integration.AI` 边界：workflow raw token 分别映射到 LLM provider auth 与 tool execution credentials，workflow `RoutePreference` 在这里映射为 provider-specific `NyxIdRoutePreference`。NyxID provider 本身继续读取 typed provider auth，不从 tool context 或 workflow headers 兜底推断身份。
 
 ---
