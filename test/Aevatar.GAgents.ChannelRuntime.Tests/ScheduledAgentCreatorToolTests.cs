@@ -661,6 +661,31 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenApiKeyLifetimeInvalid_ShouldFailBeforeKeyCreation()
+    {
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(
+            handler: handler,
+            options: new ScheduledAgentCreatorOptions { ApiKeyLifetimeDays = 0 });
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("api_key_lifetime_invalid");
+            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
+            handler.Requests.Should().NotContain(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenRequiredOrgServiceIsViewerOnly_ShouldFailUnreachableWithoutCreatingKey()
     {
         // A personal caller can mint an allow-all key spanning owners, but only for org services it
@@ -1072,7 +1097,8 @@ public sealed class ScheduledAgentCreatorToolTests
         OwnerScope? scope = null,
         bool callerScopeUnavailable = false,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
-        ISecretVault? secretVault = null)
+        ISecretVault? secretVault = null,
+        ScheduledAgentCreatorOptions? options = null)
     {
         handler ??= CreateSuccessHandler();
 
@@ -1102,7 +1128,7 @@ public sealed class ScheduledAgentCreatorToolTests
         services.AddSingleton(skillRunnerPort);
         services.AddSingleton(resolver);
         services.AddSingleton(queryPort);
-        services.AddSingleton(new ScheduledAgentCreatorOptions());
+        services.AddSingleton(options ?? new ScheduledAgentCreatorOptions());
         services.AddSingleton<ScheduledAgentCreateRequestMapper>();
         services.AddSingleton(secretVault ?? new InMemorySecretVault());
         if (ownerLlmConfigSource is not null)

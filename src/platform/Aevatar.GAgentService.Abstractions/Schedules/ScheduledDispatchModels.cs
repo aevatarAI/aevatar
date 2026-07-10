@@ -67,18 +67,6 @@ public sealed record ScheduledServiceInvocationCredentialExchangeResult(
         new(false, null, error);
 }
 
-public sealed record ScheduledInvocationAgentKeyResolveResult(
-    bool Succeeded,
-    string? AccessToken = null,
-    string? Error = null)
-{
-    public static ScheduledInvocationAgentKeyResolveResult Success(string accessToken) =>
-        new(true, accessToken, null);
-
-    public static ScheduledInvocationAgentKeyResolveResult Failure(string error) =>
-        new(false, null, error);
-}
-
 public sealed record ScheduledDispatchConfiguration(
     string ScheduleId,
     string DisplayName,
@@ -275,13 +263,6 @@ public interface IScheduledServiceInvocationCredentialExchangePort
     Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
         ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
         ServiceIdentity serviceIdentity,
-        CancellationToken ct = default);
-}
-
-public interface IScheduledInvocationAgentKeyResolvePort
-{
-    Task<ScheduledInvocationAgentKeyResolveResult> ResolveAsync(
-        ScheduledInvocationAgentKeyCredentialReference source,
         CancellationToken ct = default);
 }
 
