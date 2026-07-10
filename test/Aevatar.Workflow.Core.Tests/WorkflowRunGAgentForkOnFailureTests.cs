@@ -397,14 +397,14 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         string? OwnerScopeId);
 
     private sealed class RecordingWorkflowFileArtifactOwnershipPort :
-        Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactOwnershipPort
+        Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort
     {
         public List<FileOwnerBinding> Bindings { get; } = [];
 
         public Exception? Exception { get; init; }
 
         public ValueTask BindOwnerAsync(
-            Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef fileRef,
+            Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef fileRef,
             string ownerRunId,
             string? ownerScopeId,
             CancellationToken cancellationToken = default)

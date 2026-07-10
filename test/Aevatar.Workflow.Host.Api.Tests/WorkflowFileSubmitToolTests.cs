@@ -8,7 +8,7 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using ProtoWorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
 using AppWorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
-using AppWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
+using AppFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -714,7 +714,7 @@ public sealed class WorkflowFileSubmitToolTests
     }
 
     private static async Task<IWorkflowTool> GetSubmitToolAsync(
-        IWorkflowFileArtifactReadPort artifactPort,
+        IFileArtifactReadPort artifactPort,
         IWorkflowFileMultipartUploadPolicyResolver policyResolver,
         IWorkflowFileMultipartUploadPort uploadPort)
     {
@@ -766,7 +766,7 @@ public sealed class WorkflowFileSubmitToolTests
         }
         """;
 
-    private static AppWorkflowFileRef BuildFileRef(
+    private static AppFileArtifactRef BuildFileRef(
         long sizeBytes,
         string mediaType = "text/plain",
         string fileName = "report.txt",
@@ -777,7 +777,7 @@ public sealed class WorkflowFileSubmitToolTests
         {
             FileId = "file-1",
             ArtifactId = "artifact-1",
-            SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ExternalResource,
+            SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind.ExternalResource,
             FileName = fileName,
             MediaType = mediaType,
             SizeBytes = sizeBytes,
@@ -808,7 +808,7 @@ public sealed class WorkflowFileSubmitToolTests
 
         public ValueTask<WorkflowFileMultipartUploadPolicyResolution> ResolveAsync(
             WorkflowFileMultipartUploadCandidate candidate,
-            AppWorkflowFileRef descriptor,
+            AppFileArtifactRef descriptor,
             WorkflowFileMultipartUploadExecutionContext context,
             CancellationToken cancellationToken = default)
         {
@@ -870,17 +870,17 @@ public sealed class WorkflowFileSubmitToolTests
         byte[] UploadedBytes);
 
     private sealed class RecordingWorkflowFileArtifactReadPort(
-        AppWorkflowFileRef descriptor,
-        byte[] content) : IWorkflowFileArtifactReadPort
+        AppFileArtifactRef descriptor,
+        byte[] content) : IFileArtifactReadPort
     {
         public int DescribeCount { get; private set; }
         public int OpenCount { get; private set; }
         public Exception? DescribeException { get; init; }
         public Exception? OpenException { get; init; }
-        public AppWorkflowFileRef? OpenDescriptor { get; init; }
+        public AppFileArtifactRef? OpenDescriptor { get; init; }
 
-        public ValueTask<AppWorkflowFileRef> DescribeAsync(
-            AppWorkflowFileRef fileRef,
+        public ValueTask<AppFileArtifactRef> DescribeAsync(
+            AppFileArtifactRef fileRef,
             CancellationToken cancellationToken = default)
         {
             DescribeCount++;
@@ -890,15 +890,15 @@ public sealed class WorkflowFileSubmitToolTests
             return ValueTask.FromResult(descriptor);
         }
 
-        public ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
-            AppWorkflowFileRef fileRef,
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            AppFileArtifactRef fileRef,
             CancellationToken cancellationToken = default)
         {
             OpenCount++;
             if (OpenException != null)
                 throw OpenException;
 
-            return ValueTask.FromResult(new WorkflowFileArtifactContent(
+            return ValueTask.FromResult(new FileArtifactContent(
                 OpenDescriptor ?? descriptor,
                 new MemoryStream(content, writable: false)));
         }

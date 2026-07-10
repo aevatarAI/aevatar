@@ -82,7 +82,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowFileRef ToProto(
-        Application.Abstractions.Runs.WorkflowFileRef source)
+        Application.Abstractions.Runs.FileArtifactRef source)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -92,11 +92,11 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             ArtifactId = source.ArtifactId ?? string.Empty,
             SourceKind = source.SourceKind switch
             {
-                Application.Abstractions.Runs.WorkflowFileSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
-                Application.Abstractions.Runs.WorkflowFileSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
+                Application.Abstractions.Runs.FileArtifactSourceKind.ChatInput => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ChatInput,
+                Application.Abstractions.Runs.FileArtifactSourceKind.FormUpload => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.FormUpload,
+                Application.Abstractions.Runs.FileArtifactSourceKind.ConnectedServiceResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ConnectedServiceResource,
+                Application.Abstractions.Runs.FileArtifactSourceKind.ExternalResource => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.ExternalResource,
+                Application.Abstractions.Runs.FileArtifactSourceKind.Generated => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Generated,
                 _ => Aevatar.Workflow.Abstractions.WorkflowFileSourceKind.Unspecified,
             },
             SourceMessageId = source.SourceMessageId ?? string.Empty,

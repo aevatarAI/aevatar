@@ -45,7 +45,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
             descriptor.ServiceType == typeof(INyxIdProxyFileArtifactIngress));
 
         var withWorkflowIngress = new ServiceCollection();
-        withWorkflowIngress.AddSingleton<IWorkflowFileIngressPort, StubWorkflowFileIngressPort>();
+        withWorkflowIngress.AddSingleton<IFileArtifactIngressPort, StubWorkflowFileIngressPort>();
         withWorkflowIngress.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         withWorkflowIngress.Should().ContainSingle(descriptor =>
@@ -175,12 +175,12 @@ file static class HttpClientRegistrationAssertions
     }
 }
 
-file sealed class StubWorkflowFileIngressPort : IWorkflowFileIngressPort
+file sealed class StubWorkflowFileIngressPort : IFileArtifactIngressPort
 {
-    public ValueTask<WorkflowFileIngressResult> IngestAsync(
-        WorkflowFileIngressRequest request,
+    public ValueTask<FileArtifactIngressResult> IngestAsync(
+        FileArtifactIngressRequest request,
         CancellationToken cancellationToken = default) =>
-        ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+        ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
         {
             FileId = "file-1",
             ArtifactId = "artifact-1",

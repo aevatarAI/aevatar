@@ -853,12 +853,12 @@ public sealed class MainnetHostCompositionTests
             ["WorkflowConnectedServiceFileSubmit:Targets:0:Endpoint:FileFieldName"] = "upload",
         };
 
-    private static WorkflowFileRef BuildWorkflowFileRef() =>
+    private static FileArtifactRef BuildWorkflowFileRef() =>
         new()
         {
             FileId = "file-1",
             ArtifactId = "artifact-1",
-            SourceKind = WorkflowFileSourceKind.FormUpload,
+            SourceKind = FileArtifactSourceKind.FormUpload,
             FileName = "report.txt",
             MediaType = "text/plain",
             SizeBytes = 12,

@@ -7,18 +7,18 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 internal sealed class WorkflowMultipartChatRequestParser
 {
     private readonly WorkflowMultipartFileInputParser _fileInputParser;
-    private readonly IWorkflowFileIngressPort _fileIngressPort;
+    private readonly IFileArtifactIngressPort _fileIngressPort;
 
     public WorkflowMultipartChatRequestParser(
         WorkflowMultipartFileInputParser fileInputParser,
-        IWorkflowFileIngressPort fileIngressPort)
+        IFileArtifactIngressPort fileIngressPort)
     {
         _fileInputParser = fileInputParser;
         _fileIngressPort = fileIngressPort;
     }
 
     internal WorkflowMultipartChatRequestParser(
-        IWorkflowFileIngressPort fileIngressPort,
+        IFileArtifactIngressPort fileIngressPort,
         Microsoft.Extensions.Options.IOptions<WorkflowMultipartFileIngressOptions> multipartOptions,
         Microsoft.Extensions.Options.IOptions<WorkflowFormFileIngressOptions>? formOptions = null)
         : this(new WorkflowMultipartFileInputParser(multipartOptions, formOptions), fileIngressPort)
@@ -52,7 +52,7 @@ internal sealed class WorkflowMultipartChatRequestParser
         var inputParts = new List<ChatInputContentPart>(source.InputParts ?? []);
         foreach (var file in form.PendingFiles)
         {
-            WorkflowFileIngressResult ingressResult;
+            FileArtifactIngressResult ingressResult;
             try
             {
                 ingressResult = await _fileIngressPort.IngestAsync(

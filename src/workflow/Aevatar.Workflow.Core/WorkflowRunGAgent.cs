@@ -15,9 +15,9 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
-using ApplicationWorkflowFileArtifactOwnershipPort = Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileArtifactOwnershipPort;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationWorkflowFileArtifactOwnershipPort = Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
 namespace Aevatar.Workflow.Core;
 
@@ -650,7 +650,7 @@ public sealed class WorkflowRunGAgent
             try
             {
                 await _fileArtifactOwnership.BindOwnerAsync(
-                    ToApplicationWorkflowFileRef(fileRef),
+                    ToApplicationFileArtifactRef(fileRef),
                     runId,
                     scopeId,
                     CancellationToken.None);
@@ -673,12 +673,12 @@ public sealed class WorkflowRunGAgent
         return true;
     }
 
-    private static ApplicationWorkflowFileRef ToApplicationWorkflowFileRef(WorkflowFileRef source) =>
+    private static ApplicationFileArtifactRef ToApplicationFileArtifactRef(WorkflowFileRef source) =>
         new()
         {
             FileId = source.FileId,
             ArtifactId = source.ArtifactId,
-            SourceKind = ToApplicationWorkflowFileSourceKind(source.SourceKind),
+            SourceKind = ToApplicationFileArtifactSourceKind(source.SourceKind),
             SourceMessageId = source.SourceMessageId,
             SourceResourceKey = source.SourceResourceKey,
             FileName = source.FileName,
@@ -691,16 +691,16 @@ public sealed class WorkflowRunGAgent
             OwnerScopeId = source.OwnerScopeId,
         };
 
-    private static ApplicationWorkflowFileSourceKind ToApplicationWorkflowFileSourceKind(
+    private static ApplicationFileArtifactSourceKind ToApplicationFileArtifactSourceKind(
         WorkflowFileSourceKind source) =>
         source switch
         {
-            WorkflowFileSourceKind.ChatInput => ApplicationWorkflowFileSourceKind.ChatInput,
-            WorkflowFileSourceKind.FormUpload => ApplicationWorkflowFileSourceKind.FormUpload,
-            WorkflowFileSourceKind.ConnectedServiceResource => ApplicationWorkflowFileSourceKind.ConnectedServiceResource,
-            WorkflowFileSourceKind.ExternalResource => ApplicationWorkflowFileSourceKind.ExternalResource,
-            WorkflowFileSourceKind.Generated => ApplicationWorkflowFileSourceKind.Generated,
-            _ => ApplicationWorkflowFileSourceKind.Unspecified,
+            WorkflowFileSourceKind.ChatInput => ApplicationFileArtifactSourceKind.ChatInput,
+            WorkflowFileSourceKind.FormUpload => ApplicationFileArtifactSourceKind.FormUpload,
+            WorkflowFileSourceKind.ConnectedServiceResource => ApplicationFileArtifactSourceKind.ConnectedServiceResource,
+            WorkflowFileSourceKind.ExternalResource => ApplicationFileArtifactSourceKind.ExternalResource,
+            WorkflowFileSourceKind.Generated => ApplicationFileArtifactSourceKind.Generated,
+            _ => ApplicationFileArtifactSourceKind.Unspecified,
         };
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]

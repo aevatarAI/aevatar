@@ -7,25 +7,25 @@ using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSo
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
-public sealed class FileSystemWorkflowFileIngressPort :
-    IWorkflowFileIngressPort,
-    IWorkflowFileArtifactReadPort,
-    IWorkflowFileArtifactOwnershipPort,
-    IWorkflowFileArtifactCleanupPort
+public sealed class FileSystemFileArtifactPort :
+    IFileArtifactIngressPort,
+    IFileArtifactReadPort,
+    IFileArtifactOwnershipPort,
+    IFileArtifactCleanupPort
 {
     private const string ArtifactIdPrefix = "workflow-file://";
     private const string ContentFileName = "content.bin";
     private const string DescriptorFileName = "descriptor.pb";
 
-    private readonly IOptions<FileSystemWorkflowFileIngressOptions> _options;
+    private readonly IOptions<FileSystemFileArtifactOptions> _options;
 
-    public FileSystemWorkflowFileIngressPort(IOptions<FileSystemWorkflowFileIngressOptions> options)
+    public FileSystemFileArtifactPort(IOptions<FileSystemFileArtifactOptions> options)
     {
         _options = options;
     }
 
-    public async ValueTask<WorkflowFileIngressResult> IngestAsync(
-        WorkflowFileIngressRequest request,
+    public async ValueTask<FileArtifactIngressResult> IngestAsync(
+        FileArtifactIngressRequest request,
         CancellationToken cancellationToken = default)
     {
         if (request.Content.IsEmpty)
@@ -45,7 +45,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
             content,
             cancellationToken);
 
-        var descriptor = new WorkflowFileRef
+        var descriptor = new FileArtifactRef
         {
             FileId = fileId,
             ArtifactId = artifactId,
@@ -66,11 +66,11 @@ public sealed class FileSystemWorkflowFileIngressPort :
             ToProto(descriptor).ToByteArray(),
             cancellationToken);
 
-        return new WorkflowFileIngressResult(descriptor);
+        return new FileArtifactIngressResult(descriptor);
     }
 
-    public async ValueTask<WorkflowFileRef> DescribeAsync(
-        WorkflowFileRef fileRef,
+    public async ValueTask<FileArtifactRef> DescribeAsync(
+        FileArtifactRef fileRef,
         CancellationToken cancellationToken = default)
     {
         var descriptor = await ReadDescriptorAsync(fileRef, cancellationToken);
@@ -80,7 +80,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
     }
 
     public async ValueTask BindOwnerAsync(
-        WorkflowFileRef fileRef,
+        FileArtifactRef fileRef,
         string ownerRunId,
         string? ownerScopeId,
         CancellationToken cancellationToken = default)
@@ -111,8 +111,8 @@ public sealed class FileSystemWorkflowFileIngressPort :
             cancellationToken);
     }
 
-    public async ValueTask<WorkflowFileArtifactContent> OpenReadAsync(
-        WorkflowFileRef fileRef,
+    public async ValueTask<FileArtifactContent> OpenReadAsync(
+        FileArtifactRef fileRef,
         CancellationToken cancellationToken = default)
     {
         var descriptor = await DescribeAsync(fileRef, cancellationToken);
@@ -126,11 +126,11 @@ public sealed class FileSystemWorkflowFileIngressPort :
             throw new InvalidOperationException("Workflow file content length does not match its descriptor.");
         await ValidateContentHashAsync(contentPath, descriptor, cancellationToken);
 
-        return new WorkflowFileArtifactContent(descriptor, File.OpenRead(contentPath));
+        return new FileArtifactContent(descriptor, File.OpenRead(contentPath));
     }
 
-    public async ValueTask<WorkflowFileArtifactCleanupResult> CleanupAsync(
-        WorkflowFileArtifactCleanupRequest request,
+    public async ValueTask<FileArtifactCleanupResult> CleanupAsync(
+        FileArtifactCleanupRequest request,
         CancellationToken cancellationToken = default)
     {
         var observedAtUnixMs = request.ObservedAtUnixMs > 0
@@ -139,7 +139,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
         var observedAtUtc = DateTimeOffset.FromUnixTimeMilliseconds(observedAtUnixMs);
         var rootDirectory = NormalizeRootDirectory(_options.Value.RootDirectory);
         if (!Directory.Exists(rootDirectory))
-            return new WorkflowFileArtifactCleanupResult(0, 0, 0);
+            return new FileArtifactCleanupResult(0, 0, 0);
 
         long scanned = 0;
         long deletedExpired = 0;
@@ -166,10 +166,10 @@ public sealed class FileSystemWorkflowFileIngressPort :
                 deletedExpired += DeleteArtifactDirectory(artifactDirectory);
         }
 
-        return new WorkflowFileArtifactCleanupResult(scanned, deletedExpired, deletedIncomplete);
+        return new FileArtifactCleanupResult(scanned, deletedExpired, deletedIncomplete);
     }
 
-    private string ResolveArtifactDirectory(WorkflowFileRef fileRef)
+    private string ResolveArtifactDirectory(FileArtifactRef fileRef)
     {
         ArgumentNullException.ThrowIfNull(fileRef);
         var fileId = ResolveFileId(fileRef);
@@ -180,7 +180,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
         return artifactDirectory;
     }
 
-    private static string ResolveFileId(WorkflowFileRef fileRef)
+    private static string ResolveFileId(FileArtifactRef fileRef)
     {
         var fileId = Normalize(fileRef.FileId);
         var artifactId = Normalize(fileRef.ArtifactId);
@@ -252,8 +252,8 @@ public sealed class FileSystemWorkflowFileIngressPort :
         return 1;
     }
 
-    private async ValueTask<WorkflowFileRef> ReadDescriptorAsync(
-        WorkflowFileRef fileRef,
+    private async ValueTask<FileArtifactRef> ReadDescriptorAsync(
+        FileArtifactRef fileRef,
         CancellationToken cancellationToken)
     {
         var descriptorPath = ResolveDescriptorPath(fileRef);
@@ -264,7 +264,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
         return ToApplication(ProtoWorkflowFileRef.Parser.ParseFrom(descriptorBytes));
     }
 
-    private string ResolveDescriptorPath(WorkflowFileRef fileRef) =>
+    private string ResolveDescriptorPath(FileArtifactRef fileRef) =>
         Path.Combine(ResolveArtifactDirectory(fileRef), DescriptorFileName);
 
     private static long ResolveExpiresAtUnixMs(
@@ -284,7 +284,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private static void ValidateRequestedDescriptor(WorkflowFileRef requested, WorkflowFileRef descriptor)
+    private static void ValidateRequestedDescriptor(FileArtifactRef requested, FileArtifactRef descriptor)
     {
         ValidateRequestedDescriptorWithoutOwner(requested, descriptor);
         if (!string.IsNullOrWhiteSpace(requested.OwnerRunId) &&
@@ -295,7 +295,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
             throw new InvalidOperationException("Workflow file descriptor owner scope id does not match the requested owner.");
     }
 
-    private static void ValidateRequestedDescriptorWithoutOwner(WorkflowFileRef requested, WorkflowFileRef descriptor)
+    private static void ValidateRequestedDescriptorWithoutOwner(FileArtifactRef requested, FileArtifactRef descriptor)
     {
         if (!string.IsNullOrWhiteSpace(requested.FileId) &&
             !string.Equals(requested.FileId.Trim(), descriptor.FileId, StringComparison.Ordinal))
@@ -317,7 +317,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
             throw new InvalidOperationException($"Workflow file descriptor owner {ownerName} is already bound.");
     }
 
-    private static void ValidateNotExpired(WorkflowFileRef descriptor)
+    private static void ValidateNotExpired(FileArtifactRef descriptor)
     {
         if (descriptor.ExpiresAtUnixMs > 0 &&
             descriptor.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
@@ -326,7 +326,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
 
     private static async Task ValidateContentHashAsync(
         string contentPath,
-        WorkflowFileRef descriptor,
+        FileArtifactRef descriptor,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(descriptor.Sha256))
@@ -339,7 +339,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
             throw new InvalidOperationException("Workflow file content hash does not match its descriptor.");
     }
 
-    private static ProtoWorkflowFileRef ToProto(WorkflowFileRef source) =>
+    private static ProtoWorkflowFileRef ToProto(FileArtifactRef source) =>
         new()
         {
             FileId = source.FileId ?? string.Empty,
@@ -357,7 +357,7 @@ public sealed class FileSystemWorkflowFileIngressPort :
             OwnerScopeId = source.OwnerScopeId ?? string.Empty,
         };
 
-    private static WorkflowFileRef ToApplication(ProtoWorkflowFileRef source) =>
+    private static FileArtifactRef ToApplication(ProtoWorkflowFileRef source) =>
         new()
         {
             FileId = Normalize(source.FileId),
@@ -375,25 +375,25 @@ public sealed class FileSystemWorkflowFileIngressPort :
             OwnerScopeId = Normalize(source.OwnerScopeId),
         };
 
-    private static ProtoWorkflowFileSourceKind ToProtoSourceKind(WorkflowFileSourceKind source) =>
+    private static ProtoWorkflowFileSourceKind ToProtoSourceKind(FileArtifactSourceKind source) =>
         source switch
         {
-            WorkflowFileSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
-            WorkflowFileSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
-            WorkflowFileSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
-            WorkflowFileSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
-            WorkflowFileSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
+            FileArtifactSourceKind.ChatInput => ProtoWorkflowFileSourceKind.ChatInput,
+            FileArtifactSourceKind.FormUpload => ProtoWorkflowFileSourceKind.FormUpload,
+            FileArtifactSourceKind.ConnectedServiceResource => ProtoWorkflowFileSourceKind.ConnectedServiceResource,
+            FileArtifactSourceKind.ExternalResource => ProtoWorkflowFileSourceKind.ExternalResource,
+            FileArtifactSourceKind.Generated => ProtoWorkflowFileSourceKind.Generated,
             _ => ProtoWorkflowFileSourceKind.Unspecified,
         };
 
-    private static WorkflowFileSourceKind ToApplicationSourceKind(ProtoWorkflowFileSourceKind source) =>
+    private static FileArtifactSourceKind ToApplicationSourceKind(ProtoWorkflowFileSourceKind source) =>
         source switch
         {
-            ProtoWorkflowFileSourceKind.ChatInput => WorkflowFileSourceKind.ChatInput,
-            ProtoWorkflowFileSourceKind.FormUpload => WorkflowFileSourceKind.FormUpload,
-            ProtoWorkflowFileSourceKind.ConnectedServiceResource => WorkflowFileSourceKind.ConnectedServiceResource,
-            ProtoWorkflowFileSourceKind.ExternalResource => WorkflowFileSourceKind.ExternalResource,
-            ProtoWorkflowFileSourceKind.Generated => WorkflowFileSourceKind.Generated,
-            _ => WorkflowFileSourceKind.Unspecified,
+            ProtoWorkflowFileSourceKind.ChatInput => FileArtifactSourceKind.ChatInput,
+            ProtoWorkflowFileSourceKind.FormUpload => FileArtifactSourceKind.FormUpload,
+            ProtoWorkflowFileSourceKind.ConnectedServiceResource => FileArtifactSourceKind.ConnectedServiceResource,
+            ProtoWorkflowFileSourceKind.ExternalResource => FileArtifactSourceKind.ExternalResource,
+            ProtoWorkflowFileSourceKind.Generated => FileArtifactSourceKind.Generated,
+            _ => FileArtifactSourceKind.Unspecified,
         };
 }

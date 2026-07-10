@@ -4,6 +4,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
+using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
+using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 
 namespace Aevatar.AI.Tests;
 
@@ -65,6 +67,52 @@ public class MultimodalPipelineTests
         roundTripped.DataBase64.Should().Be("Zm9v");
         roundTripped.MediaType.Should().Be("image/jpeg");
         roundTripped.Name.Should().Be("test.jpg");
+    }
+
+    [Fact]
+    public void ContentPartProtoMapper_RoundTrip_ShouldPreserveFileRef()
+    {
+        var original = ContentPart.ImageFileRefPart(
+            new LlmChatFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = LlmChatFileSourceKind.ChatInput,
+                SourceMessageId = "om_1",
+                SourceResourceKey = "img_1",
+                FileName = "photo.png",
+                MediaType = "image/png",
+                SizeBytes = 3,
+                Sha256 = "sha",
+                CreatedAtUnixMs = 1_000,
+                ExpiresAtUnixMs = 2_000,
+                OwnerRunId = "run-1",
+                OwnerScopeId = "scope-1",
+            });
+
+        var proto = ContentPartProtoMapper.ToProto(original);
+        proto.FileRef.FileId.Should().Be("file-1");
+        proto.FileRef.ArtifactId.Should().Be("workflow-file://file-1");
+        proto.FileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput);
+        proto.FileRef.SourceMessageId.Should().Be("om_1");
+        proto.FileRef.SourceResourceKey.Should().Be("img_1");
+        proto.FileRef.SizeBytes.Should().Be(3);
+
+        var roundTripped = ContentPartProtoMapper.FromProto(proto);
+        roundTripped.FileRef.Should().NotBeNull();
+        roundTripped.FileRef!.FileId.Should().Be("file-1");
+        roundTripped.FileRef.ArtifactId.Should().Be("workflow-file://file-1");
+        roundTripped.FileRef.SourceKind.Should().Be(LlmChatFileSourceKind.ChatInput);
+        roundTripped.FileRef.SourceMessageId.Should().Be("om_1");
+        roundTripped.FileRef.SourceResourceKey.Should().Be("img_1");
+        roundTripped.FileRef.FileName.Should().Be("photo.png");
+        roundTripped.FileRef.MediaType.Should().Be("image/png");
+        roundTripped.FileRef.SizeBytes.Should().Be(3);
+        roundTripped.FileRef.Sha256.Should().Be("sha");
+        roundTripped.FileRef.CreatedAtUnixMs.Should().Be(1_000);
+        roundTripped.FileRef.ExpiresAtUnixMs.Should().Be(2_000);
+        roundTripped.FileRef.OwnerRunId.Should().Be("run-1");
+        roundTripped.FileRef.OwnerScopeId.Should().Be("scope-1");
     }
 
     [Fact]

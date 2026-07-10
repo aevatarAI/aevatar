@@ -152,7 +152,7 @@ public static class ScopeServiceEndpoints
         string scopeId,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
         CancellationToken ct)
     {
         try
@@ -255,7 +255,7 @@ public static class ScopeServiceEndpoints
     private static async ValueTask<ScopeDraftRunRequestInput> ParseScopeDraftRunRequestAsync(
         HttpContext http,
         WorkflowMultipartFileInputParser multipartFileInputParser,
-        IWorkflowFileIngressPort workflowFileIngressPort,
+        IFileArtifactIngressPort workflowFileIngressPort,
         string scopeId,
         CancellationToken ct)
     {
@@ -744,7 +744,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -810,7 +810,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -908,7 +908,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -1802,7 +1802,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
         [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -3860,7 +3860,7 @@ const response = await fetch("{{invokePath}}", {
                 MediaType = part.FileRef?.MediaType ?? part.MediaType,
                 Uri = part.FileRef?.ArtifactId ?? part.FileRef?.Uri ?? part.Uri,
                 Name = part.FileRef?.FileName ?? part.FileRef?.Name ?? part.Name,
-                FileRef = MapWorkflowFileRef(part.FileRef),
+                FileRef = MapFileArtifactRef(part.FileRef),
             });
         }
 
@@ -3884,16 +3884,16 @@ const response = await fetch("{{invokePath}}", {
         return kind != WorkflowChatInputPartKind.Unspecified;
     }
 
-    private static WorkflowFileRef? MapWorkflowFileRef(ChatInputFileRef? fileRef)
+    private static FileArtifactRef? MapFileArtifactRef(ChatInputFileRef? fileRef)
     {
         if (fileRef == null)
             return null;
 
-        return new WorkflowFileRef
+        return new FileArtifactRef
         {
             FileId = fileRef.FileId,
             ArtifactId = fileRef.ArtifactId ?? fileRef.Uri,
-            SourceKind = MapWorkflowFileSourceKind(fileRef.SourceKind),
+            SourceKind = MapFileArtifactSourceKind(fileRef.SourceKind),
             SourceMessageId = fileRef.SourceMessageId,
             SourceResourceKey = fileRef.SourceResourceKey,
             FileName = fileRef.FileName ?? fileRef.Name,
@@ -3906,19 +3906,19 @@ const response = await fetch("{{invokePath}}", {
         };
     }
 
-    private static WorkflowFileSourceKind MapWorkflowFileSourceKind(string? raw)
+    private static FileArtifactSourceKind MapFileArtifactSourceKind(string? raw)
     {
         var key = string.IsNullOrWhiteSpace(raw)
             ? string.Empty
             : raw.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
         return key switch
         {
-            "chatinput" or "chat" => WorkflowFileSourceKind.ChatInput,
-            "formupload" or "form" => WorkflowFileSourceKind.FormUpload,
-            "connectedserviceresource" or "connectedservice" => WorkflowFileSourceKind.ConnectedServiceResource,
-            "externalresource" or "external" => WorkflowFileSourceKind.ExternalResource,
-            "generated" => WorkflowFileSourceKind.Generated,
-            _ => WorkflowFileSourceKind.Unspecified,
+            "chatinput" or "chat" => FileArtifactSourceKind.ChatInput,
+            "formupload" or "form" => FileArtifactSourceKind.FormUpload,
+            "connectedserviceresource" or "connectedservice" => FileArtifactSourceKind.ConnectedServiceResource,
+            "externalresource" or "external" => FileArtifactSourceKind.ExternalResource,
+            "generated" => FileArtifactSourceKind.Generated,
+            _ => FileArtifactSourceKind.Unspecified,
         };
     }
 
@@ -3940,14 +3940,14 @@ const response = await fetch("{{invokePath}}", {
 
     private static async ValueTask<IReadOnlyList<ChatInputContentPart>> IngestMultipartInputPartsAsync(
         WorkflowMultipartFileInputForm form,
-        IWorkflowFileIngressPort workflowFileIngressPort,
+        IFileArtifactIngressPort workflowFileIngressPort,
         string scopeId,
         CancellationToken ct)
     {
         var inputParts = new List<ChatInputContentPart>(form.PendingFiles.Count);
         foreach (var file in form.PendingFiles)
         {
-            WorkflowFileIngressResult ingressResult;
+            FileArtifactIngressResult ingressResult;
             try
             {
                 ingressResult = await workflowFileIngressPort.IngestAsync(

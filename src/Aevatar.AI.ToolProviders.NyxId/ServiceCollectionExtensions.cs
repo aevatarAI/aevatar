@@ -37,11 +37,11 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());
-        if (services.Any(static descriptor => descriptor.ServiceType == typeof(IWorkflowFileIngressPort)))
+        if (services.Any(static descriptor => descriptor.ServiceType == typeof(IFileArtifactIngressPort)))
         {
             services.TryAddSingleton<INyxIdProxyFileArtifactIngress>(sp =>
                 new NyxIdProxyWorkflowFileArtifactIngress(
-                    sp.GetRequiredService<IWorkflowFileIngressPort>()));
+                    sp.GetRequiredService<IFileArtifactIngressPort>()));
         }
 
         services.TryAddEnumerable(

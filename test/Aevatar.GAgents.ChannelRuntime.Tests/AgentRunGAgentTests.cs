@@ -2,6 +2,7 @@ using System.Text;
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -33,6 +34,61 @@ public sealed class AgentRunGAgentTests
         RecordingExecutors.TryGetValue(agent, out var executor)
             ? executor.DrainAsync(agent.State)
             : Task.CompletedTask;
+
+    [Fact]
+    public void StripInlineMediaPayloads_ShouldRemoveMediaDataBase64FromDurableStepState()
+    {
+        var stepState = new AgentRunReplyStepState
+        {
+            RunId = "run-media",
+        };
+        stepState.Messages.Add(new AgentRunChatMessage
+        {
+            Role = "user",
+            ContentParts =
+            {
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Text,
+                    Text = "describe",
+                },
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Image,
+                    DataBase64 = "large-image-base64",
+                    FileRef = new Aevatar.AI.Abstractions.ChatFileRef
+                    {
+                        ArtifactId = "workflow-file://wf-file-1",
+                    },
+                },
+            },
+        });
+        stepState.AppendedHistory.Add(new ConversationHistoryEntry
+        {
+            Role = "user",
+            ContentParts =
+            {
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Audio,
+                    DataBase64 = "large-audio-base64",
+                },
+                new Aevatar.AI.Abstractions.ChatContentPart
+                {
+                    Kind = Aevatar.AI.Abstractions.ChatContentPartKind.Unspecified,
+                    DataBase64 = "large-attachment-base64",
+                },
+            },
+        });
+
+        var sanitized = AgentRunGAgent.StripInlineMediaPayloads(stepState);
+
+        sanitized.Messages.Single().ContentParts[0].Text.Should().Be("describe");
+        sanitized.Messages.Single().ContentParts[1].DataBase64.Should().BeEmpty();
+        sanitized.Messages.Single().ContentParts[1].FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        sanitized.AppendedHistory.Single().ContentParts.Should().OnlyContain(part => part.DataBase64.Length == 0);
+        stepState.Messages.Single().ContentParts[1].DataBase64.Should().Be("large-image-base64");
+    }
 
     [Fact]
     public async Task HandleNextToolStepAsync_MergesToolStepOutboundIntentIntoStepState()
@@ -1441,6 +1497,73 @@ public sealed class AgentRunGAgentTests
         persistedText.Should().NotContain("owner-token");
         persistedText.Should().NotContain("inbound-sender-token");
         persistedText.Should().NotContain("sender-runtime-token");
+    }
+
+    [Fact]
+    public async Task HandleStartAsync_WhenLarkImageAttachmentIsOversized_EmitsControlledVisibleFailure()
+    {
+        var targetActor = Substitute.For<IActor>();
+        targetActor.Id.Returns("conversation:c");
+        targetActor.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        EventEnvelope? handled = null;
+        targetActor.When(x => x.HandleEventAsync(Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>()))
+            .Do(call => handled = call.Arg<EventEnvelope>());
+        var providerFactory = new SingleReplyProviderFactory("reply after attachment visibility warning")
+        {
+            Capabilities = new LLMProviderCapabilities
+            {
+                SupportedInputModalities = new HashSet<ContentPartKind>
+                {
+                    ContentPartKind.Text,
+                    ContentPartKind.Image,
+                },
+            },
+        };
+        var replyGenerator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: Substitute.For<ILarkNyxClient>());
+        var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
+        var runtime = CreateRunAgent(
+            actorRuntime,
+            replyGenerator,
+            new AsyncLocalInteractiveReplyCollector(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { InteractiveRepliesEnabled = true });
+        var activity = BuildRelayActivity();
+        activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "user-token",
+            NyxPlatformMessageId = "om_oversized",
+        };
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "img_oversized",
+            Kind = AttachmentKind.Image,
+            ContentType = "image/png",
+            Name = "large.png",
+            SizeBytes = 10 * 1024 * 1024 + 1,
+        });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-oversized-attachment",
+            TargetActorId = "conversation:c",
+            RegistrationId = "reg-1",
+            Activity = activity,
+            ReplyToken = "relay-token-oversized-attachment",
+            LlmControl = ControlForAgentRun("owner-model", "owner-route", 4).ToPayload(),
+        });
+
+        handled.Should().NotBeNull();
+        var ready = handled!.Payload.Unpack<LlmReplyReadyEvent>();
+        ready.TerminalState.Should().Be(LlmReplyTerminalState.Completed);
+        ready.ErrorCode.Should().BeEmpty();
+        ready.ErrorSummary.Should().BeEmpty();
+        ready.Outbound.Text.Should().Be("reply after attachment visibility warning");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
     }
 
     [Fact]
@@ -4411,6 +4534,8 @@ public sealed class AgentRunGAgentTests
 
         public List<LLMRequest> Requests { get; } = [];
 
+        public LLMProviderCapabilities Capabilities { get; init; } = LLMProviderCapabilities.TextOnly;
+
         public ILLMProvider GetProvider(string name) => this;
 
         public ILLMProvider GetDefault() => this;
@@ -4688,6 +4813,7 @@ public sealed class AgentRunGAgentTests
             reply.Should().Be(generic);
         }
     }
+
 }
 
 internal static class AgentRunGAgentTestExtensions
