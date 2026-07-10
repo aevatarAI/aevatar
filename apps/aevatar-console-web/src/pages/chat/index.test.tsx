@@ -114,6 +114,15 @@ async function sendPrompt(prompt: string): Promise<void> {
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 }
 
+function seedConversationHistory(
+  conversations: readonly Record<string, unknown>[]
+): void {
+  window.localStorage.setItem(
+    "aevatar.chat.localHistory.v1:scope-a",
+    JSON.stringify(conversations)
+  );
+}
+
 describe("ChatPage MVP", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -256,6 +265,148 @@ describe("ChatPage MVP", () => {
     const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
     expect(secondBody.sessionId).toBe(firstBody.sessionId);
     expect(secondBody.prompt).toContain("Confirm. Please create it now.");
+    expect(await screen.findByRole("button", { name: "Open Workflow Studio" })).toBeTruthy();
+  });
+
+  it("shows a top-level creating summary from runtime step and tool events", async () => {
+    const stream = createControlledSseResponse();
+    (authFetch as jest.Mock)
+      .mockResolvedValueOnce(
+        createSseResponse([
+          {
+            runFinished: {
+              result: {
+                output: "Plan ready. Please confirm before I create resources.",
+              },
+            },
+          },
+        ])
+      )
+      .mockResolvedValueOnce(stream.response);
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Create a workflow from chat");
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm and create" }));
+
+    stream.enqueue({
+      stepStarted: {
+        stepName: "Create workflow draft",
+      },
+      timestamp: 1,
+    });
+    stream.enqueue({
+      toolCallStart: {
+        toolCallId: "tool-1",
+        toolName: "create_team_member",
+      },
+      timestamp: 2,
+    });
+
+    expect(await screen.findByText("Creating workflow")).toBeTruthy();
+    expect(await screen.findByText("Current step: Create workflow draft")).toBeTruthy();
+    expect(await screen.findByText("Running tool: create_team_member")).toBeTruthy();
+    expect(
+      await screen.findByText("Stop only cancels the current chat run.")
+    ).toBeTruthy();
+  });
+
+  it("shows confirmation in the top-level status center for restored conversations", async () => {
+    seedConversationHistory([
+      {
+        createdAt: "2026-07-10T07:00:00.000Z",
+        id: "conv-confirm",
+        messages: [
+          {
+            content: "Plan ready. Please confirm before I create resources.",
+            id: "assistant-confirm",
+            role: "assistant",
+            status: "complete",
+            timestamp: 1,
+          },
+        ],
+        scopeId: "scope-a",
+        status: "needs_confirmation",
+        title: "Workflow planning",
+        updatedAt: "2026-07-10T07:00:00.000Z",
+      },
+    ]);
+
+    renderWithQueryClient(<ChatPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Workflow planning" }));
+
+    expect(await screen.findByText("Review before creating resources")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Confirm and create" })).toBeTruthy();
+  });
+
+  it("surfaces pending operator action in the top-level status center", async () => {
+    seedConversationHistory([
+      {
+        createdAt: "2026-07-10T07:00:00.000Z",
+        id: "conv-action",
+        messages: [
+          {
+            content: "Waiting for approval.",
+            id: "assistant-action",
+            pendingApproval: {
+              argumentsJson: "{\"scopeId\":\"scope-a\"}",
+              isDestructive: false,
+              requestId: "approval-1",
+              timeoutSeconds: 30,
+              toolCallId: "tool-approval-1",
+              toolName: "create_workflow",
+            },
+            role: "assistant",
+            status: "complete",
+            timestamp: 1,
+          },
+        ],
+        scopeId: "scope-a",
+        status: "creating",
+        title: "Workflow approval",
+        updatedAt: "2026-07-10T07:00:00.000Z",
+      },
+    ]);
+
+    renderWithQueryClient(<ChatPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Workflow approval" }));
+
+    expect(await screen.findByText("Action required")).toBeTruthy();
+    expect(await screen.findByText("Tool approval is waiting below.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Review action" })).toBeTruthy();
+  });
+
+  it("shows completed next-step guidance in the top-level status center", async () => {
+    seedConversationHistory([
+      {
+        createdAt: "2026-07-10T07:00:00.000Z",
+        id: "conv-complete",
+        messages: [
+          {
+            content: "Created.",
+            id: "assistant-complete",
+            role: "assistant",
+            status: "complete",
+            timestamp: 1,
+          },
+        ],
+        scopeId: "scope-a",
+        status: "completed_with_studio_target",
+        target: {
+          memberId: "member-a",
+          scopeId: "scope-a",
+          teamId: "team-a",
+          workflowId: "workflow-a",
+        },
+        title: "Workflow created",
+        updatedAt: "2026-07-10T07:00:00.000Z",
+      },
+    ]);
+
+    renderWithQueryClient(<ChatPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Workflow created" }));
+
+    expect(await screen.findByText("Workflow created")).toBeTruthy();
+    expect(await screen.findByText("Open Studio to review the created workflow.")).toBeTruthy();
     expect(await screen.findByRole("button", { name: "Open Workflow Studio" })).toBeTruthy();
   });
 

@@ -60,6 +60,38 @@ const zhCNMessages = {
   'pages.chat.index.reviewPlan': '创建资源前请先确认计划。',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
   'pages.chat.index.status.completed': '已完成',
+  'pages.chat.index.statusCenter.actionRequired': '需要处理操作',
+  'pages.chat.index.statusCenter.approvalTool': '工具：{toolName}',
+  'pages.chat.index.statusCenter.completed': '已完成',
+  'pages.chat.index.statusCenter.completedDescription':
+    '本次运行已完成，你可以继续在 Chat 中追问。',
+  'pages.chat.index.statusCenter.completedTextDescription':
+    '本次运行已完成，你可以继续在 Chat 中追问。',
+  'pages.chat.index.statusCenter.completedTitle': 'Workflow 已创建',
+  'pages.chat.index.statusCenter.completedWithTargetDescription':
+    '打开 Studio 查看刚创建的 workflow。',
+  'pages.chat.index.statusCenter.confirmDescription':
+    '在你确认之前，不会真正创建任何资源。',
+  'pages.chat.index.statusCenter.creatingDescription':
+    '当前 Chat run 仍在处理中。',
+  'pages.chat.index.statusCenter.creatingTitle': '正在创建 workflow',
+  'pages.chat.index.statusCenter.currentStep': '当前步骤：{stepName}',
+  'pages.chat.index.statusCenter.error': '运行已停止',
+  'pages.chat.index.statusCenter.errorDescription':
+    '这次运行已停止或失败。你可以发送后续消息继续。',
+  'pages.chat.index.statusCenter.reviewAction': '查看操作',
+  'pages.chat.index.statusCenter.reviewBeforeCreate':
+    '创建资源前先确认',
+  'pages.chat.index.statusCenter.runInterventionFallback':
+    '当前 run 正在等待操作员响应。',
+  'pages.chat.index.statusCenter.runInterventionWaiting':
+    '当前有输入或审批等待你处理。',
+  'pages.chat.index.statusCenter.runningTool': '正在运行工具：{toolName}',
+  'pages.chat.index.statusCenter.stopHelp':
+    '停止只会取消当前这次 chat run。',
+  'pages.chat.index.statusCenter.streamingTitle': '正在处理你的请求',
+  'pages.chat.index.statusCenter.toolApprovalWaiting':
+    '当前有工具审批在下方等待处理。',
   'pages.chat.index.status.creating': '创建中',
   'pages.chat.index.status.draft': '草稿',
   'pages.chat.index.status.error': '错误',
