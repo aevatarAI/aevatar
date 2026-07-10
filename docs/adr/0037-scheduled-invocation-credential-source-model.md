@@ -42,7 +42,7 @@ owner: eanzhao
 5. **create/update 期只做无副作用 validation**：NyxId source 不再用「真 mint」做预检；改用 binding 存在性（已有的 read-only `bindingQueryPort.ResolveAsync`）+ scope 归属判断；只有 fire/run-now 才为 NyxId source 签发短 token（具体 introspection 机制见 Open Questions，受限于 NyxID 既有 surface）。
 6. **删除 legacy header/metadata auth 残留**：清理已无活写入路径的防御 strip 代码（保留 proto `reserved`）。
 
-`oneof` 草图见 Required Contract。无 opt-in 不变量：收敛后默认凭证语义对既有 schedule 保持等价（迁移期 reducer 双读旧格式）。
+`oneof` 草图见 Required Contract。无 opt-in 不变量：收敛后默认凭证语义对既有 schedule 保持等价（迁移期 reducer 双读旧格式），但历史 raw bearer 状态只允许 fail-closed，不允许继续成功调用。
 
 ## Locked Rules
 
@@ -53,15 +53,14 @@ owner: eanzhao
 5. **create 无副作用**：create/update 不得通过实际签发 access token 来做校验。
 6. **durable internal-only**：通用 HTTP `/api/schedules` 不接受 durable reference；只有 trusted provisioning 路径可写。
 7. **owner 不可伪造**：`SCOPE_OWNER` role 的 subject 只能来自认证 principal 的 claim，调用方不能在 body 指定（HTTP 现状已如此，下沉后 internal 入口也须遵守）。
-8. **wire-safe 迁移**：旧 tag `1/2/3` 迁移期只标记 deprecated 并双读，不能 reserve；现有 tag `4` 保留给 `legacy_durable_sender_bearer_blocked`，新写只写 `oneof source` 的 tag `5/6`。旧 schedule 不破，下次 update 迁移，不要求一次性回填。
+8. **wire-safe 迁移**：旧 tag `1/2/3` 迁移期只标记 deprecated 并双读，不能 reserve；`durable_sender_bearer_token = 2` 与 `legacy_durable_sender_bearer_blocked = 4` 作为只读 fail-closed 哨兵保留。新写只写 `oneof source` 的 tag `5/6/7`，旧 raw bearer 状态必须拒绝调度/dispatch，不得解释为 no-auth。
 9. **legacy 删除优先**：无活路径的 legacy auth 代码直接删（FI-007），不留兼容空壳。
 10. **读侧诚实**：凭证来源可经 readmodel 暴露（不含 secret）；durable id 与 raw token 都不得投影（沿用现有 `ProjectAsync_ShouldNotProjectDurableSenderBearerToken` 的安全立场）。
 
 ## Required Contract（proto 收敛，wire-safe 演进）
 
 ```proto
-// scheduled_dispatch_state.proto — 收敛后
-
+// scheduled_dispatch_state.proto — 目标收敛后
 message ScheduledServiceInvocationAuthState {
   ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1 [deprecated = true];
   string durable_sender_bearer_token = 2 [deprecated = true];  // read only; never copy to current state
@@ -70,6 +69,7 @@ message ScheduledServiceInvocationAuthState {
   oneof source {
     ScheduledServiceInvocationNyxIdCredentialSourceState nyx_id = 5;
     ScheduledServiceInvocationDurableCredentialReferenceState durable = 6;
+    ScheduledInvocationAgentKeyCredentialReferenceState scheduled_invocation_agent_key = 7;
   }
   // 未设 source = no-auth（合法性由 required-credential policy 判定）
 }
@@ -89,9 +89,17 @@ enum ScheduledServiceInvocationNyxIdCredentialRoleState {
 message ScheduledServiceInvocationDurableCredentialReferenceState {
   string credential_id = 1;   // NyxID agent key handle；fire 兑换由后续行为阶段接入
 }
+
+message ScheduledInvocationAgentKeyCredentialReferenceState {
+  aevatar.credentials.SecretReference secret_reference = 1; // purpose 固定为 scheduled.invocation-agent-key
+  string api_key_id = 2;
+  int64 key_expires_at_unix_ms = 3;
+}
 ```
 
 应用层 record `ScheduledServiceInvocationAuth`（`ScheduledDispatchModels.cs:46-49`）同步收敛为 `oneof`-等价的判别联合；credential exchange port 收敛为单一 `IssueNyxIdAsync(NyxIdCredentialSource source, ...)`（role 内含），删除 `IssueScopeOwnerNyxIdAsync` 与其被丢弃的 `serviceIdentity` 参数。
+
+新的 scheduled invocation agent key 引用使用 `scheduled_invocation_agent_key = 7`，raw key material 只能通过 vault purpose `scheduled.invocation-agent-key` 存取，state/readmodel/log/API response 只保留 typed reference 与过期时间。
 
 ## Entry-Point Alignment（discussion C）
 
@@ -116,7 +124,7 @@ message ScheduledServiceInvocationDurableCredentialReferenceState {
 分阶段交付，每步 build + 定向测试 + 对应 `tools/ci/*guard*.sh`，详见 epic [#2404](https://github.com/aevatarAI/aevatar/issues/2404)：
 
 1. 接受本 ADR（proposed → accepted）。
-2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableCredentialReference`；旧 tag `1/2/3` deprecated 双读，tag `4` 保留，新写只用 `5/6`；proto 重生 + reducer/replay 测试。
+2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableCredentialReference`/`ScheduledInvocationAgentKeyCredentialReference`；旧 tag `1/2/3` deprecated 双读，tag `4` 保留为 fail-closed 哨兵，新写只用 `5/6/7`；proto 重生 + reducer/replay 测试。
 3. **Phase 1 校验下沉**：binding/owner/scope 校验从 endpoint private static 下沉 application/domain；HTTP 与 internal 入口对齐；create 改无副作用 validation。
 4. **Phase 2 durable 收敛**：HTTP 关闭 durable；raw token → `DurableCredentialReference(id)`；Studio minted 走 reference；旧 raw durable replay fail closed；迁移相关测试。
 5. **Phase 3 注入与 legacy 收敛**：fire 时注入由 role 决定；接入 durable reference 的 broker 兑换；核实并收敛 `NyxIdAccessToken`+`NyxIdOrgToken` 双写；`ConnectorHttpAuthorization` 下沉 workflow adapter；删 legacy strip 残留。

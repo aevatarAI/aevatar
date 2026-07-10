@@ -75,6 +75,7 @@ message WorkflowLlmControlContext {
 message WorkflowCallerCredential {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
+  aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
 }
 
 message WorkflowExternalIngressContext {

@@ -67,6 +67,50 @@ public sealed class GarnetSecretStoreTests
     }
 
     [Fact]
+    public async Task GarnetBackedSecretVault_ShouldPersistAndEnforceExpiresAt()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var clock = new ManualTime(new DateTimeOffset(2026, 7, 5, 12, 0, 0, TimeSpan.Zero));
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, clock);
+        var expiresAt = clock.GetUtcNow().AddMinutes(5);
+        var expiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds();
+
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "expiring-secret",
+            "test store expiring",
+            expiresAt));
+
+        stored.Reference.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        var record = GarnetSecretVaultRecord.Parser.ParseFrom(
+            keyValueStore.Values.Should().ContainSingle().Subject.Value);
+        record.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+
+        var beforeExpiry = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve before expiry"));
+        beforeExpiry.Resolved.Should().BeTrue();
+        beforeExpiry.Reference!.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        beforeExpiry.Secret.Should().Be("expiring-secret");
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        var expired = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve expired"));
+        expired.Resolved.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GarnetBackedSecretVault_ShouldRejectRotateBeforeModifyingRecord()
     {
         var keyValueStore = new RecordingGarnetSecretKeyValueStore();

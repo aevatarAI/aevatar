@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 
@@ -340,6 +341,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ScheduledServiceInvocationDurableCredentialReference durable =>
                 new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
                     NormalizeRequired(durable.CredentialId, nameof(durable.CredentialId)))),
+            ScheduledInvocationAgentKeyCredentialReference agentKey =>
+                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey)),
             _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
         };
     }
@@ -362,6 +365,34 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope)),
             role));
+    }
+
+    private static ScheduledInvocationAgentKeyCredentialReference NormalizeScheduledInvocationAgentKey(
+        ScheduledInvocationAgentKeyCredentialReference source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var reference = source.SecretReference?.Clone()
+            ?? throw new ArgumentException("Scheduled invocation agent key secret reference is required.", nameof(source));
+        if (string.IsNullOrWhiteSpace(reference.Ref))
+            throw new ArgumentException("Scheduled invocation agent key secret reference is required.", nameof(source));
+        if (!string.Equals(reference.Purpose, CredentialSecretPurposes.ScheduledInvocationAgentKey, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Scheduled invocation agent key secret reference purpose must be '{CredentialSecretPurposes.ScheduledInvocationAgentKey}'.",
+                nameof(source));
+        }
+        if (string.IsNullOrWhiteSpace(reference.OwnerScopeKey))
+            throw new ArgumentException("Scheduled invocation agent key owner scope key is required.", nameof(source));
+
+        var apiKeyId = NormalizeRequired(source.ApiKeyId, nameof(source.ApiKeyId));
+        var expiresAtUnixMs = source.KeyExpiresAtUnixMs > 0
+            ? source.KeyExpiresAtUnixMs
+            : reference.ExpiresAtUnixMs;
+        if (expiresAtUnixMs <= 0)
+            throw new ArgumentException("Scheduled invocation agent key expiry is required.", nameof(source));
+
+        reference.ExpiresAtUnixMs = expiresAtUnixMs;
+        return new ScheduledInvocationAgentKeyCredentialReference(reference, apiKeyId, expiresAtUnixMs);
     }
 
     private static string ToMissingSubjectMessage(ScheduledServiceInvocationNyxIdCredentialRole role) =>

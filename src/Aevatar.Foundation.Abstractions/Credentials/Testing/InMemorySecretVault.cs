@@ -25,6 +25,7 @@ public sealed class InMemorySecretVault : ISecretVault
             Version = 1,
             OwnerScopeKey = request.OwnerScopeKey,
             CreatedAtUnixMs = now,
+            ExpiresAtUnixMs = request.ExpiresAt?.ToUniversalTime().ToUnixTimeMilliseconds() ?? 0,
         };
 
         lock (_gate)
@@ -42,7 +43,8 @@ public sealed class InMemorySecretVault : ISecretVault
         lock (_gate)
         {
             if (!TryGetAuthorized(request.Ref, request.Purpose, request.OwnerScopeKey, request.SubjectId, out var storedSecret) ||
-                storedSecret.Revoked)
+                storedSecret.Revoked ||
+                IsExpired(storedSecret.Reference))
             {
                 return Task.FromResult(new ResolveSecretResult(null, null));
             }
@@ -121,6 +123,10 @@ public sealed class InMemorySecretVault : ISecretVault
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(secret));
         return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    private static bool IsExpired(SecretReference reference) =>
+        reference.ExpiresAtUnixMs > 0 &&
+        reference.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     private sealed record StoredSecret(
         SecretReference Reference,

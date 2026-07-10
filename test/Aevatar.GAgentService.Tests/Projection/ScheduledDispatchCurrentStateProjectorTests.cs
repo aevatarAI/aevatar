@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -122,6 +123,55 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document!.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8("durable-run-key").ToByteArray()).Should().Be(-1);
         document.ToString().Should().NotContain("durable-run-key");
         document.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        document.StateVersion.Should().Be(10);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotProjectScheduledInvocationAgentKeySecretReference()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+            {
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-sensitive-reference",
+                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    OwnerScopeKey = "owner-scope-key",
+                    Fingerprint = "sha256:sensitive-fingerprint",
+                    Version = 1,
+                    ExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+                },
+                ApiKeyId = "api-key-sensitive-id",
+                KeyExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-reference"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-reference",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-reference");
+        document.Should().NotBeNull();
+        document!.ToString().Should().NotContain("sec-sensitive-reference");
+        document.ToString().Should().NotContain("api-key-sensitive-id");
+        document.ToString().Should().NotContain("sensitive-fingerprint");
         document.StateVersion.Should().Be(10);
     }
 
