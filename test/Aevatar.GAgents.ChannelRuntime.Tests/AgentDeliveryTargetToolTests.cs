@@ -709,6 +709,7 @@ public sealed class AgentDeliveryTargetToolTests
                 AgentId = "agent-3",
                 ConversationId = "oc_chat_3",
                 NyxProviderSlug = "api-lark-bot",
+                ApiKeyId = "key-agent-3",
                 OwnerScope = caller,
             }));
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
@@ -717,6 +718,11 @@ public sealed class AgentDeliveryTargetToolTests
         //   New principle: Stub returns Task.CompletedTask; test asserts caller-scoped guard and command dispatch.
         commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+        commandPort.RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var issuer = new RecordingApiKeyIssuer();
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -726,6 +732,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(callerScopeResolver);
+        services.AddSingleton<IScheduledAgentApiKeyIssuer>(issuer);
         var tool = CreateTool(services);
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
@@ -739,6 +746,13 @@ public sealed class AgentDeliveryTargetToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
             await commandPort.Received(1).TombstoneAsync("agent-3", Arg.Any<CancellationToken>());
+            issuer.RevokedApiKeyIds.Should().ContainSingle().Which.Should().Be("key-agent-3");
+            await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                    command.AgentId == "agent-3" &&
+                    command.ApiKeyId == "key-agent-3" &&
+                    command.Completed),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -1175,6 +1189,12 @@ public sealed class AgentDeliveryTargetToolTests
         {
             Issues.Add(new IssueCall(token, serviceSlugs, agentId, skillName, scopeId));
             return Task.FromResult(ScheduledAgentApiKeyIssueResult.Succeeded($"key-{agentId}", "secret-created-key"));
+        }
+
+        public Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct)
+        {
+            RevokedApiKeyIds.Add(apiKeyId);
+            return Task.FromResult(ScheduledAgentApiKeyRevokeResult.Complete());
         }
 
         public Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)

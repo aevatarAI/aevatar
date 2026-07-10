@@ -88,6 +88,22 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
     }
 
+    public async Task RecordApiKeyRevocationAttemptAsync(
+        UserAgentCatalogRecordApiKeyRevocationAttemptCommand command,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (string.IsNullOrWhiteSpace(command.AgentId))
+            throw new ArgumentException("AgentId is required for API key revocation attempt.", nameof(command));
+        if (string.IsNullOrWhiteSpace(command.ApiKeyId))
+            throw new ArgumentException("ApiKeyId is required for API key revocation attempt.", nameof(command));
+
+        await EnsureCatalogActorAsync(ct);
+
+        var envelope = BuildEnvelope(command);
+        await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+    }
+
     public async Task ShareAsync(
         string agentId,
         OwnerScope ownerScope,

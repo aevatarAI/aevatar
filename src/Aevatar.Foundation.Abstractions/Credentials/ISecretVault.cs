@@ -29,9 +29,22 @@ public sealed record ResolveSecretRequest(
 
 public sealed record ResolveSecretResult(
     SecretReference? Reference,
-    string? Secret)
+    string? Secret,
+    SecretResolutionFailureReason FailureReason = SecretResolutionFailureReason.None)
 {
-    public bool Resolved => Secret is not null;
+    public bool Resolved => Secret is not null && FailureReason == SecretResolutionFailureReason.None;
+}
+
+public enum SecretResolutionFailureReason
+{
+    None = 0,
+    NotFound = 1,
+    Revoked = 2,
+    Unauthorized = 3,
+    AuthenticationFailed = 4,
+    KeyringMismatch = 5,
+    UnsupportedAlgorithm = 6,
+    InvalidRecord = 7,
 }
 
 public sealed record RotateSecretRequest(

@@ -42,6 +42,7 @@ public sealed class CredentialSecretVaultContractTests
             "schedule-1",
             "wrong owner"));
         wrongOwner.Secret.ShouldBeNull();
+        wrongOwner.FailureReason.ShouldBe(SecretResolutionFailureReason.Unauthorized);
 
         var wrongPurpose = await vault.ResolveAsync(new ResolveSecretRequest(
             stored.Ref,
@@ -50,6 +51,15 @@ public sealed class CredentialSecretVaultContractTests
             "schedule-1",
             "wrong purpose"));
         wrongPurpose.Secret.ShouldBeNull();
+        wrongPurpose.FailureReason.ShouldBe(SecretResolutionFailureReason.Unauthorized);
+
+        var missing = await vault.ResolveAsync(new ResolveSecretRequest(
+            "sec_missing",
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            "scope-a",
+            "schedule-1",
+            "missing"));
+        missing.FailureReason.ShouldBe(SecretResolutionFailureReason.NotFound);
     }
 
     [Fact]
@@ -97,5 +107,6 @@ public sealed class CredentialSecretVaultContractTests
             "run-1/step-1",
             "use after revoke"));
         revoked.Secret.ShouldBeNull();
+        revoked.FailureReason.ShouldBe(SecretResolutionFailureReason.Revoked);
     }
 }

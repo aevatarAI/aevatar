@@ -75,6 +75,10 @@ public sealed class AgentBuilderToolTests
         //   New principle: Stub returns Task.CompletedTask; test asserts dispatch happened at the tool boundary.
         catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+        catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
@@ -111,6 +115,7 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-1");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
             doc.RootElement.GetProperty("agents").GetArrayLength().Should().Be(0);
             doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Delete submitted");
             doc.RootElement.GetProperty("note").GetString()
@@ -129,6 +134,12 @@ public sealed class AgentBuilderToolTests
             handler.Requests.Should().ContainSingle(x =>
                 x.Method == HttpMethod.Delete &&
                 x.Path == "/api/v1/api-keys/key-1");
+            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                    command.AgentId == "skill-runner-1" &&
+                    command.ApiKeyId == "key-1" &&
+                    command.Completed),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -162,6 +173,10 @@ public sealed class AgentBuilderToolTests
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; test asserts accepted copy plus source/query guard behavior.
         catalogCommandPort.TombstoneAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         var handler = new RoutingJsonHandler();
@@ -198,6 +213,7 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-stuck");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
             doc.RootElement.GetProperty("delete_notice").GetString()
                 .Should().Contain("Delete submitted for");
             // The new copy must point users at /agents to verify rather than

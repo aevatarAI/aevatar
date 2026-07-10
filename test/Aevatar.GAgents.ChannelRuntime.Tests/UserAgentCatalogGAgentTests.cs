@@ -124,6 +124,85 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleTombstoneAsync_WithApiKey_RecordsPendingRevocationBeforeTombstone()
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-1");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-with-key",
+            ConversationId = "conv-a",
+            ApiKeyId = "key-1",
+            NyxApiKeyReference = new SecretReference
+            {
+                Ref = "sec-1",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = "scope-key-1",
+            },
+            OwnerScope = owner,
+        });
+
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand
+        {
+            AgentId = "agent-with-key",
+        });
+
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle();
+        var pending = _agent.State.PendingApiKeyRevocations[0];
+        pending.AgentId.Should().Be("agent-with-key");
+        pending.ApiKeyId.Should().Be("key-1");
+        pending.NyxApiKeyReference.Ref.Should().Be("sec-1");
+        pending.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
+
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        persisted.Select(static item => item.EventData.TypeUrl)
+            .Should().ContainInOrder(
+                "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogUpsertedEvent",
+                "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogApiKeyRevocationRequestedEvent",
+                "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogTombstonedEvent");
+    }
+
+    [Fact]
+    public async Task HandleRecordApiKeyRevocationAttemptAsync_FailureKeepsPendingAndCompletionClearsIt()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-retry",
+            ConversationId = "conv-a",
+            ApiKeyId = "key-retry",
+            OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+        });
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand { AgentId = "agent-retry" });
+
+        await _agent.HandleRecordApiKeyRevocationAttemptAsync(
+            new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+            {
+                AgentId = "agent-retry",
+                ApiKeyId = "key-retry",
+                Completed = false,
+                HttpStatus = 503,
+                Error = "upstream unavailable",
+                FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+            });
+
+        var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        pending.AttemptCount.Should().Be(1);
+        pending.LastHttpStatus.Should().Be(503);
+        pending.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+
+        await _agent.HandleRecordApiKeyRevocationAttemptAsync(
+            new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+            {
+                AgentId = "agent-retry",
+                ApiKeyId = "key-retry",
+                Completed = true,
+                HttpStatus = 404,
+                FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+            });
+
+        _agent.State.PendingApiKeyRevocations.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleUpsertAsync_CopiesOwnerScopeFromCommand()
     {
         // Issue #466 regression: HandleUpsertAsync must copy command.OwnerScope onto the

@@ -259,19 +259,17 @@ public sealed class AgentBuilderTool : IAgentTool
         if (disableResult.error != null)
             return disableResult.error;
 
-        if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
-        {
-            var nyxClient = nyxClientFactory.CreateClient();
-            await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
-        }
-
-        // Refactor (iter4/cluster-009):
-        //   Old pattern: Delete mapped command-port Observed to a synchronous deleted status.
-        //   New principle: Tombstone ACK is accepted-only; deletion visibility is confirmed by the catalog query path.
-        // Refactor (iter5/cluster-012):
-        //   Old pattern: Delete awaited a tombstone result object that carried only accepted.
-        //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
         await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
+
+        var revocationResult = string.IsNullOrWhiteSpace(entry.ApiKeyId)
+            ? null
+            : await RevokeApiKeyAsync(nyxClientFactory, token, entry.ApiKeyId, ct);
+        if (revocationResult is not null)
+        {
+            await catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
+                BuildRevocationAttemptCommand(entry.AgentId, entry.ApiKeyId, revocationResult),
+                ct);
+        }
 
         var agents = await QueryAgentsForCallerAsync(queryPort, executionQueryPort, caller, ct);
 
@@ -280,12 +278,93 @@ public sealed class AgentBuilderTool : IAgentTool
             status = "accepted",
             agent_id = entry.AgentId,
             revoked_api_key_id = entry.ApiKeyId,
-            delete_notice = $"Delete submitted for `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
+            api_key_revocation_status = ResolveRevocationStatus(revocationResult),
+            delete_notice = $"Delete submitted for `{entry.AgentId}`. API key revocation: `{ResolveRevocationStatus(revocationResult)}`.",
             agents,
             total = agents.Length,
             note = "Tombstone is propagating. Run /agents in a few seconds to confirm the agent is gone.",
         });
     }
+
+    private static async Task<ScheduledAgentApiKeyRevokeResult> RevokeApiKeyAsync(
+        INyxIdApiClientFactory nyxClientFactory,
+        string token,
+        string apiKeyId,
+        CancellationToken ct)
+    {
+        var response = await nyxClientFactory.CreateClient().DeleteApiKeyAsync(token, apiKeyId.Trim(), ct);
+        if (!TryReadNyxErrorEnvelope(response, out var status, out var detail))
+            return ScheduledAgentApiKeyRevokeResult.Complete();
+
+        if (status == 404)
+            return ScheduledAgentApiKeyRevokeResult.Complete(404);
+
+        return ScheduledAgentApiKeyRevokeResult.Pending(
+            status,
+            string.IsNullOrWhiteSpace(detail) ? "nyxid_api_key_revoke_failed" : detail,
+            ClassifyRevocationFailure(status));
+    }
+
+    private static UserAgentCatalogRecordApiKeyRevocationAttemptCommand BuildRevocationAttemptCommand(
+        string agentId,
+        string apiKeyId,
+        ScheduledAgentApiKeyRevokeResult result) =>
+        new()
+        {
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            Completed = result.Completed,
+            HttpStatus = result.HttpStatus,
+            Error = result.Error,
+            FailureKind = result.FailureKind,
+        };
+
+    private static string ResolveRevocationStatus(ScheduledAgentApiKeyRevokeResult? result) =>
+        result is null ? "not_applicable" : result.Completed ? "completed" : "pending";
+
+    private static bool TryReadNyxErrorEnvelope(string response, out int status, out string detail)
+    {
+        status = 0;
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(response))
+            return true;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.True)
+                return false;
+
+            if (root.TryGetProperty("status", out var statusValue) &&
+                statusValue.ValueKind == JsonValueKind.Number &&
+                statusValue.TryGetInt32(out var parsedStatus))
+            {
+                status = parsedStatus;
+            }
+
+            detail = ReadString(root, "body") ?? ReadString(root, "message") ?? string.Empty;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static UserAgentApiKeyRevocationFailureKind ClassifyRevocationFailure(int status) =>
+        status switch
+        {
+            401 or 403 => UserAgentApiKeyRevocationFailureKind.Unauthorized,
+            429 => UserAgentApiKeyRevocationFailureKind.Transient,
+            >= 500 => UserAgentApiKeyRevocationFailureKind.Transient,
+            _ => UserAgentApiKeyRevocationFailureKind.ProviderError,
+        };
+
+    private static string? ReadString(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     private async Task<string> RunAgentAsync(
         BuilderArgs args,

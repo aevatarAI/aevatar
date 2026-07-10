@@ -103,6 +103,34 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
+    public async Task RecordApiKeyRevocationAttemptAsync_DispatchesCommand_AndCompletes()
+    {
+        var fixture = new Fixture();
+
+        await fixture.Port.RecordApiKeyRevocationAttemptAsync(
+            new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+            {
+                AgentId = "agent-1",
+                ApiKeyId = "key-1",
+                Completed = false,
+                HttpStatus = 503,
+                Error = "upstream unavailable",
+                FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+            },
+            CancellationToken.None);
+
+        fixture.Captured.Should().ContainSingle();
+        var command = fixture.Captured[0].Payload.Unpack<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>();
+        command.AgentId.Should().Be("agent-1");
+        command.ApiKeyId.Should().Be("key-1");
+        command.Completed.Should().BeFalse();
+        command.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        fixture.Captured[0].Route.PublisherActorId.Should().Be(ExpectedPublisher);
+        fixture.Captured[0].Route.Direct.TargetActorId.Should().Be(CatalogActorId);
+        await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ShareAsync_DispatchesCommand_AndCompletes()
     {
         var fixture = new Fixture();
