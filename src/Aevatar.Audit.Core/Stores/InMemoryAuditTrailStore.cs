@@ -115,7 +115,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         var offset = DecodeCursor(query.Cursor);
         var filtered = snapshot
             .Where(record => Matches(record, query))
-            .OrderBy(static record => record.OccurredAt.ToDateTimeOffset())
+            .OrderByDescending(static record => record.OccurredAt.ToDateTimeOffset())
             .ThenBy(static record => record.AuditId, StringComparer.Ordinal)
             .ToList();
 
@@ -127,9 +127,9 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
 
         var nextOffset = offset + pageRecords.Count;
         var nextCursor = nextOffset < filtered.Count ? EncodeCursor(nextOffset) : null;
-        var watermark = snapshot.Count == 0
+        var watermark = filtered.Count == 0
             ? (DateTimeOffset?)null
-            : snapshot.Max(static record => record.OccurredAt.ToDateTimeOffset());
+            : filtered.Max(static record => record.OccurredAt.ToDateTimeOffset());
 
         return Task.FromResult(new AuditTrailPage(
             pageRecords,

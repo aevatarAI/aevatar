@@ -45,7 +45,12 @@ public sealed class EndpointAuditCaptureMiddleware
             return;
         }
 
-        if (context.User.Identity?.IsAuthenticated != true)
+        // Unauthenticated callers are skipped by default so 401 challenges are
+        // not recorded (no authenticated actor to hash). Endpoints that opt in
+        // via CaptureUnauthenticated (explicit AllowAnonymous ingress: OAuth
+        // callbacks, HMAC-signed webhooks, relay ingress) are still recorded,
+        // hashing the fixed anonymous canonical actor key.
+        if (context.User.Identity?.IsAuthenticated != true && !metadata.CaptureUnauthenticated)
         {
             await _next(context);
             return;
@@ -234,6 +239,14 @@ public sealed class EndpointAuditCaptureMiddleware
 
     private static AuditActorKind ResolveActorKind(ClaimsPrincipal user)
     {
+        // Anonymous ingress (opt-in CaptureUnauthenticated): no authenticated
+        // caller, so the record is a system-captured governance fact keyed by the
+        // fixed anonymous canonical actor key.
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            return AuditActorKind.System;
+        }
+
         return FirstClaimValue(user, "client_id", "app_id") is null
             ? AuditActorKind.NyxidUser
             : AuditActorKind.Service;
@@ -241,6 +254,11 @@ public sealed class EndpointAuditCaptureMiddleware
 
     private static AuditCredentialSource ResolveCredentialSource(ClaimsPrincipal user)
     {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            return AuditCredentialSource.System;
+        }
+
         return FirstClaimValue(user, "client_id", "app_id") is null
             ? AuditCredentialSource.BearerToken
             : AuditCredentialSource.ServiceAccount;

@@ -227,7 +227,6 @@ internal sealed class StartWorkflowTool : IAevatarInvocationTool
             ReplyMessageId = ReadString(value, "reply_message_id"),
             PlatformMessageId = ReadString(value, "platform_message_id"),
             RegistrationScopeId = ReadString(value, "registration_scope_id"),
-            DurableReplyCredentialRef = ReadString(value, "durable_reply_credential_ref"),
         };
     }
 

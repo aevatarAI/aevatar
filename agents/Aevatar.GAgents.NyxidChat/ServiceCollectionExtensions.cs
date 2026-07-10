@@ -141,6 +141,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
         services.TryAddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort, WorkflowRunBackgroundDeliveryRegistrationPort>();
+        services.TryAddSingleton<IWorkflowResultDeliveryCredentialResolver, SecretVaultWorkflowResultDeliveryCredentialResolver>();
         // ─── LLM-call middleware that injects channel context into LLM requests ───
         // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware
         // (AI.Abstractions); keeping it in NyxidChat lets Channel.Runtime stay free of

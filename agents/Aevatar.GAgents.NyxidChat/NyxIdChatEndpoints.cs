@@ -1,5 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -36,6 +38,12 @@ public static partial class NyxIdChatEndpoints
         // under the same prefix are operator probes that also must stay open.
         app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync)
             .WithTags("NyxIdRelay")
+            .WithEndpointAudit(
+                "channel.relay.inbound",
+                AuditSensitivityLevel.Confidential,
+                "channel_relay",
+                EndpointAuditTargetResolvers.Static("channel_relay", "inbound"),
+                captureUnauthenticated: true)
             .AllowAnonymous();
         app.MapGet("/api/webhooks/nyxid-relay/health", () => Results.Json(new
         {
