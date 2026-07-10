@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.GAgents.Scheduled;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -19,6 +21,13 @@ internal static class SkillRunnerExternalTriggerEndpoints
                 "/api/skill-runners/{agentId}/external-trigger-sources/{sourceId}/deliveries",
                 HandleDeliveryAsync)
             .WithTags("SkillRunnerExternalTriggers")
+            .WithEndpointAudit(
+                "skill-runner.external-trigger.delivery",
+                AuditSensitivityLevel.Confidential,
+                "skill_runner",
+                EndpointAuditTargetResolvers.FromRouteValue("skill_runner", "agentId"),
+                EndpointAuditSanitizers.WithRouteValues("agentId", "sourceId"),
+                captureUnauthenticated: true)
             .AllowAnonymous();
 
         return app;

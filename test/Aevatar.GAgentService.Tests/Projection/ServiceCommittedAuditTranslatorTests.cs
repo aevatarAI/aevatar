@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.CommittedFacts;
@@ -28,7 +29,16 @@ public sealed class ServiceCommittedAuditTranslatorTests
         AssertCommittedAuditMaterializerRegistered<ServiceCatalogProjectionContext>(services, provider);
         AssertCommittedAuditMaterializerRegistered<ServiceDeploymentCatalogProjectionContext>(services, provider);
         AssertCommittedAuditMaterializerRegistered<ServiceRevisionCatalogProjectionContext>(services, provider);
+        AssertCommittedAuditMaterializerRegistered<ServiceServingSetProjectionContext>(services, provider);
+        AssertCommittedAuditMaterializerRegistered<ServiceRolloutProjectionContext>(services, provider);
+        AssertCommittedAuditMaterializerRegistered<ServiceRunCurrentStateProjectionContext>(services, provider);
         AssertCommittedAuditMaterializerRegistered<ScheduledDispatchProjectionContext>(services, provider);
+        AssertCommittedAuditMaterializerRegistered<GAgentRunTerminalProjectionContext>(services, provider);
+        provider
+            .GetServices<IAuditCommittedEventTranslator>()
+            .Select(static translator => translator.GetType())
+            .Should()
+            .Contain(typeof(RoleChatSessionCompletedAuditTranslator));
         provider
             .GetServices<IAuditCommittedEventTranslator>()
             .Select(static translator => translator.GetType())
@@ -38,12 +48,29 @@ public sealed class ServiceCommittedAuditTranslatorTests
                 typeof(ServiceRegistrationFailedAuditTranslator),
                 typeof(ServiceRegistrationRetiredAuditTranslator),
                 typeof(ServiceRevisionPublishedAuditTranslator),
+                typeof(DefaultServingRevisionChangedAuditTranslator),
                 typeof(ServiceDeploymentActivatedAuditTranslator),
                 typeof(ServiceDeploymentDeactivatedAuditTranslator),
                 typeof(ScheduledDispatchConfiguredAuditTranslator),
                 typeof(ScheduledDispatchEnabledAuditTranslator),
                 typeof(ScheduledDispatchDisabledAuditTranslator),
                 typeof(ScheduledDispatchDeletedAuditTranslator),
+                typeof(ServiceServingSetUpdatedAuditTranslator),
+                typeof(ServiceRolloutStartedAuditTranslator),
+                typeof(ServiceRolloutStageAdvancedAuditTranslator),
+                typeof(ServiceRolloutPausedAuditTranslator),
+                typeof(ServiceRolloutResumedAuditTranslator),
+                typeof(ServiceRolloutCompletedAuditTranslator),
+                typeof(ServiceRolloutRolledBackAuditTranslator),
+                typeof(ServiceRolloutFailedAuditTranslator),
+                typeof(ServiceDefinitionCreatedAuditTranslator),
+                typeof(ServiceDefinitionUpdatedAuditTranslator),
+                typeof(ServiceRevisionCreatedAuditTranslator),
+                typeof(ServiceRevisionRetiredAuditTranslator),
+                typeof(ServiceRunRegisteredAuditTranslator),
+                typeof(ServiceRunStatusUpdatedAuditTranslator),
+                typeof(ScheduledDispatchFireDispatchedAuditTranslator),
+                typeof(ScheduledDispatchFireFailedAuditTranslator),
             ]);
     }
 
@@ -78,6 +105,166 @@ public sealed class ServiceCommittedAuditTranslatorTests
     public void ServiceTranslator_ShouldReturnZeroRecords_ForWrongEventType()
     {
         var translator = new ServiceRevisionPublishedAuditTranslator();
+        var records = translator.Translate(Context(), Any.Pack(new StringValue { Value = "wrong" }));
+
+        records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ServiceRunRegisteredTranslator_ShouldRecordRunFacts()
+    {
+        var evt = new ServiceRunRegisteredEvent
+        {
+            Record = new ServiceRunRecord
+            {
+                RunId = "run-1",
+                ServiceId = "svc-a",
+                ScopeId = "scope-1",
+                CommandId = "cmd-run",
+                CorrelationId = "corr-run",
+                TargetActorId = "target-1",
+                ScheduleId = "sched-1",
+                Status = ServiceRunStatus.Completed,
+            },
+        };
+
+        var record = Translate(new ServiceRunRegisteredAuditTranslator(), evt);
+
+        record.OperationName.Should().Be("service.run.registered");
+        record.Target.Kind.Should().Be("service_run");
+        record.Target.Id.Should().Be("run-1");
+        record.ScopeId.Should().Be("scope-1");
+        record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
+        record.Correlation.CommandId.Should().Be("cmd-run");
+        record.Correlation.TraceId.Should().Be("corr-run");
+        record.Annotations.Should().Contain("service_id", "svc-a");
+        record.Annotations.Should().Contain("status", "completed");
+        record.Annotations.Should().Contain("target_actor_id", "target-1");
+        record.Annotations.Should().Contain("schedule_id", "sched-1");
+    }
+
+    [Fact]
+    public void ServiceRunStatusUpdatedTranslator_ShouldRecordStatusAndSafeErrorClassWithoutBody()
+    {
+        var evt = new ServiceRunStatusUpdatedEvent
+        {
+            RunId = "run-1",
+            Status = ServiceRunStatus.Failed,
+            LastOutput = "sensitive business output body",
+            LastError = "System.InvalidOperationException: secret detail must not leak",
+        };
+
+        var record = Translate(new ServiceRunStatusUpdatedAuditTranslator(), evt);
+
+        record.OperationName.Should().Be("service.run.status-updated");
+        record.Target.Kind.Should().Be("service_run");
+        record.Target.Id.Should().Be("run-1");
+        record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
+        record.Annotations.Should().Contain("status", "failed");
+        record.Annotations.Should().Contain("error_class", "System.InvalidOperationException");
+        record.Annotations.Should().NotContainKey("last_output");
+        record.Annotations.Should().NotContainKey("last_error");
+        record.Annotations.Values.Should().NotContain(value => value.Contains("secret detail", StringComparison.Ordinal));
+        record.Annotations.Values.Should().NotContain(value => value.Contains("business output", StringComparison.Ordinal));
+        record.ResultSummary.Should().NotContain("business output");
+    }
+
+    [Fact]
+    public void ScheduledDispatchFireDispatchedTranslator_ShouldRecordDispatchFacts()
+    {
+        var evt = new ScheduledDispatchFireDispatchedEvent
+        {
+            IdempotencyKey = "idem-1",
+            TargetActorId = "target-1",
+            CommandId = "cmd-fire",
+            CorrelationId = "corr-fire",
+            Manual = true,
+        };
+
+        var record = Translate(new ScheduledDispatchFireDispatchedAuditTranslator(), evt);
+
+        record.OperationName.Should().Be("scheduled.dispatch.fire.dispatched");
+        record.Target.Kind.Should().Be("scheduled_dispatch");
+        record.Target.Id.Should().Be("actor-1");
+        record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
+        record.Correlation.CommandId.Should().Be("cmd-fire");
+        record.Correlation.TraceId.Should().Be("corr-fire");
+        record.Annotations.Should().Contain("target_actor_id", "target-1");
+        record.Annotations.Should().Contain("idempotency_key", "idem-1");
+        record.Annotations.Should().Contain("manual", "true");
+    }
+
+    [Fact]
+    public void ScheduledDispatchFireFailedTranslator_ShouldRecordSafeErrorClassWithoutBody()
+    {
+        var evt = new ScheduledDispatchFireFailedEvent
+        {
+            IdempotencyKey = "idem-1",
+            Error = "System.TimeoutException: downstream secret payload should not leak",
+            Manual = false,
+        };
+
+        var record = Translate(new ScheduledDispatchFireFailedAuditTranslator(), evt);
+
+        record.OperationName.Should().Be("scheduled.dispatch.fire.failed");
+        record.Target.Kind.Should().Be("scheduled_dispatch");
+        record.Target.Id.Should().Be("actor-1");
+        record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
+        record.Annotations.Should().Contain("error_class", "System.TimeoutException");
+        record.Annotations.Should().Contain("idempotency_key", "idem-1");
+        record.Annotations.Should().Contain("manual", "false");
+        record.Annotations.Values.Should().NotContain(value => value.Contains("secret payload", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RoleChatSessionCompletedTranslator_ShouldRecordSafeSessionFactsWithoutContent()
+    {
+        var evt = new RoleChatSessionCompletedEvent
+        {
+            SessionId = "session-1",
+            Model = "gpt-4o",
+            RoleId = "role-7",
+            Content = "sensitive assistant response body must not leak",
+            ReasoningContent = "secret chain of thought must not leak",
+            Prompt = "confidential user prompt must not leak",
+            ContentEmitted = true,
+            Usage = new TokenUsagePayload
+            {
+                PromptTokens = 11,
+                CompletionTokens = 22,
+                TotalTokens = 33,
+            },
+        };
+        evt.ToolCalls.Add(new ToolCallEvent { CallId = "call-1" });
+        evt.ToolReceipts.Add(new AgentToolReceipt { ToolName = "search" });
+        evt.ToolReceipts.Add(new AgentToolReceipt { ToolName = "fetch" });
+
+        var record = Translate(new RoleChatSessionCompletedAuditTranslator(), evt);
+
+        record.OperationName.Should().Be("ai.role-session.completed");
+        record.Target.Kind.Should().Be("ai_role_session");
+        record.Target.Id.Should().Be("session-1");
+        record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Internal);
+        record.Annotations.Should().Contain("model", "gpt-4o");
+        record.Annotations.Should().Contain("role_id", "role-7");
+        record.Annotations.Should().Contain("tool_call_count", "1");
+        record.Annotations.Should().Contain("tool_receipt_count", "2");
+        record.Annotations.Should().Contain("content_emitted", "true");
+        record.Annotations.Should().Contain("prompt_token_count", "11");
+        record.Annotations.Should().Contain("completion_token_count", "22");
+        record.Annotations.Should().Contain("total_token_count", "33");
+        record.Annotations.Should().NotContainKey("content");
+        record.Annotations.Should().NotContainKey("prompt");
+        record.Annotations.Should().NotContainKey("reasoning_content");
+        record.Annotations.Values.Should().NotContain(value => value.Contains("must not leak", StringComparison.Ordinal));
+        record.ResultSummary.Should().NotContain("must not leak");
+    }
+
+    [Fact]
+    public void RoleChatSessionCompletedTranslator_ShouldReturnZeroRecords_ForWrongEventType()
+    {
+        var translator = new RoleChatSessionCompletedAuditTranslator();
+
         var records = translator.Translate(Context(), Any.Pack(new StringValue { Value = "wrong" }));
 
         records.Should().BeEmpty();
@@ -167,6 +354,19 @@ public sealed class ServiceCommittedAuditTranslatorTests
         ];
         yield return
         [
+            new DefaultServingRevisionChangedAuditTranslator(),
+            new DefaultServingRevisionChangedEvent
+            {
+                Identity = identity,
+                RevisionId = "rev-1",
+            },
+            "service.default-serving.changed",
+            "service",
+            "rev-1",
+            ServiceExpected(annotations: ServiceAnnotations(identity)),
+        ];
+        yield return
+        [
             new ServiceDeploymentActivatedAuditTranslator(),
             new ServiceDeploymentActivatedEvent
             {
@@ -249,6 +449,259 @@ public sealed class ServiceCommittedAuditTranslatorTests
             "scheduled_dispatch",
             "actor-1",
             RestrictedDestructiveExpected,
+        ];
+        yield return
+        [
+            new ServiceServingSetUpdatedAuditTranslator(),
+            new ServiceServingSetUpdatedEvent
+            {
+                Identity = identity,
+                Generation = 3,
+                RolloutId = "rollout-1",
+                Reason = "promote",
+            },
+            "service.serving_set.updated",
+            "service",
+            "svc-a",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                false,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["generation"] = "3",
+                        ["rollout_id"] = "rollout-1",
+                        ["target_count"] = "0",
+                        ["reason"] = "promote",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceRolloutStartedAuditTranslator(),
+            new ServiceRolloutStartedEvent
+            {
+                Identity = identity,
+                Plan = new ServiceRolloutPlanSpec
+                {
+                    RolloutId = "rollout-1",
+                    DisplayName = "Canary",
+                },
+            },
+            "service.rollout.started",
+            "service",
+            "rollout-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                false,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rollout_id"] = "rollout-1",
+                        ["stage_count"] = "0",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceRolloutStageAdvancedAuditTranslator(),
+            new ServiceRolloutStageAdvancedEvent
+            {
+                Identity = identity,
+                RolloutId = "rollout-1",
+                StageIndex = 2,
+                StageId = "stage-2",
+            },
+            "service.rollout.stage_advanced",
+            "service",
+            "rollout-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                false,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rollout_id"] = "rollout-1",
+                        ["stage_index"] = "2",
+                        ["stage_id"] = "stage-2",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceRolloutPausedAuditTranslator(),
+            new ServiceRolloutPausedEvent
+            {
+                Identity = identity,
+                RolloutId = "rollout-1",
+                Reason = "manual hold",
+            },
+            "service.rollout.paused",
+            "service",
+            "rollout-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                false,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rollout_id"] = "rollout-1",
+                        ["reason"] = "manual hold",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceRolloutResumedAuditTranslator(),
+            new ServiceRolloutResumedEvent
+            {
+                Identity = identity,
+                RolloutId = "rollout-1",
+            },
+            "service.rollout.resumed",
+            "service",
+            "rollout-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                false,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rollout_id"] = "rollout-1",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceRolloutCompletedAuditTranslator(),
+            new ServiceRolloutCompletedEvent
+            {
+                Identity = identity,
+                RolloutId = "rollout-1",
+            },
+            "service.rollout.completed",
+            "service",
+            "rollout-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                false,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rollout_id"] = "rollout-1",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceRolloutRolledBackAuditTranslator(),
+            new ServiceRolloutRolledBackEvent
+            {
+                Identity = identity,
+                RolloutId = "rollout-1",
+                Reason = "regression",
+            },
+            "service.rollout.rolled_back",
+            "service",
+            "rollout-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                true,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rollout_id"] = "rollout-1",
+                        ["reason"] = "regression",
+                        ["target_count"] = "0",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceRolloutFailedAuditTranslator(),
+            new ServiceRolloutFailedEvent
+            {
+                Identity = identity,
+                RolloutId = "rollout-1",
+                FailureReason = "activation error",
+            },
+            "service.rollout.failed",
+            "service",
+            "rollout-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                false,
+                ServiceAnnotations(
+                    identity,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["rollout_id"] = "rollout-1",
+                        ["failure_reason"] = "activation error",
+                    })),
+        ];
+        yield return
+        [
+            new ServiceDefinitionCreatedAuditTranslator(),
+            new ServiceDefinitionCreatedEvent
+            {
+                Spec = new ServiceDefinitionSpec
+                {
+                    Identity = identity,
+                    DisplayName = "My Service",
+                },
+            },
+            "service.definition.created",
+            "service",
+            "svc-a",
+            ServiceExpected(annotations: ServiceAnnotations(identity)),
+        ];
+        yield return
+        [
+            new ServiceDefinitionUpdatedAuditTranslator(),
+            new ServiceDefinitionUpdatedEvent
+            {
+                Spec = new ServiceDefinitionSpec
+                {
+                    Identity = identity,
+                    DisplayName = "My Service",
+                },
+            },
+            "service.definition.updated",
+            "service",
+            "svc-a",
+            ServiceExpected(annotations: ServiceAnnotations(identity)),
+        ];
+        yield return
+        [
+            new ServiceRevisionCreatedAuditTranslator(),
+            new ServiceRevisionCreatedEvent
+            {
+                Spec = new ServiceRevisionSpec
+                {
+                    Identity = identity,
+                    RevisionId = "rev-1",
+                },
+            },
+            "service.revision.created",
+            "service",
+            "rev-1",
+            ServiceExpected(annotations: ServiceAnnotations(identity)),
+        ];
+        yield return
+        [
+            new ServiceRevisionRetiredAuditTranslator(),
+            new ServiceRevisionRetiredEvent
+            {
+                Identity = identity,
+                RevisionId = "rev-1",
+            },
+            "service.revision.retired",
+            "service",
+            "rev-1",
+            ServiceExpected(
+                AuditSensitivityLevel.Restricted,
+                true,
+                ServiceAnnotations(identity)),
         ];
     }
 

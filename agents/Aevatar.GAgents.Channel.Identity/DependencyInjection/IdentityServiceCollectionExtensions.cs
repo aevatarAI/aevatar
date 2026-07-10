@@ -1,5 +1,8 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Audit;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
@@ -85,6 +88,17 @@ public static class IdentityServiceCollectionExtensions
             ExternalIdentityBindingDocumentMetadataProvider>();
         services.TryAddSingleton<IExternalIdentityBindingQueryPort, ExternalIdentityBindingProjectionQueryPort>();
 
+        // ─── Committed-fact audit for external-identity bindings ───
+        // Subject-bearing: the actor id embeds the raw external subject, so the
+        // translators hash the origin actor id through the host-provided
+        // IAuditActorIdentityHasher (AddAuditTrailCore). When no hasher is
+        // configured the translators skip rather than leak (fail-open).
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ExternalIdentityBoundAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ExternalIdentityBindingRevokedAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<ExternalIdentityBindingMaterializationContext>();
+
         // ─── Cluster-singleton OAuth client projection ───
         // Refactor (iter97/cluster-526): Old pattern: AevatarOAuthClientDocument
         // carries state-token HMAC bytes but ES startup did not require an
@@ -109,6 +123,21 @@ public static class IdentityServiceCollectionExtensions
             IProjectionDocumentMetadataProvider<AevatarOAuthClientDocument>,
             AevatarOAuthClientDocumentMetadataProvider>();
         services.TryAddSingleton<IAevatarOAuthClientProvider, AevatarOAuthClientProjectionProvider>();
+
+        // ─── Committed-fact audit (platform governance trail) ───
+        // The OAuth client actor is a cluster singleton with a fixed well-known
+        // id (no external subject), so its committed events can be audited on the
+        // projection-artifact plane without leaking any raw identity. The HMAC
+        // key rotation translator records key ids only, never key material.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, AevatarOAuthClientProvisionedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, AevatarOAuthClientHmacKeyRotatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, AevatarOAuthClientBrokerCapabilityObservedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, AevatarOAuthClientDriftReconciledAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<AevatarOAuthClientMaterializationContext>();
         var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
         if (configuration is not null)
             aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));

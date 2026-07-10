@@ -208,12 +208,30 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationFailedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationRetiredAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRevisionPublishedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, DefaultServingRevisionChangedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceDeploymentActivatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceDeploymentDeactivatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchConfiguredAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchEnabledAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchDisabledAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchDeletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceServingSetUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRolloutStartedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRolloutStageAdvancedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRolloutPausedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRolloutResumedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRolloutCompletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRolloutRolledBackAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRolloutFailedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceDefinitionCreatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceDefinitionUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRevisionCreatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRevisionRetiredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRunRegisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRunStatusUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchFireDispatchedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ScheduledDispatchFireFailedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleChatSessionCompletedAuditTranslator>());
         services.AddProjectionArtifactMaterializer<
             ServiceCatalogProjectionContext,
             ServiceCatalogProjector>();
@@ -225,12 +243,14 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ServiceServingSetProjectionContext,
             ServiceServingSetProjector>();
+        services.AddAuditCommittedFactMaterializer<ServiceServingSetProjectionContext>();
         services.AddProjectionArtifactMaterializer<
             ServiceRolloutProjectionContext,
             ServiceRolloutProjector>();
         services.AddProjectionArtifactMaterializer<
             ServiceRolloutProjectionContext,
             ServiceRolloutCommandObservationProjector>();
+        services.AddAuditCommittedFactMaterializer<ServiceRolloutProjectionContext>();
         services.AddCurrentStateProjectionMaterializer<
             ServiceTrafficViewProjectionContext,
             ServiceTrafficViewProjector>();
@@ -244,9 +264,11 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             ServiceRunCurrentStateProjectionContext,
             ServiceRunCurrentStateProjector>();
+        services.AddAuditCommittedFactMaterializer<ServiceRunCurrentStateProjectionContext>();
         services.AddCurrentStateProjectionMaterializer<
             GAgentRunTerminalProjectionContext,
             GAgentRunTerminalProjector>();
+        services.AddAuditCommittedFactMaterializer<GAgentRunTerminalProjectionContext>();
         services.AddCurrentStateProjectionMaterializer<
             LlmSessionCurrentStateProjectionContext,
             LlmSessionCurrentStateProjector>();

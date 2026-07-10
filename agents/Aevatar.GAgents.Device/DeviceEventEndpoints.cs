@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Household;
 using Microsoft.AspNetCore.Builder;
@@ -49,10 +51,31 @@ public static class DeviceEventEndpoints
         // Device callback from NyxID relay. Authentication is HMAC-based (X-NyxID-Signature),
         // not JWT — the endpoint must stay anonymous so the fallback policy does not reject
         // legitimate device events before we can verify them.
-        group.MapPost("/{registrationId}", HandleDeviceCallbackAsync).AllowAnonymous();
-        group.MapPost("/registrations", HandleRegisterDeviceAsync).RequireAuthorization();
+        group.MapPost("/{registrationId}", HandleDeviceCallbackAsync)
+            .WithEndpointAudit(
+                "device.callback.inbound",
+                AuditSensitivityLevel.Confidential,
+                "device_registration",
+                EndpointAuditTargetResolvers.FromRouteValue("device_registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"),
+                captureUnauthenticated: true)
+            .AllowAnonymous();
+        group.MapPost("/registrations", HandleRegisterDeviceAsync)
+            .WithEndpointAudit(
+                "device.registration.create",
+                AuditSensitivityLevel.Confidential,
+                "device_registration",
+                EndpointAuditTargetResolvers.Static("device_registration", "new"))
+            .RequireAuthorization();
         group.MapGet("/registrations", HandleListDeviceRegistrationsAsync).RequireAuthorization();
-        group.MapDelete("/registrations/{registrationId}", HandleDeleteDeviceRegistrationAsync).RequireAuthorization();
+        group.MapDelete("/registrations/{registrationId}", HandleDeleteDeviceRegistrationAsync)
+            .WithEndpointAudit(
+                "device.registration.delete",
+                AuditSensitivityLevel.Restricted,
+                "device_registration",
+                EndpointAuditTargetResolvers.FromRouteValue("device_registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
 
         return app;
     }
