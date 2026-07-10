@@ -98,4 +98,26 @@ public sealed class CredentialSecretVaultContractTests
             "use after revoke"));
         revoked.Secret.ShouldBeNull();
     }
+
+    [Fact]
+    public async Task InMemorySecretVault_ShouldNotResolveExpiredSecret()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = (await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-a",
+            "key-1",
+            "expired-secret",
+            "capture scheduled invocation key",
+            DateTimeOffset.UtcNow.AddMinutes(-1)))).Reference;
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Ref,
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-a",
+            "key-1",
+            "dispatch scheduled invocation"));
+
+        resolved.Secret.ShouldBeNull();
+    }
 }

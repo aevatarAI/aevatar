@@ -300,6 +300,10 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                     CredentialId = durable.CredentialId,
                 },
             },
+            ScheduledInvocationAgentKeyCredentialReference agentKey => new ScheduledServiceInvocationAuthState
+            {
+                ScheduledInvocationAgentKey = CreateScheduledInvocationAgentKeyState(agentKey),
+            },
             _ => throw new ArgumentException("Unsupported scheduled service invocation credential source.", nameof(auth)),
         };
     }
@@ -320,6 +324,15 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner =>
                 ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
             _ => ScheduledServiceInvocationNyxIdCredentialRoleState.Sender,
+        };
+
+    private static ScheduledInvocationAgentKeyCredentialReferenceState CreateScheduledInvocationAgentKeyState(
+        ScheduledInvocationAgentKeyCredentialReference source) =>
+        new()
+        {
+            SecretReference = source.SecretReference.Clone(),
+            ApiKeyId = source.ApiKeyId,
+            KeyExpiresAtUnixMs = source.KeyExpiresAtUnixMs,
         };
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(

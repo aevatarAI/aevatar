@@ -329,6 +329,60 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_WithScheduledInvocationAgentKeyInHttpAuth_ShouldReturnBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+                auth = new
+                {
+                    senderNyxId = new
+                    {
+                        subject = new
+                        {
+                            platform = "nyxid",
+                            externalUserId = "user-42",
+                        },
+                        scope = "proxy",
+                    },
+                    scheduledInvocationAgentKey = new
+                    {
+                        apiKeyId = "key-schedule",
+                    },
+                },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Create_ShouldDefaultMissingScheduleKindToGeneric()
     {
         var service = new RecordingScheduledDispatchApplicationService();
