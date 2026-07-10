@@ -74,6 +74,17 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPortTests
             NullLogger<WorkflowRunBackgroundDeliveryRegistrationPort>.Instance,
             new FakeTimeProvider(Now));
 
+    private static readonly ChannelWorkflowResultDeliveryCredential DeliveryCredential = new()
+    {
+        SecretReference = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+        {
+            Ref = "sec_workflow_delivery_1",
+            Purpose = "channel.workflow-result-delivery-agent-key",
+            OwnerScopeKey = "registration-scope-1",
+        },
+        SubjectId = "nyx-api-key-1",
+    };
+
     private static WorkflowRunBackgroundDeliveryRegistration Registration(
         string deliveryId = "workflow-run-delivery:explicit",
         string workflowActorId = "workflow-actor",
@@ -84,8 +95,8 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPortTests
         string channelPlatform = "lark",
         string replyMessageId = "reply-message-1",
         string platformMessageId = "platform-message-1",
-        string durableReplyCredentialRef = "secrets://nyx/reply-1",
-        string registrationScopeId = "registration-scope-1") =>
+        string registrationScopeId = "registration-scope-1",
+        string botRegistrationId = "bot-reg-1") =>
         new(
             DeliveryId: deliveryId,
             WorkflowActorId: workflowActorId,
@@ -96,8 +107,9 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPortTests
             ChannelPlatform: channelPlatform,
             ReplyMessageId: replyMessageId,
             PlatformMessageId: platformMessageId,
-            DurableReplyCredentialRef: durableReplyCredentialRef,
-            RegistrationScopeId: registrationScopeId);
+            WorkflowResultDeliveryCredential: DeliveryCredential.Clone(),
+            RegistrationScopeId: registrationScopeId,
+            BotRegistrationId: botRegistrationId);
 
     private static void AssertEnvelope(EventEnvelope envelope, string expectedActorId, string expectedCorrelationId)
     {
@@ -124,7 +136,8 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPortTests
         command.ReplyMessageId.Should().Be(registration.ReplyMessageId);
         command.PlatformMessageId.Should().Be(registration.PlatformMessageId);
         command.RegistrationScopeId.Should().Be(registration.RegistrationScopeId);
-        command.DurableReplyCredentialRef.Should().Be(registration.DurableReplyCredentialRef);
+        command.WorkflowResultDeliveryCredential.Should().Be(registration.WorkflowResultDeliveryCredential);
+        command.BotRegistrationId.Should().Be(registration.BotRegistrationId);
     }
 
     private static void AssertReceipt(
@@ -142,7 +155,8 @@ public sealed class WorkflowRunBackgroundDeliveryRegistrationPortTests
         receipt.ReplyMessageId.Should().Be(registration.ReplyMessageId);
         receipt.PlatformMessageId.Should().Be(registration.PlatformMessageId);
         receipt.RegistrationScopeId.Should().Be(registration.RegistrationScopeId);
-        receipt.DurableReplyCredentialRef.Should().Be(registration.DurableReplyCredentialRef);
+        // The receipt intentionally carries no credential material or handle.
+        receipt.ToString().Should().NotContain("sec_workflow_delivery_1");
     }
 
     private sealed class RecordingActorRuntime : IActorRuntime

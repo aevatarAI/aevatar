@@ -22,7 +22,9 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(10);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
-        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(13);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("last_inbound_at_utc")!.FieldNumber.Should().Be(14);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(15);
     }
 
     [Fact]
@@ -37,7 +39,8 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(7);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(8);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
-        ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(10);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(11);
     }
 
     [Fact]
@@ -56,7 +59,9 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_agent_api_key_id")!.FieldNumber.Should().Be(11);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_conversation_route_id")!.FieldNumber.Should().Be(12);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
-        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_reply_credential_ref")!.FieldNumber.Should().Be(14);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("last_inbound_at_utc")!.FieldNumber.Should().Be(15);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(16);
     }
 
     [Fact]

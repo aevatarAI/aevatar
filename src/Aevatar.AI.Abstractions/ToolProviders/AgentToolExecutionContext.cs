@@ -167,9 +167,10 @@ public sealed record AgentToolChannelContext(
     string? MessageId,
     string? PlatformMessageId,
     string? DeliveryTargetId = null,
-    string? DurableReplyCredentialRef = null)
+    ChannelWorkflowResultDeliveryCredential? WorkflowResultDeliveryCredential = null,
+    string? BotRegistrationId = null)
 {
-    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null);
+    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null);
 }
 
 public sealed record AgentToolSenderBindingContext(string? BindingId, string? NyxUserId = null, string? SenderTenant = null)
