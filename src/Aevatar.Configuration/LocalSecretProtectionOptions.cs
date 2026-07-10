@@ -15,6 +15,12 @@ public sealed record LocalSecretProtectionOptions(
     public static LocalSecretProtectionOptions FromEnvironment() =>
         new(IsEnvironmentPlaintextOptInEnabled());
 
+    public static readonly LocalSecretProtectionOptions NoPlaintextNoKeychain =
+        new(false, LocalSecretMasterKeySource.Disabled);
+
+    public static readonly LocalSecretProtectionOptions DevelopmentPlaintextNoKeychain =
+        new(true, LocalSecretMasterKeySource.Disabled);
+
     public bool UseLocalMasterKeySources => MasterKeySource == LocalSecretMasterKeySource.Auto;
 
     public static bool IsEnvironmentPlaintextOptInEnabled() =>

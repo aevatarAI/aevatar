@@ -193,11 +193,14 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
         var ownerScopeKey = BuildScheduledNyxApiKeyOwnerScopeKey(request.Caller, request.ScopeId, request.ConversationId, request.ReceiveTarget.Primary.ReceiveId);
         var storedKey = await _secretVault.PutAsync(new StoreSecretRequest(
-            CredentialSecretPurposes.ScheduledNyxApiKey,
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
             ownerScopeKey,
             issuedKey.ApiKeyId,
             issuedKey.FullKey,
-            "scheduled-agent-create"),
+            "scheduled-agent-create",
+            issuedKey.KeyExpiresAtUnixMs > 0
+                ? DateTimeOffset.FromUnixTimeMilliseconds(issuedKey.KeyExpiresAtUnixMs)
+                : null),
             ct);
 
         var command = new InitializeSkillRunnerCommand

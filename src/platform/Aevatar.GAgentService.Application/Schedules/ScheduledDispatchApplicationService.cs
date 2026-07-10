@@ -339,7 +339,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
             ScheduledServiceInvocationDurableCredentialReference durable =>
+<<<<<<< HEAD
                 new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable)),
+=======
+                new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
+                    NormalizeRequired(durable.CredentialId, nameof(durable.CredentialId)))),
+            ScheduledInvocationAgentKeyCredentialReference agentKey =>
+                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey)),
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
         };
     }
@@ -364,6 +371,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             role));
     }
 
+<<<<<<< HEAD
     private static ScheduledServiceInvocationDurableCredentialReference NormalizeDurableCredentialReference(
         ScheduledServiceInvocationDurableCredentialReference reference)
     {
@@ -393,6 +401,36 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             CreatedAtUnixMs = reference.CreatedAtUnixMs,
         };
 
+=======
+    private static ScheduledInvocationAgentKeyCredentialReference NormalizeScheduledInvocationAgentKey(
+        ScheduledInvocationAgentKeyCredentialReference source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var reference = source.SecretReference?.Clone()
+            ?? throw new ArgumentException("Scheduled invocation agent key secret reference is required.", nameof(source));
+        if (string.IsNullOrWhiteSpace(reference.Ref))
+            throw new ArgumentException("Scheduled invocation agent key secret reference is required.", nameof(source));
+        if (!string.Equals(reference.Purpose, CredentialSecretPurposes.ScheduledInvocationAgentKey, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Scheduled invocation agent key secret reference purpose must be '{CredentialSecretPurposes.ScheduledInvocationAgentKey}'.",
+                nameof(source));
+        }
+        if (string.IsNullOrWhiteSpace(reference.OwnerScopeKey))
+            throw new ArgumentException("Scheduled invocation agent key owner scope key is required.", nameof(source));
+
+        var apiKeyId = NormalizeRequired(source.ApiKeyId, nameof(source.ApiKeyId));
+        var expiresAtUnixMs = source.KeyExpiresAtUnixMs > 0
+            ? source.KeyExpiresAtUnixMs
+            : reference.ExpiresAtUnixMs;
+        if (expiresAtUnixMs <= 0)
+            throw new ArgumentException("Scheduled invocation agent key expiry is required.", nameof(source));
+
+        reference.ExpiresAtUnixMs = expiresAtUnixMs;
+        return new ScheduledInvocationAgentKeyCredentialReference(reference, apiKeyId, expiresAtUnixMs);
+    }
+
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     private static string ToMissingSubjectMessage(ScheduledServiceInvocationNyxIdCredentialRole role) =>
         role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
             ? "Service invocation scope owner NyxID subject is required."

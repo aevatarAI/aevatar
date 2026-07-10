@@ -1305,6 +1305,84 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_ForScheduledInvocationAgentKeyAuth_ShouldPassReferenceAndRequestWorkflowProjection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        var createdAtUnixMs = DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")
+            .ToUnixTimeMilliseconds();
+        var expiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+                        {
+                            SecretReference = new SecretReference
+                            {
+                                Ref = "sec-schedule",
+                                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                                OwnerScopeKey = "scope-key",
+                                Fingerprint = "sha256:abc",
+                                Version = 7,
+                                CreatedAtUnixMs = createdAtUnixMs,
+                                ExpiresAtUnixMs = expiresAtUnixMs,
+                            },
+                            ApiKeyId = "key-schedule",
+                            KeyExpiresAtUnixMs = expiresAtUnixMs,
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-schedule");
+        auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        auth.ScheduledInvocationAgentKey.SecretReference.Ref.Should().Be("sec-schedule");
+        auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should()
+            .Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.ScheduledInvocationAgentKey.SecretReference.OwnerScopeKey.Should().Be("scope-key");
+        auth.ScheduledInvocationAgentKey.SecretReference.Fingerprint.Should().Be("sha256:abc");
+        auth.ScheduledInvocationAgentKey.SecretReference.Version.Should().Be(7);
+        auth.ScheduledInvocationAgentKey.SecretReference.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
+            .ContainSingle()
+            .Which.Should().BeTrue();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleFireAsync_ForLegacyDurableBearerTokenAuth_ShouldFailClosed()
     {
         var eventStore = new TestEventStore();

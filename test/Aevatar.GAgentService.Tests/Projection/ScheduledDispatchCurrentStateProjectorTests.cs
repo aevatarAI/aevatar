@@ -127,7 +127,11 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     }
 
     [Fact]
+<<<<<<< HEAD
     public async Task ProjectAsync_ShouldNotProjectDurableCredentialReference()
+=======
+    public async Task ProjectAsync_ShouldNotProjectScheduledInvocationAgentKeySecretReference()
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
         var projector = new ScheduledDispatchCurrentStateProjector(
@@ -140,6 +144,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             Namespace = "default",
             ServiceId = "svc",
         };
+<<<<<<< HEAD
         var state = CreateServiceInvocationState("schedule-durable-reference", identity);
         state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
         {
@@ -153,10 +158,29 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                     OwnerScopeKey = "owner-scope-projector",
                     Fingerprint = "fp-projector",
                 },
+=======
+        var state = CreateServiceInvocationState("schedule-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+            {
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-sensitive-reference",
+                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    OwnerScopeKey = "owner-scope-key",
+                    Fingerprint = "sha256:sensitive-fingerprint",
+                    Version = 1,
+                    ExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+                },
+                ApiKeyId = "api-key-sensitive-id",
+                KeyExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             },
         };
 
         await projector.ProjectAsync(
+<<<<<<< HEAD
             CreateContext("scheduled-dispatch:schedule-durable-reference"),
             WrapCommitted(
                 state,
@@ -173,6 +197,21 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         AssertDocumentDoesNotContain(document!, "resolved-full-key");
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.StateVersion.Should().Be(11);
+=======
+            CreateContext("scheduled-dispatch:schedule-reference"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-reference",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-reference");
+        document.Should().NotBeNull();
+        document!.ToString().Should().NotContain("sec-sensitive-reference");
+        document.ToString().Should().NotContain("api-key-sensitive-id");
+        document.ToString().Should().NotContain("sensitive-fingerprint");
+        document.StateVersion.Should().Be(10);
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Theory]

@@ -679,6 +679,7 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
          revision.Implementation?.Workflow != null);
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledServiceInvocationAuthHttpRequest
 {
     public ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
