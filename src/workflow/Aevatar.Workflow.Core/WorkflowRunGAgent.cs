@@ -37,7 +37,8 @@ namespace Aevatar.Workflow.Core;
 public sealed class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost,
-      IRuntimeSecretStoreAccessor
+      IRuntimeSecretStoreAccessor,
+      ISecretVaultAccessor
 {
     private const string RunningStatus = "running";
     private const string CompletedStatus = "completed";
@@ -55,6 +56,7 @@ public sealed class WorkflowRunGAgent
     private readonly ISet<string> _knownModuleStepTypes;
     private readonly SubWorkflowOrchestrator _subWorkflowOrchestrator;
     private readonly ApplicationWorkflowFileArtifactOwnershipPort? _fileArtifactOwnership;
+    private readonly ISecretVault? _secretVault;
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
@@ -62,6 +64,7 @@ public sealed class WorkflowRunGAgent
         IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
         IEnumerable<IWorkflowModulePack> modulePacks,
         IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
+        ISecretVault? secretVault = null,
         ApplicationWorkflowFileArtifactOwnershipPort? fileArtifactOwnership = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
@@ -91,6 +94,7 @@ public sealed class WorkflowRunGAgent
                 .SelectMany(x => x.Modules)
                 .SelectMany(x => x.Names));
         _fileArtifactOwnership = fileArtifactOwnership;
+        _secretVault = secretVault;
 
         _subWorkflowOrchestrator = new SubWorkflowOrchestrator(
             _runtime,
@@ -115,6 +119,9 @@ public sealed class WorkflowRunGAgent
 
     IRuntimeSecretStore? IRuntimeSecretStoreAccessor.RuntimeSecretStore =>
         (IRuntimeSecretStore?)Services.GetService(typeof(IRuntimeSecretStore));
+
+    ISecretVault? ISecretVaultAccessor.SecretVault =>
+        _secretVault;
 
     WorkflowExecutionRuntimeContext IWorkflowExecutionStateHost.RuntimeContext => _runtimeContext;
 
@@ -1479,6 +1486,7 @@ public sealed class WorkflowRunGAgent
             {
                 BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
             };
         }
 
