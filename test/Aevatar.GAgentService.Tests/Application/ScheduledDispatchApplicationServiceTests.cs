@@ -22,7 +22,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
         var envelope = new EventEnvelope
         {
             Payload = Any.Pack(new StringValue { Value = "run" }),
@@ -67,7 +67,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         await service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
 
@@ -84,7 +84,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
 
@@ -101,7 +101,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
         var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy"));
@@ -133,7 +133,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-durable-auth",
@@ -162,7 +162,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
         var payload = Any.Pack(new StringValue { Value = "invoke" });
 
         var receipt = await service.UpdateAsync(
@@ -218,7 +218,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var actorPort = new RecordingScheduledDispatchActorPort();
         var queryPort = new RecordingScheduledDispatchQueryPort();
         var preparation = new ScheduledDispatchTargetPreparationService();
-        var service = new ScheduledDispatchApplicationService(actorPort, queryPort, preparation);
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            preparation,
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
         var receipt = await service.EnsureAsync(CreateEnvelopeConfiguration(" schedule-1 "));
 
@@ -245,7 +249,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.UpdateAsync(" missing ", CreateEnvelopeConfiguration("ignored"));
 
@@ -443,7 +447,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectScopeOwnerServiceInvocationAuthWithoutOwnerSubject()
+    public async Task CreateAsync_ShouldRejectScopeOwnerServiceInvocationAuthWithoutMutationContext()
     {
         var service = CreateService();
 
@@ -464,17 +468,22 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*scope owner NyxID subject is required*");
+            .WithMessage("*Authenticated NyxID owner subject*");
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldNormalizeScopeOwnerServiceInvocationAuth()
+    public async Task CreateAsync_ShouldStampScopeOwnerServiceInvocationAuthFromMutationContext()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var context = new ScheduledDispatchMutationContext(
+            "tenant",
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
 
         await service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-owner-auth",
@@ -487,12 +496,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     Any.Pack(new StringValue { Value = "invoke" }),
                     Auth: new ScheduledServiceInvocationAuth(
                         ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                            " owner-proxy ",
-                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, " owner-nyx-user "))))),
+                            " owner-proxy ")))),
             "0 9 * * *",
             "UTC",
             true,
-            new Dictionary<string, string>()));
+            new Dictionary<string, string>()),
+            context);
 
         var created = actorPort.Created.Should().ContainSingle().Which;
         created.Configuration.Target.ServiceInvocation!.Auth!.SenderNyxId.Should().BeNull();
@@ -504,6 +513,86 @@ public sealed class ScheduledDispatchApplicationServiceTests
         dispatchOwnerAuth.Scope.Should().Be("owner-proxy");
         dispatchOwnerAuth.OwnerSubject.Should().BeEquivalentTo(
             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+        admissionPort.Requests.Should().ContainSingle()
+            .Which.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(context.AuthenticatedNyxIdOwnerSubject);
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_ShouldRejectMissingBindingBeforeDispatch(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort
+        {
+            Result = ScheduledDispatchCredentialAdmissionResult.MissingBinding(),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var configuration = CreateScopeOwnerConfiguration();
+        var context = CreateScopeOwnerContext();
+
+        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*owner binding is required*");
+        admissionPort.Requests.Should().ContainSingle();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_ShouldRejectTargetScopeMismatchBeforeAdmission(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var configuration = CreateScopeOwnerConfiguration(tenantId: "scope-2");
+        var context = CreateScopeOwnerContext();
+
+        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*target scope must match the authenticated scope*");
+        admissionPort.Requests.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectScopeOwnerSubjectMismatchBeforeAdmission()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var configuration = CreateScopeOwnerConfiguration(
+            ownerSubject: new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "evil-owner"));
+
+        var act = () => service.CreateAsync(configuration, CreateScopeOwnerContext());
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*must match the authenticated owner subject*");
+        admissionPort.Requests.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
     }
 
     [Fact]
@@ -713,7 +802,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
         var disabled = await service.DisableAsync("schedule-1", null!);
@@ -805,7 +894,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var get = await service.GetAsync(" schedule-1 ");
         var update = () => service.UpdateAsync("schedule-1", CreateEnvelopeConfiguration("schedule-1"));
@@ -837,7 +926,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             new RecordingScheduledDispatchActorPort(),
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         await service.GetAsync(" schedule-1 ");
         await service.ListAsync(0, "cursor-1", includeTotalCount: true);
@@ -1041,7 +1130,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         new(
             new RecordingScheduledDispatchActorPort(),
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
     private static ScheduledDispatchConfiguration CreateEnvelopeConfiguration(string scheduleId) =>
         new(
@@ -1055,6 +1145,59 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "UTC",
             true,
             new Dictionary<string, string>());
+
+    private static ScheduledDispatchConfiguration CreateScopeOwnerConfiguration(
+        string scheduleId = "scope-owner-schedule",
+        string tenantId = "scope-1",
+        ScheduledServiceInvocationNyxIdSubjectRef? ownerSubject = null) =>
+        new(
+            scheduleId,
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity
+                    {
+                        TenantId = tenantId,
+                        AppId = "app",
+                        Namespace = "default",
+                        ServiceId = "svc",
+                    },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                            "proxy",
+                            ownerSubject)))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+    private static ScheduledDispatchMutationContext CreateScopeOwnerContext() =>
+        new(
+            "scope-1",
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+
+    private static Task<ScheduledDispatchMutationReceipt> ExecuteMutationAsync(
+        ScheduledDispatchApplicationService service,
+        ScheduleMutationKind mutation,
+        ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchMutationContext context) =>
+        mutation switch
+        {
+            ScheduleMutationKind.Create => service.CreateAsync(configuration, context),
+            ScheduleMutationKind.Ensure => service.EnsureAsync(configuration, context),
+            ScheduleMutationKind.Update => service.UpdateAsync(configuration.ScheduleId, configuration, context),
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null),
+        };
+
+    private enum ScheduleMutationKind
+    {
+        Create,
+        Ensure,
+        Update,
+    }
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {
@@ -1287,6 +1430,23 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ct.ThrowIfCancellationRequested();
             FilteredListRequests.Add(query);
             return Task.FromResult(new ScheduledDispatchListResult([], null, query.IncludeTotalCount ? 0 : null));
+        }
+    }
+
+    private sealed class RecordingScheduledDispatchCredentialAdmissionPort : IScheduledDispatchCredentialAdmissionPort
+    {
+        public List<ScheduledDispatchCredentialAdmissionRequest> Requests { get; } = [];
+
+        public ScheduledDispatchCredentialAdmissionResult Result { get; init; } =
+            ScheduledDispatchCredentialAdmissionResult.Allowed();
+
+        public Task<ScheduledDispatchCredentialAdmissionResult> AdmitAsync(
+            ScheduledDispatchCredentialAdmissionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(Result);
         }
     }
 }

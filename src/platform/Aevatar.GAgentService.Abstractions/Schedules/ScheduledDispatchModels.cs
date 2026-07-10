@@ -48,6 +48,50 @@ public sealed record ScheduledServiceInvocationAuth(
     string? DurableSenderBearerToken = null,
     ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
 
+public sealed record ScheduledDispatchMutationContext(
+    string? AuthenticatedScopeId = null,
+    ScheduledServiceInvocationNyxIdSubjectRef? AuthenticatedNyxIdOwnerSubject = null)
+{
+    public static ScheduledDispatchMutationContext None { get; } = new();
+}
+
+public sealed record ScheduledDispatchCredentialAdmissionRequest(
+    ScheduledDispatchMutationContext Context,
+    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource ScopeOwnerNyxId,
+    ServiceIdentity ServiceIdentity);
+
+public enum ScheduledDispatchCredentialAdmissionStatus
+{
+    Allowed = 0,
+    MissingBinding = 1,
+    ScopeMismatch = 2,
+    Unsupported = 3,
+}
+
+public sealed record ScheduledDispatchCredentialAdmissionResult(
+    ScheduledDispatchCredentialAdmissionStatus Status,
+    string? Error = null)
+{
+    public static ScheduledDispatchCredentialAdmissionResult Allowed() =>
+        new(ScheduledDispatchCredentialAdmissionStatus.Allowed);
+
+    public static ScheduledDispatchCredentialAdmissionResult MissingBinding(string? error = null) =>
+        new(ScheduledDispatchCredentialAdmissionStatus.MissingBinding, error);
+
+    public static ScheduledDispatchCredentialAdmissionResult ScopeMismatch(string? error = null) =>
+        new(ScheduledDispatchCredentialAdmissionStatus.ScopeMismatch, error);
+
+    public static ScheduledDispatchCredentialAdmissionResult Unsupported(string? error = null) =>
+        new(ScheduledDispatchCredentialAdmissionStatus.Unsupported, error);
+}
+
+public interface IScheduledDispatchCredentialAdmissionPort
+{
+    Task<ScheduledDispatchCredentialAdmissionResult> AdmitAsync(
+        ScheduledDispatchCredentialAdmissionRequest request,
+        CancellationToken ct = default);
+}
+
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,
     string? AccessToken = null,
@@ -263,15 +307,18 @@ public interface IScheduledDispatchApplicationService
 {
     Task<ScheduledDispatchMutationReceipt> CreateAsync(
         ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> EnsureAsync(
         ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> UpdateAsync(
         string scheduleId,
         ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> EnableAsync(

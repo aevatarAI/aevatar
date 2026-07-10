@@ -93,6 +93,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("go");
         chat.ScopeId.Should().Be(ScopeId);
+        schedule.MutationContext.Should().BeEquivalentTo(new ScheduledDispatchMutationContext(
+            ScopeId,
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "user-42")));
     }
 
     [Fact]
@@ -659,6 +662,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Exception? ThrowOnEnsure { get; set; }
         public bool Ensured { get; private set; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
+        public ScheduledDispatchMutationContext? MutationContext { get; private set; }
 
         /// <summary>
         /// Schedule ids that behave like delete tombstones: ensuring them throws
@@ -667,7 +671,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public HashSet<string> TombstonedScheduleIds { get; } = new(StringComparer.Ordinal);
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default)
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default)
         {
             if (ThrowOnEnsure != null)
                 throw ThrowOnEnsure;
@@ -676,6 +681,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
             Ensured = true;
             Configuration = configuration;
+            MutationContext = context;
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 ScheduleId,
                 $"scheduled-dispatch:{ScheduleId}",
@@ -689,12 +695,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // ---- Unused members ----
 
         public Task<ScheduledDispatchMutationReceipt> CreateAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException(
                 "Provisioning must use EnsureAsync so retries converge on one schedule.");
 
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
-            string scheduleId, ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            string scheduleId, ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(

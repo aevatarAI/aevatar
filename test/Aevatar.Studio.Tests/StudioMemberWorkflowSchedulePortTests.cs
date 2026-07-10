@@ -91,6 +91,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.SenderNyxId.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
         auth.DurableSenderBearerToken.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
+        scheduleService.MutationContext.Should().BeEquivalentTo(new ScheduledDispatchMutationContext(
+            "scope-1",
+            new ScheduledServiceInvocationNyxIdSubjectRef("Lark", "tenant-1", "owner-1")));
     }
 
     [Fact]
@@ -332,13 +335,16 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int EnsureCallCount { get; private set; }
         public int TombstonedAttempts { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
+        public ScheduledDispatchMutationContext? MutationContext { get; private set; }
         public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default)
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default)
         {
             EnsureCallCount++;
             Configuration = configuration;
+            MutationContext = context;
             Configurations.Add(configuration);
             if (EnsureCallCount <= TombstonedAttempts)
                 throw new ScheduledDispatchNotFoundException(configuration.ScheduleId);
@@ -354,11 +360,13 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         }
 
         public Task<ScheduledDispatchMutationReceipt> CreateAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
-            string scheduleId, ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            string scheduleId, ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
