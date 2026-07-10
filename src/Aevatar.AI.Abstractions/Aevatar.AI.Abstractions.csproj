@@ -18,6 +18,6 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="ai_messages.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.VoicePresence.Abstractions" />
+    <Protobuf Include="ai_messages.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions;..\Aevatar.Foundation.VoicePresence.Abstractions" />
   </ItemGroup>
 </Project>

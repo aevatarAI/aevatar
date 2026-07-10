@@ -29,6 +29,6 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
   <ItemGroup>
-    <Protobuf Include="aevatar_invocation_tools.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.AI.Abstractions;..\Aevatar.Foundation.VoicePresence.Abstractions" />
+    <Protobuf Include="aevatar_invocation_tools.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.AI.Abstractions;..\Aevatar.Foundation.Abstractions;..\Aevatar.Foundation.VoicePresence.Abstractions" />
   </ItemGroup>
 </Project>

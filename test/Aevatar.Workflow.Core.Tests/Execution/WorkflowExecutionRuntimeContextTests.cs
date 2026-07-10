@@ -183,6 +183,22 @@ public sealed class WorkflowExecutionRuntimeContextTests
             .Should()
             .Throw<ArgumentException>()
             .WithMessage("*caller credential*invalid*");
+
+        var durableRef = new DurableCallerCredentialRef
+        {
+            Ref = "sec_scheduled",
+            Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            OwnerScopeKey = "schedule:schedule-1",
+            SubjectId = "subject-1",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
+        var durableDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
+            new WorkflowCallerCredential { DurableCallerCredential = durableRef });
+        durableDelta.ClearCallerCredential.Should().BeTrue();
+        durableDelta.CallerCredential!.BearerToken.Should().BeEmpty();
+        durableDelta.CallerCredential.RuntimeSecretReference.Should().BeNull();
+        durableDelta.CallerCredential.DurableCallerCredential.Should().NotBeNull();
+        durableDelta.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
     }
 
     [Fact]
@@ -232,6 +248,40 @@ public sealed class WorkflowExecutionRuntimeContextTests
         await FluentActions.Awaiting(() => WorkflowCallerCredentialRuntimeContextAccess.RemoveCredentialAsync(null!))
             .Should()
             .ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldResolveDurableHandleThroughVault()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            "schedule:schedule-1",
+            "lark:tenant:user-1",
+            " durable-token ",
+            "test"));
+        var handle = new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "lark:tenant:user-1",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
+        var host = new RecordingStateHost(secretVault: vault);
+
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { DurableCallerCredential = handle });
+
+        host.ExecutionContextState.CallerCredential!.BearerToken.Should().BeEmpty();
+        host.ExecutionContextState.CallerCredential.RuntimeSecretReference.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.DurableCallerCredential.Ref.Should().Be(stored.Reference.Ref);
+
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        credential.Found.Should().BeTrue();
+        credential.Credential.BearerToken.Should().Be("durable-token");
     }
 
     [Fact]
@@ -460,18 +510,21 @@ public sealed class WorkflowExecutionRuntimeContextTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         };
 
-    private sealed class RecordingStateHost : IWorkflowExecutionStateHost, IRuntimeSecretStoreAccessor
+    private sealed class RecordingStateHost : IWorkflowExecutionStateHost, IRuntimeSecretStoreAccessor, ISecretVaultAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
 
-        public RecordingStateHost(IRuntimeSecretStore? runtimeSecretStore = null)
+        public RecordingStateHost(IRuntimeSecretStore? runtimeSecretStore = null, ISecretVault? secretVault = null)
         {
             RuntimeSecretStore = runtimeSecretStore;
+            SecretVault = secretVault;
         }
 
         public string RunId => "run-1";
 
         public IRuntimeSecretStore? RuntimeSecretStore { get; }
+
+        public ISecretVault? SecretVault { get; }
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
@@ -565,16 +618,20 @@ public sealed class WorkflowExecutionRuntimeContextTests
         ContextWithoutRuntimeAccessor,
         IWorkflowExecutionRuntimeContextAccessor,
         IWorkflowExecutionStateHost,
-        IRuntimeSecretStoreAccessor
+        IRuntimeSecretStoreAccessor,
+        ISecretVaultAccessor
     {
         private readonly Dictionary<string, Any> _states = new(StringComparer.Ordinal);
 
-        public RecordingWorkflowExecutionContext(IRuntimeSecretStore? runtimeSecretStore = null)
+        public RecordingWorkflowExecutionContext(IRuntimeSecretStore? runtimeSecretStore = null, ISecretVault? secretVault = null)
         {
             RuntimeSecretStore = runtimeSecretStore;
+            SecretVault = secretVault;
         }
 
         public IRuntimeSecretStore? RuntimeSecretStore { get; }
+
+        public ISecretVault? SecretVault { get; }
 
         public WorkflowExecutionRuntimeContext RuntimeContext { get; } = new();
 
@@ -773,6 +830,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
             {
                 BearerToken = delta.CallerCredential.BearerToken,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
             };
         }
     }

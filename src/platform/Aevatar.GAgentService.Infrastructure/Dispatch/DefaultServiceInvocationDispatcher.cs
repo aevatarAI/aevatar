@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
@@ -143,9 +144,9 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ServiceInvocationResolvedTarget target,
         string workflowRunActorId)
     {
-        var callerCredential = BuildWorkflowCallerCredential(source);
+        var callerCredential = BuildWorkflowCallerCredential(source, invocationRequest);
         _logger.LogInformation(
-            "Workflow service invocation caller credential prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} workflowRunActorId={WorkflowRunActorId} hasConnectorAuthorization={HasConnectorAuthorization} hasLlmOwnerToken={HasLlmOwnerToken} hasCallerBearerToken={HasCallerBearerToken}",
+            "Workflow service invocation caller credential prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} workflowRunActorId={WorkflowRunActorId} hasConnectorAuthorization={HasConnectorAuthorization} hasLlmOwnerToken={HasLlmOwnerToken} callerCredentialSourceKind={CallerCredentialSourceKind} hasCallerBearerToken={HasCallerBearerToken}",
             invocationRequest.ScheduleId ?? string.Empty,
             target.Service.ServiceKey ?? string.Empty,
             invocationRequest.EndpointId ?? string.Empty,
@@ -153,6 +154,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             !string.IsNullOrWhiteSpace(source.ConnectorHttpAuthorization),
             !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdAccessToken) ||
             !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken),
+            ResolveCallerCredentialSourceKind(callerCredential),
             !string.IsNullOrWhiteSpace(callerCredential.BearerToken));
 
         var request = new WorkflowChatRequestEvent
@@ -198,8 +200,37 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         return request;
     }
 
-    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(ChatRequestEvent source)
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(
+        ChatRequestEvent source,
+        ServiceInvocationRequest invocationRequest)
     {
+        if (source.CallerDurableCredential != null)
+        {
+            if (string.IsNullOrWhiteSpace(invocationRequest.ScheduleId))
+            {
+                throw new InvalidOperationException(
+                    "caller_durable_credential is accepted only from scheduled dispatch.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(source.ConnectorHttpAuthorization) ||
+                !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdAccessToken) ||
+                !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken))
+            {
+                throw new InvalidOperationException(
+                    "caller_durable_credential must not be combined with raw workflow caller credentials.");
+            }
+            if (!HasDurableCallerCredential(source.CallerDurableCredential))
+            {
+                throw new InvalidOperationException(
+                    "caller_durable_credential must include a durable secret reference.");
+            }
+
+            return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+            {
+                DurableCallerCredential = source.CallerDurableCredential.Clone(),
+            };
+        }
+
         var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
         if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
             return connectorCredential;
@@ -231,6 +262,17 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
         };
     }
+
+    private static bool HasDurableCallerCredential(DurableCallerCredentialRef? reference) =>
+        reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
+
+    private static string ResolveCallerCredentialSourceKind(
+        Aevatar.Workflow.Abstractions.WorkflowCallerCredential credential) =>
+        credential.DurableCallerCredential?.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch
+            ? "scheduled_dispatch"
+            : !string.IsNullOrWhiteSpace(credential.BearerToken)
+                ? "bearer_token"
+                : string.Empty;
 
     private async Task RegisterRunAsync(
         ServiceInvocationResolvedTarget target,

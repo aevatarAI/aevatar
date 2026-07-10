@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -397,6 +399,20 @@ public static class ScheduledDispatchEndpoints
                 return false;
         }
     }
+
+    internal static void RejectExternalCallerDurableCredential(Any? payload)
+    {
+        if (payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true ||
+            chatRequest.CallerDurableCredential == null)
+        {
+            return;
+        }
+
+        throw new ArgumentException(
+            "caller_durable_credential is trusted-only and cannot be supplied by schedule API payloads.",
+            "caller_durable_credential");
+    }
+
 }
 
 public sealed record ScheduledDispatchConfigurationHttpRequest
@@ -520,10 +536,16 @@ public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
     public required EventEnvelope Envelope { get; init; }
 
     public ScheduledDispatchTargetDescriptor ToTarget() =>
-        new(
+        CreateTarget(Envelope);
+
+    private ScheduledDispatchTargetDescriptor CreateTarget(EventEnvelope envelope)
+    {
+        ScheduledDispatchEndpoints.RejectExternalCallerDurableCredential(envelope.Payload);
+        return new(
             ScheduledDispatchTargetKind.Envelope,
             ActorId: ActorId,
-            Envelope: Envelope);
+            Envelope: envelope);
+    }
 }
 
 public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
@@ -562,8 +584,10 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
     public ScheduledDispatchTargetDescriptor ToTarget(
         Any payload,
         string revisionId,
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null) =>
-        new(
+        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null)
+    {
+        ScheduledDispatchEndpoints.RejectExternalCallerDurableCredential(payload);
+        return new(
             ScheduledDispatchTargetKind.ServiceInvocation,
             ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
                 Identity,
@@ -572,6 +596,7 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
                 revisionId,
                 Caller,
                 Auth?.ToAuth(authenticatedOwnerSubject)));
+    }
 
     private async Task<(Any Payload, string RevisionId)> ResolvePayloadAsync(
         IServiceCatalogQueryReader catalogReader,

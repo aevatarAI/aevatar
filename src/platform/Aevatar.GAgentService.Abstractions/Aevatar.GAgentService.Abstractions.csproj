@@ -30,6 +30,6 @@
     <Protobuf Include="Protos/service_serving.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_invocation_catalog.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_runs.proto" GrpcServices="None" ProtoRoot="Protos" />
-    <Protobuf Include="Protos/llm_sessions.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions" />
+    <Protobuf Include="Protos/llm_sessions.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions" />
   </ItemGroup>
 </Project>
