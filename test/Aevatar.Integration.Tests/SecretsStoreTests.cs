@@ -1,5 +1,6 @@
 using Aevatar.Configuration;
 using FluentAssertions;
+using System.Security.Cryptography;
 
 namespace Aevatar.Integration.Tests;
 
@@ -22,7 +23,7 @@ public class SecretsStoreTests
 
         try
         {
-            var store = new AevatarSecretsStore(path, LocalSecretProtectionOptions.DevelopmentPlaintextNoKeychain);
+            var store = new AevatarSecretsStore(path, PlaintextAllowedNoLocalMasterKeySources);
 
             store.Get("Custom:Value").Should().Be("x");
             store.GetApiKey("deepseek").Should().Be("k1");
@@ -45,7 +46,7 @@ public class SecretsStoreTests
 
         try
         {
-            var act = () => new AevatarSecretsStore(path, LocalSecretProtectionOptions.NoPlaintextNoKeychain);
+            var act = () => new AevatarSecretsStore(path, NoPlaintextNoLocalMasterKeySources);
 
             act.Should().Throw<InvalidOperationException>()
                 .WithMessage("*plaintext*AEVATAR_ALLOW_PLAINTEXT_SECRETS*");
@@ -94,7 +95,8 @@ public class SecretsStoreTests
 
         try
         {
-            var store = new AevatarSecretsStore(path, LocalSecretProtectionOptions.NoPlaintextNoKeychain);
+            WriteSiblingMasterKey(path);
+            var store = new AevatarSecretsStore(path, NoPlaintextNoLocalMasterKeySources);
 
             var act = () => store.Set("K1", "V1");
 
@@ -116,12 +118,13 @@ public class SecretsStoreTests
 
         try
         {
-            var store = new AevatarSecretsStore(path, LocalSecretProtectionOptions.DevelopmentPlaintextNoKeychain);
+            WriteSiblingMasterKey(path);
+            var store = new AevatarSecretsStore(path, PlaintextAllowedNoLocalMasterKeySources);
             store.Set("K1", "V1");
             store.Set("K2", "V2");
             store.Remove("K1");
 
-            var reloaded = new AevatarSecretsStore(path, LocalSecretProtectionOptions.DevelopmentPlaintextNoKeychain);
+            var reloaded = new AevatarSecretsStore(path, PlaintextAllowedNoLocalMasterKeySources);
             reloaded.Get("K1").Should().BeNull();
             reloaded.Get("K2").Should().Be("V2");
 
@@ -144,12 +147,12 @@ public class SecretsStoreTests
 
         try
         {
-            var store = new AevatarSecretsStore(path, LocalSecretProtectionOptions.DevelopmentPlaintextNoKeychain);
+            var store = new AevatarSecretsStore(path, PlaintextAllowedNoLocalMasterKeySources);
             store.GetAll().Should().BeEmpty();
 
             store.Set("After", "Write");
 
-            var reloaded = new AevatarSecretsStore(path, LocalSecretProtectionOptions.DevelopmentPlaintextNoKeychain);
+            var reloaded = new AevatarSecretsStore(path, PlaintextAllowedNoLocalMasterKeySources);
             reloaded.Get("After").Should().Be("Write");
         }
         finally
@@ -176,6 +179,19 @@ public class SecretsStoreTests
         {
             // no-op
         }
+    }
+
+    private static LocalSecretProtectionOptions NoPlaintextNoLocalMasterKeySources =>
+        new(false, LocalSecretMasterKeySource.Disabled);
+
+    private static LocalSecretProtectionOptions PlaintextAllowedNoLocalMasterKeySources =>
+        new(true, LocalSecretMasterKeySource.Disabled);
+
+    private static void WriteSiblingMasterKey(string secretsPath)
+    {
+        var directory = Path.GetDirectoryName(secretsPath);
+        Directory.CreateDirectory(directory!);
+        File.WriteAllBytes(Path.Combine(directory!, "masterkey.bin"), RandomNumberGenerator.GetBytes(32));
     }
 
     private sealed class EnvironmentVariableScope : IDisposable
