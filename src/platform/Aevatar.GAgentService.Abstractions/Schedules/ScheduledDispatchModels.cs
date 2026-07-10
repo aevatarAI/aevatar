@@ -35,18 +35,76 @@ public sealed record ScheduledServiceInvocationNyxIdSubjectRef(
     string Tenant,
     string ExternalUserId);
 
+public enum ScheduledServiceInvocationNyxIdCredentialRole
+{
+    Sender = 1,
+    ScopeOwner = 2,
+}
+
+public abstract record ScheduledServiceInvocationCredentialSource;
+
 public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
     ScheduledServiceInvocationNyxIdSubjectRef Subject,
-    string Scope);
+    string Scope,
+    ScheduledServiceInvocationNyxIdCredentialRole Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender)
+    : ScheduledServiceInvocationCredentialSource;
 
 public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
     string Scope,
     ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
 
-public sealed record ScheduledServiceInvocationAuth(
-    ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId = null,
-    string? DurableSenderBearerToken = null,
-    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
+public sealed record ScheduledServiceInvocationDurableCredentialReference(
+    string CredentialId)
+    : ScheduledServiceInvocationCredentialSource;
+
+public sealed record ScheduledServiceInvocationAuth
+{
+    public ScheduledServiceInvocationAuth()
+    {
+    }
+
+    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationCredentialSource source)
+    {
+        Source = source ?? throw new ArgumentNullException(nameof(source));
+    }
+
+    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationNyxIdCredentialSource SenderNyxId)
+        : this((ScheduledServiceInvocationCredentialSource)(SenderNyxId ??
+                                                            throw new ArgumentNullException(nameof(SenderNyxId))))
+    {
+    }
+
+    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource ScopeOwnerNyxId)
+        : this((ScheduledServiceInvocationCredentialSource)ToNyxIdSource(ScopeOwnerNyxId))
+    {
+    }
+
+    public ScheduledServiceInvocationCredentialSource? Source { get; init; }
+
+    public ScheduledServiceInvocationNyxIdCredentialSource? NyxId =>
+        Source as ScheduledServiceInvocationNyxIdCredentialSource;
+
+    public ScheduledServiceInvocationDurableCredentialReference? Durable =>
+        Source as ScheduledServiceInvocationDurableCredentialReference;
+
+    public ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId =>
+        NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRole.Sender ? NyxId : null;
+
+    public ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId =>
+        NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
+            ? new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(NyxId.Scope, NyxId.Subject)
+            : null;
+
+    private static ScheduledServiceInvocationNyxIdCredentialSource ToNyxIdSource(
+        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return new ScheduledServiceInvocationNyxIdCredentialSource(
+            source.OwnerSubject!,
+            source.Scope,
+            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
+    }
+}
 
 public sealed record ScheduledDispatchMutationContext(
     string? AuthenticatedScopeId = null,
@@ -293,13 +351,8 @@ public interface IScheduledServiceInvocationDispatchPort
 
 public interface IScheduledServiceInvocationCredentialExchangePort
 {
-    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueNyxIdAsync(
         ScheduledServiceInvocationNyxIdCredentialSource source,
-        CancellationToken ct = default);
-
-    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
-        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
-        ServiceIdentity serviceIdentity,
         CancellationToken ct = default);
 }
 

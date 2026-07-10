@@ -100,19 +100,125 @@ public sealed class LarkChannelNativeMessageSenderTests
             FellBackToPrefixInference: false));
     }
 
+    [Fact]
+    public async Task UpdateAsync_ShouldDelegateTextEditToLarkDispatcher()
+    {
+        var dispatcher = new RecordingLarkOutboundDispatcher();
+        var sender = new LarkChannelNativeMessageSender(dispatcher);
+        var target = new ChannelNativeDeliveryTarget(
+            AgentId: "agent-1",
+            Platform: "lark",
+            ConversationId: "oc_chat_1",
+            NyxProviderSlug: "api-lark-bot",
+            NyxApiKey: "nyx-api-key-1");
+
+        var result = await sender.UpdateAsync(
+            target,
+            "om_stream",
+            new ChannelNativeMessage("hello updated", CardPayload: null, MessageType: "text", ComposeCapability.Exact),
+            isFinal: false,
+            cancellationToken: CancellationToken.None);
+
+        result.SentActivityId.ShouldBe("om_stream");
+        result.PlatformMessageId.ShouldBe("om_stream");
+        dispatcher.LastUpdateRequest.ShouldNotBeNull();
+        dispatcher.LastUpdateRequest!.MessageId.ShouldBe("om_stream");
+        dispatcher.LastUpdateRequest.MessageType.ShouldBe("text");
+        dispatcher.LastUpdateRequest.ContentJson.ShouldContain("hello updated");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenEditCapReachedMidStream_ReturnsSealedFailure()
+    {
+        var dispatcher = new RecordingLarkOutboundDispatcher
+        {
+            NextUpdateResult = LarkUpdateMessageResult.Failed(
+                230072,
+                "The message has reached the number of times it can be edited."),
+        };
+        var sender = new LarkChannelNativeMessageSender(dispatcher);
+        var target = new ChannelNativeDeliveryTarget(
+            AgentId: "agent-1",
+            Platform: "lark",
+            ConversationId: "oc_chat_1",
+            NyxProviderSlug: "api-lark-bot",
+            NyxApiKey: "nyx-api-key-1");
+
+        var result = await sender.UpdateAsync(
+            target,
+            "om_stream",
+            new ChannelNativeMessage("hello updated", CardPayload: null, MessageType: "text", ComposeCapability.Exact),
+            isFinal: false,
+            cancellationToken: CancellationToken.None);
+
+        result.Success.ShouldBeFalse();
+        result.ErrorCode.ShouldBe("message_update_sealed");
+        result.RawErrorCode.ShouldBe(230072);
+        dispatcher.UpdateRequests.Count.ShouldBe(1);
+        dispatcher.SendRequests.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task FinalEdit_EditCapReached_PostsCompleteTextAsFreshMessage_DoesNotThrow()
+    {
+        var dispatcher = new RecordingLarkOutboundDispatcher
+        {
+            NextUpdateResult = LarkUpdateMessageResult.Failed(
+                230072,
+                "The message has reached the number of times it can be edited."),
+            NextSendMessageId = "om_final",
+        };
+        var sender = new LarkChannelNativeMessageSender(dispatcher);
+        var target = new ChannelNativeDeliveryTarget(
+            AgentId: "agent-1",
+            Platform: "lark",
+            ConversationId: "oc_chat_1",
+            NyxProviderSlug: "api-lark-bot",
+            NyxApiKey: "nyx-api-key-1");
+
+        var result = await sender.UpdateAsync(
+            target,
+            "om_stream",
+            new ChannelNativeMessage("complete final text", CardPayload: null, MessageType: "text", ComposeCapability.Exact),
+            isFinal: true,
+            cancellationToken: CancellationToken.None);
+
+        result.Success.ShouldBeTrue();
+        result.SentActivityId.ShouldBe("om_final");
+        result.PlatformMessageId.ShouldBe("om_final");
+        dispatcher.UpdateRequests.Count.ShouldBe(1);
+        dispatcher.SendRequests.Count.ShouldBe(1);
+        dispatcher.SendRequests[0].ContentJson.ShouldContain("complete final text");
+    }
+
     private sealed class RecordingLarkOutboundDispatcher : ILarkOutboundDispatcher
     {
         public LarkSendNewMessageRequest? LastRequest { get; private set; }
+        public LarkUpdateMessageRequest? LastUpdateRequest { get; private set; }
+        public List<LarkSendNewMessageRequest> SendRequests { get; } = [];
+        public List<LarkUpdateMessageRequest> UpdateRequests { get; } = [];
+        public LarkUpdateMessageResult? NextUpdateResult { get; set; }
+        public string NextSendMessageId { get; set; } = "om_1";
 
         public Task<LarkSendNewMessageResult> SendNewMessageAsync(
             LarkSendNewMessageRequest request,
             CancellationToken ct)
         {
             LastRequest = request;
+            SendRequests.Add(request);
             return Task.FromResult(LarkSendNewMessageResult.Sent(
-                "om_1",
+                NextSendMessageId,
                 request.PrimaryTarget,
                 usedFallback: false));
+        }
+
+        public Task<LarkUpdateMessageResult> UpdateMessageAsync(
+            LarkUpdateMessageRequest request,
+            CancellationToken ct)
+        {
+            LastUpdateRequest = request;
+            UpdateRequests.Add(request);
+            return Task.FromResult(NextUpdateResult ?? LarkUpdateMessageResult.Updated(request.MessageId));
         }
     }
 

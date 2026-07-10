@@ -89,7 +89,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("owner-1");
         auth.SenderNyxId.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.Sender);
+        auth.Durable.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
         scheduleService.MutationContext.Should().BeEquivalentTo(new ScheduledDispatchMutationContext(
             "scope-1",

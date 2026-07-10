@@ -447,12 +447,9 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         if (auth == null)
             return null;
 
-        var hasSenderNyxId = auth.SenderNyxId != null;
-        var durableToken = NormalizeOptional(auth.DurableSenderBearerToken);
-        var hasDurableSenderBearerToken = durableToken.Length > 0;
-        var hasScopeOwnerNyxId = auth.ScopeOwnerNyxId != null;
-        if (hasDurableSenderBearerToken)
+        return auth.Source switch
         {
+<<<<<<< HEAD
             throw new ArgumentException(
                 "Durable sender bearer token schedule auth is no longer supported; use senderNyxId or scopeOwnerNyxId so the dispatch can mint a short-lived NyxID token at fire time.",
                 nameof(auth));
@@ -482,6 +479,42 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(source.Scope, nameof(source.Scope))));
     }
 
+=======
+            null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
+            ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
+            ScheduledServiceInvocationDurableCredentialReference durable =>
+                new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
+                    NormalizeRequired(durable.CredentialId, nameof(durable.CredentialId)))),
+            _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
+        };
+    }
+
+    private static ScheduledServiceInvocationAuth NormalizeNyxIdAuth(
+        ScheduledServiceInvocationNyxIdCredentialSource source,
+        ScheduledServiceInvocationAuth auth)
+    {
+        if (source.Subject == null)
+            throw new ArgumentException(ToMissingSubjectMessage(source.Role), nameof(auth));
+
+        var role = source.Role switch
+        {
+            ScheduledServiceInvocationNyxIdCredentialRole.Sender => ScheduledServiceInvocationNyxIdCredentialRole.Sender,
+            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner => ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner,
+            _ => throw new ArgumentException("Service invocation NyxID credential role is required.", nameof(auth)),
+        };
+
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+            NormalizeSubject(source.Subject),
+            NormalizeRequired(source.Scope, nameof(source.Scope)),
+            role));
+    }
+
+    private static string ToMissingSubjectMessage(ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
+            ? "Service invocation scope owner NyxID subject is required."
+            : "Service invocation sender NyxID subject is required.";
+
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
         ScheduledServiceInvocationNyxIdSubjectRef subject) =>
         new(

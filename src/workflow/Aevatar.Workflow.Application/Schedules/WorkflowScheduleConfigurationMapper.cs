@@ -84,16 +84,21 @@ internal static class WorkflowScheduleConfigurationMapper
         {
             var scopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId!;
             return new ScheduledServiceInvocationAuth(
-                ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                new ScheduledServiceInvocationNyxIdCredentialSource(
+                    MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject),
                     NormalizeRequired(scopeOwnerNyxId.Scope, nameof(scopeOwnerNyxId.Scope)),
+<<<<<<< HEAD
                     scopeOwnerNyxId.OwnerSubject == null ? null : MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject)));
+=======
+                    ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         }
 
         var senderNyxId = configuration.Auth.SenderNyxId!;
         if (senderNyxId.Subject == null)
             throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
 
-        return new ScheduledServiceInvocationAuth(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             MapNyxIdSubject(senderNyxId.Subject),
             NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
     }
