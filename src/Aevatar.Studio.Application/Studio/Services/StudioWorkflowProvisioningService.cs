@@ -357,7 +357,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// </summary>
     private static ScheduledServiceInvocationAuth BuildScheduleAuth(
         ScheduledServiceInvocationNyxIdCredentialSource subjectRef) =>
-        new(SenderNyxId: subjectRef);
+        new(subjectRef with { Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender });
 
     private static ScheduledServiceInvocationNyxIdCredentialSource BuildSenderNyxIdCredentialSource(
         ProvisionWorkflowCallerCredential credential) =>
