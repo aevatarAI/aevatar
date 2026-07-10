@@ -143,7 +143,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         ServiceInvocationResolvedTarget target,
         string workflowRunActorId)
     {
-        var callerCredential = BuildWorkflowCallerCredential(source);
+        var callerCredential = BuildWorkflowCallerCredential(source, invocationRequest.ScheduleId);
         _logger.LogInformation(
             "Workflow service invocation caller credential prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} workflowRunActorId={WorkflowRunActorId} hasConnectorAuthorization={HasConnectorAuthorization} hasLlmOwnerToken={HasLlmOwnerToken} hasCallerBearerToken={HasCallerBearerToken}",
             invocationRequest.ScheduleId ?? string.Empty,
@@ -198,11 +198,16 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         return request;
     }
 
-    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(ChatRequestEvent source)
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(
+        ChatRequestEvent source,
+        string? scheduleId)
     {
-        var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
-        if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
-            return connectorCredential;
+        if (string.IsNullOrWhiteSpace(scheduleId))
+        {
+            var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
+            if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
+                return connectorCredential;
+        }
 
         return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
     }

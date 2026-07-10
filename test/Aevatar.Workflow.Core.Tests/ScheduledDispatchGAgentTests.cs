@@ -715,6 +715,67 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_ForServiceInvocation_ShouldStripScheduleOwnedCredentialsFromPersistedPayloads()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        var invocation = new ServiceInvocationRequest
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = "scope-1",
+                AppId = ScopeServiceIdentityDefaults.ServiceAppId,
+                Namespace = ScopeServiceIdentityDefaults.ServiceNamespace,
+                ServiceId = "daily-workflow",
+            },
+            EndpointId = "chat",
+            Payload = Any.Pack(CreateCredentialBearingChatRequest("trigger")),
+        };
+
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            targetActorId: ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+            triggerEnvelope: CreateTriggerEnvelope(
+                ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+                invocation),
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = invocation.Identity.Clone(),
+                    EndpointId = invocation.EndpointId,
+                    Payload = Any.Pack(CreateCredentialBearingChatRequest("target")),
+                },
+            },
+            enabled: false));
+
+        var configuredEvent = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchConfiguredEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle()
+            .Which
+            .EventData
+            .Unpack<ScheduledDispatchConfiguredEvent>();
+        var persistedTriggerChat = configuredEvent.TriggerEnvelope.Payload
+            .Unpack<ServiceInvocationRequest>()
+            .Payload
+            .Unpack<ChatRequestEvent>();
+        var persistedTargetChat = configuredEvent.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        var stateTriggerChat = agent.State.TriggerEnvelope!.Payload
+            .Unpack<ServiceInvocationRequest>()
+            .Payload
+            .Unpack<ChatRequestEvent>();
+        var stateTargetChat = agent.State.Target!.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
+
+        AssertScheduleOwnedCredentialFieldsStripped(persistedTriggerChat, "trigger");
+        AssertScheduleOwnedCredentialFieldsStripped(persistedTargetChat, "target");
+        AssertScheduleOwnedCredentialFieldsStripped(stateTriggerChat, "trigger");
+        AssertScheduleOwnedCredentialFieldsStripped(stateTargetChat, "target");
+    }
+
+    [Fact]
     public async Task HandleFireAsync_ShouldPreserveWorkflowAdapterMetadataWithoutCoreWorkflowLeak()
     {
         var eventStore = new TestEventStore();
@@ -976,15 +1037,57 @@ public sealed class ScheduledDispatchGAgentTests
         auth.SenderNyxId.Subject.Platform.Should().Be("lark");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
         auth.SenderNyxId.Scope.Should().Be("proxy");
-        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
-            .ContainSingle()
-            .Which.Should().BeFalse();
         var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
         var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.ConnectorHttpAuthorization.Should().BeEmpty();
         chatRequest.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForServiceInvocation_ShouldStripConnectorAuthorizationScheduleHeader()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                },
+            });
+        command.Headers[ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer stored-header-token";
+        command.Headers["trace"] = "kept";
+        await agent.HandleConfigureAsync(command);
+
+        agent.State.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        agent.State.Headers.Should().Contain("trace", "kept");
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var headers = serviceInvocationDispatch.Headers.Should().ContainSingle().Which;
+        headers.Should().NotBeNull();
+        headers!.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        headers.Should().Contain("trace", "kept");
+        headers.Should().ContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
     }
 
     [Fact]
@@ -1010,6 +1113,7 @@ public sealed class ScheduledDispatchGAgentTests
                     Payload = Any.Pack(new ChatRequestEvent
                     {
                         Prompt = "configured",
+                        ConnectorHttpAuthorization = "Bearer stale-schedule-token",
                     }),
                     Auth = new ScheduledServiceInvocationAuthState
                     {
@@ -1042,10 +1146,8 @@ public sealed class ScheduledDispatchGAgentTests
             OwnerScope.NyxIdPlatform,
             string.Empty,
             "owner-nyx-user"));
-        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
-            .ContainSingle()
-            .Which.Should().BeFalse();
-        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        serviceInvocationDispatch.Requests.Should().ContainSingle()
+            .Which.Payload.Unpack<ChatRequestEvent>().ConnectorHttpAuthorization.Should().BeEmpty();
         agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
         agent.State.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.ExternalUserId.Should().Be("owner-nyx-user");
         agent.State.FireCount.Should().Be(1);
@@ -1179,7 +1281,7 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleFireAsync_ForWorkflowServiceInvocationAuth_ShouldRequestWorkflowCallerCredentialProjection()
+    public async Task HandleFireAsync_ForWorkflowServiceInvocationAuth_ShouldNotRequestWorkflowCallerCredentialProjection()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
@@ -1228,10 +1330,8 @@ public sealed class ScheduledDispatchGAgentTests
 
         serviceInvocationDispatch.Auths.Should().ContainSingle()
             .Which!.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
-        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
-            .ContainSingle()
-            .Which.Should().BeTrue();
-        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        serviceInvocationDispatch.Requests.Should().ContainSingle()
+            .Which.Payload.Unpack<ChatRequestEvent>().ConnectorHttpAuthorization.Should().BeEmpty();
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }
@@ -1912,6 +2012,62 @@ public sealed class ScheduledDispatchGAgentTests
         replayed.NextFireLease!.Generation.Should().Be(7);
     }
 
+    [Fact]
+    public void ScheduledDispatchStateReplay_ShouldStripScheduleOwnedCredentialsFromLegacyConfiguredEvent()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        var transition = typeof(ScheduledDispatchGAgent)
+            .GetMethod("TransitionState", BindingFlags.Instance | BindingFlags.NonPublic);
+        transition.Should().NotBeNull();
+        var invocation = new ServiceInvocationRequest
+        {
+            Identity = new ServiceIdentity { ServiceId = "legacy-service" },
+            EndpointId = "chat",
+            Payload = Any.Pack(CreateCredentialBearingChatRequest("legacy-trigger")),
+        };
+
+        var replayed = transition!.Invoke(agent,
+            [
+                new ScheduledDispatchState(),
+                new ScheduledDispatchConfiguredEvent
+                {
+                    ScheduleId = "schedule-1",
+                    DisplayName = "Legacy schedule",
+                    TargetActorId = ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+                    TriggerEnvelope = CreateTriggerEnvelope(
+                        ScheduledDispatchAdapterConventions.ServiceInvocationTargetActorId,
+                        invocation),
+                    CronExpression = "*/15 * * * *",
+                    Timezone = "UTC",
+                    Enabled = false,
+                    ConfiguredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    Target = new ScheduledDispatchTargetState
+                    {
+                        Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                        ServiceInvocation = new ScheduledServiceInvocationTargetState
+                        {
+                            Identity = invocation.Identity.Clone(),
+                            EndpointId = invocation.EndpointId,
+                            Payload = Any.Pack(CreateCredentialBearingChatRequest("legacy-target")),
+                        },
+                    },
+                    ScheduleKind = ScheduledDispatchScheduleKindState.Workflow,
+                },
+            ]) as ScheduledDispatchState;
+
+        replayed.Should().NotBeNull();
+        var replayedTriggerChat = replayed!.TriggerEnvelope!.Payload
+            .Unpack<ServiceInvocationRequest>()
+            .Payload
+            .Unpack<ChatRequestEvent>();
+        var replayedTargetChat = replayed.Target!.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
+
+        AssertScheduleOwnedCredentialFieldsStripped(replayedTriggerChat, "legacy-trigger");
+        AssertScheduleOwnedCredentialFieldsStripped(replayedTargetChat, "legacy-target");
+    }
+
     private static ScheduledDispatchGAgent CreateAgent(
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
@@ -2058,6 +2214,56 @@ public sealed class ScheduledDispatchGAgentTests
             Envelope = triggerEnvelope?.Clone(),
         };
 
+    private static ChatRequestEvent CreateCredentialBearingChatRequest(string prompt) =>
+        new()
+        {
+            Prompt = prompt,
+            ConnectorHttpAuthorization = "Bearer connector-token",
+            Headers =
+            {
+                [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer header-token",
+                ["client"] = "kept",
+            },
+            Metadata =
+            {
+                [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer metadata-token",
+                ["trace"] = "kept",
+            },
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload
+                {
+                    NyxIdAccessToken = "tool-owner-token",
+                    NyxIdOrgToken = "tool-org-token",
+                    SenderNyxIdAccessToken = "tool-sender-token",
+                },
+            },
+            LlmControl = new LLMControlContextPayload
+            {
+                NyxIdAccessToken = "owner-token",
+                NyxIdOrgToken = "org-token",
+                SenderNyxIdAccessToken = "sender-token",
+                ModelOverride = "sonnet",
+            },
+        };
+
+    private static void AssertScheduleOwnedCredentialFieldsStripped(ChatRequestEvent chatRequest, string prompt)
+    {
+        chatRequest.Prompt.Should().Be(prompt);
+        chatRequest.ConnectorHttpAuthorization.Should().BeEmpty();
+        chatRequest.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        chatRequest.Headers.Should().Contain("client", "kept");
+        chatRequest.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        chatRequest.Metadata.Should().Contain("trace", "kept");
+        chatRequest.LlmControl.NyxIdAccessToken.Should().BeEmpty();
+        chatRequest.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        chatRequest.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
+        chatRequest.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+    }
+
     private static EventEnvelope CreateTriggerEnvelope(string targetActorId, IMessage payload) =>
         new()
         {
@@ -2098,7 +2304,6 @@ public sealed class ScheduledDispatchGAgentTests
         public List<ServiceInvocationRequest> Requests { get; } = [];
         public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
         public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
-        public List<bool> ProjectNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
 
         public Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
             dispatch => new ScheduledServiceInvocationDispatchReceipt(
@@ -2119,8 +2324,6 @@ public sealed class ScheduledDispatchGAgentTests
             Headers.Add(dispatch.Headers == null
                 ? null
                 : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));
-            ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Add(
-                dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
             if (DispatchException != null)
                 throw DispatchException;
 

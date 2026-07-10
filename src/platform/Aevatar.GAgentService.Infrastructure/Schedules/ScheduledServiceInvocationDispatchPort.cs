@@ -12,7 +12,8 @@ namespace Aevatar.GAgentService.Infrastructure.Schedules;
 
 public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceInvocationDispatchPort
 {
-    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey =
+        ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey;
 
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
@@ -40,11 +41,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             await BuildInvocationRequestAsync(dispatch, ct),
             dispatch.ScheduleId);
         _logger.LogInformation(
-            "Scheduled service invocation credential projection prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential} hasConnectorAuthorization={HasConnectorAuthorization} hasOwnerLlmToken={HasOwnerLlmToken} hasSenderLlmToken={HasSenderLlmToken}",
+            "Scheduled service invocation credential projection prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} hasConnectorAuthorization={HasConnectorAuthorization} hasOwnerLlmToken={HasOwnerLlmToken} hasSenderLlmToken={HasSenderLlmToken}",
             dispatch.ScheduleId ?? string.Empty,
             FormatServiceKey(request.Identity),
             request.EndpointId ?? string.Empty,
-            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
             HasConnectorAuthorization(request),
             HasOwnerLlmToken(request),
             HasSenderLlmToken(request));
@@ -69,9 +69,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             return EnrichChatPayload(
                 dispatch.Request,
                 dispatch.Headers,
-                credential: null,
-                projectNyxIdAccessTokenToWorkflowCallerCredential:
-                    dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
+                credential: null);
         }
 
         if (!exchange.Result.Succeeded)
@@ -82,12 +80,11 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
 
         _logger.LogInformation(
-            "Scheduled service invocation NyxID credential exchange succeeded. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} credentialRole={CredentialRole} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential} hasAccessToken={HasAccessToken}",
+            "Scheduled service invocation NyxID credential exchange succeeded. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} credentialRole={CredentialRole} hasAccessToken={HasAccessToken}",
             dispatch.ScheduleId ?? string.Empty,
             FormatServiceKey(dispatch.Request.Identity),
             dispatch.Request.EndpointId ?? string.Empty,
             ToErrorSubject(exchange.Role),
-            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
             !string.IsNullOrWhiteSpace(exchange.Result.AccessToken));
 
         return EnrichChatPayload(
@@ -95,8 +92,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             dispatch.Headers,
             new ExchangedCredential(
                 exchange.Role,
-                NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role))),
-            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
+                NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role))));
     }
 
     private static ServiceInvocationRequest WithScheduleId(ServiceInvocationRequest request, string? scheduleId)
@@ -149,13 +145,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private static ServiceInvocationRequest EnrichChatPayload(
         ServiceInvocationRequest request,
         IReadOnlyDictionary<string, string>? headers,
-        ExchangedCredential? credential,
-        bool projectNyxIdAccessTokenToWorkflowCallerCredential)
+        ExchangedCredential? credential)
     {
+        var sanitizedRequest = ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(request);
         if ((headers == null || headers.Count == 0) && credential == null)
-            return request;
+            return sanitizedRequest;
 
-        var cloned = request.Clone();
+        var cloned = sanitizedRequest.Clone();
         if (cloned.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
             return cloned;
 
@@ -187,8 +183,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     : existingControl.SenderNyxIdAccessToken,
             };
             chatRequest.LlmControl = control.ToPayload();
-            if (projectNyxIdAccessTokenToWorkflowCallerCredential)
-                chatRequest.ConnectorHttpAuthorization = $"Bearer {token}";
         }
 
         cloned.Payload = Any.Pack(chatRequest);
