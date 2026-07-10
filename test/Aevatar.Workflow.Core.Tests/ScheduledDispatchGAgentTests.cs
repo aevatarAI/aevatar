@@ -1146,22 +1146,13 @@ public sealed class ScheduledDispatchGAgentTests
             OwnerScope.NyxIdPlatform,
             string.Empty,
             "owner-nyx-user"));
-<<<<<<< HEAD
         serviceInvocationDispatch.Requests.Should().ContainSingle()
             .Which.Payload.Unpack<ChatRequestEvent>().ConnectorHttpAuthorization.Should().BeEmpty();
-        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
-        agent.State.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.ExternalUserId.Should().Be("owner-nyx-user");
-=======
-        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
-            .ContainSingle()
-            .Which.Should().BeFalse();
-        serviceInvocationDispatch.Requests.Should().ContainSingle();
         agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId.Should().BeNull();
         agent.State.Target.ServiceInvocation.Auth.NyxId!.Role.Should()
             .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
         agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("owner-proxy");
         agent.State.Target.ServiceInvocation.Auth.NyxId.Subject.ExternalUserId.Should().Be("owner-nyx-user");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }
