@@ -359,6 +359,11 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
 
     private byte[]? TryGetMasterKey()
     {
+        if (!_protectionOptions.UseLocalMasterKeySources)
+        {
+            return null;
+        }
+
         if (OperatingSystem.IsMacOS())
         {
             var key = TryGetKeychainKey();
