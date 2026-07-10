@@ -1,10 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
-<<<<<<< HEAD
-=======
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -560,7 +557,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReference_ShouldResolveVaultAndInjectSenderToken()
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReference_ShouldResolveVaultAndProjectDurableCallerCredential()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
@@ -582,7 +579,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
             original,
             auth,
             Headers: null,
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-durable"));
 
         credentialExchange.Sources.Should().BeEmpty();
         var resolve = secretVault.ResolveRequests.Should().ContainSingle().Which;
@@ -590,10 +588,20 @@ public sealed class ScheduledDispatchServiceInvocationTests
         resolve.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
         resolve.OwnerScopeKey.Should().Be("owner-scope-1");
         resolve.SubjectId.Should().Be("credential-1");
+        var store = secretVault.StoreRequests.Should().ContainSingle().Which;
+        store.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerDurableBearerToken);
+        store.OwnerScopeKey.Should().Be("schedule:schedule-durable");
+        store.SubjectId.Should().Be("credential-1");
+        store.Secret.Should().Be("durable-run-key");
         var invoked = invocationPort.Requests.Should().ContainSingle().Which;
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
-        invokedChat.ConnectorHttpAuthorization.Should().Be("Bearer durable-run-key");
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        invokedChat.CallerDurableCredential.Should().NotBeNull();
+        invokedChat.CallerDurableCredential.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerDurableBearerToken);
+        invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-durable");
+        invokedChat.CallerDurableCredential.SubjectId.Should().Be("credential-1");
+        invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
         invokedChat.LlmControl.ModelOverride.Should().Be("opus");
     }
 
@@ -782,7 +790,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy");
 
-<<<<<<< HEAD
     private static ScheduledServiceInvocationDurableCredentialReference CreateDurableCredentialReference() =>
         new(
             "credential-1",
@@ -792,7 +799,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
                 OwnerScopeKey = "owner-scope-1",
             });
-=======
+
     private static DurableCallerCredentialRef CreateDurableCallerCredentialRef() =>
         new()
         {
@@ -802,7 +809,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             SubjectId = "lark:tenant-1:ou-user-1",
             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
         };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private sealed class RecordingServiceInvocationPort : IServiceInvocationPort
     {
@@ -846,14 +852,40 @@ public sealed class ScheduledDispatchServiceInvocationTests
     private sealed class RecordingSecretVault(string? secret) : ISecretVault
     {
         public List<ResolveSecretRequest> ResolveRequests { get; } = [];
+        public List<StoreSecretRequest> StoreRequests { get; } = [];
+        private SecretReference? _storedReference;
+        private string? _storedSubjectId;
+        private string? _storedSecret;
 
-        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StoreRequests.Add(request);
+            _storedReference = new SecretReference
+            {
+                Ref = "sec-workflow-caller-1",
+                Purpose = request.Purpose,
+                OwnerScopeKey = request.OwnerScopeKey,
+                Version = 1,
+            };
+            _storedSubjectId = request.SubjectId;
+            _storedSecret = request.Secret;
+            return Task.FromResult(new StoreSecretResult(_storedReference.Clone()));
+        }
 
         public Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             ResolveRequests.Add(request);
+            if (_storedReference != null &&
+                string.Equals(request.Ref, _storedReference.Ref, StringComparison.Ordinal) &&
+                string.Equals(request.Purpose, _storedReference.Purpose, StringComparison.Ordinal) &&
+                string.Equals(request.OwnerScopeKey, _storedReference.OwnerScopeKey, StringComparison.Ordinal) &&
+                string.Equals(request.SubjectId, _storedSubjectId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ResolveSecretResult(_storedReference.Clone(), _storedSecret));
+            }
+
             return Task.FromResult(string.IsNullOrWhiteSpace(secret)
                 ? new ResolveSecretResult(null, null)
                 : new ResolveSecretResult(CreateDurableCredentialReference().SecretReference.Clone(), secret));
