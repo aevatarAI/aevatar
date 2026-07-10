@@ -39,7 +39,7 @@ owner: eanzhao
 2. **Durable 降级为引用、且 internal-only**：删除新写路径中的「raw bearer token 持久化进 state」；改为 `DurableCredentialReference(credential_id)`，id 是 NyxID agent key 的 handle（Studio minted 本就产出有 id 的 agent key，`ScheduledAgentKeyStudioRunCredentialIssuer.cs:44`）。本结构阶段只落 typed reference，fire 时由 id 经 broker 换短 token 的行为留给后续行为阶段；迁移期旧 raw durable replay 必须 fail closed。**通用 HTTP API 不再接受 durable**——durable reference 只能由 internal trusted provisioning（Studio）写入。
 3. **无 auth + required-credential policy**：保留 no-auth，但由 typed policy 按 target/implementation 声明「是否必须带 credential」，避免运行到下游才失败（discussion E）。
 4. **校验下沉**：把当前困在 endpoint private static 的 binding/owner 校验下沉到 application/domain 统一路径，HTTP 与 internal 入口走同一套校验语义。
-5. **create/update 期只做无副作用 validation**：NyxId source 不再用「真 mint」做预检；改用 binding 存在性（已有的 read-only `bindingQueryPort.ResolveAsync`）+ scope 归属判断；只有 fire/run-now 才为 NyxId source 签发短 token（具体 introspection 机制见 Open Questions，受限于 NyxID 既有 surface）。
+5. **create/update 期只做无副作用 validation**：不再用「真 mint」做预检；改用 binding 存在性（已有的 read-only `bindingQueryPort.ResolveAsync`）+ scope 归属判断；fire/run-now 才签发短 token（具体 introspection 机制见 Open Questions，受限于 NyxID 既有 surface）。
 6. **删除 legacy header/metadata auth 残留**：清理已无活写入路径的防御 strip 代码（保留 proto `reserved`）。
 
 `oneof` 草图见 Required Contract。无 opt-in 不变量：收敛后默认凭证语义对既有 schedule 保持等价（迁移期 reducer 双读旧格式），但历史 raw bearer 状态只允许 fail-closed，不允许继续成功调用。
@@ -124,7 +124,7 @@ message ScheduledInvocationAgentKeyCredentialReferenceState {
 分阶段交付，每步 build + 定向测试 + 对应 `tools/ci/*guard*.sh`，详见 epic [#2404](https://github.com/aevatarAI/aevatar/issues/2404)：
 
 1. 接受本 ADR（proposed → accepted）。
-2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableCredentialReference`/`ScheduledInvocationAgentKeyCredentialReference`；旧 tag `1/2/3` deprecated 双读，tag `4` 保留为 fail-closed 哨兵，新写只用 `5/6/7`；proto 重生 + reducer/replay 测试。
+2. **Phase 0 契约先行**：proto `oneof` 收敛 + `NyxIdCredentialSource`/role/`DurableCredentialReference`；旧 tag `1/2/3` deprecated 双读，新写只用 `5/6`；proto 重生 + reducer/replay 测试。
 3. **Phase 1 校验下沉**：binding/owner/scope 校验从 endpoint private static 下沉 application/domain；HTTP 与 internal 入口对齐；create 改无副作用 validation。
 4. **Phase 2 durable 收敛**：HTTP 关闭 durable；raw token → `DurableCredentialReference(id)`；Studio minted 走 reference；旧 raw durable replay fail closed；迁移相关测试。
 5. **Phase 3 注入与 legacy 收敛**：fire 时注入由 role 决定；接入 durable reference 的 broker 兑换；核实并收敛 `NyxIdAccessToken`+`NyxIdOrgToken` 双写；`ConnectorHttpAuthorization` 下沉 workflow adapter；删 legacy strip 残留。
