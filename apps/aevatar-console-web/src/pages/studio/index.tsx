@@ -1385,6 +1385,25 @@ function upsertStudioMemberRosterMember(
   };
 }
 
+function removeStudioMemberRosterMember(
+  roster: StudioMemberRoster | undefined,
+  scopeId: string,
+  memberId: string,
+): StudioMemberRoster | undefined {
+  const normalizedMemberId = trimOptional(memberId);
+  if (!roster || !normalizedMemberId) {
+    return roster;
+  }
+
+  return {
+    scopeId: trimOptional(roster.scopeId) || trimOptional(scopeId),
+    members: roster.members.filter(
+      (member) => trimOptional(member.memberId) !== normalizedMemberId,
+    ),
+    nextPageToken: roster.nextPageToken ?? null,
+  };
+}
+
 function primeStudioMemberRoster(
   queryClient: ReturnType<typeof useQueryClient>,
   queryKey: readonly unknown[],
@@ -3048,6 +3067,7 @@ const StudioPage: React.FC = () => {
   const handledCreateMemberIntentSnapshotRef = useRef('');
   const executionLogsWindowRef = useRef<Window | null>(null);
   const createMemberNameInputRef = useRef<HTMLInputElement | null>(null);
+  const suppressBuildMemberRoutePersistenceRef = useRef(false);
   const [logsDetached, setLogsDetached] = useState(false);
   const [authRecoveryPending, setAuthRecoveryPending] = useState(false);
   const authSessionQuery = useQuery({
@@ -7673,11 +7693,18 @@ const StudioPage: React.FC = () => {
     if (routeLegacyServiceId && !routeLegacyBackendMemberKey) {
       return;
     }
+    const suppressBuildMemberRoutePersistence =
+      suppressBuildMemberRoutePersistenceRef.current &&
+      studioSurface === 'build' &&
+      !trimOptional(routeSelectedMemberKey) &&
+      !trimOptional(routeState.focusKey);
     const persistedMemberKey =
       canonicalLegacyRouteMemberKey ||
       (studioSurface === 'build'
         ? routeLegacyBackendMemberKey ||
-          trimOptional(persistableBuildMemberKey) ||
+          (suppressBuildMemberRoutePersistence
+            ? undefined
+            : trimOptional(persistableBuildMemberKey) || undefined) ||
           undefined
         : pinnedRouteBackendMemberKey ||
           trimOptional(lifecycleSurfaceMemberKey) ||
@@ -7691,11 +7718,13 @@ const StudioPage: React.FC = () => {
           ? (`workflow:${routeBuildFocus.value}` as const)
           : undefined;
     const persistedFocus =
-      persistedLifecycleFocus ||
-      (persistBuildFocusRoute &&
-      trimOptional(activeBuildFocusKey) !== trimOptional(persistedMemberKey)
-        ? activeBuildFocusKey || undefined
-        : undefined);
+      suppressBuildMemberRoutePersistence
+        ? undefined
+        : persistedLifecycleFocus ||
+          (persistBuildFocusRoute &&
+          trimOptional(activeBuildFocusKey) !== trimOptional(persistedMemberKey)
+            ? activeBuildFocusKey || undefined
+            : undefined);
 
     history.replace(buildStudioRoute({
       scopeId: resolvedStudioScopeId || undefined,
@@ -7712,6 +7741,14 @@ const StudioPage: React.FC = () => {
       executionId: persistExecutionRoute ? selectedExecutionId || undefined : undefined,
       logsMode: logsPopoutMode === 'popout' ? 'popout' : undefined,
     }));
+    if (
+      suppressBuildMemberRoutePersistence &&
+      !trimOptional(selectedWorkflowId) &&
+      !trimOptional(selectedScriptId) &&
+      !trimOptional(templateWorkflow)
+    ) {
+      suppressBuildMemberRoutePersistenceRef.current = false;
+    }
   }, [
     appliedRouteSnapshot,
     activeBuildFocusKey,
@@ -7738,8 +7775,10 @@ const StudioPage: React.FC = () => {
     runPrompt,
     selectedWorkflowRepresentsPublishedMember,
     selectedWorkflowId,
+    selectedScriptId,
     selectedExecutionId,
     studioSurface,
+    templateWorkflow,
     visibleWorkflowSummaries,
     workflowsQuery.isLoading,
   ]);
@@ -9232,14 +9271,223 @@ const StudioPage: React.FC = () => {
       selectedInventoryWorkflowId,
   );
   const selectedInventoryCanDelete = Boolean(
-    selectedInventoryMemberKey.startsWith('workflow:') &&
-      selectedInventoryWorkflowId,
+    (selectedInventoryMemberKey.startsWith('workflow:') &&
+      selectedInventoryWorkflowId) ||
+      (selectedInventoryMemberKey.startsWith('member:') &&
+        resolvedStudioScopeId &&
+        selectedInventoryResolvedMemberId),
   );
   const selectedInventoryDeleteTitle = selectedInventoryMemberKey.startsWith('member:')
-    ? 'Member delete is not available yet.'
+    ? selectedInventoryCanDelete
+      ? `Delete ${selectedInventoryLabel}`
+      : 'Select a synced Studio member to delete.'
     : selectedInventoryCanDelete
       ? `Delete ${selectedInventoryLabel}`
       : 'Select a workflow draft member to delete.';
+  const handleDeleteStudioMember = useCallback(
+    (memberKey: string) => {
+      const memberId =
+        trimOptional(selectedInventoryMemberSummary?.memberId) ||
+        readMemberIdFromMemberKey(memberKey);
+      const scopeId = trimOptional(resolvedStudioScopeId);
+      if (!scopeId || !memberId) {
+        return;
+      }
+
+      const memberLabel =
+        trimOptional(selectedInventoryLabel) || memberId || 'this member';
+
+      Modal.confirm({
+        autoFocusButton: 'cancel',
+        cancelText: t("pages.studio.index.keep.member.3", "Keep member"),
+        centered: true,
+        content: (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <Typography.Text
+              style={{
+                color: '#111827',
+                fontSize: 13,
+                lineHeight: '20px',
+              }}
+            >
+              {t("pages.studio.index.delete.member.confirm.body", "Delete")}
+              <strong>{memberLabel}</strong>{" "}
+              {t(
+                "pages.studio.index.delete.member.confirm.body.suffix",
+                "from the current member inventory?",
+              )}
+            </Typography.Text>
+            <div
+              style={{
+                background: 'rgba(254, 242, 242, 0.92)',
+                border: '1px solid rgba(248, 113, 113, 0.18)',
+                borderRadius: 12,
+                display: 'grid',
+                gap: 4,
+                padding: '10px 12px',
+              }}
+            >
+              <Typography.Text
+                strong
+                style={{
+                  color: '#991b1b',
+                  fontSize: 12,
+                  letterSpacing: 0,
+                }}
+              >
+                {t("pages.studio.index.member.authority", "Member authority")}
+              </Typography.Text>
+              <Typography.Text
+                style={{
+                  color: '#7f1d1d',
+                  fontSize: 12,
+                  lineHeight: '18px',
+                }}
+              >
+                {t(
+                  "pages.studio.index.delete.member.authority.warning",
+                  "This removes the Studio member authority and team roster entry. Published service artifacts, revisions, and historical runs stay intact.",
+                )}
+              </Typography.Text>
+            </div>
+          </div>
+        ),
+        icon: <DeleteOutlined style={{ color: '#dc2626' }} />,
+        okButtonProps: {
+          danger: true,
+        },
+        okText: t("pages.studio.index.delete.member.3", "Delete member"),
+        title: t("pages.studio.index.delete.studio.member", "Delete Studio member"),
+        width: 460,
+        onOk: async () => {
+          setInventoryBusyKey(memberKey);
+          setInventoryBusyAction('delete');
+
+          try {
+            try {
+              await studioApi.deleteMember({
+                scopeId,
+                memberId,
+              });
+            } catch (error) {
+              if (!isStudioApiStatus(error, 404)) {
+                void message.error(
+                  error instanceof Error
+                    ? error.message
+                    : t("pages.studio.index.failed.delete.member", "Failed to delete member."),
+                );
+                return;
+              }
+            }
+
+            setOptimisticStudioMembers((current) =>
+              current.filter(
+                (member) => trimOptional(member.memberId) !== memberId,
+              ),
+            );
+            queryClient.setQueryData<StudioMemberRoster>(
+              studioMembersQueryKey,
+              (current) =>
+                removeStudioMemberRosterMember(current, scopeId, memberId),
+            );
+
+            const invalidations = [
+              queryClient.invalidateQueries({
+                queryKey: studioMembersQueryKey,
+              }),
+              queryClient.invalidateQueries({
+                queryKey: ['teams', 'roster', scopeId],
+              }),
+            ];
+            if (resolvedStudioTeamId) {
+              invalidations.push(
+                queryClient.invalidateQueries({
+                  queryKey: studioTeamSummaryQueryKey,
+                }),
+                queryClient.invalidateQueries({
+                  queryKey: ['teams', 'team-summary', scopeId, resolvedStudioTeamId],
+                }),
+                queryClient.invalidateQueries({
+                  queryKey: ['teams', 'team-members', scopeId, resolvedStudioTeamId],
+                }),
+              );
+            }
+            await Promise.all(invalidations);
+
+            const deletedMemberKey = buildBackendMemberKey(memberId);
+            if (
+              selectedInventoryMemberKey === memberKey ||
+              trimOptional(deletedMemberKey) === trimOptional(workbenchMemberKey) ||
+              trimOptional(deletedMemberKey) === trimOptional(routeState.memberKey)
+            ) {
+              pinnedRouteBackendMemberIdRef.current = '';
+              suppressBuildMemberRoutePersistenceRef.current = true;
+              setPinnedRouteBackendMemberId('');
+              setSelectedWorkflowId('');
+              setSelectedScriptId('');
+              setTemplateWorkflow('');
+              if (studioSurface === 'observe') {
+                setSelectedExecutionId('');
+              }
+              history.replace(
+                buildStudioRoute({
+                  scopeId,
+                  teamId: routeState.teamId || undefined,
+                  returnTo: routeState.returnTo || undefined,
+                  step: 'build',
+                  tab: 'studio',
+                }),
+              );
+            }
+
+            void message.success(
+              t("pages.studio.index.deleted.member", "Deleted member {member}.", {
+                member: memberLabel,
+              }),
+            );
+          } catch (error) {
+            void message.error(
+              error instanceof Error
+                ? error.message
+                : t(
+                    "pages.studio.index.failed.delete.member",
+                    "Failed to delete member.",
+                  ),
+            );
+          } finally {
+            setInventoryBusyKey('');
+            setInventoryBusyAction('');
+          }
+        },
+      });
+    },
+    [
+      queryClient,
+      resolvedStudioScopeId,
+      resolvedStudioTeamId,
+      routeState.memberKey,
+      routeState.returnTo,
+      routeState.teamId,
+      selectedInventoryLabel,
+      selectedInventoryMemberKey,
+      selectedInventoryMemberSummary?.memberId,
+      studioMembersQueryKey,
+      studioSurface,
+      studioTeamSummaryQueryKey,
+      workbenchMemberKey,
+    ],
+  );
+  const handleDeleteInventoryMember = useCallback(
+    (memberKey: string) => {
+      if (memberKey.startsWith('member:')) {
+        handleDeleteStudioMember(memberKey);
+        return;
+      }
+
+      handleDeleteWorkflowMember(memberKey);
+    },
+    [handleDeleteStudioMember, handleDeleteWorkflowMember],
+  );
   const handleSelectStudioMember = useCallback(
     async (memberKey: string) => {
       const normalizedMemberKey = trimOptional(memberKey);
@@ -9694,7 +9942,11 @@ const StudioPage: React.FC = () => {
       key: selectedRailMemberKey || currentFocusMemberKey,
       label: currentMemberLabel,
       canDelete:
-        currentFocusMemberKey.startsWith('workflow:') && Boolean(selectedWorkflowId),
+        (currentFocusMemberKey.startsWith('workflow:') && Boolean(selectedWorkflowId)) ||
+        Boolean(
+          readMemberIdFromMemberKey(selectedRailMemberKey) ||
+            readMemberIdFromMemberKey(currentFocusMemberKey),
+        ),
       canRename: currentMemberCanRename,
       description: currentMemberDescription,
       kind: currentMemberKind,
@@ -9807,6 +10059,7 @@ const StudioPage: React.FC = () => {
             trimOptional(service.defaultServingRevisionId) ||
             trimOptional(service.deploymentStatus),
         }),
+        canDelete: Boolean(memberId),
         tone: resolveServiceMemberTone(service.deploymentStatus),
       }, memberDuplicateKeys);
     }
@@ -9834,6 +10087,7 @@ const StudioPage: React.FC = () => {
             formatStudioMemberLifecycleStage(memberSummary.lifecycleStage) ||
             'Backend member authority',
         }) || 'Backend member authority.',
+        canDelete: Boolean(memberId),
         canRename: Boolean(memberId),
         kind: 'member',
         meta: formatStudioAssetMeta({
@@ -10498,7 +10752,7 @@ const StudioPage: React.FC = () => {
           loading={selectedInventoryBusyAction === 'delete'}
           onClick={() =>
             selectedInventoryCanDelete
-              ? void handleDeleteWorkflowMember(selectedInventoryMemberKey)
+              ? void handleDeleteInventoryMember(selectedInventoryMemberKey)
               : undefined
           }
           title={selectedInventoryDeleteTitle}

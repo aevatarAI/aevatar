@@ -610,6 +610,7 @@ export interface StudioMemberBindingAcceptedResponse {
 
 export type StudioMemberCommandStatus =
   | 'accepted'
+  | 'delete_accepted'
   | 'no_change'
   | 'unknown';
 
