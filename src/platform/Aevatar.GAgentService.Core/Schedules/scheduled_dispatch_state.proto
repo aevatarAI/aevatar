@@ -98,13 +98,17 @@ message ScheduledServiceInvocationTargetState
 
 message ScheduledServiceInvocationAuthState
 {
-  ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1;
+  ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1 [deprecated = true];
   // Legacy field. Older schedule events may contain a raw bearer here; reducers
   // must not copy it into current state or runtime dispatch. Keep the field
   // readable until old events have been migrated, then reserve it.
-  string durable_sender_bearer_token = 2;
-  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3;
+  string durable_sender_bearer_token = 2 [deprecated = true];
+  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3 [deprecated = true];
   bool legacy_durable_sender_bearer_blocked = 4;
+  oneof source {
+    ScheduledServiceInvocationNyxIdCredentialSourceState nyx_id = 5;
+    ScheduledServiceInvocationDurableCredentialReferenceState durable = 6;
+  }
 }
 
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
@@ -117,6 +121,19 @@ message ScheduledServiceInvocationNyxIdCredentialSourceState
 {
   ScheduledServiceInvocationNyxIdSubjectRefState subject = 1;
   string scope = 2;
+  ScheduledServiceInvocationNyxIdCredentialRoleState role = 3;
+}
+
+enum ScheduledServiceInvocationNyxIdCredentialRoleState
+{
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_UNSPECIFIED = 0;
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_SENDER = 1;
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_SCOPE_OWNER = 2;
+}
+
+message ScheduledServiceInvocationDurableCredentialReferenceState
+{
+  string credential_id = 1;
 }
 
 message ScheduledServiceInvocationNyxIdSubjectRefState

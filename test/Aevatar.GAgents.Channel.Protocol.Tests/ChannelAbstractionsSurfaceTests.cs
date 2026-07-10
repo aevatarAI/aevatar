@@ -123,6 +123,14 @@ public sealed class ChannelAbstractionsSurfaceTests
             .GetParameters()[0]
             .ParameterType
             .ShouldBe(typeof(ChannelNativeDeliveryTarget));
+        typeof(IChannelNativeMessageSender).GetMethod(nameof(IChannelNativeMessageSender.UpdateAsync))!
+            .GetParameters()[1]
+            .ParameterType
+            .ShouldBe(typeof(string));
+        typeof(IChannelNativeMessageSender).GetMethod(nameof(IChannelNativeMessageSender.UpdateAsync))!
+            .GetParameters()[3]
+            .ParameterType
+            .ShouldBe(typeof(bool));
 
         var genericComposer = typeof(IMessageComposer<>);
         genericComposer.IsGenericTypeDefinition.ShouldBeTrue();
