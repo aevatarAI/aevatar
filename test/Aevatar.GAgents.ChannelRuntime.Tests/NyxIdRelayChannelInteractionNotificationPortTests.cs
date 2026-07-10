@@ -42,7 +42,11 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     [Fact]
     public async Task RemoteApprovalNotifyAsync_WhenLarkTarget_ShouldSendInteractiveCardThroughNyxProxy()
     {
-        var registry = BuildRegistry(BuildTarget("agent-remote-1", "lark", "oc_chat_1"));
+        var registry = BuildRegistry(BuildTarget(
+            "agent-remote-1",
+            "lark",
+            "legacy-conversation",
+            larkReceiveId: "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_remote_1"}}""");
         var port = new NyxIdRelayRemoteToolApprovalNotificationPort(
             new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
@@ -116,7 +120,11 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     [Fact]
     public async Task DeliverAsync_WhenLarkTarget_ShouldSendComposedInteractiveCardThroughNyxProxy()
     {
-        var registry = BuildRegistry(BuildTarget("agent-lark-1", "lark", "oc_chat_1"));
+        var registry = BuildRegistry(BuildTarget(
+            "agent-lark-1",
+            "lark",
+            "legacy-conversation",
+            larkReceiveId: "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
@@ -349,14 +357,15 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     private static UserAgentDeliveryTarget BuildTarget(
         string deliveryTargetId,
         string platform,
-        string conversationId) =>
+        string conversationId,
+        string? larkReceiveId = null) =>
         new(
             AgentId: deliveryTargetId,
             Platform: platform,
             ConversationId: conversationId,
             NyxProviderSlug: platform == "telegram" ? "api-telegram-bot" : "api-lark-bot",
             NyxApiKey: "nyx-api-key-1",
-            LarkReceiveId: platform == "lark" ? conversationId : string.Empty,
+            LarkReceiveId: platform == "lark" ? larkReceiveId ?? conversationId : string.Empty,
             LarkReceiveIdType: platform == "lark" ? "chat_id" : string.Empty,
             LarkReceiveIdFallback: string.Empty,
             LarkReceiveIdTypeFallback: string.Empty,
