@@ -10,6 +10,14 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class RegistrationQueryPortTests
 {
+    private static Aevatar.Foundation.Abstractions.Credentials.SecretReference TestDeliverySecretReference(string registrationId) =>
+        new()
+        {
+            Ref = $"sec_delivery_{registrationId}",
+            Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-x",
+        };
+
     [Fact]
     public async Task DeviceQueryPort_GetAsync_ReturnsMappedEntry()
     {
@@ -52,7 +60,7 @@ public sealed class RegistrationQueryPortTests
                 NyxChannelBotId = "nyx-bot-1",
                 NyxAgentApiKeyId = "key-1",
                 NyxConversationRouteId = "route-1",
-                NyxReplyCredentialRef = "secrets://channel/nyxid/lark/bot-1/reply-api-key",
+                WorkflowResultDeliveryCredential = TestDeliverySecretReference("bot-1"),
             }));
 
         var queryPort = new ChannelBotRegistrationQueryPort(reader);
@@ -67,7 +75,7 @@ public sealed class RegistrationQueryPortTests
         result.NyxChannelBotId.Should().Be("nyx-bot-1");
         result.NyxAgentApiKeyId.Should().Be("key-1");
         result.NyxConversationRouteId.Should().Be("route-1");
-        result.NyxReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/bot-1/reply-api-key");
+        result.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("bot-1"));
     }
 
     [Fact]

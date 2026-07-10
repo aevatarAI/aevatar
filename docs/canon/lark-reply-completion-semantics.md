@@ -229,11 +229,20 @@ internal static bool IsTerminal(AgentRunState s) =>
 
 `aevatar_start_workflow wait=stream` 在 channel chat turn 中只承诺 workflow run command 已 accepted，并返回 typed `WorkflowRunBackgroundDeliveryReceipt`。聊天轮必须 ack-fast 结束，不能挂住原 LLM turn 等 workflow terminal，也不能依赖一次性 report artifact 或用户 relay token 作为后续完成态投递依据。
 
-AgentRun/NyxidChat 侧为每个 workflow command 注册一个 run-scoped `WorkflowRunDeliveryGAgent`。该 actor 的 Protobuf state 持久化 delivery id、workflow actor/run/command/correlation id、channel reply target、registration scope 与 long-lived `bot_agent_key_id`；projection callback 只把 terminal frame 包成 `WorkflowRunDeliveryTerminalFrameObserved` 自消息投回 actor，actor handler 内完成 stale check、relay side effect 与 delivered/failed event 持久化。
+AgentRun/NyxidChat 侧为每个 workflow command 注册一个 run-scoped `WorkflowRunDeliveryGAgent`。该 actor 的 Protobuf state 持久化 delivery id、workflow actor/run/command/correlation id、channel reply target、registration scope、稳定 `bot_registration_id` 与 typed `workflow_result_delivery_credential`（vault `SecretReference` + api-key subject）；projection callback 只把 terminal frame 包成 `WorkflowRunDeliveryTerminalFrameObserved` 自消息投回 actor，actor handler 内完成 stale check、relay side effect 与 delivered/failed event 持久化。
 
 后台观察必须复用 `IWorkflowExecutionProjectionPort.AttachExistingActorProjectionAsync(...)` 连接既有 workflow run event projection 链，只消费 committed `RunFinished` / `RunError` / `RunStopped` terminal frame。禁止新增平行 workflow stream subscriber、禁止 query-time replay/priming、禁止用进程内 run-to-context registry 保存会话事实。MVP 只做 completion/error/stopped terminal reply；progress edit 流后续可在同一 projection input 上叠加 throttle。
 
 Nyx relay terminal reply 必须经 channel-relay `/reply` 使用长效 bot agent key 投递到同一 reply target。用户 inbound relay token 过期不得影响后台 terminal delivery；短命用户凭据只属于原入站 turn，不能进入 `WorkflowRunDeliveryGAgentState`。
+
+### 10.1 Delivery credential：typed vault handle + fail closed（#2675）
+
+- **凭据来源唯一**：Lark provisioning 在创建 relay api key 时捕获 NyxID 一次性 `full_key`，立即写入分布式 `ISecretVault`（purpose `channel.workflow-result-delivery-agent-key`，owner scope = registration scope，subject = `nyx_agent_api_key_id`）。raw key 不进入 Protobuf state、event、read model、result 或日志；mainnet 只读 secrets store 不参与。
+- **强类型 handle 贯穿链路**：`ChannelBotRegistrationEntry.workflow_result_delivery_credential`（vault `SecretReference`）→ registration read model → `AgentToolChannelContext.WorkflowResultDeliveryCredential`（`SecretReference` + subject）→ `WorkflowRunDeliveryStartRequested` → `WorkflowRunDeliveryGAgentState`。泛化字符串 `nyx_reply_credential_ref` / `durable_reply_credential_ref` 字段已 reserved 删除。
+- **窄解析边界**：终态回投经 `IWorkflowResultDeliveryCredentialResolver` 在 actor turn 内解析，固定 purpose + handle 自带 owner scope + api-key subject；purpose/owner/subject 不匹配、vault 未命中或 revoked 一律 fail closed 且不发出 HTTP。raw bearer 只进入 `NyxIdRelayOutboundPort` adapter 调用。
+- **身份与凭据分离**：`ConversationReference.BotInstanceId` 使用稳定 `bot_registration_id`；secret handle 只负责授权解析。缺 registration id 的历史 delivery 用 `"nyx-relay-bot"` 共享别名。
+- **默认 wait=stream + fail closed**：channel skill 触发 workflow 且无可用 handle 时，dispatcher 在 dispatch 前返回产品级 `channel_workflow_delivery_unavailable`（不泄漏 credential 细节），不创建注定丢失终态结果的 run；`WorkflowRunDeliveryGAgent.ValidateStart` 为第二道同语义门。内部日志用 typed reason 区分 `credential_handle_missing` / `resolver_unavailable` / `delivery_registration_failed`。
+- **迁移语义**：NyxID `full_key` 只在 create/rotate 时返回，无法回读；缺 handle 的存量 registration 持续 fail closed，修复路径是通过 /channels 重新注册（re-provision 铸新 key + vault handle）。禁止 query-time repair、禁止把短期 inbound reply token 冒充 delivery credential。vault revoke/rotate 基建见 #2689；provisioning 失败补偿会尽力 revoke vault 记录并回滚 NyxID api key。
 
 ## 11. 实现 Checklist
 

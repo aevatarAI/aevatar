@@ -39,6 +39,19 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
     }
 
+    [Fact]
+    public async Task AdminShell_AuditRefresh_ShouldReloadOnEntryAndGlobalRefresh()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("if(!AUDIT_LOADING) loadAuditTrail();");
+        html.Should().Contain("if((curParts()[0]||defaultModule())==='audit')");
+        html.Should().Contain("toast('正在刷新审计日志');");
+        html.Should().NotContain(
+            "if(!AUDIT_LOADED||AUDIT_LOADING){ if(!AUDIT_LOADING) loadAuditTrail(); }");
+    }
+
     private static async Task<WebApplication> CreateAppAsync()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions

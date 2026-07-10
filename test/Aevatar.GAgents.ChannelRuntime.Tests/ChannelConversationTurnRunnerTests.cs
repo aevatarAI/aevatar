@@ -373,7 +373,12 @@ public sealed class ChannelConversationTurnRunnerTests
     {
         var registration = BuildRegistrationEntry();
         registration.NyxAgentApiKeyId = "nyx-agent-key-1";
-        registration.NyxReplyCredentialRef = "secrets://channel/nyxid/lark/reg-1/reply-api-key";
+        registration.WorkflowResultDeliveryCredential = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+        {
+            Ref = "sec_delivery_reg_1",
+            Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-1",
+        };
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
         registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-agent-key-1", Arg.Any<CancellationToken>())
@@ -399,8 +404,13 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
-        toolContext.Channel.DurableReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/reg-1/reply-api-key");
-        toolContext.Channel.DurableReplyCredentialRef.Should().NotBe("nyx-agent-key-1");
+        var deliveryCredential = toolContext.Channel.WorkflowResultDeliveryCredential;
+        deliveryCredential.Should().NotBeNull();
+        // The vault ref authorizes delivery; the raw api-key id is only the vault subject, never the credential.
+        deliveryCredential!.SecretReference.Ref.Should().Be("sec_delivery_reg_1");
+        deliveryCredential.SecretReference.Ref.Should().NotBe("nyx-agent-key-1");
+        deliveryCredential.SubjectId.Should().Be("nyx-agent-key-1");
+        toolContext.Channel.BotRegistrationId.Should().Be(registration.Id);
         toolContext.ExternalMetadata.Should().NotContainKey("channel.durable_reply_credential_ref");
     }
 

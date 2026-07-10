@@ -1,7 +1,7 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -23,7 +23,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly NyxIdRelayOutboundPort _outboundPort;
-    private readonly ICredentialProvider _credentialProvider;
+    private readonly IWorkflowResultDeliveryCredentialResolver _credentialResolver;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WorkflowRunDeliveryGAgent> _logger;
     private IEventSink<WorkflowRunEventEnvelope>? _sink;
@@ -33,14 +33,14 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         IWorkflowExecutionProjectionPort projectionPort,
         IActorDispatchPort dispatchPort,
         NyxIdRelayOutboundPort outboundPort,
-        ICredentialProvider credentialProvider,
+        IWorkflowResultDeliveryCredentialResolver credentialResolver,
         ILogger<WorkflowRunDeliveryGAgent> logger,
         TimeProvider? timeProvider = null)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _outboundPort = outboundPort ?? throw new ArgumentNullException(nameof(outboundPort));
-        _credentialProvider = credentialProvider ?? throw new ArgumentNullException(nameof(credentialProvider));
+        _credentialResolver = credentialResolver ?? throw new ArgumentNullException(nameof(credentialResolver));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -82,6 +82,13 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         var validationError = ValidateStart(command);
         if (validationError is not null)
         {
+            _logger.LogWarning(
+                "Workflow run delivery start rejected: reason={Reason} deliveryId={DeliveryId} workflowActorId={WorkflowActorId}",
+                validationError.Value.Code == ChannelWorkflowDeliveryUnavailableCode
+                    ? "credential_handle_missing"
+                    : validationError.Value.Code,
+                command.DeliveryId,
+                command.WorkflowActorId);
             await PersistDomainEventAsync(new WorkflowRunDeliveryFailedEvent
             {
                 DeliveryId = command.DeliveryId ?? string.Empty,
@@ -107,7 +114,8 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             ReplyMessageId = command.ReplyMessageId.Trim(),
             PlatformMessageId = command.PlatformMessageId?.Trim() ?? string.Empty,
             RegistrationScopeId = command.RegistrationScopeId?.Trim() ?? string.Empty,
-            DurableReplyCredentialRef = command.DurableReplyCredentialRef.Trim(),
+            WorkflowResultDeliveryCredential = command.WorkflowResultDeliveryCredential.Clone(),
+            BotRegistrationId = command.BotRegistrationId?.Trim() ?? string.Empty,
             StartedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
 
@@ -126,9 +134,9 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             ? command.ObservedAtUnixMs
             : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var text = BuildTerminalReplyText(command);
-        var durableReplyCredential = await ResolveDurableReplyCredentialAsync(command, attempt, observedAt)
+        var deliveryAgentKey = await ResolveWorkflowResultDeliveryAgentKeyAsync(command, attempt, observedAt)
             .ConfigureAwait(false);
-        if (durableReplyCredential is null)
+        if (deliveryAgentKey is null)
             return;
 
         var result = await _outboundPort.SendWithAgentKeyAsync(
@@ -142,7 +150,7 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
                         ? State.WorkflowCommandId
                         : State.WorkflowCorrelationId,
                 },
-                durableReplyCredential,
+                deliveryAgentKey,
                 CancellationToken.None)
             .ConfigureAwait(false);
 
@@ -187,16 +195,16 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
-    private async Task<string?> ResolveDurableReplyCredentialAsync(
+    private async Task<string?> ResolveWorkflowResultDeliveryAgentKeyAsync(
         WorkflowRunDeliveryTerminalFrameObserved command,
         int attempt,
         long observedAt)
     {
-        string? credential;
+        string? agentKey;
         try
         {
-            credential = await _credentialProvider.ResolveAsync(
-                    State.DurableReplyCredentialRef,
+            agentKey = await _credentialResolver.ResolveAsync(
+                    State.WorkflowResultDeliveryCredential ?? new ChannelWorkflowResultDeliveryCredential(),
                     CancellationToken.None)
                 .ConfigureAwait(false);
         }
@@ -204,29 +212,33 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         {
             _logger.LogWarning(
                 ex,
-                "Workflow run delivery credential resolution failed: deliveryId={DeliveryId} credentialRef={CredentialRef}",
+                "Workflow run delivery credential resolution failed: reason=resolver_unavailable deliveryId={DeliveryId} credentialRef={CredentialRef}",
                 State.DeliveryId,
-                State.DurableReplyCredentialRef);
+                State.WorkflowResultDeliveryCredential?.SecretReference?.Ref);
             await PersistDeliveryFailureAsync(
                     command,
                     attempt,
                     observedAt,
-                    "durable_reply_credential_unavailable",
+                    "resolver_unavailable",
                     "Workflow terminal reply credential could not be resolved.")
                 .ConfigureAwait(false);
             await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
             return null;
         }
 
-        if (!string.IsNullOrWhiteSpace(credential))
-            return credential.Trim();
+        if (!string.IsNullOrWhiteSpace(agentKey))
+            return agentKey;
 
+        _logger.LogWarning(
+            "Workflow run delivery credential handle did not resolve to an agent key: reason=credential_handle_missing deliveryId={DeliveryId} credentialRef={CredentialRef}",
+            State.DeliveryId,
+            State.WorkflowResultDeliveryCredential?.SecretReference?.Ref);
         await PersistDeliveryFailureAsync(
                 command,
                 attempt,
                 observedAt,
-                "durable_reply_credential_missing",
-                "Workflow terminal reply credential reference is not available.")
+                "credential_handle_missing",
+                "Workflow terminal reply credential handle is not resolvable.")
             .ConfigureAwait(false);
         await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
         return null;
@@ -341,9 +353,12 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         if (string.IsNullOrWhiteSpace(State.ChannelPlatform))
             return new ConversationReference();
 
-        var bot = string.IsNullOrWhiteSpace(State.DurableReplyCredentialRef)
+        // Bot identity is the stable channel bot registration id; the credential handle only
+        // authorizes delivery and never doubles as identity. "nyx-relay-bot" is the relay's
+        // shared bot alias for deliveries registered before the registration id was persisted.
+        var bot = string.IsNullOrWhiteSpace(State.BotRegistrationId)
             ? "nyx-relay-bot"
-            : State.DurableReplyCredentialRef;
+            : State.BotRegistrationId;
         var partition = string.IsNullOrWhiteSpace(State.RegistrationScopeId)
             ? State.ReplyMessageId
             : State.RegistrationScopeId;
@@ -390,7 +405,8 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
             return ("channel_platform_required", "Workflow run delivery requires a channel platform.");
         if (string.IsNullOrWhiteSpace(command.ReplyMessageId))
             return ("reply_message_id_required", "Workflow run delivery requires a reply message id.");
-        if (string.IsNullOrWhiteSpace(command.DurableReplyCredentialRef))
+        if (string.IsNullOrWhiteSpace(command.WorkflowResultDeliveryCredential?.SecretReference?.Ref) ||
+            string.IsNullOrWhiteSpace(command.WorkflowResultDeliveryCredential.SubjectId))
             return (ChannelWorkflowDeliveryUnavailableCode, ChannelWorkflowDeliveryUnavailableSummary);
 
         return null;
@@ -411,7 +427,8 @@ public sealed class WorkflowRunDeliveryGAgent : GAgentBase<WorkflowRunDeliveryGA
         next.ReplyMessageId = evt.ReplyMessageId;
         next.PlatformMessageId = evt.PlatformMessageId;
         next.RegistrationScopeId = evt.RegistrationScopeId;
-        next.DurableReplyCredentialRef = evt.DurableReplyCredentialRef;
+        next.WorkflowResultDeliveryCredential = evt.WorkflowResultDeliveryCredential?.Clone();
+        next.BotRegistrationId = evt.BotRegistrationId;
         next.Status = WorkflowRunDeliveryStatus.Started;
         next.StartedAtUnixMs = evt.StartedAtUnixMs;
         next.CompletedAtUnixMs = 0;
