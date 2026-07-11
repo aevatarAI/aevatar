@@ -53,6 +53,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             member.Summary.PublishedServiceId,
             nameof(member.Summary.PublishedServiceId));
         EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
+        var callerSubject = BuildCallerSubject(request, callerSubjectExternalUserId);
 
         var schedule = await EnsureScheduleAsync(
             BuildScheduleId(scopeId, memberId),
@@ -61,7 +62,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             memberId,
             publishedServiceId,
             NormalizeOptional(request.Prompt) ?? string.Empty,
-            BuildScheduleAuth(request, callerSubjectExternalUserId),
+            BuildScheduleAuth(callerSubject),
+            new ScheduledDispatchMutationContext(scopeId, callerSubject),
             scheduleCron,
             scheduleTimezone,
             ct);
@@ -84,6 +86,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string publishedServiceId,
         string prompt,
         ScheduledServiceInvocationAuth auth,
+        ScheduledDispatchMutationContext mutationContext,
         string cronExpression,
         string timezone,
         CancellationToken ct)
@@ -104,6 +107,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                         auth,
                         cronExpression,
                         timezone),
+                    mutationContext,
                     ct);
             }
             catch (ScheduledDispatchNotFoundException)
@@ -189,14 +193,18 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
 
     private static ScheduledServiceInvocationAuth BuildScheduleAuth(
+        ScheduledServiceInvocationNyxIdSubjectRef callerSubject) =>
+        new(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+            callerSubject,
+            Scope: ProvisionWorkflowCallerCredential.DefaultScope));
+
+    private static ScheduledServiceInvocationNyxIdSubjectRef BuildCallerSubject(
         StudioMemberWorkflowScheduleRequest request,
         string callerSubjectExternalUserId) =>
-        new(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(
-                Platform: NormalizeRequired(request.CallerSubjectPlatform, nameof(request.CallerSubjectPlatform)),
-                Tenant: NormalizeOptional(request.CallerSubjectTenant) ?? string.Empty,
-                ExternalUserId: callerSubjectExternalUserId),
-            Scope: ProvisionWorkflowCallerCredential.DefaultScope));
+        new(
+            Platform: NormalizeRequired(request.CallerSubjectPlatform, nameof(request.CallerSubjectPlatform)),
+            Tenant: NormalizeOptional(request.CallerSubjectTenant) ?? string.Empty,
+            ExternalUserId: callerSubjectExternalUserId);
 
     private static string BuildScheduleId(string scopeId, string memberId)
     {

@@ -136,6 +136,10 @@ message ScheduledInvocationAgentKeyCredentialReferenceState {
 - **`NyxIdAccessToken` + `NyxIdOrgToken` 双写是否保留**：需先核实 org token 的下游消费方（schedule 链路外）是否仍依赖同写；确认前不删（discussion D）。
 - **`ConnectorHttpAuthorization` 下沉边界**：是否能完全收进 workflow adapter 内部生成，使其退化为纯边界产物。
 
+## Implementation Note
+
+issue-2406 Phase 1 采用无副作用 admission：create/update/ensure 只校验可信 mutation context 的 owner/scope 与 binding readmodel 可见性，不调用 `IssueScopeOwnerNyxIdAsync` 预签 token。由于当前 aevatar 边界内没有 NyxID scope introspection surface，scope 真实可签发性仍保留在 fire-time credential exchange 边界处理。
+
 ## Non-Goals
 
 - 改 NyxID（任何形态）。
