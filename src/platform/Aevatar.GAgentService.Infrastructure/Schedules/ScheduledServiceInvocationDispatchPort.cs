@@ -219,13 +219,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 credential.CredentialId.Trim(),
                 "scheduled-dispatch-fire"),
             ct);
-        if (!resolved.Resolved || string.IsNullOrWhiteSpace(resolved.Secret))
+        if (!resolved.Resolved)
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
                 "Scheduled service invocation durable credential reference could not be resolved.");
         }
 
-        return ScheduledServiceInvocationCredentialExchangeResult.Success(resolved.Secret);
+        return ScheduledServiceInvocationCredentialExchangeResult.Success(resolved.Secret!);
     }
 
     private async Task<ScheduledServiceInvocationCredentialExchangeResult> ResolveScheduledInvocationAgentKeyAsync(
