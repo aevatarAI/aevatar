@@ -143,6 +143,7 @@ enum ScheduledServiceInvocationNyxIdCredentialRoleState
 message ScheduledServiceInvocationDurableCredentialReferenceState
 {
   string credential_id = 1;
+  aevatar.credentials.SecretReference secret_reference = 2;
 }
 
 message ScheduledServiceInvocationNyxIdSubjectRefState

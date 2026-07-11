@@ -61,7 +61,8 @@ public sealed record ScheduledInvocationAgentKeyCredentialReference(
     : ScheduledServiceInvocationCredentialSource;
 
 public sealed record ScheduledServiceInvocationDurableCredentialReference(
-    string CredentialId)
+    string CredentialId,
+    SecretReference SecretReference)
     : ScheduledServiceInvocationCredentialSource;
 
 public sealed record ScheduledServiceInvocationAuth
@@ -86,6 +87,12 @@ public sealed record ScheduledServiceInvocationAuth
     {
     }
 
+    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationDurableCredentialReference DurableCredentialReference)
+        : this((ScheduledServiceInvocationCredentialSource)(DurableCredentialReference ??
+                                                            throw new ArgumentNullException(nameof(DurableCredentialReference))))
+    {
+    }
+
     public ScheduledServiceInvocationAuth(ScheduledInvocationAgentKeyCredentialReference ScheduledInvocationAgentKey)
         : this((ScheduledServiceInvocationCredentialSource)(ScheduledInvocationAgentKey ??
                                                             throw new ArgumentNullException(nameof(ScheduledInvocationAgentKey))))
@@ -99,6 +106,9 @@ public sealed record ScheduledServiceInvocationAuth
 
     public ScheduledServiceInvocationDurableCredentialReference? Durable =>
         Source as ScheduledServiceInvocationDurableCredentialReference;
+
+    public ScheduledServiceInvocationDurableCredentialReference? DurableCredentialReference =>
+        Durable;
 
     public ScheduledInvocationAgentKeyCredentialReference? ScheduledInvocationAgentKey =>
         Source as ScheduledInvocationAgentKeyCredentialReference;

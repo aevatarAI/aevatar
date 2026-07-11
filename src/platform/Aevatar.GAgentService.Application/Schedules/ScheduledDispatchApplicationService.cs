@@ -456,8 +456,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
             ScheduledServiceInvocationDurableCredentialReference durable =>
-                new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
-                    NormalizeRequired(durable.CredentialId, nameof(durable.CredentialId)))),
+                new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable)),
             ScheduledInvocationAgentKeyCredentialReference agentKey =>
                 new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey)),
             _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
@@ -492,6 +491,35 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(source.Scope, nameof(source.Scope)),
             role));
     }
+
+    private static ScheduledServiceInvocationDurableCredentialReference NormalizeDurableCredentialReference(
+        ScheduledServiceInvocationDurableCredentialReference reference)
+    {
+        var credentialId = NormalizeRequired(reference.CredentialId, nameof(reference.CredentialId));
+        if (reference.SecretReference == null)
+            throw new ArgumentException("Durable credential secret reference is required.", nameof(reference));
+
+        var secretReference = NormalizeSecretReference(reference.SecretReference);
+        if (!string.Equals(secretReference.Purpose, CredentialSecretPurposes.ScheduledNyxApiKey, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Durable credential secret reference purpose must be '{CredentialSecretPurposes.ScheduledNyxApiKey}'.",
+                nameof(reference));
+        }
+
+        return new ScheduledServiceInvocationDurableCredentialReference(credentialId, secretReference);
+    }
+
+    private static SecretReference NormalizeSecretReference(SecretReference reference) =>
+        new()
+        {
+            Ref = NormalizeRequired(reference.Ref, nameof(reference.Ref)),
+            Purpose = NormalizeRequired(reference.Purpose, nameof(reference.Purpose)),
+            Fingerprint = NormalizeOptional(reference.Fingerprint),
+            Version = reference.Version,
+            OwnerScopeKey = NormalizeRequired(reference.OwnerScopeKey, nameof(reference.OwnerScopeKey)),
+            CreatedAtUnixMs = reference.CreatedAtUnixMs,
+        };
 
     private static ScheduledInvocationAgentKeyCredentialReference NormalizeScheduledInvocationAgentKey(
         ScheduledInvocationAgentKeyCredentialReference source)

@@ -127,6 +127,55 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldNotProjectDurableCredentialReference()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-durable-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+            {
+                CredentialId = "credential-projector-1",
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-projector-1",
+                    Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                    OwnerScopeKey = "owner-scope-projector",
+                    Fingerprint = "fp-projector",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-durable-reference"),
+            WrapCommitted(
+                state,
+                version: 11,
+                eventId: "evt-durable-reference",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:20:00+00:00")));
+
+        var document = await store.GetAsync("schedule-durable-reference");
+        document.Should().NotBeNull();
+        AssertDocumentDoesNotContain(document!, "credential-projector-1");
+        AssertDocumentDoesNotContain(document!, "sec-projector-1");
+        AssertDocumentDoesNotContain(document!, "owner-scope-projector");
+        AssertDocumentDoesNotContain(document!, "fp-projector");
+        AssertDocumentDoesNotContain(document!, "resolved-full-key");
+        document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        document.StateVersion.Should().Be(11);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldNotProjectScheduledInvocationAgentKeySecretReference()
     {
         var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
@@ -169,9 +218,9 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
 
         var document = await store.GetAsync("schedule-reference");
         document.Should().NotBeNull();
-        document!.ToString().Should().NotContain("sec-sensitive-reference");
-        document.ToString().Should().NotContain("api-key-sensitive-id");
-        document.ToString().Should().NotContain("sensitive-fingerprint");
+        AssertDocumentDoesNotContain(document!, "sec-sensitive-reference");
+        AssertDocumentDoesNotContain(document!, "api-key-sensitive-id");
+        AssertDocumentDoesNotContain(document!, "sensitive-fingerprint");
         document.StateVersion.Should().Be(10);
     }
 
@@ -300,4 +349,10 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                 StateRoot = Any.Pack(state),
             }),
         };
+
+    private static void AssertDocumentDoesNotContain(ScheduledDispatchDocument document, string value)
+    {
+        document.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8(value).ToByteArray()).Should().Be(-1);
+        document.ToString().Should().NotContain(value);
+    }
 }
