@@ -596,11 +596,13 @@ public sealed class SkillRunnerCommandPortTests
 
         public Task<ScheduledDispatchMutationReceipt> CreateAsync(
             ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
             ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
             Ensured.Add(configuration);
@@ -610,6 +612,7 @@ public sealed class SkillRunnerCommandPortTests
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
             string scheduleId,
             ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
