@@ -189,6 +189,21 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceAuthWithoutSecretReference()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
+                "credential-1",
+                null!))));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*secret reference is required*");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldRejectDurableCredentialReferenceAuthWithWrongPurpose()
     {
         var service = CreateService();

@@ -748,6 +748,47 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.LlmControl.ModelOverride.Should().Be("opus");
     }
 
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReferenceAndDefaultProjection_ShouldInjectSenderToken()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
+        var secretVault = new RecordingSecretVault("durable-run-key");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                LlmControl = new LLMControlContextPayload { ModelOverride = "opus" },
+            }),
+        };
+        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference());
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            auth,
+            ScheduleId: "schedule-durable"));
+
+        credentialExchange.Sources.Should().BeEmpty();
+        var resolve = secretVault.ResolveRequests.Should().ContainSingle().Which;
+        resolve.Ref.Should().Be("sec-1");
+        resolve.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        resolve.OwnerScopeKey.Should().Be("owner-scope-1");
+        resolve.SubjectId.Should().Be("credential-1");
+        secretVault.StoreRequests.Should().BeEmpty();
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
+        invokedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
+        invokedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        invokedChat.LlmControl.ModelOverride.Should().Be("opus");
+        invokedChat.CallerDurableCredential.Should().BeNull();
+        original.Payload.Unpack<ChatRequestEvent>().LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+    }
+
     [Theory]
     [MemberData(nameof(DurableCredentialReferenceFailureCases))]
     public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReferenceFailure_ShouldFailBeforeInvocation(
