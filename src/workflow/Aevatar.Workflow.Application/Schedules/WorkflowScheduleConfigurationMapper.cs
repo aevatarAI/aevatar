@@ -31,6 +31,18 @@ internal static class WorkflowScheduleConfigurationMapper
             ScheduledDispatchScheduleKind.Workflow);
     }
 
+    public static ScheduledDispatchMutationContext ToScheduledDispatchMutationContext(
+        WorkflowScheduleConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var context = configuration.MutationContext ?? WorkflowScheduleMutationContext.None;
+        return new ScheduledDispatchMutationContext(
+            NormalizeOptional(context.AuthenticatedScopeId, string.Empty),
+            context.AuthenticatedNyxIdOwnerSubject == null
+                ? null
+                : MapNyxIdSubject(context.AuthenticatedNyxIdOwnerSubject));
+    }
+
     private static ServiceIdentity BuildWorkflowServiceIdentity(WorkflowScheduleConfiguration configuration)
     {
         var scopeId = NormalizeRequired(FirstNonBlank(configuration.ScopeId, configuration.TenantId), nameof(configuration.ScopeId));
@@ -71,12 +83,9 @@ internal static class WorkflowScheduleConfigurationMapper
         if (hasScopeOwnerNyxId)
         {
             var scopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId!;
-            if (scopeOwnerNyxId.OwnerSubject == null)
-                throw new ArgumentException("Scope owner NyxID subject is required.", nameof(configuration.Auth));
-
             return new ScheduledServiceInvocationAuth(
                 new ScheduledServiceInvocationNyxIdCredentialSource(
-                    MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject),
+                    scopeOwnerNyxId.OwnerSubject == null ? null! : MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject),
                     NormalizeRequired(scopeOwnerNyxId.Scope, nameof(scopeOwnerNyxId.Scope)),
                     ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
         }

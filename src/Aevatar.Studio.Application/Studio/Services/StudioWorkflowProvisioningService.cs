@@ -249,7 +249,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 var schedule = await _scheduleService.EnsureAsync(
                     BuildScheduleConfiguration(
                         scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone),
-                    ct);
+                    ct: ct);
                 return NormalizeOptional(schedule.ScheduleId);
             }
             catch (ScheduledDispatchNotFoundException)

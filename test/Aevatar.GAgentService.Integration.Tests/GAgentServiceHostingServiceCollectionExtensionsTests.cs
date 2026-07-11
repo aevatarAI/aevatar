@@ -1,11 +1,15 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Core.Ports;
@@ -14,6 +18,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
+using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
@@ -126,6 +131,39 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ILlmRunCore>().Should().BeOfType<LlmRunCore>();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithoutBindingQueryPort_ShouldResolveNoopScheduledCredentialAdmissionPort()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScheduledDispatchCredentialAdmissionPort>()
+            .Should()
+            .BeOfType<NoopScheduledDispatchCredentialAdmissionPort>();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithBindingQueryPort_ShouldResolveNyxIdScheduledCredentialAdmissionPort()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddSingleton<IExternalIdentityBindingQueryPort>(new UnusedExternalIdentityBindingQueryPort());
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScheduledDispatchCredentialAdmissionPort>()
+            .Should()
+            .BeOfType<NyxIdScheduledDispatchCredentialAdmissionPort>();
     }
 
     [Fact]
@@ -753,5 +791,11 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
 
         public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default) =>
+            throw new NotSupportedException("The DI test only resolves the scheduled credential-admission adapter.");
     }
 }
