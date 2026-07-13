@@ -4,7 +4,7 @@ status: accepted
 owner: eanzhao
 ---
 
-# ADR-0041: Scheduled Invocation Durable Credential Uses SecretReference
+# ADR-0042: Scheduled Invocation Durable Credential Uses SecretReference
 
 ## Context
 

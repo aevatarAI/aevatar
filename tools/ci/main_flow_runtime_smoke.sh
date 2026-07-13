@@ -335,6 +335,7 @@ save_bind_response="${log_dir}/save-bind.json"
 workflow_list_response="${log_dir}/workflow-list.json"
 preview_response="${log_dir}/schedule-preview.json"
 provision_response="${log_dir}/provision.json"
+schedule_readmodel_response="${log_dir}/schedule-readmodel.json"
 run_now_response="${log_dir}/run-now.json"
 
 request_json POST "/api/scopes/${scope_id}/teams" "${team_body}" "201" "${team_response}"
@@ -366,6 +367,9 @@ if [[ -z "${schedule_id}" ]]; then
   python3 -m json.tool "${provision_response}" >&2 2>/dev/null || cat "${provision_response}" >&2
   exit 1
 fi
+
+wait_for_status_code "/api/schedules/${schedule_id}" "200" "${schedule_readmodel_response}"
+assert_json_field "${schedule_readmodel_response}" "schedule.scheduleId" "${schedule_id}"
 
 request_json POST "/api/schedules/${schedule_id}:run-now" "{}" "202" "${run_now_response}"
 
