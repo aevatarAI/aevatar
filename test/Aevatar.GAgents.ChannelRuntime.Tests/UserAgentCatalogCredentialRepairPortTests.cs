@@ -330,6 +330,32 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
         release.Leases.Should().ContainSingle().Which.Should().BeSameAs(runtimeLease);
     }
 
+    [Fact]
+    public async Task ObservationPort_WhenSubscriptionFails_ReleasesActivatedProjectionLeaseOnce()
+    {
+        var context = new UserAgentCatalogCredentialRepairProjectionContext
+        {
+            RootActorId = UserAgentCatalogGAgent.WellKnownId,
+            ProjectionKind = UserAgentCatalogCredentialRepairObservationPort.ProjectionKind,
+            SessionId = "repair-request-1",
+        };
+        var runtimeLease = new UserAgentCatalogCredentialRepairRuntimeLease(context);
+        var activation = new RecordingActivationService(runtimeLease);
+        var release = new RecordingReleaseService();
+        var eventHub = new RecordingSessionEventHub(throwOnSubscribe: true);
+        var observationPort = new UserAgentCatalogCredentialRepairObservationPort(
+            activation,
+            release,
+            eventHub);
+
+        var bind = () => observationPort.BindAsync("repair-request-1");
+
+        await bind.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("subscription failed");
+        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(runtimeLease);
+        eventHub.Subscription.DisposeCalls.Should().Be(0);
+    }
+
     private static SecretReference CompleteReference() => new()
     {
         Ref = "secret-1",
@@ -391,7 +417,9 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
         }
     }
 
-    private sealed class RecordingSessionEventHub(bool throwOnDispose = false)
+    private sealed class RecordingSessionEventHub(
+        bool throwOnDispose = false,
+        bool throwOnSubscribe = false)
         : IProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>
     {
         public string? RootActorId { get; private set; }
@@ -416,6 +444,12 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (throwOnSubscribe)
+            {
+                return Task.FromException<IAsyncDisposable>(
+                    new InvalidOperationException("subscription failed"));
+            }
+
             RootActorId = rootActorId;
             SessionId = sessionId;
             Handler = handler;

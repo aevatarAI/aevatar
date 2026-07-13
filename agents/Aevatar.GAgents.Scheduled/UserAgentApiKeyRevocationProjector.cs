@@ -41,6 +41,7 @@ public sealed class UserAgentApiKeyRevocationProjector
         }
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
+        var deletedLegacyDocumentIds = new HashSet<string>(StringComparer.Ordinal);
         if (stateEvent.EventData.Is(UserAgentCatalogApiKeyRevocationAttemptRecordedEvent.Descriptor))
         {
             var attempt = stateEvent.EventData.Unpack<UserAgentCatalogApiKeyRevocationAttemptRecordedEvent>();
@@ -54,7 +55,7 @@ public sealed class UserAgentApiKeyRevocationProjector
                 !string.IsNullOrWhiteSpace(attempt.AgentId) &&
                 !string.IsNullOrWhiteSpace(attempt.ApiKeyId))
             {
-                await DeleteLegacyDocumentAsync(attempt.AgentId, ct);
+                await DeleteLegacyDocumentAsync(attempt.AgentId, deletedLegacyDocumentIds, ct);
                 var documentId = string.IsNullOrWhiteSpace(attempt.SecretReferenceRef)
                     ? ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
                         attempt.AgentId.Trim(),
@@ -74,7 +75,7 @@ public sealed class UserAgentApiKeyRevocationProjector
             if (!string.IsNullOrWhiteSpace(repaired.AgentId) &&
                 !string.IsNullOrWhiteSpace(repaired.ApiKeyId))
             {
-                await DeleteLegacyDocumentAsync(repaired.AgentId, ct);
+                await DeleteLegacyDocumentAsync(repaired.AgentId, deletedLegacyDocumentIds, ct);
                 await _writeDispatcher.DeleteAsync(
                     ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
                         repaired.AgentId.Trim(),
@@ -91,7 +92,7 @@ public sealed class UserAgentApiKeyRevocationProjector
                 continue;
             }
 
-            await DeleteLegacyDocumentAsync(revocation.AgentId, ct);
+            await DeleteLegacyDocumentAsync(revocation.AgentId, deletedLegacyDocumentIds, ct);
             await _writeDispatcher.UpsertAsync(
                 Materialize(context, stateEvent, revocation, updatedAt),
                 ct);
@@ -104,10 +105,17 @@ public sealed class UserAgentApiKeyRevocationProjector
             apiKeyId.Trim(),
             secretReference.Trim());
 
-    private Task<ProjectionWriteResult> DeleteLegacyDocumentAsync(
+    private async Task DeleteLegacyDocumentAsync(
         string agentId,
-        CancellationToken ct) =>
-        _writeDispatcher.DeleteAsync(agentId.Trim(), ct);
+        ISet<string> deletedLegacyDocumentIds,
+        CancellationToken ct)
+    {
+        var legacyDocumentId = agentId.Trim();
+        if (!deletedLegacyDocumentIds.Add(legacyDocumentId))
+            return;
+
+        await _writeDispatcher.DeleteAsync(legacyDocumentId, ct);
+    }
 
     private static string BuildDocumentId(UserAgentApiKeyRevocation revocation)
     {

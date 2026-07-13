@@ -1,7 +1,9 @@
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -643,6 +645,38 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         });
 
         committedBeforeExecution.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleTombstoneAsync_DoesNotPersistBearerTokenInEventsOrState()
+    {
+        const string bearerToken = "sensitive-bearer-token-sentinel";
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-transient-bearer",
+            ApiKeyId = "key-transient-bearer",
+            NyxApiKeyReference = CompleteReference(
+                "secret-transient-bearer",
+                "key-transient-bearer"),
+            OwnerScope = OwnerScope.ForNyxIdNative("user-transient-bearer"),
+        });
+
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand
+        {
+            AgentId = "agent-transient-bearer",
+            BearerToken = bearerToken,
+        });
+
+        await _credentialRevocationExecutor.Received(1).ExecutePendingAsync(
+            bearerToken,
+            Arg.Any<UserAgentApiKeyRevocation>(),
+            Arg.Any<CancellationToken>());
+        Encoding.UTF8.GetString(_agent.State.ToByteArray()).Should().NotContain(bearerToken);
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        persisted.Should().OnlyContain(stateEvent =>
+            !Encoding.UTF8.GetString(stateEvent.ToByteArray()).Contains(
+                bearerToken,
+                StringComparison.Ordinal));
     }
 
     [Fact]
