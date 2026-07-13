@@ -11,6 +11,20 @@ public static class ScheduledAgentCredentialRevocationDocumentIds
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
         ArgumentException.ThrowIfNullOrWhiteSpace(secretReference);
 
+        return BuildCore(agentId, apiKeyId, secretReference);
+    }
+
+    public static string BuildBlocked(string agentId, string apiKeyId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
+
+        return BuildCore(agentId, apiKeyId, string.Empty);
+    }
+
+    private static string BuildCore(string agentId, string apiKeyId, string secretReference)
+    {
+
         var segments = new[]
         {
             Encoding.UTF8.GetBytes(agentId),

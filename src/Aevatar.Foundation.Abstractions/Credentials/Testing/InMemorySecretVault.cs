@@ -106,11 +106,16 @@ public sealed class InMemorySecretVault : ISecretVault
 
         lock (_gate)
         {
-            if (!TryGetAuthorized(request.Ref, request.Purpose, request.OwnerScopeKey, request.SubjectId, out var storedSecret) ||
-                storedSecret.Revoked)
+            if (!_secrets.TryGetValue(request.Ref, out var storedSecret))
+                return Task.FromResult(new RevokeSecretResult(true));
+
+            if (!IsAuthorized(storedSecret, request.Purpose, request.OwnerScopeKey, request.SubjectId))
             {
                 return Task.FromResult(new RevokeSecretResult(false));
             }
+
+            if (storedSecret.Revoked)
+                return Task.FromResult(new RevokeSecretResult(true));
 
             _secrets[request.Ref] = storedSecret with { Revoked = true };
             return Task.FromResult(new RevokeSecretResult(true));

@@ -20,7 +20,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
-    private readonly ScheduledAgentCredentialLifecycle _credentialLifecycle;
+    private readonly IScheduledAgentCredentialLifecycle _credentialLifecycle;
     private readonly ILogger<AgentBuilderTool>? _logger;
 
     // Refactor (iter1/cluster-002):
@@ -32,7 +32,7 @@ public sealed class AgentBuilderTool : IAgentTool
         ISkillRunnerCommandPort skillRunnerPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
-        ScheduledAgentCredentialLifecycle credentialLifecycle,
+        IScheduledAgentCredentialLifecycle credentialLifecycle,
         ILogger<AgentBuilderTool>? logger = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));

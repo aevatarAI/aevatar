@@ -454,6 +454,9 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             NyxIdTrack = document.NyxIdTrack?.Clone(),
             VaultTrack = document.VaultTrack?.Clone(),
             SecretSubjectId = document.SecretSubjectId ?? string.Empty,
+            RepairReason = document.RepairReason ?? string.Empty,
+            RequestedBySubjectId = document.RequestedBySubjectId ?? string.Empty,
+            RequestedAtUnixMs = document.RequestedAtUnixMs,
             CatalogAuthorityStateVersion = document.StateVersion,
             CatalogLastEventId = document.LastEventId ?? string.Empty,
         };

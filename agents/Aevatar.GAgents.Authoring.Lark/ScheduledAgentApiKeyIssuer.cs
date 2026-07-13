@@ -47,8 +47,11 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         ArgumentNullException.ThrowIfNull(serviceSlugs);
 
-        var ownerLlmRouteSlug = await ResolveOwnerLlmRouteServiceSlugAsync(scopeId, ct);
-        var slugs = RequiredSlugs(serviceSlugs, ownerLlmRouteSlug).Distinct(StringComparer.Ordinal).ToArray();
+        var ownerLlmRoute = await ResolveOwnerLlmRouteServiceSlugAsync(scopeId, ct);
+        if (ownerLlmRoute.Failure is not null)
+            return ownerLlmRoute.Failure;
+
+        var slugs = RequiredSlugs(serviceSlugs, ownerLlmRoute.ServiceSlug).Distinct(StringComparer.Ordinal).ToArray();
         if (slugs.Length == 0)
             return ScheduledAgentApiKeyIssueResult.Failed("missing_required_service_slugs");
 
@@ -187,10 +190,12 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             yield return ownerLlmRouteSlug;
     }
 
-    private async Task<string?> ResolveOwnerLlmRouteServiceSlugAsync(string? scopeId, CancellationToken ct)
+    private async Task<OwnerLlmRouteResolution> ResolveOwnerLlmRouteServiceSlugAsync(
+        string? scopeId,
+        CancellationToken ct)
     {
         if (_ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
-            return null;
+            return OwnerLlmRouteResolution.Succeeded(null);
 
         OwnerLlmConfig config;
         try
@@ -203,18 +208,18 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         }
         catch (Exception ex)
         {
-            // Mirror OwnerLlmConfigApplier's swallow-and-log policy: a flaky user-config
-            // projection must not fail agent creation. The key is minted without the LLM-route
-            // grant (identical to pre-fix behavior) so the misconfiguration, if any, surfaces at
-            // run time rather than blocking creation on a transient lookup error.
             _logger?.LogWarning(
                 ex,
-                "Scheduled agent key issuance could not load owner LLM config for scope {ScopeId}; minting key without an LLM-route grant",
+                "Scheduled agent key issuance could not load owner LLM config for scope {ScopeId}; key creation is blocked",
                 scopeId);
-            return null;
+            return OwnerLlmRouteResolution.Failed(
+                ScheduledAgentApiKeyIssueResult.Failed(
+                    "owner_llm_config_unavailable",
+                    ex.Message,
+                    "Retry after the owner LLM route configuration is available."));
         }
 
-        return ExtractProxyServiceSlug(config.PreferredLlmRoute);
+        return OwnerLlmRouteResolution.Succeeded(ExtractProxyServiceSlug(config.PreferredLlmRoute));
     }
 
     /// <summary>
@@ -608,6 +613,17 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
     {
         public static ScheduledAgentServiceResolution Failed(string error, string? detail = null, string? hint = null) =>
             new([], null, error, detail, hint);
+    }
+
+    private sealed record OwnerLlmRouteResolution(
+        string? ServiceSlug,
+        ScheduledAgentApiKeyIssueResult? Failure)
+    {
+        public static OwnerLlmRouteResolution Succeeded(string? serviceSlug) =>
+            new(serviceSlug, null);
+
+        public static OwnerLlmRouteResolution Failed(ScheduledAgentApiKeyIssueResult failure) =>
+            new(null, failure);
     }
 
     private sealed record ResolvedService(string Id, ServiceOwner Owner);

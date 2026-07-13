@@ -10,7 +10,35 @@ public interface IScheduledAgentCredentialRevocationExecutor
         CancellationToken ct = default);
 }
 
-public sealed class ScheduledAgentCredentialLifecycle : IScheduledAgentCredentialRevocationExecutor
+public interface IScheduledAgentCredentialLifecycle
+{
+    Task<ScheduledAgentCredentialProvisionResult> ProvisionAsync(
+        string token,
+        ScheduledAgentServiceSlugs serviceSlugs,
+        string agentId,
+        string skillName,
+        string? scopeId,
+        string purpose,
+        string ownerScopeKey,
+        string auditReason,
+        CancellationToken ct = default);
+
+    Task ExecutePendingAsync(
+        string token,
+        UserAgentApiKeyRevocationReadModelEntry pending,
+        CancellationToken ct = default);
+
+    Task RequestRevocationAsync(
+        string token,
+        string agentId,
+        string apiKeyId,
+        SecretReference reference,
+        CancellationToken ct = default);
+}
+
+public sealed class ScheduledAgentCredentialLifecycle
+    : IScheduledAgentCredentialLifecycle,
+      IScheduledAgentCredentialRevocationExecutor
 {
     private readonly ISecretVault _secretVault;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
@@ -266,6 +294,9 @@ public sealed class ScheduledAgentCredentialLifecycle : IScheduledAgentCredentia
             AgentId = pending.AgentId,
             ApiKeyId = pending.ApiKeyId,
             SecretSubjectId = pending.SecretSubjectId,
+            RepairReason = pending.RepairReason,
+            RequestedBySubjectId = pending.RequestedBySubjectId,
+            RequestedAtUnixMs = pending.RequestedAtUnixMs,
             NyxIdTrack = pending.NyxIdTrack?.Clone(),
             VaultTrack = pending.VaultTrack?.Clone(),
         };

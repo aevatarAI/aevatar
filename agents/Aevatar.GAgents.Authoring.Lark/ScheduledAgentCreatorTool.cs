@@ -13,14 +13,14 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _mapper;
-    private readonly ScheduledAgentCredentialLifecycle _credentialLifecycle;
+    private readonly IScheduledAgentCredentialLifecycle _credentialLifecycle;
     private readonly ILogger<ScheduledAgentCreatorTool>? _logger;
 
     internal ScheduledAgentCreatorTool(
         ISkillRunnerCommandPort skillRunnerPort,
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper mapper,
-        ScheduledAgentCredentialLifecycle credentialLifecycle,
+        IScheduledAgentCredentialLifecycle credentialLifecycle,
         ILogger<ScheduledAgentCreatorTool>? logger = null)
     {
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));

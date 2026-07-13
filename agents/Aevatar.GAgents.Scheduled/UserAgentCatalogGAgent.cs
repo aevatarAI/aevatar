@@ -150,11 +150,28 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         UserAgentApiKeyRevocation? revocation = null;
         if (!existing.Tombstoned && ShouldRequestApiKeyRevocation(existing))
         {
-            revocation = BuildApiKeyRevocation(existing);
-            await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
+            var requestedRevocation = BuildApiKeyRevocation(existing);
+            var currentRevocation = FindRevocationByIdentity(State.PendingApiKeyRevocations, requestedRevocation);
+            if (currentRevocation is not null)
             {
-                Revocation = revocation,
-            });
+                revocation = currentRevocation.Clone();
+            }
+            else if (HasRevocationAliasConflict(State.PendingApiKeyRevocations, requestedRevocation))
+            {
+                Logger.LogWarning(
+                    "Cannot replace pending credential revocation with an alias: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
+                    requestedRevocation.AgentId,
+                    requestedRevocation.ApiKeyId,
+                    GetSecretReferenceRef(requestedRevocation));
+            }
+            else
+            {
+                revocation = requestedRevocation;
+                await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
+                {
+                    Revocation = revocation,
+                });
+            }
         }
 
         await PersistDomainEventAsync(new UserAgentCatalogTombstonedEvent
@@ -177,15 +194,20 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return;
         }
 
+        var secretReferenceRef = command.SecretReferenceRef?.Trim() ?? string.Empty;
         var pending = State.PendingApiKeyRevocations.FirstOrDefault(revocation =>
-            string.Equals(revocation.AgentId, command.AgentId.Trim(), StringComparison.Ordinal) &&
-            string.Equals(revocation.ApiKeyId, command.ApiKeyId.Trim(), StringComparison.Ordinal));
+            MatchesRevocationIdentity(
+                revocation,
+                command.AgentId,
+                command.ApiKeyId,
+                secretReferenceRef));
         if (pending is null)
         {
             Logger.LogWarning(
-                "Cannot record API key revocation attempt without a pending revocation: agentId={AgentId} apiKeyId={ApiKeyId}",
+                "Cannot record API key revocation attempt without the matching pending revocation: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
                 command.AgentId.Trim(),
-                command.ApiKeyId.Trim());
+                command.ApiKeyId.Trim(),
+                secretReferenceRef);
             return;
         }
 
@@ -214,7 +236,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                 : command.FailureKind,
             AttemptedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Track = command.Track,
-            SecretReferenceRef = pending.NyxApiKeyReference?.Ref ?? string.Empty,
+            SecretReferenceRef = secretReferenceRef,
         });
     }
 
@@ -225,6 +247,26 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return;
 
         var revocation = NormalizeRevocation(command.Revocation);
+        if (string.IsNullOrWhiteSpace(revocation.AgentId) || string.IsNullOrWhiteSpace(revocation.ApiKeyId))
+            return;
+
+        var currentRevocation = FindRevocationByIdentity(State.PendingApiKeyRevocations, revocation);
+        if (currentRevocation is not null)
+        {
+            await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, currentRevocation.Clone());
+            return;
+        }
+
+        if (HasRevocationAliasConflict(State.PendingApiKeyRevocations, revocation))
+        {
+            Logger.LogWarning(
+                "Cannot request credential revocation with an aliased identity: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
+                revocation.AgentId,
+                revocation.ApiKeyId,
+                GetSecretReferenceRef(revocation));
+            return;
+        }
+
         await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
         {
             Revocation = revocation,
@@ -259,8 +301,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         }
 
         var pending = State.PendingApiKeyRevocations.FirstOrDefault(revocation =>
-            string.Equals(revocation.AgentId, agentId, StringComparison.Ordinal) &&
-            string.Equals(revocation.ApiKeyId, apiKeyId, StringComparison.Ordinal));
+            MatchesRevocationIdentity(revocation, agentId, apiKeyId, string.Empty));
         if (pending?.VaultTrack?.Status != ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef)
         {
             await PersistRepairRejectedAsync(
@@ -274,7 +315,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         var aliasConflict = State.PendingApiKeyRevocations.Any(revocation =>
             !ReferenceEquals(revocation, pending) &&
             (string.Equals(revocation.ApiKeyId, apiKeyId, StringComparison.Ordinal) ||
-             string.Equals(revocation.NyxApiKeyReference?.Ref, reference.Ref, StringComparison.Ordinal)));
+             string.Equals(GetSecretReferenceRef(revocation), reference.Ref.Trim(), StringComparison.Ordinal)));
         if (aliasConflict)
         {
             await PersistRepairRejectedAsync(
@@ -298,8 +339,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         });
 
         var repaired = State.PendingApiKeyRevocations.First(revocation =>
-            string.Equals(revocation.AgentId, agentId, StringComparison.Ordinal) &&
-            string.Equals(revocation.ApiKeyId, apiKeyId, StringComparison.Ordinal));
+            MatchesRevocationIdentity(revocation, agentId, apiKeyId, reference.Ref));
         await _credentialRevocationExecutor.ExecutePendingAsync(string.Empty, repaired);
     }
 
@@ -439,13 +479,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         }
 
         var next = current.Clone();
-        var existing = next.PendingApiKeyRevocations.FirstOrDefault(revocation =>
-            string.Equals(revocation.AgentId, evt.Revocation.AgentId, StringComparison.Ordinal) &&
-            string.Equals(revocation.ApiKeyId, evt.Revocation.ApiKeyId, StringComparison.Ordinal));
-        if (existing is not null)
-            next.PendingApiKeyRevocations.Remove(existing);
+        var requested = NormalizeRevocation(evt.Revocation);
+        if (FindRevocationByIdentity(next.PendingApiKeyRevocations, requested) is not null ||
+            HasRevocationAliasConflict(next.PendingApiKeyRevocations, requested))
+        {
+            return next;
+        }
 
-        next.PendingApiKeyRevocations.Add(NormalizeRevocation(evt.Revocation));
+        next.PendingApiKeyRevocations.Add(requested);
         return next;
     }
 
@@ -455,8 +496,11 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
     {
         var next = current.Clone();
         var existing = next.PendingApiKeyRevocations.FirstOrDefault(revocation =>
-            string.Equals(revocation.AgentId, evt.AgentId, StringComparison.Ordinal) &&
-            string.Equals(revocation.ApiKeyId, evt.ApiKeyId, StringComparison.Ordinal));
+            MatchesRevocationIdentity(
+                revocation,
+                evt.AgentId,
+                evt.ApiKeyId,
+                evt.SecretReferenceRef));
         if (existing is null)
             return current;
 
@@ -489,8 +533,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
     {
         var next = current.Clone();
         var existing = next.PendingApiKeyRevocations.FirstOrDefault(revocation =>
-            string.Equals(revocation.AgentId, evt.AgentId, StringComparison.Ordinal) &&
-            string.Equals(revocation.ApiKeyId, evt.ApiKeyId, StringComparison.Ordinal));
+            MatchesRevocationIdentity(revocation, evt.AgentId, evt.ApiKeyId, string.Empty));
         if (existing is null)
             return next;
 
@@ -618,8 +661,49 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                 ? ScheduledCredentialRevocationTrackStatus.Pending
                 : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
         };
+        if (!IsCompleteReference(revocation.NyxApiKeyReference) &&
+            revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending)
+        {
+            revocation.VaultTrack.Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef;
+        }
         return revocation;
     }
+
+    private static UserAgentApiKeyRevocation? FindRevocationByIdentity(
+        IEnumerable<UserAgentApiKeyRevocation> revocations,
+        UserAgentApiKeyRevocation candidate) =>
+        revocations.FirstOrDefault(revocation =>
+            MatchesRevocationIdentity(
+                revocation,
+                candidate.AgentId,
+                candidate.ApiKeyId,
+                GetSecretReferenceRef(candidate)));
+
+    private static bool HasRevocationAliasConflict(
+        IEnumerable<UserAgentApiKeyRevocation> revocations,
+        UserAgentApiKeyRevocation candidate)
+    {
+        var candidateReference = GetSecretReferenceRef(candidate);
+        return revocations.Any(revocation =>
+            string.Equals(revocation.ApiKeyId, candidate.ApiKeyId, StringComparison.Ordinal) ||
+            (!string.IsNullOrEmpty(candidateReference) &&
+             string.Equals(GetSecretReferenceRef(revocation), candidateReference, StringComparison.Ordinal)));
+    }
+
+    private static bool MatchesRevocationIdentity(
+        UserAgentApiKeyRevocation revocation,
+        string agentId,
+        string apiKeyId,
+        string secretReferenceRef) =>
+        string.Equals(revocation.AgentId, agentId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(revocation.ApiKeyId, apiKeyId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(
+            GetSecretReferenceRef(revocation),
+            secretReferenceRef?.Trim() ?? string.Empty,
+            StringComparison.Ordinal);
+
+    private static string GetSecretReferenceRef(UserAgentApiKeyRevocation revocation) =>
+        revocation.NyxApiKeyReference?.Ref?.Trim() ?? string.Empty;
 
     private static ScheduledCredentialRevocationTrack? ResolveTrack(
         UserAgentApiKeyRevocation revocation,
@@ -628,7 +712,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         {
             UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId => revocation.NyxIdTrack,
             UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault => revocation.VaultTrack,
-            _ => revocation.NyxIdTrack,
+            _ => null,
         };
 
     private static bool IsTerminal(ScheduledCredentialRevocationTrack? track) =>

@@ -16,7 +16,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _scheduledAgentMapper;
-    private readonly ScheduledAgentCredentialLifecycle _scheduledAgentCredentialLifecycle;
+    private readonly IScheduledAgentCredentialLifecycle _scheduledAgentCredentialLifecycle;
     private readonly ILogger<AgentBuilderTool>? _toolLogger;
     private readonly ILogger<ScheduledAgentCreatorTool>? _creatorToolLogger;
 
@@ -27,7 +27,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper scheduledAgentMapper,
-        ScheduledAgentCredentialLifecycle scheduledAgentCredentialLifecycle,
+        IScheduledAgentCredentialLifecycle scheduledAgentCredentialLifecycle,
         ILogger<AgentBuilderTool>? toolLogger = null,
         ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null)
     {

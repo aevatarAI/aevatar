@@ -137,6 +137,8 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         ct.ThrowIfCancellationRequested();
 
         var read = await ReadRecordBytesAsync(request.Ref, ct);
+        if (read.FailureReason == SecretResolutionFailureReason.NotFound)
+            return new RevokeSecretResult(true);
         if (read.Record is null || read.FailureReason is not SecretResolutionFailureReason.None)
             return new RevokeSecretResult(false);
 
@@ -151,7 +153,11 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             BuildKey(record.Ref),
             read.Bytes!,
             ct);
-        return new RevokeSecretResult(revoked);
+        if (revoked)
+            return new RevokeSecretResult(true);
+
+        var current = await ReadRecordBytesAsync(request.Ref, ct);
+        return new RevokeSecretResult(current.FailureReason == SecretResolutionFailureReason.NotFound);
     }
 
     private async Task<ReadVaultRecordResult> ReadRecordAsync(string reference, CancellationToken ct)

@@ -32,6 +32,8 @@ public static class AuthoringServiceCollectionExtensions
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
         services.TryAddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
         services.TryAddSingleton<ScheduledAgentCredentialLifecycle>();
+        services.TryAddSingleton<IScheduledAgentCredentialLifecycle>(
+            sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>());
         services.TryAddSingleton<IScheduledAgentCredentialRevocationExecutor>(
             sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>());
         if (!services.Any(IsAgentBuilderToolSourceRegistration))
@@ -53,7 +55,7 @@ public static class AuthoringServiceCollectionExtensions
             sp.GetRequiredService<IUserAgentCatalogCommandPort>(),
             sp.GetRequiredService<ICallerScopeResolver>(),
             sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            sp.GetRequiredService<ScheduledAgentCredentialLifecycle>(),
+            sp.GetRequiredService<IScheduledAgentCredentialLifecycle>(),
             sp.GetService<ILogger<AgentBuilderTool>>(),
             sp.GetService<ILogger<ScheduledAgentCreatorTool>>());
 }

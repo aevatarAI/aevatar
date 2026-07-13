@@ -35,6 +35,11 @@ executor. Bearer tokens are transient command input and are never copied to an e
 state. Failed attempts remain in actor state for idempotent retry; the fact is removed only
 after both tracks become terminal.
 
+Blocked facts encode an empty third identity segment only in the read-model document key.
+Repair deletes that blocked document key before upserting the exact-reference key. Exact
+vault revocation treats an already absent record as the postcondition being satisfied, while
+an existing unauthorized or concurrently changed record remains a failed attempt.
+
 Command ports return honest accepted-for-dispatch receipts. They do not turn the committed
 event stream into synchronous request-reply. The administrator repair endpoint therefore
 returns `202 Accepted` with stable request and command identifiers; committed repair or

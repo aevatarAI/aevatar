@@ -28,22 +28,18 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly IUserAgentCatalogCommandPort _commandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
-    private readonly ScheduledAgentCredentialLifecycle? _credentialLifecycle;
+    private readonly IScheduledAgentCredentialLifecycle? _credentialLifecycle;
 
     public AgentDeliveryTargetTool(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
         ICallerScopeResolver callerScopeResolver,
-        ISecretVault secretVault,
-        IScheduledAgentApiKeyIssuer? apiKeyIssuer = null)
+        IScheduledAgentCredentialLifecycle? credentialLifecycle = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
-        ArgumentNullException.ThrowIfNull(secretVault);
-        _credentialLifecycle = apiKeyIssuer is null
-            ? null
-            : new ScheduledAgentCredentialLifecycle(secretVault, commandPort, apiKeyIssuer);
+        _credentialLifecycle = credentialLifecycle;
     }
 
     public string Name => "agent_delivery_targets";
@@ -138,7 +134,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
         ICallerScopeResolver callerScopeResolver,
-        ScheduledAgentCredentialLifecycle? credentialLifecycle,
+        IScheduledAgentCredentialLifecycle? credentialLifecycle,
         string token,
         OwnerScope caller,
         JsonElement args,
