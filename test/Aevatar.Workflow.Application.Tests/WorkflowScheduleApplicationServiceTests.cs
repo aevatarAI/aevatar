@@ -277,7 +277,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithBothNyxIdSources()
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleAuthWithMultipleCredentialSources()
     {
         var service = CreateService();
 
@@ -293,7 +293,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         });
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Exactly one workflow schedule NyxID credential source*");
+            .WithMessage("*Exactly one workflow schedule credential source*");
     }
 
     [Fact]

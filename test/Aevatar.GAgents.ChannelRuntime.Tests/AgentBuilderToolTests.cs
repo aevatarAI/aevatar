@@ -1448,16 +1448,19 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_ScheduledWorkflowLifecycle_RoutesToScheduleService()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var scheduledWorkflowEntry = new UserAgentCatalogReadModelEntry
+        {
+            AgentId = "scheduled-workflow-1",
+            AgentType = ScheduledWorkflowAgentDefaults.AgentType,
+            TemplateName = "summary",
+            Status = SkillRunnerDefaults.StatusRunning,
+            ScheduleCron = "0 9 * * *",
+            ScheduleTimezone = "UTC",
+        };
         queryPort.GetForCallerAsync("scheduled-workflow-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
-            {
-                AgentId = "scheduled-workflow-1",
-                AgentType = ScheduledWorkflowAgentDefaults.AgentType,
-                TemplateName = "summary",
-                Status = SkillRunnerDefaults.StatusRunning,
-                ScheduleCron = "0 9 * * *",
-                ScheduleTimezone = "UTC",
-            }));
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(scheduledWorkflowEntry));
+        queryPort.GetTriggerableForCallerAsync("scheduled-workflow-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(scheduledWorkflowEntry));
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
