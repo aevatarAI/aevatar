@@ -77,7 +77,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     Any.Pack(new ChatRequestEvent
                     {
                         Prompt = "hello",
-                        ConnectorHttpAuthorization = "Bearer connector-secret",
+                        ConnectorHttpAuthorization = "Bearer stored-connector-token",
+                        Headers =
+                        {
+                            [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer header-token",
+                            ["client"] = "kept",
+                        },
+                        Metadata =
+                        {
+                            [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer metadata-token",
+                            ["trace"] = "kept",
+                        },
                         CallerDurableCredential = new DurableCallerCredentialRef
                         {
                             Ref = "forged",
@@ -119,6 +129,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
         var request = prepared.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
         var persistedChat = request.Payload.Unpack<ChatRequestEvent>();
+        persistedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        persistedChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        persistedChat.Headers.Should().Contain("client", "kept");
+        persistedChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        persistedChat.Metadata.Should().Contain("trace", "kept");
         persistedChat.LlmControl.Should().NotBeNull();
         persistedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         persistedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
@@ -137,6 +152,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
         persistedChat.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
         persistedChat.ToolContext.Routing.UserMemoryPrompt.Should().Be("tool memory");
         var descriptorChat = prepared.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
+        descriptorChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        descriptorChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        descriptorChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         descriptorChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         descriptorChat.ConnectorHttpAuthorization.Should().BeEmpty();
         descriptorChat.CallerDurableCredential.Should().BeNull();
@@ -266,6 +284,42 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithoutAuth_ShouldClearStoredConnectorAuthorization()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort();
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer stored-token",
+                Headers =
+                {
+                    [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer header-token",
+                },
+                Metadata =
+                {
+                    [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer metadata-token",
+                    ["trace"] = "kept",
+                },
+            }),
+        };
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original));
+
+        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        invokedChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        invokedChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
+        invokedChat.Metadata.Should().Contain("trace", "kept");
+        original.Payload.Unpack<ChatRequestEvent>().ConnectorHttpAuthorization.Should().Be("Bearer stored-token");
+    }
+
+    [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuth_ShouldInjectOwnerTokenIntoOwnerLlmControlFields()
     {
         var invocationPort = new RecordingServiceInvocationPort();
@@ -378,7 +432,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithAuth_ShouldExchangeAndInjectSenderTokenIntoClonedChatPayload()
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndWorkflowProjection_ShouldProjectSenderTokenToDurableCallerCredential()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");

@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Google.Protobuf.WellKnownTypes;
@@ -38,7 +37,7 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
         if (envelope.Payload == null)
             throw new ArgumentException("Envelope scheduled dispatch target requires a payload.", nameof(configuration));
 
-        envelope.Payload = StripCredentialBearingLlmControl(envelope.Payload);
+        envelope.Payload = ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(envelope.Payload);
         envelope.Id = string.IsNullOrWhiteSpace(envelope.Id) ? commandId : envelope.Id.Trim();
         envelope.Timestamp ??= Timestamp.FromDateTime(DateTime.UtcNow);
         var targetActorId = ResolveTargetActorId(target.ActorId, envelope);
@@ -68,7 +67,7 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
     {
         var target = configuration.Target.ServiceInvocation
             ?? throw new ArgumentException("Service invocation scheduled dispatch target is required.", nameof(configuration));
-        var safePayload = StripCredentialBearingLlmControl(target.Payload);
+        var safePayload = ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(target.Payload);
         var invocation = new ServiceInvocationRequest
         {
             Identity = target.Identity.Clone(),
@@ -115,32 +114,6 @@ public sealed class ScheduledDispatchTargetPreparationService : IScheduledDispat
                 CorrelationId = correlationId,
             },
         };
-
-    private static Any StripCredentialBearingLlmControl(Any payload)
-    {
-        if (!payload.Is(ChatRequestEvent.Descriptor))
-            return payload.Clone();
-
-        var chatRequest = payload.Unpack<ChatRequestEvent>();
-        if (chatRequest.LlmControl != null)
-        {
-            chatRequest.LlmControl.NyxIdAccessToken = string.Empty;
-            chatRequest.LlmControl.NyxIdOrgToken = string.Empty;
-            chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
-        }
-
-        chatRequest.ConnectorHttpAuthorization = string.Empty;
-        chatRequest.CallerDurableCredential = null;
-
-        if (chatRequest.ToolContext?.Credentials != null)
-        {
-            chatRequest.ToolContext.Credentials.NyxIdAccessToken = string.Empty;
-            chatRequest.ToolContext.Credentials.NyxIdOrgToken = string.Empty;
-            chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken = string.Empty;
-        }
-
-        return Any.Pack(chatRequest);
-    }
 
     private static string ResolveTargetActorId(string? configuredActorId, EventEnvelope envelope)
     {

@@ -238,7 +238,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             ScheduleId = NormalizeRequired(scheduleId, nameof(scheduleId)),
             DisplayName = NormalizeOptional(displayName),
             TargetActorId = NormalizeOptional(targetActorId),
-            TriggerEnvelope = triggerEnvelope.Clone(),
+            TriggerEnvelope = NormalizeTriggerEnvelope(triggerEnvelope),
             CronExpression = NormalizeCronExpression(normalizedMode, cronExpression),
             Timezone = ScheduledDispatchCalculator.NormalizeTimezone(timezone),
             Enabled = enabled,
@@ -549,6 +549,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (envelope.Payload == null)
             throw new InvalidOperationException("Scheduled dispatch trigger envelope payload is not configured.");
 
+        envelope.Payload = ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(envelope.Payload);
         envelope.Id = idempotencyKey;
         envelope.Timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
         envelope.Route = EnvelopeRouteSemantics.CreateDirect(ResolveScheduleId(), ResolveDispatchTargetActorId());
@@ -588,8 +589,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             Identity = target.Identity?.Clone(),
             EndpointId = target.EndpointId ?? string.Empty,
-            Payload = target.Payload?.Clone()
-                ?? throw new InvalidOperationException("Scheduled service invocation payload is not configured."),
+            Payload = target.Payload == null
+                ? throw new InvalidOperationException("Scheduled service invocation payload is not configured.")
+                : ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(target.Payload),
             CommandId = idempotencyKey,
             CorrelationId = idempotencyKey,
             RevisionId = target.RevisionId ?? string.Empty,
@@ -820,7 +822,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         ScheduledDispatchTargetState target,
         IEnumerable<KeyValuePair<string, string>> headers)
     {
-        var normalizedHeaders = NormalizeHeaders(headers);
+        var normalizedHeaders = ShouldInspectRawCredentialSignalHeaders(target.CredentialRequirementTargetKind)
+            ? NormalizeCredentialSignalHeaders(headers)
+            : NormalizeHeaders(headers);
         var payload = target.Kind == ScheduledDispatchTargetKindState.ServiceInvocation
             ? target.ServiceInvocation?.Payload
             : target.Envelope?.Payload;
@@ -1087,6 +1091,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var normalizedTarget = PreserveExistingServiceInvocationAuth(
             NormalizeTarget(command.Target, command.ScheduleKind),
             isCreate: false);
+        var normalizedTriggerEnvelope = NormalizeTriggerEnvelope(command.TriggerEnvelope);
         var normalizedHeaders = NormalizeHeaders(command.Headers);
         var normalizedScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
         var normalizedDisplayName = NormalizeOptional(command.DisplayName);
@@ -1103,13 +1108,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                string.Equals(State.TargetActorId, normalizedTargetActorId, StringComparison.Ordinal) &&
                string.Equals(State.CronExpression, normalizedCronExpression, StringComparison.Ordinal) &&
                string.Equals(State.Timezone, normalizedTimezone, StringComparison.Ordinal) &&
-               string.Equals(State.PayloadTypeUrl, ResolvePayloadTypeUrl(command.TriggerEnvelope), StringComparison.Ordinal) &&
+               string.Equals(State.PayloadTypeUrl, ResolvePayloadTypeUrl(normalizedTriggerEnvelope), StringComparison.Ordinal) &&
                State.Enabled == command.Enabled &&
                State.ScheduleKind == command.ScheduleKind &&
                State.ScheduleMode == normalizedMode &&
                State.OneShotFireAt == normalizedOneShotFireAt &&
                DictionaryEquals(State.Headers, normalizedHeaders) &&
-               EnvelopePayloadEquals(State.TriggerEnvelope, command.TriggerEnvelope) &&
+               EnvelopePayloadEquals(State.TriggerEnvelope, normalizedTriggerEnvelope) &&
                TargetEquals(NormalizeTarget(State.Target, State.ScheduleKind), normalizedTarget);
     }
 
@@ -1180,7 +1185,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
-                Envelope = target.Envelope?.Clone(),
+                Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
@@ -1190,7 +1195,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
-                Envelope = target.Envelope?.Clone(),
+                Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
@@ -1227,11 +1232,22 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             Identity = serviceInvocation.Identity?.Clone(),
             EndpointId = NormalizeOptional(serviceInvocation.EndpointId),
-            Payload = serviceInvocation.Payload?.Clone(),
+            Payload = serviceInvocation.Payload == null
+                ? null
+                : ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(serviceInvocation.Payload),
             RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
             Caller = serviceInvocation.Caller?.Clone(),
             Auth = NormalizeServiceInvocationAuth(serviceInvocation.Auth),
         };
+    }
+
+    private static EventEnvelope NormalizeTriggerEnvelope(EventEnvelope triggerEnvelope)
+    {
+        var normalized = triggerEnvelope.Clone();
+        if (normalized.Payload != null)
+            normalized.Payload = ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(normalized.Payload);
+
+        return normalized;
     }
 
     private ScheduledDispatchTargetState PreserveExistingServiceInvocationAuth(
@@ -1400,13 +1416,16 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         next.ScheduleId = scheduleId;
         next.DisplayName = evt.DisplayName ?? string.Empty;
+        var normalizedTriggerEnvelope = evt.TriggerEnvelope == null
+            ? null
+            : NormalizeTriggerEnvelope(evt.TriggerEnvelope);
         next.TargetActorId = evt.TargetActorId ?? string.Empty;
-        next.TriggerEnvelope = evt.TriggerEnvelope?.Clone();
+        next.TriggerEnvelope = normalizedTriggerEnvelope;
         next.CronExpression = evt.CronExpression ?? string.Empty;
         next.Timezone = ScheduledDispatchCalculator.NormalizeTimezone(evt.Timezone);
         next.Enabled = evt.Enabled;
         next.UpdatedAt = configuredAt;
-        next.PayloadTypeUrl = evt.PayloadTypeUrl ?? ResolvePayloadTypeUrl(evt.TriggerEnvelope);
+        next.PayloadTypeUrl = evt.PayloadTypeUrl ?? ResolvePayloadTypeUrl(normalizedTriggerEnvelope);
         next.Headers.Clear();
         foreach (var (key, value) in NormalizeHeaders(evt.Headers))
             next.Headers[key] = value;
@@ -1661,6 +1680,39 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             var normalizedValue = NormalizeOptional(value);
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
                 continue;
+            if (string.Equals(
+                    normalizedKey,
+                    ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            normalized[normalizedKey] = normalizedValue;
+        }
+
+        return normalized;
+    }
+
+    private static bool ShouldInspectRawCredentialSignalHeaders(
+        ScheduledDispatchCredentialRequirementTargetKindState targetKind) =>
+        targetKind is ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService
+            or ScheduledDispatchCredentialRequirementTargetKindState.Connector;
+
+    private static IReadOnlyDictionary<string, string> NormalizeCredentialSignalHeaders(
+        IEnumerable<KeyValuePair<string, string>>? source)
+    {
+        if (source == null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = NormalizeOptional(key);
+            var normalizedValue = NormalizeOptional(value);
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
+
             normalized[normalizedKey] = normalizedValue;
         }
 

@@ -1309,6 +1309,62 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeTeamForChatRun_DefaultWaitWorkflowEntryWithoutChannelDelivery_ShouldNotDispatch()
+    {
+        // The workflow-team path shares the pre-dispatch delivery gate with aevatar_start_workflow:
+        // a channel invocation without a delivery credential must fail closed before the service
+        // invocation dispatch, with the same product-level error.
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "workflow-service");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "workflow-service",
+            endpointId: "chat",
+            primaryActorId: "deployed-workflow-definition-actor");
+        harness.ServiceInvocationResolution.Result!.Artifact.DeploymentPlan.WorkflowPlan =
+            new WorkflowServiceDeploymentPlan
+            {
+                WorkflowName = "published-workflow",
+                WorkflowYaml = "name: published-workflow",
+                DefinitionActorId = "published-definition-actor",
+            };
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-team-workflow-no-channel-delivery",
+            durableReplyCredentialRef: string.Empty);
+        var request = BuildChatRunRequest(
+            "response-team-workflow-no-channel-delivery",
+            "call-team-workflow-no-channel-delivery-tool",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "run published workflow" }
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+        result.RunId.Should().BeEmpty();
+        harness.ServiceInvocationDispatcher.Calls.Should().BeEmpty(
+            "a channel workflow-team run without a result delivery path would silently lose the terminal result");
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        var errorMessage = resultJson.RootElement.GetProperty("error").GetProperty("message").GetString();
+        errorMessage.Should().NotBeNull();
+        errorMessage!.ToLowerInvariant()
+            .Should().NotContain("durable")
+            .And.NotContain("credential");
+    }
+
+    [Fact]
     public async Task StartWorkflow_WhenServerSetCallerCredentialIsMalformed_ShouldReturnStructuredError()
     {
         var harness = new Harness();
