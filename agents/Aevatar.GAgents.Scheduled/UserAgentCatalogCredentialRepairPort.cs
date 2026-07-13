@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -9,19 +8,16 @@ internal sealed class UserAgentCatalogCredentialRepairPort : IUserAgentCatalogCr
 {
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
-    private readonly IActorEventSubscriptionProvider _subscriptionProvider;
 
     public UserAgentCatalogCredentialRepairPort(
         IActorRuntime actorRuntime,
-        IActorDispatchPort actorDispatchPort,
-        IActorEventSubscriptionProvider subscriptionProvider)
+        IActorDispatchPort actorDispatchPort)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
-        _subscriptionProvider = subscriptionProvider ?? throw new ArgumentNullException(nameof(subscriptionProvider));
     }
 
-    public async Task<UserAgentCatalogCredentialRepairResult> RepairMissingSecretReferenceAsync(
+    public async Task<UserAgentCatalogCredentialRepairAcceptedReceipt> RepairMissingSecretReferenceAsync(
         string agentId,
         string apiKeyId,
         Foundation.Abstractions.Credentials.SecretReference secretReference,
@@ -32,16 +28,9 @@ internal sealed class UserAgentCatalogCredentialRepairPort : IUserAgentCatalogCr
         CancellationToken ct = default)
     {
         var requestId = Guid.NewGuid().ToString("N");
-        var resultSource = new TaskCompletionSource<UserAgentCatalogCredentialRepairResult>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var subscription = await _subscriptionProvider.SubscribeAsync<CommittedStateEventPublished>(
-            UserAgentCatalogGAgent.WellKnownId,
-            published => HandleCommittedResultAsync(published, requestId, resultSource),
-            ct);
-
         _ = await _actorRuntime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
             ?? await _actorRuntime.CreateAsync<UserAgentCatalogGAgent>(UserAgentCatalogGAgent.WellKnownId, ct);
-        await _actorDispatchPort.DispatchAsync(
+        var admission = await _actorDispatchPort.DispatchAsync(
             UserAgentCatalogGAgent.WellKnownId,
             new EventEnvelope
             {
@@ -61,32 +50,6 @@ internal sealed class UserAgentCatalogCredentialRepairPort : IUserAgentCatalogCr
                 Route = EnvelopeRouteSemantics.CreateDirect("scheduled-credential-repair", UserAgentCatalogGAgent.WellKnownId),
             },
             ct);
-        return await resultSource.Task.WaitAsync(ct);
-    }
-
-    private static Task HandleCommittedResultAsync(
-        CommittedStateEventPublished published,
-        string requestId,
-        TaskCompletionSource<UserAgentCatalogCredentialRepairResult> resultSource)
-    {
-        var eventData = published.StateEvent?.EventData;
-        if (eventData?.Is(UserAgentCatalogCredentialRevocationRepairedEvent.Descriptor) == true)
-        {
-            var repaired = eventData.Unpack<UserAgentCatalogCredentialRevocationRepairedEvent>();
-            if (string.Equals(repaired.RequestId, requestId, StringComparison.Ordinal))
-            {
-                resultSource.TrySetResult(new UserAgentCatalogCredentialRepairResult(
-                    true,
-                    UserAgentCatalogCredentialRevocationRepairRejectionReason.Unspecified));
-            }
-        }
-        else if (eventData?.Is(UserAgentCatalogCredentialRevocationRepairRejectedEvent.Descriptor) == true)
-        {
-            var rejected = eventData.Unpack<UserAgentCatalogCredentialRevocationRepairRejectedEvent>();
-            if (string.Equals(rejected.RequestId, requestId, StringComparison.Ordinal))
-                resultSource.TrySetResult(new UserAgentCatalogCredentialRepairResult(false, rejected.Reason));
-        }
-
-        return Task.CompletedTask;
+        return new UserAgentCatalogCredentialRepairAcceptedReceipt(requestId, admission);
     }
 }

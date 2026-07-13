@@ -2,7 +2,7 @@ namespace Aevatar.GAgents.Scheduled;
 
 using Aevatar.Foundation.Abstractions.Credentials;
 
-public sealed class ScheduledAgentOpaqueSecret
+internal sealed class ScheduledAgentOpaqueSecret
 {
     private readonly string _value;
 
@@ -10,12 +10,6 @@ public sealed class ScheduledAgentOpaqueSecret
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         _value = value;
-    }
-
-    public TResult Use<TResult>(Func<string, TResult> consumer)
-    {
-        ArgumentNullException.ThrowIfNull(consumer);
-        return consumer(_value);
     }
 
     public Task<StoreSecretResult> StoreAsync(

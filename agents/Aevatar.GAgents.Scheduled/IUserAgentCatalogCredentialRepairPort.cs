@@ -1,10 +1,11 @@
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.GAgents.Scheduled;
 
 public interface IUserAgentCatalogCredentialRepairPort
 {
-    Task<UserAgentCatalogCredentialRepairResult> RepairMissingSecretReferenceAsync(
+    Task<UserAgentCatalogCredentialRepairAcceptedReceipt> RepairMissingSecretReferenceAsync(
         string agentId,
         string apiKeyId,
         SecretReference secretReference,
@@ -15,6 +16,6 @@ public interface IUserAgentCatalogCredentialRepairPort
         CancellationToken ct = default);
 }
 
-public sealed record UserAgentCatalogCredentialRepairResult(
-    bool Repaired,
-    UserAgentCatalogCredentialRevocationRepairRejectionReason RejectionReason);
+public sealed record UserAgentCatalogCredentialRepairAcceptedReceipt(
+    string RequestId,
+    DispatchAdmission Admission);

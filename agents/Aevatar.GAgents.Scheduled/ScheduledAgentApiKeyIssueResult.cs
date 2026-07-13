@@ -24,7 +24,7 @@ public sealed class ScheduledAgentApiKeyIssueResult
     {
         Success = success;
         ApiKeyId = apiKeyId;
-        Secret = secret;
+        _secret = secret;
         Error = error;
         Detail = detail;
         Hint = hint;
@@ -34,10 +34,10 @@ public sealed class ScheduledAgentApiKeyIssueResult
         KeyExpiresAtUnixMs = keyExpiresAtUnixMs;
     }
 
+    private readonly ScheduledAgentOpaqueSecret? _secret;
+
     public bool Success { get; }
     public string? ApiKeyId { get; }
-    [JsonIgnore]
-    public ScheduledAgentOpaqueSecret? Secret { get; }
     public string? Error { get; }
     public string? Detail { get; }
     public string? Hint { get; }
@@ -71,6 +71,17 @@ public sealed class ScheduledAgentApiKeyIssueResult
         string? skillRef = null) =>
         new(false, apiKeyId, null, error, detail, hint, httpStatus, serviceSlug, skillRef, 0);
 
+    public Task<Aevatar.Foundation.Abstractions.Credentials.StoreSecretResult> StoreSecretAsync(
+        Aevatar.Foundation.Abstractions.Credentials.ISecretVault secretVault,
+        Aevatar.Foundation.Abstractions.Credentials.StoreSecretRequest request,
+        CancellationToken ct = default)
+    {
+        if (!Success || _secret is null)
+            throw new InvalidOperationException("A successful issued credential is required before storing its secret.");
+
+        return _secret.StoreAsync(secretVault, request, ct);
+    }
+
     public string ToErrorJson() =>
         JsonSerializer.Serialize(new
         {
@@ -83,5 +94,5 @@ public sealed class ScheduledAgentApiKeyIssueResult
         }, ErrorJsonOptions);
 
     public override string ToString() =>
-        $"{nameof(ScheduledAgentApiKeyIssueResult)} {{ Success = {Success}, ApiKeyId = {ApiKeyId}, Secret = {(Secret is null ? "null" : "[redacted]")}, Error = {Error}, KeyExpiresAtUnixMs = {KeyExpiresAtUnixMs} }}";
+        $"{nameof(ScheduledAgentApiKeyIssueResult)} {{ Success = {Success}, ApiKeyId = {ApiKeyId}, Secret = {(_secret is null ? "null" : "[redacted]")}, Error = {Error}, KeyExpiresAtUnixMs = {KeyExpiresAtUnixMs} }}";
 }

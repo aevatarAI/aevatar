@@ -2,7 +2,15 @@ using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.GAgents.Scheduled;
 
-public sealed class ScheduledAgentCredentialLifecycle
+public interface IScheduledAgentCredentialRevocationExecutor
+{
+    Task ExecutePendingAsync(
+        string bearerToken,
+        UserAgentApiKeyRevocation pending,
+        CancellationToken ct = default);
+}
+
+public sealed class ScheduledAgentCredentialLifecycle : IScheduledAgentCredentialRevocationExecutor
 {
     private readonly ISecretVault _secretVault;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
@@ -35,6 +43,7 @@ public sealed class ScheduledAgentCredentialLifecycle
             if (!string.IsNullOrWhiteSpace(issuedKey.ApiKeyId))
             {
                 await RequestRevocationAsync(
+                    token,
                     agentId,
                     issuedKey.ApiKeyId,
                     new SecretReference
@@ -70,13 +79,13 @@ public sealed class ScheduledAgentCredentialLifecycle
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(issuedKey);
-        if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId) || issuedKey.Secret is null)
+        if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId))
             throw new InvalidOperationException("Issued scheduled credential is incomplete.");
 
         var requestedRef = "sec_" + Guid.NewGuid().ToString("N");
         try
         {
-            var stored = await issuedKey.Secret.StoreAsync(
+            var stored = await issuedKey.StoreSecretAsync(
                 _secretVault,
                 new StoreSecretRequest(
                     purpose,
@@ -94,6 +103,7 @@ public sealed class ScheduledAgentCredentialLifecycle
         catch
         {
             await RequestRevocationAsync(
+                token: string.Empty,
                 agentId,
                 issuedKey.ApiKeyId!,
                 new SecretReference
@@ -113,20 +123,40 @@ public sealed class ScheduledAgentCredentialLifecycle
     public async Task ExecutePendingAsync(
         string token,
         UserAgentApiKeyRevocationReadModelEntry pending,
+        CancellationToken ct = default) =>
+        await ExecutePendingAsync(token, ToRevocation(pending), ct);
+
+    public async Task ExecutePendingAsync(
+        string bearerToken,
+        UserAgentApiKeyRevocation pending,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(pending);
         if (pending.NyxIdTrack?.Status == ScheduledCredentialRevocationTrackStatus.Pending)
         {
-            var result = await _apiKeyIssuer.RevokeAsync(token, pending.ApiKeyId, ct);
-            await RecordTrackAsync(
-                pending,
-                UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
-                result.Completed,
-                result.HttpStatus,
-                result.Error,
-                result.FailureKind,
-                ct);
+            try
+            {
+                var result = await _apiKeyIssuer.RevokeAsync(bearerToken, pending.ApiKeyId, ct);
+                await RecordTrackAsync(
+                    pending,
+                    UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+                    result.Completed,
+                    result.HttpStatus,
+                    result.Error,
+                    result.FailureKind,
+                    ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                await RecordTrackAsync(
+                    pending,
+                    UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+                    false,
+                    0,
+                    ex.Message,
+                    UserAgentApiKeyRevocationFailureKind.Transient,
+                    ct);
+            }
         }
 
         if (pending.VaultTrack?.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
@@ -166,11 +196,13 @@ public sealed class ScheduledAgentCredentialLifecycle
     }
 
     public Task RequestRevocationAsync(
+        string token,
         string agentId,
         string apiKeyId,
         SecretReference reference,
         CancellationToken ct = default) =>
         RequestRevocationAsync(
+            token,
             agentId,
             apiKeyId,
             reference,
@@ -178,6 +210,7 @@ public sealed class ScheduledAgentCredentialLifecycle
             ct);
 
     private Task RequestRevocationAsync(
+        string token,
         string agentId,
         string apiKeyId,
         SecretReference reference,
@@ -199,10 +232,10 @@ public sealed class ScheduledAgentCredentialLifecycle
             {
                 Status = vaultStatus,
             },
-        }, ct);
+        }, ct, token);
 
     private Task RecordTrackAsync(
-        UserAgentApiKeyRevocationReadModelEntry pending,
+        UserAgentApiKeyRevocation pending,
         UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track track,
         bool completed,
         int httpStatus,
@@ -222,6 +255,24 @@ public sealed class ScheduledAgentCredentialLifecycle
                 SecretReferenceRef = pending.NyxApiKeyReference?.Ref ?? string.Empty,
             },
             ct);
+
+    private static UserAgentApiKeyRevocation ToRevocation(UserAgentApiKeyRevocationReadModelEntry pending)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            AgentId = pending.AgentId,
+            ApiKeyId = pending.ApiKeyId,
+            SecretSubjectId = pending.SecretSubjectId,
+            NyxIdTrack = pending.NyxIdTrack?.Clone(),
+            VaultTrack = pending.VaultTrack?.Clone(),
+        };
+        if (pending.NyxApiKeyReference is not null)
+            revocation.NyxApiKeyReference = pending.NyxApiKeyReference.Clone();
+        if (pending.OwnerScope is not null)
+            revocation.OwnerScope = pending.OwnerScope.Clone();
+        return revocation;
+    }
 }
 
 public sealed record ScheduledAgentCredentialProvisionResult(

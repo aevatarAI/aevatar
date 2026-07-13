@@ -71,7 +71,8 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
     //   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
     public async Task TombstoneAsync(
         string agentId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string bearerToken = "")
     {
         if (string.IsNullOrWhiteSpace(agentId))
             throw new ArgumentException("agentId is required.", nameof(agentId));
@@ -82,7 +83,11 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand { AgentId = agentId }),
+            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand
+            {
+                AgentId = agentId,
+                BearerToken = bearerToken?.Trim() ?? string.Empty,
+            }),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
@@ -106,7 +111,8 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 
     public async Task RequestCredentialRevocationAsync(
         UserAgentApiKeyRevocation revocation,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string bearerToken = "")
     {
         ArgumentNullException.ThrowIfNull(revocation);
         await EnsureCatalogActorAsync(ct);
@@ -115,6 +121,7 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
             BuildEnvelope(new UserAgentCatalogRequestCredentialRevocationCommand
             {
                 Revocation = revocation.Clone(),
+                BearerToken = bearerToken?.Trim() ?? string.Empty,
             }),
             ct);
     }

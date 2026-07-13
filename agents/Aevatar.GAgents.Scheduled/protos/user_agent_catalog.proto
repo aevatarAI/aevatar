@@ -166,6 +166,9 @@ message UserAgentCatalogUpsertCommand {
 
 message UserAgentCatalogTombstoneCommand {
   string agent_id = 1;
+  // Transient authorization for the immediate NyxID compensation attempt.
+  // Command handlers must never copy this value into events or actor state.
+  string bearer_token = 2;
 }
 
 message UserAgentCatalogCompactTombstonesCommand {
@@ -212,6 +215,9 @@ message UserAgentCatalogRepairCredentialRevocationCommand {
 
 message UserAgentCatalogRequestCredentialRevocationCommand {
   UserAgentApiKeyRevocation revocation = 1;
+  // Transient authorization for the immediate NyxID compensation attempt.
+  // Command handlers must never copy this value into events or actor state.
+  string bearer_token = 2;
 }
 
 message UserAgentCatalogUpsertedEvent {

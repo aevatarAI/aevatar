@@ -25,7 +25,8 @@ public interface IUserAgentCatalogCommandPort
 
     Task TombstoneAsync(
         string agentId,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        string bearerToken = "");
 
     Task RecordApiKeyRevocationAttemptAsync(
         UserAgentCatalogRecordApiKeyRevocationAttemptCommand command,
@@ -33,7 +34,8 @@ public interface IUserAgentCatalogCommandPort
 
     Task RequestCredentialRevocationAsync(
         UserAgentApiKeyRevocation revocation,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        string bearerToken = "");
 
     Task ShareAsync(
         string agentId,
