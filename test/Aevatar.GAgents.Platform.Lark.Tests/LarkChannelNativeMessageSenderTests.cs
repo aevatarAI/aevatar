@@ -105,6 +105,43 @@ public sealed class LarkChannelNativeMessageSenderTests
     }
 
     [Fact]
+    public async Task SendAsync_ShouldUseGenericChannelAddress_WhenTargetCarriesUserAgentDeliveryTarget()
+    {
+        var dispatcher = new RecordingLarkOutboundDispatcher();
+        var sender = new LarkChannelNativeMessageSender(dispatcher);
+        var target = new UserAgentDeliveryTarget(
+            AgentId: "agent-1",
+            Platform: "lark",
+            ConversationId: "legacy-conversation",
+            NyxProviderSlug: "api-lark-bot",
+            NyxApiKey: "nyx-api-key-1",
+            ChannelAddress: new ChannelAddressModel(
+                "lark",
+                "api-lark-bot",
+                "legacy-conversation",
+                new ChannelAddressEndpointModel("oc_dm_chat_1", "chat_id"),
+                new ChannelAddressEndpointModel("on_user_1", "union_id")),
+            OutputFormat: SkillRunnerOutputFormat.Auto,
+            TemplateName: string.Empty,
+            AgentType: string.Empty);
+
+        await sender.SendAsync(
+            target,
+            new ChannelNativeMessage("hello", CardPayload: null, MessageType: "text", ComposeCapability.Exact),
+            CancellationToken.None);
+
+        dispatcher.LastRequest.ShouldNotBeNull();
+        dispatcher.LastRequest!.PrimaryTarget.ShouldBe(new LarkReceiveTarget(
+            "oc_dm_chat_1",
+            "chat_id",
+            FellBackToPrefixInference: false));
+        dispatcher.LastRequest.FallbackTarget.ShouldBe(new LarkReceiveTarget(
+            "on_user_1",
+            "union_id",
+            FellBackToPrefixInference: false));
+    }
+
+    [Fact]
     public async Task UpdateAsync_ShouldDelegateTextEditToLarkDispatcher()
     {
         var dispatcher = new RecordingLarkOutboundDispatcher();
