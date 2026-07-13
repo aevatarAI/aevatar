@@ -616,6 +616,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         response.Should().NotBeNull();
         response!.Runs.Select(x => x.RunId).Should().Equal("run-match");
+        response.Runs[0].ScheduleId.Should().Be("schedule-a");
     }
 
     [Fact]
@@ -668,8 +669,16 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         httpResponse.StatusCode.Should().Be(HttpStatusCode.OK);
         response.Should().NotBeNull();
         response!.Runs.Select(x => x.RunId).Should().Equal("run-member-match");
+        response.Runs[0].ScheduleId.Should().Be("schedule-member");
         response.Runs[0].ActorId.Should().Be("run-actor-member-registry");
         response.Runs[0].DefinitionActorId.Should().Be("def-member-registry");
+        response.Runs[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow.ToString());
+        response.Runs[0].Status.Should().Be(ServiceRunStatus.Completed.ToString());
+        response.Runs[0].CommandId.Should().Be("cmd-run-member-match");
+        response.Runs[0].CorrelationId.Should().Be("corr-run-member-match");
+        response.Runs[0].EndpointId.Should().Be("run");
+        response.Runs[0].TargetActorId.Should().Be("run-actor-member-registry");
+        response.Runs[0].CreatedAt.Should().Be(baseTime.AddHours(1).AddMinutes(-5));
     }
 
     [Fact]
