@@ -442,9 +442,10 @@ public sealed class AgentDeliveryTargetToolTests
 
             await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("dispatch failed");
             await commandPort.Received(1).RequestCredentialRevocationAsync(
-                Arg.Is<UserAgentApiKeyRevocation>(revocation =>
-                    revocation.AgentId == "aelf-twitter-approval" &&
-                    revocation.ApiKeyId == "key-aelf-twitter-approval"),
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
+                    intent.AgentId == "aelf-twitter-approval" &&
+                    intent.ApiKeyId == "key-aelf-twitter-approval" &&
+                    intent.OwnerScope.MatchesStrictly(caller)),
                 Arg.Any<CancellationToken>(),
                 "session-token");
         }

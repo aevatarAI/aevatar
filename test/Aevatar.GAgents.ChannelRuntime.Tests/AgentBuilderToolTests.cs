@@ -33,8 +33,7 @@ public sealed class AgentBuilderToolTests
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
             Substitute.For<ISkillRunnerCommandPort>(),
             Substitute.For<IUserAgentCatalogCommandPort>(),
-            Substitute.For<ICallerScopeResolver>(),
-            CreateCredentialLifecycle());
+            Substitute.For<ICallerScopeResolver>());
 
         using var document = JsonDocument.Parse(tool.ParametersSchema);
         var actions = document.RootElement
@@ -217,7 +216,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DeleteAgent_RetriesPendingRevocationsForCaller()
+    public async Task ExecuteAsync_DeleteAgent_SubmitsBearerBoundRetryCommandWithoutReadingRevocationProjection()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-current", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -232,38 +231,16 @@ public sealed class AgentBuilderToolTests
         queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
         queryPort.QueryPendingApiKeyRevocationsByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>>(
-            [
-                new UserAgentApiKeyRevocationReadModelEntry
-                {
-                    AgentId = "skill-runner-old",
-                    ApiKeyId = "key-old",
-                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
-                    NyxApiKeyReference = new SecretReference
-                    {
-                        Ref = "secret-old",
-                        Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
-                        OwnerScopeKey = "scheduled-agent:key-old",
-                        Version = 1,
-                        Fingerprint = "sha256:test",
-                    },
-                    SecretSubjectId = "key-old",
-                    NyxIdTrack = new ScheduledCredentialRevocationTrack
-                    {
-                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
-                    },
-                    VaultTrack = new ScheduledCredentialRevocationTrack
-                    {
-                        Status = ScheduledCredentialRevocationTrackStatus.Completed,
-                    },
-                    AttemptCount = 1,
-                    LastHttpStatus = 503,
-                    FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
-                },
-            ]));
+            .Returns(Task.FromException<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>>(
+                new InvalidOperationException("read model must not drive retry")));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        catalogCommandPort.RetryCredentialRevocationsAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
         catalogCommandPort.TombstoneAsync("skill-runner-current", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
@@ -273,7 +250,6 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-current", """{"ok":true}""");
-        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-old", """{"error":true,"status":404,"body":"already deleted"}""");
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
@@ -304,21 +280,22 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("api_key_revocation_retry_count").GetInt32().Should().Be(1);
-
-            handler.Requests.Select(static request => request.Path)
-                .Should().BeEquivalentTo("/api/v1/api-keys/key-old");
-            await queryPort.Received(1).QueryPendingApiKeyRevocationsByCallerAsync(
+            doc.RootElement.GetProperty("api_key_revocation_retry_status").GetString().Should().Be("accepted");
+            handler.Requests.Should().BeEmpty();
+            await queryPort.DidNotReceive().QueryPendingApiKeyRevocationsByCallerAsync(
                 Arg.Any<OwnerScope>(),
                 Arg.Any<CancellationToken>());
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-old" &&
-                    command.ApiKeyId == "key-old" &&
-                    command.Completed &&
-                    command.HttpStatus == 404 &&
-                    command.FailureKind == UserAgentApiKeyRevocationFailureKind.None),
-                Arg.Any<CancellationToken>());
+            Received.InOrder(() =>
+            {
+                catalogCommandPort.RetryCredentialRevocationsAsync(
+                    Arg.Is<OwnerScope>(scope => scope.MatchesStrictly(OwnerScope.ForNyxIdNative("user-1"))),
+                    "session-token",
+                    Arg.Any<CancellationToken>());
+                catalogCommandPort.TombstoneAsync(
+                    "skill-runner-current",
+                    Arg.Any<CancellationToken>(),
+                    "session-token");
+            });
         }
         finally
         {
@@ -327,7 +304,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DeleteAgent_StillSubmitsCurrentRevocation_WhenPendingRevocationProjectionHasSchemaDrift()
+    public async Task ExecuteAsync_DeleteAgent_DoesNotDependOnPendingRevocationProjection()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-drift-revoke", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -388,7 +365,14 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
-            doc.RootElement.GetProperty("api_key_revocation_retry_count").GetInt32().Should().Be(0);
+            doc.RootElement.GetProperty("api_key_revocation_retry_status").GetString().Should().Be("accepted");
+            await queryPort.DidNotReceive().QueryPendingApiKeyRevocationsByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).RetryCredentialRevocationsAsync(
+                Arg.Any<OwnerScope>(),
+                "session-token",
+                Arg.Any<CancellationToken>());
             await catalogCommandPort.Received(1).TombstoneAsync(
                 "skill-runner-drift-revoke",
                 Arg.Any<CancellationToken>(),
@@ -1529,12 +1513,11 @@ public sealed class AgentBuilderToolTests
             catalogCommandPort,
             scheduledAgentApiKeyIssuer);
 
-        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, skillRunnerPort, catalogCommandPort, callerScopeResolver, credentialLifecycle);
-        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver, credentialLifecycle);
-        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, catalogCommandPort, callerScopeResolver, credentialLifecycle);
-        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, null!, callerScopeResolver, credentialLifecycle);
-        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, catalogCommandPort, null!, credentialLifecycle);
-        var missingLifecycle = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, catalogCommandPort, callerScopeResolver, null!);
+        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver);
+        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, catalogCommandPort, callerScopeResolver);
+        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, null!, callerScopeResolver);
+        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, catalogCommandPort, null!);
         var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
         var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
         var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
@@ -1548,7 +1531,6 @@ public sealed class AgentBuilderToolTests
         missingSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
         missingCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
-        missingLifecycle.Should().Throw<ArgumentNullException>().WithParameterName("credentialLifecycle");
         missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingSourceExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
         missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
@@ -1695,25 +1677,14 @@ public sealed class AgentBuilderToolTests
                      new ScheduledAgentApiKeyIssuer(
                          provider.GetRequiredService<INyxIdApiClientFactory>(),
                          new ScheduledAgentCreatorOptions());
-        var lifecycle = new ScheduledAgentCredentialLifecycle(
-            provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
-            provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
-            issuer);
         return new AgentBuilderTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
             provider.GetService<ISkillRunnerExecutionQueryPort>() ?? Substitute.For<ISkillRunnerExecutionQueryPort>(),
             provider.GetRequiredService<ISkillRunnerCommandPort>(),
             provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
-            lifecycle,
             provider.GetService<ILogger<AgentBuilderTool>>());
     }
-
-    private static ScheduledAgentCredentialLifecycle CreateCredentialLifecycle() =>
-        new(
-            new InMemorySecretVault(),
-            Substitute.For<IUserAgentCatalogCommandPort>(),
-            Substitute.For<IScheduledAgentApiKeyIssuer>());
 
     private static ProjectionIndexSchemaDriftException CreateExecutionProjectionDrift() =>
         new(

@@ -39,6 +39,11 @@ executor. Bearer tokens are transient command input and are never copied to an e
 state. Failed attempts remain in actor state for idempotent retry; the fact is removed only
 after both tracks become terminal.
 
+Bearer-bound retries re-enter the catalog actor through a typed owner-scoped command. The
+actor selects pending facts from its authoritative state and invokes the executor in its own
+turn; tools never use the eventually consistent revocation read model to drive write-side
+retry.
+
 Blocked facts encode an empty third identity segment only in the read-model document key.
 Repair deletes that blocked document key before upserting the exact-reference key. Exact
 vault revocation treats an already absent record as the postcondition being satisfied, while

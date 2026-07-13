@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
@@ -70,6 +71,7 @@ public sealed class ScheduledCredentialVaultContractTests
             "token",
             new ScheduledAgentServiceSlugs("service", null, [], false),
             "agent-a",
+            Owner(),
             "skill-a",
             "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
@@ -79,7 +81,7 @@ public sealed class ScheduledCredentialVaultContractTests
         result.Success.Should().BeFalse();
         await vault.DidNotReceive().PutAsync(Arg.Any<StoreSecretRequest>(), Arg.Any<CancellationToken>());
         await commandPort.DidNotReceive().RequestCredentialRevocationAsync(
-            Arg.Any<UserAgentApiKeyRevocation>(),
+            Arg.Any<ScheduledAgentCredentialRevocationIntent>(),
             Arg.Any<CancellationToken>(),
             Arg.Any<string>());
     }
@@ -104,6 +106,7 @@ public sealed class ScheduledCredentialVaultContractTests
             "token",
             new ScheduledAgentServiceSlugs("service", null, [], false),
             "agent-a",
+            Owner(),
             "skill-a",
             "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
@@ -113,13 +116,12 @@ public sealed class ScheduledCredentialVaultContractTests
         result.Success.Should().BeFalse();
         await vault.DidNotReceive().PutAsync(Arg.Any<StoreSecretRequest>(), Arg.Any<CancellationToken>());
         await commandPort.Received(1).RequestCredentialRevocationAsync(
-            Arg.Is<UserAgentApiKeyRevocation>(intent =>
+            Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
                 intent.ApiKeyId == "key-a" &&
                 intent.NyxApiKeyReference == null &&
+                intent.OwnerScope.MatchesStrictly(Owner()) &&
                 intent.VaultRevocationDescriptor.ReferenceAvailability ==
-                    ScheduledCredentialVaultReferenceAvailability.NotApplicable &&
-                intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-                intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.NotApplicable),
+                    ScheduledCredentialVaultReferenceAvailability.NotApplicable),
             Arg.Any<CancellationToken>(),
             "token");
     }
@@ -146,6 +148,7 @@ public sealed class ScheduledCredentialVaultContractTests
             "token",
             new ScheduledAgentServiceSlugs("service", null, [], false),
             "agent-a",
+            Owner(),
             "skill-a",
             "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
@@ -154,19 +157,18 @@ public sealed class ScheduledCredentialVaultContractTests
 
         await act.Should().ThrowAsync<InvalidOperationException>();
         await commandPort.Received(1).RequestCredentialRevocationAsync(
-            Arg.Is<UserAgentApiKeyRevocation>(intent =>
+            Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
                 intent.AgentId == "agent-a" &&
                 intent.ApiKeyId == "key-a" &&
                 intent.NyxApiKeyReference == null &&
+                intent.OwnerScope.MatchesStrictly(Owner()) &&
                 intent.VaultRevocationDescriptor.Ref.StartsWith("sec_", StringComparison.Ordinal) &&
                 intent.VaultRevocationDescriptor.Purpose ==
                     CredentialSecretPurposes.ScheduledInvocationAgentKey &&
                 intent.VaultRevocationDescriptor.OwnerScopeKey == "owner-a" &&
                 intent.VaultRevocationDescriptor.SubjectId == "key-a" &&
                 intent.VaultRevocationDescriptor.ReferenceAvailability ==
-                    ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed &&
-                intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-                intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending),
+                    ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed),
             Arg.Any<CancellationToken>(),
             "token");
     }
@@ -191,6 +193,7 @@ public sealed class ScheduledCredentialVaultContractTests
             "token",
             new ScheduledAgentServiceSlugs("service", null, [], false),
             "agent-a",
+            Owner(),
             "skill-a",
             "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
@@ -206,6 +209,22 @@ public sealed class ScheduledCredentialVaultContractTests
             "key-a",
             "test"));
         resolved.Secret.Should().Be("raw-secret");
+    }
+
+    [Fact]
+    public void RevocationIntent_DoesNotExposeAuthoritativeTrackOrAuditState()
+    {
+        typeof(ScheduledAgentCredentialRevocationIntent).GetProperties()
+            .Select(static property => property.Name)
+            .Should().NotContain(
+            [
+                "NyxIdTrack",
+                "VaultTrack",
+                "AttemptCount",
+                "RequestedAt",
+                "RepairReason",
+                "RequestedBySubjectId",
+            ]);
     }
 
     [Fact]
@@ -399,4 +418,6 @@ public sealed class ScheduledCredentialVaultContractTests
             Status = ScheduledCredentialRevocationTrackStatus.Pending,
         },
     };
+
+    private static OwnerScope Owner() => OwnerScope.ForNyxIdNative("user-a");
 }

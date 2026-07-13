@@ -626,6 +626,37 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
+    public async Task ApiKeyRevocationProjector_WithCompletedNyxOnlyFact_DeletesBlockedDocument()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var completed = new UserAgentCatalogApiKeyRevocationAttemptRecordedEvent
+        {
+            AgentId = "agent-nyx-only",
+            ApiKeyId = "key-nyx-only",
+            Completed = true,
+            FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+            Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+            SecretReferenceRef = string.Empty,
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope(
+                "evt-revoke-nyx-only-complete",
+                9,
+                new UserAgentCatalogState(),
+                Any.Pack(completed)),
+            CancellationToken.None);
+
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
+                "agent-nyx-only",
+                "key-nyx-only"));
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
     public void CredentialRevocationDocumentId_UsesUtf8LengthPrefixedNaturalKey()
     {
         var first = ScheduledAgentCredentialRevocationDocumentIds.Build("a", "bc", "d");

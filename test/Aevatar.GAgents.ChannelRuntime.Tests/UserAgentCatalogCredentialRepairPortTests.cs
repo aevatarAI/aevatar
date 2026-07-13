@@ -3,7 +3,9 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -124,6 +126,134 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
                 outcome.OutcomeCase == UserAgentCatalogCredentialRepairOutcome.OutcomeOneofCase.Repaired &&
                 outcome.Repaired.RequestId == "repair-request-1"),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task OutcomeProjector_PublishesOnlyCorrelationBoundCommittedRejection()
+    {
+        var eventHub = Substitute.For<IProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>>();
+        var projector = new UserAgentCatalogCredentialRepairOutcomeProjector(eventHub);
+        var context = new UserAgentCatalogCredentialRepairProjectionContext
+        {
+            RootActorId = UserAgentCatalogGAgent.WellKnownId,
+            ProjectionKind = UserAgentCatalogCredentialRepairObservationPort.ProjectionKind,
+            SessionId = "repair-request-1",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(new UserAgentCatalogCredentialRevocationRepairRejectedEvent
+            {
+                RequestId = "different-request",
+                Reason = UserAgentCatalogCredentialRevocationRepairRejectionReason.NotBlocked,
+            }),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(new UserAgentCatalogTombstonedEvent { AgentId = "agent-1" }),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(new UserAgentCatalogCredentialRevocationRepairRejectedEvent
+            {
+                RequestId = "repair-request-1",
+                AgentId = "agent-1",
+                ApiKeyId = "key-1",
+                Reason = UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict,
+            }),
+            CancellationToken.None);
+
+        await eventHub.Received(1).PublishAsync(
+            UserAgentCatalogGAgent.WellKnownId,
+            "repair-request-1",
+            Arg.Is<UserAgentCatalogCredentialRepairOutcome>(outcome =>
+                outcome.OutcomeCase == UserAgentCatalogCredentialRepairOutcome.OutcomeOneofCase.Rejected &&
+                outcome.Rejected.RequestId == "repair-request-1" &&
+                outcome.Rejected.Reason ==
+                    UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OutcomeCodec_RoundTripsTypedOutcomes(bool repaired)
+    {
+        var codec = new UserAgentCatalogCredentialRepairOutcomeCodec();
+        var outcome = repaired
+            ? new UserAgentCatalogCredentialRepairOutcome
+            {
+                Repaired = new UserAgentCatalogCredentialRevocationRepairedEvent
+                {
+                    RequestId = "repair-request-1",
+                    AgentId = "agent-1",
+                },
+            }
+            : new UserAgentCatalogCredentialRepairOutcome
+            {
+                Rejected = new UserAgentCatalogCredentialRevocationRepairRejectedEvent
+                {
+                    RequestId = "repair-request-1",
+                    Reason = UserAgentCatalogCredentialRevocationRepairRejectionReason.NotBlocked,
+                },
+            };
+
+        var eventType = codec.GetEventType(outcome);
+        var payload = codec.Serialize(outcome);
+        var roundTripped = codec.Deserialize(eventType, payload);
+
+        roundTripped.Should().BeEquivalentTo(outcome);
+    }
+
+    [Fact]
+    public void OutcomeCodec_RejectsMismatchedEmptyAndMalformedPayloads()
+    {
+        var codec = new UserAgentCatalogCredentialRepairOutcomeCodec();
+        var outcome = new UserAgentCatalogCredentialRepairOutcome
+        {
+            Repaired = new UserAgentCatalogCredentialRevocationRepairedEvent
+            {
+                RequestId = "repair-request-1",
+            },
+        };
+
+        codec.Deserialize("Rejected", codec.Serialize(outcome)).Should().BeNull();
+        codec.Deserialize("Repaired", ByteString.Empty).Should().BeNull();
+        codec.Deserialize("Repaired", ByteString.CopyFromUtf8("not-protobuf")).Should().BeNull();
+    }
+
+    [Fact]
+    public void OutcomeCodec_RejectsNullEvents()
+    {
+        var codec = new UserAgentCatalogCredentialRepairOutcomeCodec();
+
+        var getEventType = () => codec.GetEventType(null!);
+        var serialize = () => codec.Serialize(null!);
+
+        getEventType.Should().Throw<ArgumentNullException>();
+        serialize.Should().Throw<ArgumentNullException>();
+    }
+
+    [Fact]
+    public void AddScheduledAgents_ResolvesCredentialRepairObservationChain()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Substitute.For<IActorRuntime>());
+        services.AddSingleton(Substitute.For<IActorDispatchPort>());
+        services.AddSingleton(Substitute.For<IStreamProvider>());
+        services.AddScheduledAgents();
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IProjectionSessionEventCodec<UserAgentCatalogCredentialRepairOutcome>>()
+            .Should().BeOfType<UserAgentCatalogCredentialRepairOutcomeCodec>();
+        provider.GetServices<IProjectionProjector<UserAgentCatalogCredentialRepairProjectionContext>>()
+            .Should().ContainSingle()
+            .Which.Should().BeOfType<UserAgentCatalogCredentialRepairOutcomeProjector>();
+        provider.GetRequiredService<IUserAgentCatalogCredentialRepairObservationPort>()
+            .Should().BeOfType<UserAgentCatalogCredentialRepairObservationPort>();
+        provider.GetRequiredService<IUserAgentCatalogCredentialRepairPort>()
+            .Should().BeOfType<UserAgentCatalogCredentialRepairPort>();
     }
 
     [Fact]

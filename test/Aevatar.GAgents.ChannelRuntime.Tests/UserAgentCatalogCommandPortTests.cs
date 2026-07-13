@@ -142,14 +142,15 @@ public sealed class UserAgentCatalogCommandPortTests
     }
 
     [Fact]
-    public async Task RequestCredentialRevocationAsync_DispatchesClonedFactWithTrimmedBearer()
+    public async Task RequestCredentialRevocationAsync_DispatchesClonedIntentWithTrimmedBearer()
     {
         var fixture = new Fixture();
-        var revocation = new UserAgentApiKeyRevocation
+        var owner = OwnerScope.ForNyxIdNative("user-revoke-1");
+        var intent = new ScheduledAgentCredentialRevocationIntent
         {
             AgentId = "agent-revoke-1",
             ApiKeyId = "key-revoke-1",
-            SecretSubjectId = "key-revoke-1",
+            OwnerScope = owner,
             NyxApiKeyReference = new SecretReference
             {
                 Ref = "sec-revoke-1",
@@ -166,31 +167,24 @@ public sealed class UserAgentCatalogCommandPortTests
                 SubjectId = "key-revoke-1",
                 ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
             },
-            NyxIdTrack = new ScheduledCredentialRevocationTrack
-            {
-                Status = ScheduledCredentialRevocationTrackStatus.Pending,
-            },
-            VaultTrack = new ScheduledCredentialRevocationTrack
-            {
-                Status = ScheduledCredentialRevocationTrackStatus.Pending,
-            },
         };
 
         await fixture.Port.RequestCredentialRevocationAsync(
-            revocation,
+            intent,
             CancellationToken.None,
             " bearer-token ");
-        revocation.AgentId = "mutated-after-dispatch";
+        intent.AgentId = "mutated-after-dispatch";
 
         fixture.Captured.Should().ContainSingle();
         var envelope = fixture.Captured[0];
         envelope.Payload.Is(UserAgentCatalogRequestCredentialRevocationCommand.Descriptor).Should().BeTrue();
         var command = envelope.Payload.Unpack<UserAgentCatalogRequestCredentialRevocationCommand>();
         command.BearerToken.Should().Be("bearer-token");
-        command.Revocation.AgentId.Should().Be("agent-revoke-1");
-        command.Revocation.ApiKeyId.Should().Be("key-revoke-1");
-        command.Revocation.NyxApiKeyReference.Ref.Should().Be("sec-revoke-1");
-        command.Revocation.VaultRevocationDescriptor.ReferenceAvailability.Should()
+        command.Intent.AgentId.Should().Be("agent-revoke-1");
+        command.Intent.ApiKeyId.Should().Be("key-revoke-1");
+        command.Intent.OwnerScope.MatchesStrictly(owner).Should().BeTrue();
+        command.Intent.NyxApiKeyReference.Ref.Should().Be("sec-revoke-1");
+        command.Intent.VaultRevocationDescriptor.ReferenceAvailability.Should()
             .Be(ScheduledCredentialVaultReferenceAvailability.Confirmed);
         envelope.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         envelope.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
@@ -198,6 +192,25 @@ public sealed class UserAgentCatalogCommandPortTests
             CatalogActorId,
             Arg.Any<EventEnvelope>(),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RetryCredentialRevocationsAsync_DispatchesOwnerScopedBearerCommand()
+    {
+        var fixture = new Fixture();
+        var owner = OwnerScope.ForChannel("user-1", "lark", "scope-1", "sender-1");
+
+        await fixture.Port.RetryCredentialRevocationsAsync(
+            owner,
+            " bearer-token ",
+            CancellationToken.None);
+
+        var envelope = fixture.Captured.Should().ContainSingle().Subject;
+        envelope.Payload.Is(UserAgentCatalogRetryCredentialRevocationsCommand.Descriptor).Should().BeTrue();
+        var command = envelope.Payload.Unpack<UserAgentCatalogRetryCredentialRevocationsCommand>();
+        command.OwnerScope.MatchesStrictly(owner).Should().BeTrue();
+        command.BearerToken.Should().Be("bearer-token");
+        envelope.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
     }
 
     [Theory]

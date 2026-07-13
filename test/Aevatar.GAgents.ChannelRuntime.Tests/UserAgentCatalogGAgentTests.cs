@@ -243,18 +243,28 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleRequestCredentialRevocationAsync_ExactDuplicateDoesNotCreateAnotherFact()
     {
-        var revocation = PendingRevocation("agent-duplicate", "key-duplicate", "sec-duplicate");
+        var owner = OwnerScope.ForNyxIdNative("user-duplicate");
+        var intent = RevocationIntent("agent-duplicate", "key-duplicate", owner, "sec-duplicate");
 
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = revocation,
+            Intent = intent,
         });
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = revocation.Clone(),
+            Intent = intent.Clone(),
         });
 
-        _agent.State.PendingApiKeyRevocations.Should().ContainSingle();
+        var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        pending.OwnerScope.MatchesStrictly(owner).Should().BeTrue();
+        pending.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        pending.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        pending.NyxIdTrack.AttemptCount.Should().Be(0);
+        pending.VaultTrack.AttemptCount.Should().Be(0);
+        pending.RequestedAt.Should().NotBeNull();
+        pending.RequestedAtUnixMs.Should().BeGreaterThan(0);
+        pending.RepairReason.Should().BeEmpty();
+        pending.RequestedBySubjectId.Should().BeEmpty();
         var persisted = await _store.GetEventsAsync(_agent.Id);
         persisted.Count(item => item.EventData.Is(UserAgentCatalogApiKeyRevocationRequestedEvent.Descriptor))
             .Should().Be(1);
@@ -265,12 +275,20 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     {
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = PendingRevocation("agent-alias", "key-alias", "sec-original"),
+            Intent = RevocationIntent(
+                "agent-alias",
+                "key-alias",
+                OwnerScope.ForNyxIdNative("user-alias"),
+                "sec-original"),
         });
 
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = PendingRevocation("agent-alias", "key-alias", "sec-conflict"),
+            Intent = RevocationIntent(
+                "agent-alias",
+                "key-alias",
+                OwnerScope.ForNyxIdNative("user-alias"),
+                "sec-conflict"),
         });
 
         _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
@@ -281,11 +299,49 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRetryCredentialRevocationsAsync_SelectsCallerOwnedFactsInsideActor()
+    {
+        var owner = OwnerScope.ForChannel("user-a", "lark", "scope-1", "sender-a");
+        var otherOwner = OwnerScope.ForChannel("user-b", "lark", "scope-1", "sender-b");
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Intent = RevocationIntent("agent-a", "key-a", owner, "sec-a"),
+        });
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Intent = RevocationIntent("agent-b", "key-b", otherOwner, "sec-b"),
+        });
+        _credentialRevocationExecutor.ClearReceivedCalls();
+
+        await _agent.HandleRetryCredentialRevocationsAsync(
+            new UserAgentCatalogRetryCredentialRevocationsCommand
+            {
+                OwnerScope = owner,
+                BearerToken = "bearer-a",
+            });
+
+        await _credentialRevocationExecutor.Received(1).ExecutePendingAsync(
+            "bearer-a",
+            Arg.Is<UserAgentApiKeyRevocation>(revocation =>
+                revocation.AgentId == "agent-a" &&
+                revocation.OwnerScope.MatchesStrictly(owner)),
+            Arg.Any<CancellationToken>());
+        await _credentialRevocationExecutor.DidNotReceive().ExecutePendingAsync(
+            "bearer-a",
+            Arg.Is<UserAgentApiKeyRevocation>(revocation => revocation.AgentId == "agent-b"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleRecordApiKeyRevocationAttemptAsync_LatePreviousReferenceDoesNotAdvanceCurrentFact()
     {
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = PendingRevocation("agent-rotated", "key-rotated", "sec-r1"),
+            Intent = RevocationIntent(
+                "agent-rotated",
+                "key-rotated",
+                OwnerScope.ForNyxIdNative("user-rotated"),
+                "sec-r1"),
         });
         await CompleteTrackAsync(
             "agent-rotated",
@@ -301,7 +357,11 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
 
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = PendingRevocation("agent-rotated", "key-rotated", "sec-r2"),
+            Intent = RevocationIntent(
+                "agent-rotated",
+                "key-rotated",
+                OwnerScope.ForNyxIdNative("user-rotated"),
+                "sec-r2"),
         });
         await CompleteTrackAsync(
             "agent-rotated",
@@ -320,7 +380,11 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     {
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = PendingRevocation("agent-terminal", "key-terminal", "sec-terminal"),
+            Intent = RevocationIntent(
+                "agent-terminal",
+                "key-terminal",
+                OwnerScope.ForNyxIdNative("user-terminal"),
+                "sec-terminal"),
         });
         await CompleteTrackAsync(
             "agent-terminal",
@@ -366,6 +430,38 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
 
         pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
         pending.VaultTrack.AttemptCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleRequestCredentialRevocationAsync_NyxOnlyCompletionRemovesPendingFact()
+    {
+        await _agent.HandleRequestCredentialRevocationAsync(
+            new UserAgentCatalogRequestCredentialRevocationCommand
+            {
+                Intent = new ScheduledAgentCredentialRevocationIntent
+                {
+                    AgentId = "agent-nyx-only",
+                    ApiKeyId = "key-nyx-only",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-nyx-only"),
+                    VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+                    {
+                        SubjectId = "key-nyx-only",
+                        ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.NotApplicable,
+                    },
+                },
+            });
+
+        var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        pending.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        pending.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.NotApplicable);
+
+        await CompleteTrackAsync(
+            "agent-nyx-only",
+            "key-nyx-only",
+            string.Empty,
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId);
+
+        _agent.State.PendingApiKeyRevocations.Should().BeEmpty();
     }
 
     [Fact]
@@ -477,38 +573,23 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     {
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = new UserAgentApiKeyRevocation
-            {
-                AgentId = "agent-target",
-                ApiKeyId = "key-target",
-                SecretSubjectId = "key-target",
-                NyxIdTrack = new ScheduledCredentialRevocationTrack
-                {
-                    Status = ScheduledCredentialRevocationTrackStatus.Completed,
-                },
-                VaultTrack = new ScheduledCredentialRevocationTrack
-                {
-                    Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
-                },
-            },
+            Intent = RevocationIntent(
+                "agent-target",
+                "key-target",
+                OwnerScope.ForNyxIdNative("user-target")),
         });
+        await CompleteTrackAsync(
+            "agent-target",
+            "key-target",
+            string.Empty,
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId);
         await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
         {
-            Revocation = new UserAgentApiKeyRevocation
-            {
-                AgentId = "agent-existing",
-                ApiKeyId = "key-existing",
-                SecretSubjectId = "key-existing",
-                NyxApiKeyReference = CompleteReference("secret-shared", "key-existing"),
-                NyxIdTrack = new ScheduledCredentialRevocationTrack
-                {
-                    Status = ScheduledCredentialRevocationTrackStatus.Completed,
-                },
-                VaultTrack = new ScheduledCredentialRevocationTrack
-                {
-                    Status = ScheduledCredentialRevocationTrackStatus.Pending,
-                },
-            },
+            Intent = RevocationIntent(
+                "agent-existing",
+                "key-existing",
+                OwnerScope.ForNyxIdNative("user-existing"),
+                "secret-shared"),
         });
 
         await _agent.HandleRepairCredentialRevocationAsync(new UserAgentCatalogRepairCredentialRevocationCommand
@@ -930,25 +1011,33 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 SecretReferenceRef = secretReferenceRef,
             });
 
-    private static UserAgentApiKeyRevocation PendingRevocation(
+    private static ScheduledAgentCredentialRevocationIntent RevocationIntent(
         string agentId,
         string apiKeyId,
-        string secretReferenceRef) =>
-        new()
+        OwnerScope ownerScope,
+        string? secretReferenceRef = null)
+    {
+        var intent = new ScheduledAgentCredentialRevocationIntent
         {
             AgentId = agentId,
             ApiKeyId = apiKeyId,
-            SecretSubjectId = apiKeyId,
-            NyxApiKeyReference = CompleteReference(secretReferenceRef, apiKeyId),
-            NyxIdTrack = new ScheduledCredentialRevocationTrack
-            {
-                Status = ScheduledCredentialRevocationTrackStatus.Pending,
-            },
-            VaultTrack = new ScheduledCredentialRevocationTrack
-            {
-                Status = ScheduledCredentialRevocationTrackStatus.Pending,
-            },
+            OwnerScope = ownerScope.Clone(),
         };
+        if (!string.IsNullOrWhiteSpace(secretReferenceRef))
+        {
+            intent.NyxApiKeyReference = CompleteReference(secretReferenceRef, apiKeyId);
+            intent.VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = secretReferenceRef,
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = $"scheduled-agent:{apiKeyId}",
+                SubjectId = apiKeyId,
+                ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+            };
+        }
+
+        return intent;
+    }
 
     private static SecretReference CompleteReference(string reference, string subjectId) => new()
     {

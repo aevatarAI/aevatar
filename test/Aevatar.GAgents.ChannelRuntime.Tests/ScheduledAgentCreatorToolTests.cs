@@ -1023,10 +1023,10 @@ public sealed class ScheduledAgentCreatorToolTests
 
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
             await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
-                Arg.Is<UserAgentApiKeyRevocation>(intent =>
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
                     intent.ApiKeyId == "key-created" &&
-                    intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-                    intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.NotApplicable &&
+                    intent.OwnerScope.MatchesStrictly(
+                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
                     intent.VaultRevocationDescriptor.ReferenceAvailability ==
                         ScheduledCredentialVaultReferenceAvailability.NotApplicable),
                 Arg.Any<CancellationToken>(),
@@ -1060,10 +1060,10 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("hint").GetString().Should().Contain("Check skill_ref");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
             await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
-                Arg.Is<UserAgentApiKeyRevocation>(intent =>
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
                     intent.ApiKeyId == "key-created" &&
-                    intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-                    intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.NotApplicable &&
+                    intent.OwnerScope.MatchesStrictly(
+                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
                     intent.VaultRevocationDescriptor.ReferenceAvailability ==
                         ScheduledCredentialVaultReferenceAvailability.NotApplicable),
                 Arg.Any<CancellationToken>(),
@@ -1095,10 +1095,13 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("initialize_failed");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("dispatch failed");
             await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
-                Arg.Is<UserAgentApiKeyRevocation>(intent =>
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
                     intent.ApiKeyId == "key-created" &&
-                    intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-                    intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending),
+                    intent.OwnerScope.MatchesStrictly(
+                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
+                    intent.NyxApiKeyReference != null &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.Confirmed),
                 Arg.Any<CancellationToken>(),
                 "session-token");
         });
