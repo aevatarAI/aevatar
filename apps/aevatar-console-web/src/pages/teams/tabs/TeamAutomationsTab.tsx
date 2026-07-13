@@ -4,6 +4,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
+  HistoryOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -38,6 +39,8 @@ import {
 } from "@/shared/api/scheduledDispatchApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import type { ServiceIdentity } from "@/shared/models/services";
+import { history } from "@/shared/navigation/history";
+import { buildTeamMemberPublishedRunsHref } from "@/shared/navigation/teamRoutes";
 import {
   AevatarInspectorEmpty,
   AevatarPanel,
@@ -1292,6 +1295,26 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     [cronPresets, findMemberForSchedule, selectedMember],
   );
 
+  const openScheduleRuns = React.useCallback(
+    (member: TeamAutomationMemberRow | undefined, scheduleId: string) => {
+      const normalizedScheduleId = trimText(scheduleId);
+      const routeMemberId = trimText(member?.memberId);
+      if (!member?.workflowSupported || !routeMemberId || !normalizedScheduleId) {
+        return;
+      }
+
+      history.push(
+        buildTeamMemberPublishedRunsHref({
+          memberId: routeMemberId,
+          scheduleId: normalizedScheduleId,
+          scopeId,
+          teamId,
+        }),
+      );
+    },
+    [scopeId, teamId],
+  );
+
   const updateForm = React.useCallback(
     (patch: Partial<AutomationFormState>) => {
       setFormState((current) => ({
@@ -1799,6 +1822,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           const manualRunFeedback = manualRunFeedbackByScheduleId.get(scheduleId);
           const status = resolveScheduleStatus(schedule, manualRunFeedback);
           const isHighlighted = highlightedScheduleId === scheduleId;
+          const canViewRuns = Boolean(member?.workflowSupported && scheduleId);
           const rowBorderColor =
             isHighlighted
               ? token.colorPrimaryBorder
@@ -1939,6 +1963,16 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   border: `1px solid ${token.colorBorderSecondary}`,
                 }}
               >
+                {canViewRuns
+                  ? renderAutomationActionButton({
+                      icon: <HistoryOutlined />,
+                      label: intl.formatMessage({
+                        id: "teams.automations.actions.viewRuns",
+                        defaultMessage: "View runs",
+                      }),
+                      onClick: () => openScheduleRuns(member, scheduleId),
+                    })
+                  : null}
                 {renderAutomationActionButton({
                   icon: <EditOutlined />,
                   label: intl.formatMessage({

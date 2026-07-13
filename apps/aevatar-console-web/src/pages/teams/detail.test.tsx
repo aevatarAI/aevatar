@@ -2408,6 +2408,11 @@ describe("TeamDetailPage", () => {
     expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Workflow chat · chat").length).toBeGreaterThan(0);
     expect(screen.getAllByText("通过已发布服务运行").length).toBeGreaterThan(0);
+    fireEvent.click(await screen.findByRole("button", { name: "View runs" }));
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/runs",
+    );
+    expect(window.location.search).toBe("?scheduleId=sch-alpha");
     expect(screen.queryByText("Other team task")).toBeNull();
     expect(screen.queryByText("Other service task")).toBeNull();
 
