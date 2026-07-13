@@ -1,7 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -18,10 +17,10 @@ public sealed class AgentBuilderTool : IAgentTool
     //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
-    private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
+    private readonly IScheduledAgentApiKeyIssuer _scheduledAgentApiKeyIssuer;
     private readonly ILogger<AgentBuilderTool>? _logger;
 
     // Refactor (iter1/cluster-002):
@@ -30,18 +29,18 @@ public sealed class AgentBuilderTool : IAgentTool
     public AgentBuilderTool(
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
-        INyxIdApiClientFactory nyxClientFactory,
         ISkillRunnerCommandPort skillRunnerPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
+        IScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
         ILogger<AgentBuilderTool>? logger = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
-        _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
+        _scheduledAgentApiKeyIssuer = scheduledAgentApiKeyIssuer ?? throw new ArgumentNullException(nameof(scheduledAgentApiKeyIssuer));
         _logger = logger;
     }
 
@@ -133,7 +132,7 @@ public sealed class AgentBuilderTool : IAgentTool
             "unshare_agent" => await UnshareAgentAsync(args, _queryPort, _catalogCommandPort, caller, ct),
             "disable_agent" => await DisableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
             "enable_agent" => await EnableAgentAsync(args, _queryPort, _skillRunnerPort, caller, ct),
-            "delete_agent" => await DeleteAgentAsync(args, _queryPort, _executionQueryPort, _catalogCommandPort, _skillRunnerPort, _nyxClientFactory, token, caller, ct),
+            "delete_agent" => await DeleteAgentAsync(args, _queryPort, _executionQueryPort, _catalogCommandPort, _skillRunnerPort, _scheduledAgentApiKeyIssuer, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
     }
@@ -229,7 +228,7 @@ public sealed class AgentBuilderTool : IAgentTool
         ISkillRunnerExecutionQueryPort executionQueryPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        INyxIdApiClientFactory nyxClientFactory,
+        IScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
         string token,
         OwnerScope caller,
         CancellationToken ct)
@@ -259,20 +258,27 @@ public sealed class AgentBuilderTool : IAgentTool
         if (disableResult.error != null)
             return disableResult.error;
 
-        if (!string.IsNullOrWhiteSpace(entry.ApiKeyId))
-        {
-            var nyxClient = nyxClientFactory.CreateClient();
-            await nyxClient.DeleteApiKeyAsync(token, entry.ApiKeyId, ct);
-        }
-
-        // Refactor (iter4/cluster-009):
-        //   Old pattern: Delete mapped command-port Observed to a synchronous deleted status.
-        //   New principle: Tombstone ACK is accepted-only; deletion visibility is confirmed by the catalog query path.
-        // Refactor (iter5/cluster-012):
-        //   Old pattern: Delete awaited a tombstone result object that carried only accepted.
-        //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
         await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
 
+        var revocationResult = string.IsNullOrWhiteSpace(entry.ApiKeyId)
+            ? null
+            : await scheduledAgentApiKeyIssuer.RevokeAsync(token, entry.ApiKeyId, ct);
+        if (revocationResult is not null)
+        {
+            await catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
+                BuildRevocationAttemptCommand(entry.AgentId, entry.ApiKeyId, revocationResult),
+                ct);
+        }
+
+        var retriedPendingRevocations = await RetryPendingApiKeyRevocationsAsync(
+            queryPort,
+            catalogCommandPort,
+            scheduledAgentApiKeyIssuer,
+            token,
+            caller,
+            entry.AgentId,
+            entry.ApiKeyId,
+            ct);
         var agents = await QueryAgentsForCallerAsync(queryPort, executionQueryPort, caller, ct);
 
         return JsonSerializer.Serialize(new
@@ -280,11 +286,74 @@ public sealed class AgentBuilderTool : IAgentTool
             status = "accepted",
             agent_id = entry.AgentId,
             revoked_api_key_id = entry.ApiKeyId,
-            delete_notice = $"Delete submitted for `{entry.AgentId}`. Revoked API key: `{entry.ApiKeyId ?? "n/a"}`.",
+            api_key_revocation_status = ResolveRevocationStatus(revocationResult),
+            api_key_revocation_retry_count = retriedPendingRevocations,
+            delete_notice = $"Delete submitted for `{entry.AgentId}`. API key revocation: `{ResolveRevocationStatus(revocationResult)}`.",
             agents,
             total = agents.Length,
             note = "Tombstone is propagating. Run /agents in a few seconds to confirm the agent is gone.",
         });
+    }
+
+    private static UserAgentCatalogRecordApiKeyRevocationAttemptCommand BuildRevocationAttemptCommand(
+        string agentId,
+        string apiKeyId,
+        ScheduledAgentApiKeyRevokeResult result) =>
+        new()
+        {
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            Completed = result.Completed,
+            HttpStatus = result.HttpStatus,
+            Error = result.Error,
+            FailureKind = result.FailureKind,
+        };
+
+    private static string ResolveRevocationStatus(ScheduledAgentApiKeyRevokeResult? result) =>
+        result is null ? "not_applicable" : result.Completed ? "completed" : "pending";
+
+    private async Task<int> RetryPendingApiKeyRevocationsAsync(
+        IUserAgentCatalogQueryPort queryPort,
+        IUserAgentCatalogCommandPort catalogCommandPort,
+        IScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
+        string token,
+        OwnerScope caller,
+        string currentAgentId,
+        string? currentApiKeyId,
+        CancellationToken ct)
+    {
+        IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry> pendingRevocations;
+        try
+        {
+            pendingRevocations = await queryPort.QueryPendingApiKeyRevocationsByCallerAsync(caller, ct);
+        }
+        catch (ProjectionIndexSchemaDriftException ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Catalog API key revocation projection is unavailable; pending revocations will retry on a later bearer-bound session. provider={Provider} alias={IndexAlias}",
+                ex.Provider,
+                ex.IndexAlias);
+            return 0;
+        }
+
+        var retried = 0;
+        foreach (var pending in pendingRevocations)
+        {
+            if (string.Equals(pending.AgentId, currentAgentId, StringComparison.Ordinal) &&
+                string.Equals(pending.ApiKeyId, currentApiKeyId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var result = await scheduledAgentApiKeyIssuer.RevokeAsync(token, pending.ApiKeyId, ct);
+            await catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
+                BuildRevocationAttemptCommand(pending.AgentId, pending.ApiKeyId, result),
+                ct);
+            retried++;
+        }
+
+        return retried;
     }
 
     private async Task<string> RunAgentAsync(

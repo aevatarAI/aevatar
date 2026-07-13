@@ -102,13 +102,18 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>>()
+            .Should()
+            .NotBeNull();
         var readModelDescriptors = app.Services.GetServices<IProjectionReadModelDescriptor>().ToList();
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(18);
+        readModelDescriptors.Should().HaveCount(19);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
+        readModelDescriptors.Should()
+            .ContainSingle(static descriptor => descriptor.Name == "user-agent-api-key-revocation");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
         readModelDescriptors.Should()

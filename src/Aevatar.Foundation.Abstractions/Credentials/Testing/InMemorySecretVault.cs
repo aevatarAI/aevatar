@@ -25,6 +25,7 @@ public sealed class InMemorySecretVault : ISecretVault
             Version = 1,
             OwnerScopeKey = request.OwnerScopeKey,
             CreatedAtUnixMs = now,
+            ExpiresAtUnixMs = request.ExpiresAt?.ToUniversalTime().ToUnixTimeMilliseconds() ?? 0,
         };
 
         lock (_gate)
@@ -41,10 +42,24 @@ public sealed class InMemorySecretVault : ISecretVault
 
         lock (_gate)
         {
-            if (!TryGetAuthorized(request.Ref, request.Purpose, request.OwnerScopeKey, request.SubjectId, out var storedSecret) ||
-                storedSecret.Revoked)
+            if (!_secrets.TryGetValue(request.Ref, out var storedSecret))
             {
-                return Task.FromResult(new ResolveSecretResult(null, null));
+                return Task.FromResult(new ResolveSecretResult(null, null, SecretResolutionFailureReason.NotFound));
+            }
+
+            if (storedSecret.Revoked)
+            {
+                return Task.FromResult(new ResolveSecretResult(null, null, SecretResolutionFailureReason.Revoked));
+            }
+
+            if (!IsAuthorized(storedSecret, request.Purpose, request.OwnerScopeKey, request.SubjectId))
+            {
+                return Task.FromResult(new ResolveSecretResult(null, null, SecretResolutionFailureReason.Unauthorized));
+            }
+
+            if (IsExpired(storedSecret.Reference))
+            {
+                return Task.FromResult(new ResolveSecretResult(null, null, SecretResolutionFailureReason.NotFound));
             }
 
             return Task.FromResult(new ResolveSecretResult(storedSecret.Reference.Clone(), storedSecret.Secret));
@@ -110,6 +125,15 @@ public sealed class InMemorySecretVault : ISecretVault
                string.Equals(storedSecret.SubjectId, subjectId, StringComparison.Ordinal);
     }
 
+    private static bool IsAuthorized(
+        StoredSecret storedSecret,
+        string purpose,
+        string ownerScopeKey,
+        string subjectId) =>
+        string.Equals(storedSecret.Reference.Purpose, purpose, StringComparison.Ordinal) &&
+        string.Equals(storedSecret.Reference.OwnerScopeKey, ownerScopeKey, StringComparison.Ordinal) &&
+        string.Equals(storedSecret.SubjectId, subjectId, StringComparison.Ordinal);
+
     private string NewReference()
     {
         var id = Interlocked.Increment(ref _nextId);
@@ -121,6 +145,10 @@ public sealed class InMemorySecretVault : ISecretVault
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(secret));
         return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    private static bool IsExpired(SecretReference reference) =>
+        reference.ExpiresAtUnixMs > 0 &&
+        reference.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     private sealed record StoredSecret(
         SecretReference Reference,

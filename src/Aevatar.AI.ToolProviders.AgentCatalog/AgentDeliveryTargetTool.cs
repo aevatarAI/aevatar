@@ -125,7 +125,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             {
                 "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _secretVault, _apiKeyIssuer, token, caller, root, ct),
                 "upsert" => await UpsertAsync(_queryPort, _commandPort, caller, root, ct),
-                "delete" => await DeleteAsync(_queryPort, _commandPort, caller, root, ct),
+                "delete" => await DeleteAsync(_queryPort, _commandPort, _apiKeyIssuer, token, caller, root, ct),
                 _ => await ListAsync(_queryPort, caller, ct),
             };
         }
@@ -434,6 +434,8 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private static async Task<string> DeleteAsync(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
+        IScheduledAgentApiKeyIssuer? apiKeyIssuer,
+        string token,
         OwnerScope caller,
         JsonElement args,
         CancellationToken ct)
@@ -462,21 +464,38 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        // Refactor (iter4/cluster-009):
-        //   Old pattern: Tombstone mapped command-port Observed/NotFound to synchronous delete outcomes.
-        //   New principle: Caller-scoped pre-check owns existence; tombstone ACK is accepted-only.
-        // Refactor (iter5/cluster-012):
-        //   Old pattern: Delete awaited a tombstone result object that only repeated accepted.
-        //   New principle: Delete awaits command completion; accepted status is emitted by this tool boundary.
         await commandPort.TombstoneAsync(agentId, ct);
+
+        var revocationResult = apiKeyIssuer is null || string.IsNullOrWhiteSpace(exists.ApiKeyId)
+            ? null
+            : await apiKeyIssuer.RevokeAsync(token, exists.ApiKeyId, ct);
+        if (revocationResult is not null)
+        {
+            await commandPort.RecordApiKeyRevocationAttemptAsync(
+                new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+                {
+                    AgentId = exists.AgentId,
+                    ApiKeyId = exists.ApiKeyId,
+                    Completed = revocationResult.Completed,
+                    HttpStatus = revocationResult.HttpStatus,
+                    Error = revocationResult.Error,
+                    FailureKind = revocationResult.FailureKind,
+                },
+                ct);
+        }
+
         return JsonSerializer.Serialize(new
         {
             status = "accepted",
             agent_id = agentId,
             delivery_target_id = agentId,
+            api_key_revocation_status = ResolveRevocationStatus(revocationResult),
             note = "Tombstone accepted. Projection is propagating; try 'list' in a few seconds to confirm the delivery target is gone.",
         });
     }
+
+    private static string ResolveRevocationStatus(ScheduledAgentApiKeyRevokeResult? result) =>
+        result is null ? "not_applicable" : result.Completed ? "completed" : "pending";
 
     private static (string? value, string? error) GetRequired(JsonElement args, string errorMessage, params string[] keys)
     {

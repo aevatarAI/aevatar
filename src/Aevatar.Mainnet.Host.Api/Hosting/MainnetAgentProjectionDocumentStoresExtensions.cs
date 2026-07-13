@@ -103,6 +103,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<UserAgentCatalogDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<SkillRunnerExecutionDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogNyxCredentialDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<UserAgentApiKeyRevocationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<HealthProbeTargetDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyChatSessionTerminalSnapshot>(services, configuration, static document => document.Id);
@@ -122,6 +123,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddInMemoryStore<UserAgentCatalogDocument>(services, static document => document.Id);
         TryAddInMemoryStore<SkillRunnerExecutionDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogNyxCredentialDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<UserAgentApiKeyRevocationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<HealthProbeTargetDocument>(services, static document => document.Id);
         TryAddInMemoryStore<WorkflowExternalApprovalContinuationDocument>(services, static document => document.Id);
         TryAddInMemoryStore(
@@ -154,6 +156,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<SkillRunnerExecutionDocument>(services, "skill-runner-execution", "SkillRunnerGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogNyxCredentialDocument>(services, "user-agent-catalog-nyx-credential", "UserAgentCatalogGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<UserAgentApiKeyRevocationDocument>(services, "user-agent-api-key-revocation", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<HealthProbeTargetDocument>(services, "health-probe-target", "HealthProbeGAgent", engineLabel, shape);
         // WorkflowExternalApprovalContinuationDocument is inventoried at the workflow store-registration
         // site (it owns that read-model); registering it here too would double-count it in the inventory.

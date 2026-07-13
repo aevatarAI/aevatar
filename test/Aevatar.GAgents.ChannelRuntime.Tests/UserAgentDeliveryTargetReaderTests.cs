@@ -103,6 +103,45 @@ public sealed class UserAgentDeliveryTargetReaderTests
     }
 
     [Fact]
+    public async Task GetAsync_ReturnsTarget_When_CredentialReferenceUsesScheduledInvocationAgentKeyPurpose()
+    {
+        var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();
+        var credentialReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string>>();
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "owner-scope:scheduled-agent",
+            "key-scheduled-agent",
+            "scheduled-agent-key",
+            "test"));
+
+        documentReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogDocument
+            {
+                Id = "agent-1",
+                ConversationId = "oc_chat_1",
+                NyxProviderSlug = "api-lark-bot",
+                ApiKeyId = "key-scheduled-agent",
+                OutputFormat = SkillRunnerOutputFormat.Text,
+            });
+        credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
+            .Returns(new UserAgentCatalogNyxCredentialDocument
+            {
+                Id = "agent-1",
+                ApiKeyId = "key-scheduled-agent",
+                NyxApiKeyReference = stored.Reference,
+            });
+
+        var reader = new UserAgentDeliveryTargetReader(documentReader, credentialReader, secretVault);
+
+        var target = await reader.GetAsync("agent-1", CancellationToken.None);
+
+        target.Should().NotBeNull();
+        target!.NyxApiKey.Should().Be("scheduled-agent-key");
+        target.ConversationId.Should().Be("oc_chat_1");
+    }
+
+    [Fact]
     public async Task GetAsync_ResolvesExplicitDeliveryTargetAlias_ForWorkflowDelivery()
     {
         var documentReader = Substitute.For<IProjectionDocumentReader<UserAgentCatalogDocument, string>>();

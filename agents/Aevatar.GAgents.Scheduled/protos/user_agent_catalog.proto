@@ -78,8 +78,30 @@ message UserAgentCatalogEntry {
   ChannelDeliveryAddress channel_address = 31;
 }
 
+enum UserAgentApiKeyRevocationFailureKind {
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_UNSPECIFIED = 0;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_NONE = 1;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_UNAUTHORIZED = 2;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_TRANSIENT = 3;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_PROVIDER_ERROR = 4;
+}
+
+message UserAgentApiKeyRevocation {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 3;
+  aevatar.OwnerScope owner_scope = 4;
+  google.protobuf.Timestamp requested_at = 5;
+  int32 attempt_count = 6;
+  google.protobuf.Timestamp last_attempt_at = 7;
+  int32 last_http_status = 8;
+  string last_error = 9;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 10;
+}
+
 message UserAgentCatalogState {
   repeated UserAgentCatalogEntry entries = 1;
+  repeated UserAgentApiKeyRevocation pending_api_key_revocations = 2;
 }
 
 message ScheduledAgentSharingGrant {
@@ -141,6 +163,15 @@ message UserAgentCatalogUnshareCommand {
   aevatar.OwnerScope owner_scope = 2;
 }
 
+message UserAgentCatalogRecordApiKeyRevocationAttemptCommand {
+  string agent_id = 1;
+  string api_key_id = 2;
+  bool completed = 3;
+  int32 http_status = 4;
+  string error = 5;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 6;
+}
+
 message UserAgentCatalogUpsertedEvent {
   UserAgentCatalogEntry entry = 1;
 }
@@ -148,6 +179,20 @@ message UserAgentCatalogUpsertedEvent {
 message UserAgentCatalogTombstonedEvent {
   string agent_id = 1;
   int64 tombstone_state_version = 2;
+}
+
+message UserAgentCatalogApiKeyRevocationRequestedEvent {
+  UserAgentApiKeyRevocation revocation = 1;
+}
+
+message UserAgentCatalogApiKeyRevocationAttemptRecordedEvent {
+  string agent_id = 1;
+  string api_key_id = 2;
+  bool completed = 3;
+  int32 http_status = 4;
+  string error = 5;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 6;
+  google.protobuf.Timestamp attempted_at = 7;
 }
 
 message UserAgentCatalogTombstonesCompactedEvent {
@@ -222,4 +267,22 @@ message UserAgentCatalogNyxCredentialDocument {
   string actor_id = 6;
   aevatar.credentials.SecretReference nyx_api_key_reference = 7;
   string api_key_id = 8;
+}
+
+message UserAgentApiKeyRevocationDocument {
+  string id = 1;
+  string agent_id = 2;
+  string api_key_id = 3;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 4;
+  aevatar.OwnerScope owner_scope = 5;
+  google.protobuf.Timestamp requested_at_utc = 6;
+  int32 attempt_count = 7;
+  google.protobuf.Timestamp last_attempt_at_utc = 8;
+  int32 last_http_status = 9;
+  string last_error = 10;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 11;
+  int64 state_version = 12;
+  string last_event_id = 13;
+  google.protobuf.Timestamp updated_at_utc = 14;
+  string actor_id = 15;
 }

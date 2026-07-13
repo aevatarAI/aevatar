@@ -444,6 +444,75 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
+    public async Task ApiKeyRevocationProjector_WithPendingRevocation_UpsertsDocument()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var owner = OwnerScope.ForNyxIdNative("user-1");
+        var state = new UserAgentCatalogState
+        {
+            PendingApiKeyRevocations =
+            {
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-1",
+                    ApiKeyId = "key-1",
+                    OwnerScope = owner,
+                    NyxApiKeyReference = new SecretReference
+                    {
+                        Ref = "sec-1",
+                        Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                    },
+                    RequestedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 0, 0, TimeSpan.Zero)),
+                    AttemptCount = 1,
+                    LastHttpStatus = 503,
+                    LastError = "upstream unavailable",
+                    FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                },
+            },
+        };
+
+        await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-revoke-pending", 7, state), CancellationToken.None);
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Id.Should().Be("agent-1");
+        document.AgentId.Should().Be("agent-1");
+        document.ApiKeyId.Should().Be("key-1");
+        document.NyxApiKeyReference.Ref.Should().Be("sec-1");
+        document.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
+        document.AttemptCount.Should().Be(1);
+        document.LastHttpStatus.Should().Be(503);
+        document.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        document.StateVersion.Should().Be(7);
+        document.LastEventId.Should().Be("evt-revoke-pending");
+    }
+
+    [Fact]
+    public async Task ApiKeyRevocationProjector_WithCompletedAttempt_DeletesDocument()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var state = new UserAgentCatalogState();
+        var completed = new UserAgentCatalogApiKeyRevocationAttemptRecordedEvent
+        {
+            AgentId = "agent-1",
+            ApiKeyId = "key-1",
+            Completed = true,
+            HttpStatus = 404,
+            FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+            AttemptedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 0, 0, TimeSpan.Zero)),
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-revoke-complete", 8, state, Any.Pack(completed)),
+            CancellationToken.None);
+
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-1");
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectAsync_WithTombstonedEntry_DeletesDocument()
     {
         var state = new UserAgentCatalogState
@@ -504,7 +573,11 @@ public sealed class UserAgentCatalogProjectorTests
         _dispatcher.Upserts[0].Id.Should().Be("agent-3");
     }
 
-    private static EventEnvelope BuildCommittedEnvelope(string eventId, long version, UserAgentCatalogState state)
+    private static EventEnvelope BuildCommittedEnvelope(
+        string eventId,
+        long version,
+        UserAgentCatalogState state,
+        Any? eventData = null)
     {
         var occurredAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 10, 0, 0, TimeSpan.Zero));
         return new EventEnvelope
@@ -519,7 +592,7 @@ public sealed class UserAgentCatalogProjectorTests
                     EventId = eventId,
                     Version = version,
                     Timestamp = occurredAt.Clone(),
-                    EventData = Any.Pack(new Empty()),
+                    EventData = eventData ?? Any.Pack(new Empty()),
                 },
                 StateRoot = Any.Pack(state),
             }),
@@ -579,6 +652,29 @@ public sealed class UserAgentCatalogProjectorTests
 
         public Task<ProjectionWriteResult> UpsertAsync(
             UserAgentCatalogNyxCredentialDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.Add(readModel.Clone());
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class RecordingRevocationWriteDispatcher : IProjectionWriteDispatcher<UserAgentApiKeyRevocationDocument>
+    {
+        public List<UserAgentApiKeyRevocationDocument> Upserts { get; } = [];
+
+        public List<string> Deletes { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            UserAgentApiKeyRevocationDocument readModel,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

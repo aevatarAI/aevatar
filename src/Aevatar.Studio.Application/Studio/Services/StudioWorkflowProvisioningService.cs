@@ -249,7 +249,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 var schedule = await _scheduleService.EnsureAsync(
                     BuildScheduleConfiguration(
                         scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone),
-                    ct);
+                    ct: ct);
                 return NormalizeOptional(schedule.ScheduleId);
             }
             catch (ScheduledDispatchNotFoundException)
@@ -357,7 +357,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// </summary>
     private static ScheduledServiceInvocationAuth BuildScheduleAuth(
         ScheduledServiceInvocationNyxIdCredentialSource subjectRef) =>
-        new(SenderNyxId: subjectRef);
+        new(subjectRef with { Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender });
 
     private static ScheduledServiceInvocationNyxIdCredentialSource BuildSenderNyxIdCredentialSource(
         ProvisionWorkflowCallerCredential credential) =>

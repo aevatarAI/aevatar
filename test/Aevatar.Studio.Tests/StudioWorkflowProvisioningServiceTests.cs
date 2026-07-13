@@ -93,6 +93,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("go");
         chat.ScopeId.Should().Be(ScopeId);
+        schedule.MutationContext.Should().BeNull();
     }
 
     [Fact]
@@ -115,8 +116,32 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-9");
         auth.SenderNyxId.Scope.Should().Be("proxy");
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.Sender);
+        auth.Durable.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldNotUseBodyCallerAsAuthenticatedScheduleMutationContext()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            new ProvisionWorkflowCallerCredential(
+                Platform: " nyxid-body ",
+                ExternalUserId: " body-user-42 ",
+                Scope: " sender-proxy ",
+                Tenant: " body-tenant "),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth!;
+        auth.SenderNyxId!.Subject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid-body", "body-tenant", "body-user-42"));
+        auth.SenderNyxId.Scope.Should().Be("sender-proxy");
+        schedule.MutationContext.Should().BeNull();
     }
 
     [Fact]
@@ -132,7 +157,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.DurableSenderBearerToken.Should().BeNull();
+        auth!.Durable.Should().BeNull();
         auth.SenderNyxId.Should().NotBeNull();
         AssertExactlyOneCredentialSource(auth);
     }
@@ -157,7 +182,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.SenderNyxId.Should().NotBeNull();
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.Durable.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }
 
@@ -176,7 +201,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
         response.ScheduleId.Should().Be(ScheduleId);
         member.GetBindingRunCallCount.Should().Be(0);
-        schedule.Configuration!.Target.ServiceInvocation!.Auth!.DurableSenderBearerToken.Should().BeNull();
+        schedule.Configuration!.Target.ServiceInvocation!.Auth!.Durable.Should().BeNull();
     }
 
     [Fact]
@@ -494,10 +519,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static void AssertExactlyOneCredentialSource(ScheduledServiceInvocationAuth? auth)
     {
         auth.Should().NotBeNull();
-        var sources =
-            (auth!.SenderNyxId != null ? 1 : 0) +
-            (string.IsNullOrEmpty(auth.DurableSenderBearerToken) ? 0 : 1) +
-            (auth.ScopeOwnerNyxId != null ? 1 : 0);
+        var sources = auth!.Source == null ? 0 : 1;
         sources.Should().Be(1, "a scheduled dispatch must carry exactly one credential source");
     }
 
@@ -659,6 +681,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Exception? ThrowOnEnsure { get; set; }
         public bool Ensured { get; private set; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
+        public ScheduledDispatchMutationContext? MutationContext { get; private set; }
 
         /// <summary>
         /// Schedule ids that behave like delete tombstones: ensuring them throws
@@ -667,7 +690,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public HashSet<string> TombstonedScheduleIds { get; } = new(StringComparer.Ordinal);
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default)
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default)
         {
             if (ThrowOnEnsure != null)
                 throw ThrowOnEnsure;
@@ -676,6 +700,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
             Ensured = true;
             Configuration = configuration;
+            MutationContext = context;
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 ScheduleId,
                 $"scheduled-dispatch:{ScheduleId}",
@@ -689,12 +714,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // ---- Unused members ----
 
         public Task<ScheduledDispatchMutationReceipt> CreateAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException(
                 "Provisioning must use EnsureAsync so retries converge on one schedule.");
 
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
-            string scheduleId, ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            string scheduleId, ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
