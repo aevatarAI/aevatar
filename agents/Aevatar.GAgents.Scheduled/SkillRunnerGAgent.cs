@@ -1939,7 +1939,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 ?? throw new InvalidOperationException("Scheduled Nyx API key secret vault is unavailable.");
             var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
                 reference.Ref,
-                CredentialSecretPurposes.ScheduledNyxApiKey,
+                ResolveScheduledAgentKeyPurpose(reference),
                 reference.OwnerScopeKey,
                 State.OutboundConfig?.ApiKeyId ?? string.Empty,
                 "scheduled-skill-runner"),
@@ -1949,6 +1949,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         return State.OutboundConfig?.NyxApiKey?.Trim() ?? string.Empty;
     }
+
+    private static string ResolveScheduledAgentKeyPurpose(SecretReference reference) =>
+        string.IsNullOrWhiteSpace(reference.Purpose)
+            ? CredentialSecretPurposes.ScheduledNyxApiKey
+            : reference.Purpose.Trim();
 
     private string BuildExecutionPrompt(DateTimeOffset now, string? reason)
     {

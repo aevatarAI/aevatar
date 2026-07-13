@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -128,7 +129,11 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     }
 
     [Fact]
+<<<<<<< HEAD
     public async Task ProjectAsync_ShouldMaterializeCredentialRequirementFacts()
+=======
+    public async Task ProjectAsync_ShouldNotProjectDurableCredentialReference()
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
         var projector = new ScheduledDispatchCurrentStateProjector(
@@ -141,6 +146,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             Namespace = "default",
             ServiceId = "svc",
         };
+<<<<<<< HEAD
         var state = CreateServiceInvocationState("schedule-workflow", identity);
         state.ScheduleKind = ScheduledDispatchScheduleKindState.Workflow;
         state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
@@ -153,10 +159,26 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                     ExternalUserId = "owner-1",
                 },
                 Scope = "proxy",
+=======
+        var state = CreateServiceInvocationState("schedule-durable-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+            {
+                CredentialId = "credential-projector-1",
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-projector-1",
+                    Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                    OwnerScopeKey = "owner-scope-projector",
+                    Fingerprint = "fp-projector",
+                },
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             },
         };
 
         await projector.ProjectAsync(
+<<<<<<< HEAD
             CreateContext("scheduled-dispatch:schedule-workflow"),
             WrapCommitted(
                 state,
@@ -170,6 +192,73 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService.ToString());
         document.CredentialSourceKind.Should().Be(ScheduledDispatchCredentialSourceKind.SenderNyxId.ToString());
         document.StateVersion.Should().Be(13);
+=======
+            CreateContext("scheduled-dispatch:schedule-durable-reference"),
+            WrapCommitted(
+                state,
+                version: 11,
+                eventId: "evt-durable-reference",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:20:00+00:00")));
+
+        var document = await store.GetAsync("schedule-durable-reference");
+        document.Should().NotBeNull();
+        AssertDocumentDoesNotContain(document!, "credential-projector-1");
+        AssertDocumentDoesNotContain(document!, "sec-projector-1");
+        AssertDocumentDoesNotContain(document!, "owner-scope-projector");
+        AssertDocumentDoesNotContain(document!, "fp-projector");
+        AssertDocumentDoesNotContain(document!, "resolved-full-key");
+        document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        document.StateVersion.Should().Be(11);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotProjectScheduledInvocationAgentKeySecretReference()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+            {
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-sensitive-reference",
+                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    OwnerScopeKey = "owner-scope-key",
+                    Fingerprint = "sha256:sensitive-fingerprint",
+                    Version = 1,
+                    ExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+                },
+                ApiKeyId = "api-key-sensitive-id",
+                KeyExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-reference"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-reference",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-reference");
+        document.Should().NotBeNull();
+        AssertDocumentDoesNotContain(document!, "sec-sensitive-reference");
+        AssertDocumentDoesNotContain(document!, "api-key-sensitive-id");
+        AssertDocumentDoesNotContain(document!, "sensitive-fingerprint");
+        document.StateVersion.Should().Be(10);
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Theory]
@@ -297,4 +386,10 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                 StateRoot = Any.Pack(state),
             }),
         };
+
+    private static void AssertDocumentDoesNotContain(ScheduledDispatchDocument document, string value)
+    {
+        document.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8(value).ToByteArray()).Should().Be(-1);
+        document.ToString().Should().NotContain(value);
+    }
 }

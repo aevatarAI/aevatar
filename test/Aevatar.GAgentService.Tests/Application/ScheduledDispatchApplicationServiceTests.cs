@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Schedules;
@@ -23,7 +24,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
         var envelope = new EventEnvelope
         {
             Payload = Any.Pack(new StringValue { Value = "run" }),
@@ -68,7 +69,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         await service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
 
@@ -85,7 +86,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.CreateAsync(CreateEnvelopeConfiguration("schedule-1"));
 
@@ -102,7 +103,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
         var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy"));
@@ -128,15 +129,15 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectDurableSenderBearerTokenAuth()
+    public async Task CreateAsync_ShouldNormalizeDurableCredentialReferenceAuth()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
-        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-durable-auth",
             "Invoke",
             new ScheduledDispatchTargetDescriptor(
@@ -145,14 +146,138 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: " durable-run-key "))),
+                    Auth: new ScheduledServiceInvocationAuth(CreateDurableCredentialReference(
+                            " credential-1 ",
+                            " sec-1 ",
+                            " owner-scope-1 ")))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        var created = actorPort.Created.Should().ContainSingle().Which;
+        var auth = created.Configuration.Target.ServiceInvocation!.Auth!.Durable;
+        auth.Should().NotBeNull();
+        auth!.CredentialId.Should().Be("credential-1");
+        auth.SecretReference.Ref.Should().Be("sec-1");
+        auth.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        auth.SecretReference.OwnerScopeKey.Should().Be("owner-scope-1");
+        var stateAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.Durable;
+        stateAuth.Should().BeEquivalentTo(auth);
+    }
+
+    [Theory]
+    [InlineData("", "sec-1", "owner-scope-1", "*CredentialId is required*")]
+    [InlineData("credential-1", "", "owner-scope-1", "*Ref is required*")]
+    [InlineData("credential-1", "sec-1", "", "*OwnerScopeKey is required*")]
+    public async Task CreateAsync_ShouldRejectIncompleteDurableCredentialReferenceAuth(
+        string credentialId,
+        string secretRef,
+        string ownerScopeKey,
+        string expectedMessage)
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(CreateDurableCredentialReference(
+                    credentialId,
+                    secretRef,
+                    ownerScopeKey))));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage(expectedMessage);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceAuthWithoutSecretReference()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
+                "credential-1",
+                null!))));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*secret reference is required*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectDurableCredentialReferenceAuthWithWrongPurpose()
+    {
+        var service = CreateService();
+
+        var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
+            "schedule-durable-auth",
+            new ScheduledServiceInvocationAuth(CreateDurableCredentialReference(purpose: "other-purpose"))));
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage($"*{CredentialSecretPurposes.ScheduledNyxApiKey}*");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldAcceptScheduledInvocationAgentKeyReference()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var reference = CreateScheduledInvocationAgentKeyReference();
+
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-agent-key-auth",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>()));
+
+        var auth = actorPort.Created.Should().ContainSingle().Which.Configuration.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey!.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectScheduledInvocationAgentKeyReferenceWithWrongPurpose()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var reference = CreateScheduledInvocationAgentKeyReference(CredentialSecretPurposes.ScheduledNyxApiKey);
+
+        var act = () => service.CreateAsync(new ScheduledDispatchConfiguration(
+            "schedule-agent-key-auth",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
+            .WithMessage("*scheduled.invocation-agent-key*");
         actorPort.Created.Should().BeEmpty();
     }
 
@@ -258,7 +383,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
         var payload = Any.Pack(new StringValue { Value = "invoke" });
 
         var receipt = await service.UpdateAsync(
@@ -314,7 +439,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var actorPort = new RecordingScheduledDispatchActorPort();
         var queryPort = new RecordingScheduledDispatchQueryPort();
         var preparation = new ScheduledDispatchTargetPreparationService();
-        var service = new ScheduledDispatchApplicationService(actorPort, queryPort, preparation);
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            preparation,
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
         var receipt = await service.EnsureAsync(CreateEnvelopeConfiguration(" schedule-1 "));
 
@@ -341,7 +470,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.UpdateAsync(" missing ", CreateEnvelopeConfiguration("ignored"));
 
@@ -508,7 +637,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectServiceInvocationAuthWithMultipleCredentialSources()
+    public async Task CreateAsync_ShouldRejectServiceInvocationAuthWithInvalidNyxIdRole()
     {
         var service = CreateService();
 
@@ -522,24 +651,21 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new Empty()),
                     Auth: new ScheduledServiceInvocationAuth(
-                        SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+                        new ScheduledServiceInvocationNyxIdCredentialSource(
                             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-                            "proxy"),
-                        DurableSenderBearerToken: "durable-run-key",
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                            "owner-proxy",
-                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
+                            "proxy",
+                            (ScheduledServiceInvocationNyxIdCredentialRole)999)))),
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
+            .WithMessage("*NyxID credential role is required*");
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRejectScopeOwnerServiceInvocationAuthWithoutOwnerSubject()
+    public async Task CreateAsync_ShouldRejectScopeOwnerServiceInvocationAuthWithoutMutationContext()
     {
         var service = CreateService();
 
@@ -560,17 +686,22 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*scope owner NyxID subject is required*");
+            .WithMessage("*Authenticated NyxID owner subject*");
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldNormalizeScopeOwnerServiceInvocationAuth()
+    public async Task CreateAsync_ShouldStampScopeOwnerServiceInvocationAuthFromMutationContext()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var context = new ScheduledDispatchMutationContext(
+            "tenant",
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
 
         await service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-owner-auth",
@@ -583,23 +714,202 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     Any.Pack(new StringValue { Value = "invoke" }),
                     Auth: new ScheduledServiceInvocationAuth(
                         ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                            " owner-proxy ",
-                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, " owner-nyx-user "))))),
+                            " owner-proxy ")))),
             "0 9 * * *",
             "UTC",
             true,
-            new Dictionary<string, string>()));
+            new Dictionary<string, string>()),
+            context);
 
         var created = actorPort.Created.Should().ContainSingle().Which;
-        created.Configuration.Target.ServiceInvocation!.Auth!.SenderNyxId.Should().BeNull();
-        var configurationOwnerAuth = created.Configuration.Target.ServiceInvocation.Auth.ScopeOwnerNyxId!;
+        var configurationOwnerAuth = created.Configuration.Target.ServiceInvocation!.Auth!.NyxId!;
+        configurationOwnerAuth.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
         configurationOwnerAuth.Scope.Should().Be("owner-proxy");
-        configurationOwnerAuth.OwnerSubject.Should().BeEquivalentTo(
+        configurationOwnerAuth.Subject.Should().BeEquivalentTo(
             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
-        var dispatchOwnerAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.ScopeOwnerNyxId!;
+        var dispatchOwnerAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.NyxId!;
+        dispatchOwnerAuth.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
         dispatchOwnerAuth.Scope.Should().Be("owner-proxy");
-        dispatchOwnerAuth.OwnerSubject.Should().BeEquivalentTo(
+        dispatchOwnerAuth.Subject.Should().BeEquivalentTo(
             new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+        admissionPort.Requests.Should().ContainSingle()
+            .Which.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(context.AuthenticatedNyxIdOwnerSubject);
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_ShouldRejectMissingBindingBeforeDispatch(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort
+        {
+            Result = ScheduledDispatchCredentialAdmissionResult.MissingBinding(),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var configuration = CreateScopeOwnerConfiguration();
+        var context = CreateScopeOwnerContext();
+
+        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*owner binding is required*");
+        admissionPort.Requests.Should().ContainSingle();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create), null)]
+    [InlineData(nameof(ScheduleMutationKind.Create), "")]
+    [InlineData(nameof(ScheduleMutationKind.Create), " ")]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), null)]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), "")]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), " ")]
+    [InlineData(nameof(ScheduleMutationKind.Update), null)]
+    [InlineData(nameof(ScheduleMutationKind.Update), "")]
+    [InlineData(nameof(ScheduleMutationKind.Update), " ")]
+    public async Task ScopeOwnerMutations_ShouldRejectMissingAuthenticatedScopeBeforeAdmission(
+        string mutationName,
+        string? authenticatedScopeId)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var context = CreateScopeOwnerContext() with
+        {
+            AuthenticatedScopeId = authenticatedScopeId,
+        };
+
+        var act = () => ExecuteMutationAsync(service, mutation, CreateScopeOwnerConfiguration(), context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*AuthenticatedScopeId is required*");
+        admissionPort.Requests.Should().BeEmpty();
+        AssertNoActorMutationDispatch(actorPort);
+        AssertNoScheduleQuery(queryPort);
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_ShouldMapScopeMismatchAdmissionBeforeDispatch(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort
+        {
+            Result = ScheduledDispatchCredentialAdmissionResult.ScopeMismatch(),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+
+        var act = () => ExecuteMutationAsync(
+            service,
+            mutation,
+            CreateScopeOwnerConfiguration(),
+            CreateScopeOwnerContext());
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*NyxID binding does not grant the requested schedule scope*");
+        admissionPort.Requests.Should().ContainSingle();
+        AssertNoActorMutationDispatch(actorPort);
+        AssertNoScheduleQuery(queryPort);
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_WithNoopAdmission_ShouldRejectBeforeDispatch(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateScopeOwnerConfiguration();
+        var context = CreateScopeOwnerContext();
+
+        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*admission is not configured*");
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+        queryPort.GetScheduleIds.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ScopeOwnerMutations_ShouldRejectTargetScopeMismatchBeforeAdmission(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var configuration = CreateScopeOwnerConfiguration(tenantId: "scope-2");
+        var context = CreateScopeOwnerContext();
+
+        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*target scope must match the authenticated scope*");
+        admissionPort.Requests.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectScopeOwnerSubjectMismatchBeforeAdmission()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            admissionPort);
+        var configuration = CreateScopeOwnerConfiguration(
+            ownerSubject: new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "evil-owner"));
+
+        var act = () => service.CreateAsync(configuration, CreateScopeOwnerContext());
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*must match the authenticated owner subject*");
+        admissionPort.Requests.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
     }
 
     [Fact]
@@ -607,9 +917,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
     {
         var port = new NoopScheduledServiceInvocationCredentialExchangePort();
 
-        var result = await port.IssueScopeOwnerNyxIdAsync(
-            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy"),
-            new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" });
+        var result = await port.IssueNyxIdAsync(new ScheduledServiceInvocationNyxIdCredentialSource(
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"),
+            "owner-proxy",
+            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
 
         result.Succeeded.Should().BeFalse();
         result.AccessToken.Should().BeNull();
@@ -660,7 +971,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         command.Target.CredentialRequirementTargetKind.Should().Be(
             ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService);
         command.Target.ServiceInvocation.EndpointId.Should().Be("run");
-        command.Target.ServiceInvocation.Auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
+        command.Target.ServiceInvocation.Auth.NyxId.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRoleState.Sender);
+        command.Target.ServiceInvocation.Auth.NyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         command.ScheduleKind.Should().Be(ScheduledDispatchScheduleKindState.Workflow);
     }
 
@@ -694,9 +1006,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
         command.Target.ServiceInvocation.Auth.SenderNyxId.Should().BeNull();
-        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
-        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Scope.Should().Be("proxy");
-        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
+        command.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.Should().BeNull();
+        command.Target.ServiceInvocation.Auth.NyxId.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        command.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
+        command.Target.ServiceInvocation.Auth.NyxId.Subject.Should().BeEquivalentTo(
             new ScheduledServiceInvocationNyxIdSubjectRefState
             {
                 Platform = OwnerScope.NyxIdPlatform,
@@ -706,7 +1019,43 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldRejectDurableSenderBearerTokenAuth()
+    public async Task ScheduledDispatchActorPort_ShouldPersistScheduledInvocationAgentKeyReference()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var reference = CreateScheduledInvocationAgentKeyReference();
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-agent-key",
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>(),
+            ScheduledDispatchScheduleKind.Workflow);
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        await port.DispatchCreateAsync("scheduled-dispatch:schedule-agent-key", configuration, prepared);
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
+        var auth = command.Target.ServiceInvocation.Auth;
+        auth.DurableSenderBearerToken.Should().BeEmpty();
+        auth.LegacyDurableSenderBearerBlocked.Should().BeFalse();
+        auth.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
+        auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(reference.KeyExpiresAtUnixMs);
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldPersistDurableCredentialReferenceAuth()
     {
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
@@ -719,7 +1068,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(DurableSenderBearerToken: "durable-run-key"))),
+                    Auth: new ScheduledServiceInvocationAuth(CreateDurableCredentialReference()))),
             "0 9 * * *",
             "UTC",
             true,
@@ -728,11 +1077,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var prepared = await new ScheduledDispatchTargetPreparationService()
             .PrepareAsync(configuration, "cmd-1", "corr-1");
 
-        var act = () => port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
+        await port.DispatchCreateAsync("scheduled-dispatch:schedule-durable", configuration, prepared);
 
-        await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Durable sender bearer token schedule auth is no longer supported*");
-        dispatchPort.Envelopes.Should().BeEmpty();
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchCreateCommand>();
+        command.Target.ServiceInvocation.Auth.SourceCase.Should().Be(ScheduledServiceInvocationAuthState.SourceOneofCase.Durable);
+        command.Target.ServiceInvocation.Auth.Durable.Should().NotBeNull();
+        command.Target.ServiceInvocation.Auth.Durable.CredentialId.Should().Be("credential-1");
+        command.Target.ServiceInvocation.Auth.Durable.SecretReference.Ref.Should().Be("sec-1");
+        command.Target.ServiceInvocation.Auth.Durable.SecretReference.OwnerScopeKey.Should().Be("owner-scope-1");
     }
 
     [Fact]
@@ -822,8 +1174,13 @@ public sealed class ScheduledDispatchApplicationServiceTests
         };
         var service = new ScheduledDispatchApplicationService(
             actorPort,
+<<<<<<< HEAD
             queryPort,
             new ScheduledDispatchTargetPreparationService());
+=======
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
         var disabled = await service.DisableAsync("schedule-1", null!);
@@ -915,7 +1272,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         var get = await service.GetAsync(" schedule-1 ");
         var update = () => service.UpdateAsync("schedule-1", CreateEnvelopeConfiguration("schedule-1"));
@@ -972,7 +1329,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             new RecordingScheduledDispatchActorPort(),
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
 
         await service.GetAsync(" schedule-1 ");
         await service.ListAsync(0, "cursor-1", includeTotalCount: true);
@@ -1176,7 +1533,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         new(
             new RecordingScheduledDispatchActorPort(),
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
     private static ScheduledDispatchConfiguration CreateEnvelopeConfiguration(string scheduleId) =>
         new(
@@ -1193,17 +1551,25 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
     private static ScheduledDispatchConfiguration CreateServiceInvocationConfiguration(
         string scheduleId,
+<<<<<<< HEAD
         ScheduledDispatchScheduleKind scheduleKind,
         ScheduledDispatchCredentialRequirementTargetKind credentialRequirementTargetKind,
         Any? payload = null) =>
         new ScheduledDispatchConfiguration(
             scheduleId,
             string.Empty,
+=======
+        ScheduledServiceInvocationAuth auth) =>
+        new(
+            scheduleId,
+            "Invoke",
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
+<<<<<<< HEAD
                     payload ?? Any.Pack(new Empty()))),
             "0 9 * * *",
             "UTC",
@@ -1249,6 +1615,116 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 CredentialRequirementTargetKind: credentialRequirementTargetKind,
                 CredentialSourceKind: credentialSourceKind),
             []);
+=======
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: auth)),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+    private static ScheduledDispatchConfiguration CreateScopeOwnerConfiguration(
+        string scheduleId = "scope-owner-schedule",
+        string tenantId = "scope-1",
+        ScheduledServiceInvocationNyxIdSubjectRef? ownerSubject = null) =>
+        new(
+            scheduleId,
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity
+                    {
+                        TenantId = tenantId,
+                        AppId = "app",
+                        Namespace = "default",
+                        ServiceId = "svc",
+                    },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: new ScheduledServiceInvocationAuth(
+                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                            "proxy",
+                            ownerSubject)))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+    private static ScheduledServiceInvocationDurableCredentialReference CreateDurableCredentialReference(
+        string credentialId = "credential-1",
+        string secretRef = "sec-1",
+        string ownerScopeKey = "owner-scope-1",
+        string purpose = CredentialSecretPurposes.ScheduledNyxApiKey) =>
+        new(
+            credentialId,
+            new SecretReference
+            {
+                Ref = secretRef,
+                Purpose = purpose,
+                OwnerScopeKey = ownerScopeKey,
+            });
+
+    private static ScheduledDispatchMutationContext CreateScopeOwnerContext() =>
+        new(
+            "scope-1",
+            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+
+    private static Task<ScheduledDispatchMutationReceipt> ExecuteMutationAsync(
+        ScheduledDispatchApplicationService service,
+        ScheduleMutationKind mutation,
+        ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchMutationContext context) =>
+        mutation switch
+        {
+            ScheduleMutationKind.Create => service.CreateAsync(configuration, context),
+            ScheduleMutationKind.Ensure => service.EnsureAsync(configuration, context),
+            ScheduleMutationKind.Update => service.UpdateAsync(configuration.ScheduleId, configuration, context),
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null),
+        };
+
+    private static void AssertNoActorMutationDispatch(RecordingScheduledDispatchActorPort actorPort)
+    {
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    private static void AssertNoScheduleQuery(RecordingScheduledDispatchQueryPort queryPort)
+    {
+        queryPort.GetScheduleIds.Should().BeEmpty();
+        queryPort.ListRequests.Should().BeEmpty();
+        queryPort.FilteredListRequests.Should().BeEmpty();
+    }
+
+    private enum ScheduleMutationKind
+    {
+        Create,
+        Ensure,
+        Update,
+    }
+
+    private static ScheduledInvocationAgentKeyCredentialReference CreateScheduledInvocationAgentKeyReference(
+        string purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey)
+    {
+        var expiresAtUnixMs = DateTimeOffset.UtcNow.AddDays(30).ToUnixTimeMilliseconds();
+        return new ScheduledInvocationAgentKeyCredentialReference(
+            new SecretReference
+            {
+                Ref = "sec-schedule",
+                Purpose = purpose,
+                OwnerScopeKey = "scope-key",
+                Fingerprint = "sha256:abc",
+                Version = 1,
+                CreatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ExpiresAtUnixMs = expiresAtUnixMs,
+            },
+            "key-schedule",
+            expiresAtUnixMs);
+    }
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {
@@ -1481,6 +1957,23 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ct.ThrowIfCancellationRequested();
             FilteredListRequests.Add(query);
             return Task.FromResult(new ScheduledDispatchListResult([], null, query.IncludeTotalCount ? 0 : null));
+        }
+    }
+
+    private sealed class RecordingScheduledDispatchCredentialAdmissionPort : IScheduledDispatchCredentialAdmissionPort
+    {
+        public List<ScheduledDispatchCredentialAdmissionRequest> Requests { get; } = [];
+
+        public ScheduledDispatchCredentialAdmissionResult Result { get; init; } =
+            ScheduledDispatchCredentialAdmissionResult.Allowed();
+
+        public Task<ScheduledDispatchCredentialAdmissionResult> AdmitAsync(
+            ScheduledDispatchCredentialAdmissionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(Result);
         }
     }
 }

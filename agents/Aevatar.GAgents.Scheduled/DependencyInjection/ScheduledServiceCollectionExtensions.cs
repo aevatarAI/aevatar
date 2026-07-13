@@ -63,12 +63,17 @@ public static class ScheduledServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
             UserAgentCatalogNyxCredentialProjector>();
+        services.AddCurrentStateProjectionMaterializer<
+            UserAgentCatalogMaterializationContext,
+            UserAgentApiKeyRevocationProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
             UserAgentCatalogDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<SkillRunnerExecutionDocument>,
             SkillRunnerExecutionDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
             UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentApiKeyRevocationDocument>,
+            UserAgentApiKeyRevocationDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
         services.TryAddSingleton<ISkillRunnerExecutionQueryPort, SkillRunnerExecutionQueryPort>();
         // Internal-only credential-bearing reader for outbound delivery (issue #466 §D).

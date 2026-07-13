@@ -43,6 +43,17 @@ internal static class WorkflowRunExecutionContextStateAccess
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
         if (parsed.IsInvalid)
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
+        if (HasDurableCallerCredential(credential?.DurableCallerCredential) && parsed.IsValid)
+            throw new ArgumentException("Workflow caller credential must not carry both durable and bearer credentials.", nameof(credential));
+        if (HasDurableCallerCredential(credential?.DurableCallerCredential))
+        {
+            delta.CallerCredential = new WorkflowCallerCredential
+            {
+                DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
+            };
+            return delta;
+        }
+
         if (parsed.IsMissing)
             return delta;
 
@@ -104,6 +115,12 @@ internal static class WorkflowRunExecutionContextStateAccess
         out WorkflowCallerCredential credential)
     {
         var callerCredential = Get(ctx).CallerCredential;
+        if (HasDurableCallerCredential(callerCredential?.DurableCallerCredential))
+        {
+            credential = new WorkflowCallerCredential();
+            return false;
+        }
+
         if (HasRuntimeSecretReference(callerCredential?.RuntimeSecretReference))
         {
             credential = new WorkflowCallerCredential();
@@ -134,6 +151,17 @@ internal static class WorkflowRunExecutionContextStateAccess
         WorkflowCallerCredentialState? callerCredential,
         CancellationToken ct)
     {
+        if (HasDurableCallerCredential(callerCredential?.DurableCallerCredential))
+        {
+            var resolved = await TryResolveDurableCallerCredentialAsync(
+                source,
+                callerCredential!.DurableCallerCredential,
+                ct);
+            return resolved.Found
+                ? (true, new WorkflowCallerCredential { BearerToken = resolved.Secret })
+                : (false, new WorkflowCallerCredential());
+        }
+
         if (HasRuntimeSecretReference(callerCredential?.RuntimeSecretReference))
         {
             var resolved = await TryResolveRuntimeSecretAsync(source, callerCredential!.RuntimeSecretReference, ct);
@@ -195,6 +223,39 @@ internal static class WorkflowRunExecutionContextStateAccess
         return (true, result.Secret.Trim());
     }
 
+    internal static async Task<(bool Found, string Secret)> TryResolveDurableCallerCredentialAsync(
+        object source,
+        DurableCallerCredentialRef? reference,
+        CancellationToken ct = default)
+    {
+        if (!HasDurableCallerCredential(reference) ||
+            string.IsNullOrWhiteSpace(reference!.Purpose) ||
+            string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
+            string.IsNullOrWhiteSpace(reference.SubjectId))
+        {
+            return (false, string.Empty);
+        }
+
+        var vault = ResolveSecretVault(source);
+        if (vault is null)
+            return (false, string.Empty);
+
+        var result = await vault.ResolveAsync(new ResolveSecretRequest(
+            reference.Ref,
+            reference.Purpose,
+            reference.OwnerScopeKey,
+            reference.SubjectId,
+            "workflow-durable-caller-resolve"), ct);
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(result.Secret);
+        if (!result.Resolved || parsed.IsInvalid || parsed.IsMissing)
+            return (false, string.Empty);
+
+        return (true, parsed.NormalizedBearerToken!);
+    }
+
+    private static bool HasDurableCallerCredential(DurableCallerCredentialRef? reference) =>
+        reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
+
     private static bool HasRuntimeSecretReference(RuntimeSecretReference? reference) =>
         reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
 
@@ -206,6 +267,19 @@ internal static class WorkflowRunExecutionContextStateAccess
             stateHostAccessor.StateHost is IRuntimeSecretStoreAccessor stateHostRuntimeAccessor)
         {
             return stateHostRuntimeAccessor.RuntimeSecretStore;
+        }
+
+        return null;
+    }
+
+    internal static ISecretVault? ResolveSecretVault(object source)
+    {
+        if (source is ISecretVaultAccessor accessor)
+            return accessor.SecretVault;
+        if (source is IWorkflowExecutionStateHostAccessor stateHostAccessor &&
+            stateHostAccessor.StateHost is ISecretVaultAccessor stateHostSecretVaultAccessor)
+        {
+            return stateHostSecretVaultAccessor.SecretVault;
         }
 
         return null;
@@ -292,6 +366,8 @@ internal static class WorkflowRunExecutionContextStateAccess
         var clone = source?.Clone() ?? new WorkflowRunExecutionContextState();
         if (!string.IsNullOrWhiteSpace(clone.CallerCredential?.BearerToken))
             clone.CallerCredential.BearerToken = string.Empty;
+        if (clone.CallerCredential?.DurableCallerCredential != null)
+            clone.CallerCredential.DurableCallerCredential = null;
         return clone;
     }
 

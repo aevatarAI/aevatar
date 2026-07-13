@@ -25,7 +25,10 @@ internal sealed class SkillRunnerCronSchedulePort : ISkillRunnerCronSchedulePort
         if (NormalizeScheduleMode(command.ScheduleMode) != SkillRunnerScheduleMode.Cron)
             return Task.CompletedTask;
 
-        return _scheduledDispatches.EnsureAsync(CreateConfiguration(agentId, command), ct);
+        return _scheduledDispatches.EnsureAsync(
+            CreateConfiguration(agentId, command),
+            ScheduledDispatchMutationContext.None,
+            ct);
     }
 
     public Task EnableAsync(

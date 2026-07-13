@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -1046,8 +1047,71 @@ public sealed class ScheduledDispatchGAgentTests
             .ContainSingle()
             .Which.Should().BeFalse();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
-        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
-        agent.State.Target.ServiceInvocation.Auth.ScopeOwnerNyxId.OwnerSubject.ExternalUserId.Should().Be("owner-nyx-user");
+        agent.State.Target!.ServiceInvocation!.Auth!.ScopeOwnerNyxId.Should().BeNull();
+        agent.State.Target.ServiceInvocation.Auth.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("owner-proxy");
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Subject.ExternalUserId.Should().Be("owner-nyx-user");
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForDurableCredentialReferenceAuth_ShouldPassReferenceWithoutResolvingSecret()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+                        {
+                            CredentialId = "credential-1",
+                            SecretReference = new SecretReference
+                            {
+                                Ref = "sec-1",
+                                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                                OwnerScopeKey = "owner-scope-1",
+                            },
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.Durable.Should().NotBeNull();
+        auth.Durable!.CredentialId.Should().Be("credential-1");
+        auth.Durable.SecretReference.Ref.Should().Be("sec-1");
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.Target!.ServiceInvocation!.Auth!.Durable!.CredentialId.Should().Be("credential-1");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
     }
@@ -1109,7 +1173,9 @@ public sealed class ScheduledDispatchGAgentTests
 
         eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
         agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
-        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        agent.State.Target.ServiceInvocation.Auth!.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
     }
 
     [Fact]
@@ -1171,7 +1237,9 @@ public sealed class ScheduledDispatchGAgentTests
         });
 
         agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
-        agent.State.Target.ServiceInvocation.Auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
+        agent.State.Target.ServiceInvocation.Auth!.NyxId!.Role.Should()
+            .Be(ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner);
+        agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
         auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
@@ -1237,6 +1305,84 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_ForScheduledInvocationAgentKeyAuth_ShouldPassReferenceAndRequestWorkflowProjection()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        var createdAtUnixMs = DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")
+            .ToUnixTimeMilliseconds();
+        var expiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+                        {
+                            SecretReference = new SecretReference
+                            {
+                                Ref = "sec-schedule",
+                                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                                OwnerScopeKey = "scope-key",
+                                Fingerprint = "sha256:abc",
+                                Version = 7,
+                                CreatedAtUnixMs = createdAtUnixMs,
+                                ExpiresAtUnixMs = expiresAtUnixMs,
+                            },
+                            ApiKeyId = "key-schedule",
+                            KeyExpiresAtUnixMs = expiresAtUnixMs,
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-schedule");
+        auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        auth.ScheduledInvocationAgentKey.SecretReference.Ref.Should().Be("sec-schedule");
+        auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should()
+            .Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.ScheduledInvocationAgentKey.SecretReference.OwnerScopeKey.Should().Be("scope-key");
+        auth.ScheduledInvocationAgentKey.SecretReference.Fingerprint.Should().Be("sha256:abc");
+        auth.ScheduledInvocationAgentKey.SecretReference.Version.Should().Be(7);
+        auth.ScheduledInvocationAgentKey.SecretReference.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        serviceInvocationDispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Should()
+            .ContainSingle()
+            .Which.Should().BeTrue();
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleFireAsync_ForLegacyDurableBearerTokenAuth_ShouldFailClosed()
     {
         var eventStore = new TestEventStore();
@@ -1284,6 +1430,65 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(1);
         agent.State.LastError.Should().Contain("legacy durable bearer auth");
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_ForDurableCredentialReferenceAuth_ShouldPassReferenceToDispatchAndRecordFailure()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = new InvalidOperationException(
+                "Scheduled service invocation durable credential reference exchange is not available in this phase."),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+                        {
+                            CredentialId = " durable-run-key ",
+                        },
+                    },
+                },
+            }));
+
+        var stateAuth = agent.State.Target!.ServiceInvocation!.Auth!;
+        stateAuth.Durable.Should().NotBeNull();
+        stateAuth.Durable!.CredentialId.Should().Be("durable-run-key");
+        stateAuth.SourceCase.Should().Be(ScheduledServiceInvocationAuthState.SourceOneofCase.Durable);
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var runtimeAuth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        runtimeAuth.Should().NotBeNull();
+        runtimeAuth!.Durable.Should().NotBeNull();
+        runtimeAuth.Durable!.CredentialId.Should().Be("durable-run-key");
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.LastError.Should().Be(
+            "Scheduled service invocation durable credential reference exchange is not available in this phase.");
     }
 
     [Fact]

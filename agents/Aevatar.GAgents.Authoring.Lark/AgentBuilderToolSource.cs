@@ -1,5 +1,4 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
@@ -13,7 +12,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
-    private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
@@ -25,7 +23,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     internal AgentBuilderToolSource(
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
-        INyxIdApiClientFactory nyxClientFactory,
         ISkillRunnerCommandPort skillRunnerPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
@@ -36,7 +33,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
-        _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
@@ -54,10 +50,10 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
             new AgentBuilderTool(
                 _queryPort,
                 _executionQueryPort,
-                _nyxClientFactory,
                 _skillRunnerPort,
                 _catalogCommandPort,
                 _callerScopeResolver,
+                _scheduledAgentApiKeyIssuer,
                 _toolLogger),
             new ScheduledAgentCreatorTool(
                 _skillRunnerPort,

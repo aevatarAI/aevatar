@@ -16,12 +16,15 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
     public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
+    private const int MaxApiKeyRevocationAttempts = 3;
 
     protected override UserAgentCatalogState TransitionState(UserAgentCatalogState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
             .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
             .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
+            .On<UserAgentCatalogApiKeyRevocationRequestedEvent>(ApplyApiKeyRevocationRequested)
+            .On<UserAgentCatalogApiKeyRevocationAttemptRecordedEvent>(ApplyApiKeyRevocationAttemptRecorded)
             .On<UserAgentCatalogTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .On<UserAgentCatalogSharedEvent>(ApplyShared)
             .On<UserAgentCatalogUnsharedEvent>(ApplyUnshared)
@@ -135,10 +138,64 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return;
         }
 
+        var existing = State.Entries.First(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
+        if (!existing.Tombstoned && ShouldRequestApiKeyRevocation(existing))
+        {
+            await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
+            {
+                Revocation = BuildApiKeyRevocation(existing),
+            });
+        }
+
         await PersistDomainEventAsync(new UserAgentCatalogTombstonedEvent
         {
             AgentId = command.AgentId.Trim(),
             TombstoneStateVersion = NextCommittedVersion(),
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleRecordApiKeyRevocationAttemptAsync(
+        UserAgentCatalogRecordApiKeyRevocationAttemptCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.AgentId) || string.IsNullOrWhiteSpace(command.ApiKeyId))
+        {
+            Logger.LogWarning("Cannot record API key revocation attempt with empty agent id or API key id");
+            return;
+        }
+
+        var pending = State.PendingApiKeyRevocations.FirstOrDefault(revocation =>
+            string.Equals(revocation.AgentId, command.AgentId.Trim(), StringComparison.Ordinal) &&
+            string.Equals(revocation.ApiKeyId, command.ApiKeyId.Trim(), StringComparison.Ordinal));
+        if (pending is null)
+        {
+            Logger.LogWarning(
+                "Cannot record API key revocation attempt without a pending revocation: agentId={AgentId} apiKeyId={ApiKeyId}",
+                command.AgentId.Trim(),
+                command.ApiKeyId.Trim());
+            return;
+        }
+
+        if (!command.Completed && pending.AttemptCount >= MaxApiKeyRevocationAttempts)
+        {
+            Logger.LogWarning(
+                "Cannot record API key revocation retry after max attempts: agentId={AgentId} apiKeyId={ApiKeyId}",
+                command.AgentId.Trim(),
+                command.ApiKeyId.Trim());
+            return;
+        }
+
+        await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationAttemptRecordedEvent
+        {
+            AgentId = command.AgentId.Trim(),
+            ApiKeyId = command.ApiKeyId.Trim(),
+            Completed = command.Completed,
+            HttpStatus = command.HttpStatus,
+            Error = command.Error?.Trim() ?? string.Empty,
+            FailureKind = command.Completed
+                ? UserAgentApiKeyRevocationFailureKind.None
+                : command.FailureKind,
+            AttemptedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
     }
 
@@ -253,6 +310,53 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return next;
     }
 
+    private static UserAgentCatalogState ApplyApiKeyRevocationRequested(
+        UserAgentCatalogState current,
+        UserAgentCatalogApiKeyRevocationRequestedEvent evt)
+    {
+        if (evt.Revocation is null ||
+            string.IsNullOrWhiteSpace(evt.Revocation.AgentId) ||
+            string.IsNullOrWhiteSpace(evt.Revocation.ApiKeyId))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        var existing = next.PendingApiKeyRevocations.FirstOrDefault(revocation =>
+            string.Equals(revocation.AgentId, evt.Revocation.AgentId, StringComparison.Ordinal) &&
+            string.Equals(revocation.ApiKeyId, evt.Revocation.ApiKeyId, StringComparison.Ordinal));
+        if (existing is not null)
+            next.PendingApiKeyRevocations.Remove(existing);
+
+        next.PendingApiKeyRevocations.Add(evt.Revocation.Clone());
+        return next;
+    }
+
+    private static UserAgentCatalogState ApplyApiKeyRevocationAttemptRecorded(
+        UserAgentCatalogState current,
+        UserAgentCatalogApiKeyRevocationAttemptRecordedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = next.PendingApiKeyRevocations.FirstOrDefault(revocation =>
+            string.Equals(revocation.AgentId, evt.AgentId, StringComparison.Ordinal) &&
+            string.Equals(revocation.ApiKeyId, evt.ApiKeyId, StringComparison.Ordinal));
+        if (existing is null)
+            return current;
+
+        if (evt.Completed)
+        {
+            next.PendingApiKeyRevocations.Remove(existing);
+            return next;
+        }
+
+        existing.AttemptCount++;
+        existing.LastAttemptAt = evt.AttemptedAt?.Clone();
+        existing.LastHttpStatus = evt.HttpStatus;
+        existing.LastError = evt.Error ?? string.Empty;
+        existing.FailureKind = evt.FailureKind;
+        return next;
+    }
+
     private static UserAgentCatalogState ApplyTombstonesCompacted(
         UserAgentCatalogState current,
         UserAgentCatalogTombstonesCompactedEvent evt)
@@ -306,6 +410,27 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             !entry.Tombstoned &&
             string.Equals(entry.AgentId, normalizedAgentId, StringComparison.Ordinal) &&
             ownerScope.MatchesStrictly(entry.OwnerScope));
+    }
+
+    private static bool ShouldRequestApiKeyRevocation(UserAgentCatalogEntry entry) =>
+        !string.IsNullOrWhiteSpace(entry.ApiKeyId);
+
+    private static UserAgentApiKeyRevocation BuildApiKeyRevocation(UserAgentCatalogEntry entry)
+    {
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            AgentId = entry.AgentId.Trim(),
+            ApiKeyId = entry.ApiKeyId.Trim(),
+            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            FailureKind = UserAgentApiKeyRevocationFailureKind.Unspecified,
+        };
+
+        if (entry.NyxApiKeyReference is not null)
+            revocation.NyxApiKeyReference = entry.NyxApiKeyReference.Clone();
+        if (entry.OwnerScope is not null)
+            revocation.OwnerScope = entry.OwnerScope.Clone();
+
+        return revocation;
     }
 
     private long NextCommittedVersion() =>
