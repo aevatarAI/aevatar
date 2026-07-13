@@ -13,7 +13,8 @@ namespace Aevatar.GAgentService.Infrastructure.Schedules;
 
 public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceInvocationDispatchPort
 {
-    private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+    private const string LegacyConnectorHttpAuthorizationBlockedKey =
+        ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey;
 
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
@@ -52,11 +53,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             await BuildInvocationRequestAsync(dispatch, ct),
             dispatch.ScheduleId);
         _logger.LogInformation(
-            "Scheduled service invocation credential projection prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential} hasConnectorAuthorization={HasConnectorAuthorization} hasOwnerLlmToken={HasOwnerLlmToken} hasSenderLlmToken={HasSenderLlmToken}",
+            "Scheduled service invocation credential projection prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} hasConnectorAuthorization={HasConnectorAuthorization} hasOwnerLlmToken={HasOwnerLlmToken} hasSenderLlmToken={HasSenderLlmToken}",
             dispatch.ScheduleId ?? string.Empty,
             FormatServiceKey(request.Identity),
             request.EndpointId ?? string.Empty,
-            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
             HasConnectorAuthorization(request),
             HasOwnerLlmToken(request),
             HasSenderLlmToken(request));
@@ -319,10 +319,11 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ExchangedCredential? credential,
         bool projectNyxIdAccessTokenToWorkflowCallerCredential)
     {
+        var sanitizedRequest = ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(request);
         if ((headers == null || headers.Count == 0) && credential == null)
-            return request;
+            return sanitizedRequest;
 
-        var cloned = request.Clone();
+        var cloned = sanitizedRequest.Clone();
         if (cloned.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
             return cloned;
 

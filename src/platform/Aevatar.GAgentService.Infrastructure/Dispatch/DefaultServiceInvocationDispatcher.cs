@@ -232,9 +232,12 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             };
         }
 
-        var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
-        if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
-            return connectorCredential;
+        if (string.IsNullOrWhiteSpace(invocationRequest.ScheduleId))
+        {
+            var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
+            if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
+                return connectorCredential;
+        }
 
         return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
     }
