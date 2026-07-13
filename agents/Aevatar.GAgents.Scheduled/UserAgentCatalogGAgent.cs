@@ -540,6 +540,9 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return next;
 
         existing.NyxApiKeyReference = evt.SecretReference?.Clone();
+        existing.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+            evt.SecretReference,
+            evt.SecretSubjectId);
         existing.SecretSubjectId = evt.SecretSubjectId ?? string.Empty;
         existing.RepairReason = evt.RepairReason ?? string.Empty;
         existing.RequestedBySubjectId = evt.RequestedBySubjectId ?? string.Empty;
@@ -633,7 +636,12 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         };
 
         if (entry.NyxApiKeyReference is not null)
+        {
             revocation.NyxApiKeyReference = entry.NyxApiKeyReference.Clone();
+            revocation.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+                entry.NyxApiKeyReference,
+                entry.ApiKeyId);
+        }
         if (entry.OwnerScope is not null)
             revocation.OwnerScope = entry.OwnerScope.Clone();
 
@@ -648,6 +656,19 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         revocation.SecretSubjectId = string.IsNullOrWhiteSpace(revocation.SecretSubjectId)
             ? revocation.ApiKeyId
             : revocation.SecretSubjectId.Trim();
+        if (revocation.VaultRevocationDescriptor is not null)
+        {
+            revocation.VaultRevocationDescriptor.Ref = revocation.VaultRevocationDescriptor.Ref?.Trim() ?? string.Empty;
+            revocation.VaultRevocationDescriptor.Purpose = revocation.VaultRevocationDescriptor.Purpose?.Trim() ?? string.Empty;
+            revocation.VaultRevocationDescriptor.OwnerScopeKey = revocation.VaultRevocationDescriptor.OwnerScopeKey?.Trim() ?? string.Empty;
+            revocation.VaultRevocationDescriptor.SubjectId = revocation.VaultRevocationDescriptor.SubjectId?.Trim() ?? string.Empty;
+        }
+        if (IsCompleteReference(revocation.NyxApiKeyReference))
+        {
+            revocation.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+                revocation.NyxApiKeyReference,
+                revocation.SecretSubjectId);
+        }
         revocation.NyxIdTrack ??= new ScheduledCredentialRevocationTrack
         {
             Status = ScheduledCredentialRevocationTrackStatus.Pending,
@@ -659,11 +680,16 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         };
         revocation.VaultTrack ??= new ScheduledCredentialRevocationTrack
         {
-            Status = IsCompleteReference(revocation.NyxApiKeyReference)
-                ? ScheduledCredentialRevocationTrackStatus.Pending
-                : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
+            Status = revocation.VaultRevocationDescriptor?.ReferenceAvailability ==
+                ScheduledCredentialVaultReferenceAvailability.NotApplicable
+                    ? ScheduledCredentialRevocationTrackStatus.NotApplicable
+                    : HasExecutableVaultDescriptor(revocation)
+                        ? ScheduledCredentialRevocationTrackStatus.Pending
+                        : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
         };
-        if (!IsCompleteReference(revocation.NyxApiKeyReference) &&
+        if (!HasExecutableVaultDescriptor(revocation) &&
+            revocation.VaultRevocationDescriptor?.ReferenceAvailability !=
+                ScheduledCredentialVaultReferenceAvailability.NotApplicable &&
             revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending)
         {
             revocation.VaultTrack.Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef;
@@ -705,7 +731,9 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             StringComparison.Ordinal);
 
     private static string GetSecretReferenceRef(UserAgentApiKeyRevocation revocation) =>
-        revocation.NyxApiKeyReference?.Ref?.Trim() ?? string.Empty;
+        revocation.NyxApiKeyReference?.Ref?.Trim() ??
+        revocation.VaultRevocationDescriptor?.Ref?.Trim() ??
+        string.Empty;
 
     private static ScheduledCredentialRevocationTrack? ResolveTrack(
         UserAgentApiKeyRevocation revocation,
@@ -728,6 +756,29 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         !string.IsNullOrWhiteSpace(reference.OwnerScopeKey) &&
         reference.Version > 0 &&
         !string.IsNullOrWhiteSpace(reference.Fingerprint);
+
+    private static bool HasExecutableVaultDescriptor(UserAgentApiKeyRevocation revocation) =>
+        revocation.VaultRevocationDescriptor is
+        {
+            ReferenceAvailability: ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed or
+                ScheduledCredentialVaultReferenceAvailability.Confirmed,
+        } descriptor &&
+        !string.IsNullOrWhiteSpace(descriptor.Ref) &&
+        !string.IsNullOrWhiteSpace(descriptor.Purpose) &&
+        !string.IsNullOrWhiteSpace(descriptor.OwnerScopeKey) &&
+        !string.IsNullOrWhiteSpace(descriptor.SubjectId);
+
+    private static ScheduledCredentialVaultRevocationDescriptor BuildConfirmedVaultDescriptor(
+        Aevatar.Foundation.Abstractions.Credentials.SecretReference? reference,
+        string? subjectId) =>
+        new()
+        {
+            Ref = reference?.Ref?.Trim() ?? string.Empty,
+            Purpose = reference?.Purpose?.Trim() ?? string.Empty,
+            OwnerScopeKey = reference?.OwnerScopeKey?.Trim() ?? string.Empty,
+            SubjectId = subjectId?.Trim() ?? string.Empty,
+            ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+        };
 
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))

@@ -378,6 +378,24 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
         });
         await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand { AgentId = "agent-repair" });
+        _credentialRevocationExecutor.ClearReceivedCalls();
+        var committedBeforeExecution = false;
+        _credentialRevocationExecutor.ExecutePendingAsync(
+                string.Empty,
+                Arg.Any<UserAgentApiKeyRevocation>(),
+                Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                var events = await _store.GetEventsAsync(_agent.Id);
+                committedBeforeExecution = events.Last().EventData
+                    .Is(UserAgentCatalogCredentialRevocationRepairedEvent.Descriptor);
+                var revocation = call.ArgAt<UserAgentApiKeyRevocation>(1);
+                revocation.NyxApiKeyReference.Ref.Should().Be("secret-repair");
+                revocation.VaultRevocationDescriptor.Ref.Should().Be("secret-repair");
+                revocation.VaultRevocationDescriptor.ReferenceAvailability.Should()
+                    .Be(ScheduledCredentialVaultReferenceAvailability.Confirmed);
+                revocation.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+            });
 
         await _agent.HandleRepairCredentialRevocationAsync(new UserAgentCatalogRepairCredentialRevocationCommand
         {
@@ -401,6 +419,13 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         var persisted = await _store.GetEventsAsync(_agent.Id);
         var repaired = persisted.Last().EventData.Unpack<UserAgentCatalogCredentialRevocationRepairedEvent>();
         repaired.RequestId.Should().Be("repair-request-1");
+        committedBeforeExecution.Should().BeTrue();
+        await _credentialRevocationExecutor.Received(1).ExecutePendingAsync(
+            string.Empty,
+            Arg.Is<UserAgentApiKeyRevocation>(revocation =>
+                revocation.NyxApiKeyReference.Ref == "secret-repair" &&
+                revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]

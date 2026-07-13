@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
@@ -46,39 +47,49 @@ internal static class ScheduledAgentCredentialRepairAdminEndpoints
         if (!caller.IsElevated || request is null || string.IsNullOrWhiteSpace(caller.UserId))
             return Results.Forbid();
 
-        var reference = request.secret_reference;
-        if (string.IsNullOrWhiteSpace(request.agent_id) ||
-            string.IsNullOrWhiteSpace(request.api_key_id) ||
+        var reference = request.SecretReference;
+        if (string.IsNullOrWhiteSpace(request.AgentId) ||
+            string.IsNullOrWhiteSpace(request.ApiKeyId) ||
             reference is null ||
             string.IsNullOrWhiteSpace(reference.Ref) ||
             string.IsNullOrWhiteSpace(reference.Purpose) ||
             string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
             reference.Version <= 0 ||
             string.IsNullOrWhiteSpace(reference.Fingerprint) ||
-            string.IsNullOrWhiteSpace(request.repair_reason))
+            string.IsNullOrWhiteSpace(request.RepairReason))
             return Results.BadRequest(new { error = "invalid_repair_request" });
 
-        var receipt = await repairPort.RepairMissingSecretReferenceAsync(
-            request.agent_id.Trim(),
-            request.api_key_id.Trim(),
+        var result = await repairPort.RepairMissingSecretReferenceAsync(
+            request.AgentId.Trim(),
+            request.ApiKeyId.Trim(),
             reference,
-            request.api_key_id.Trim(),
-            request.repair_reason.Trim(),
+            request.ApiKeyId.Trim(),
+            request.RepairReason.Trim(),
             caller.UserId,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ct);
-        return Results.Accepted(
-            value: new
+        if (result.Outcome.OutcomeCase == UserAgentCatalogCredentialRepairOutcome.OutcomeOneofCase.Repaired)
+        {
+            return Results.Ok(new
             {
-                status = "accepted",
-                request_id = receipt.RequestId,
-                command_id = receipt.Admission.CommandId,
+                status = "repaired",
+                request_id = result.RequestId,
+                command_id = result.Admission.CommandId,
             });
+        }
+
+        return Results.Conflict(new
+        {
+            status = "rejected",
+            request_id = result.RequestId,
+            command_id = result.Admission.CommandId,
+            reason = result.Outcome.Rejected?.Reason.ToString() ?? "unspecified",
+        });
     }
 
     internal sealed record RepairRequest(
-        string agent_id,
-        string api_key_id,
-        SecretReference secret_reference,
-        string repair_reason);
+        [property: JsonPropertyName("agent_id")] string AgentId,
+        [property: JsonPropertyName("api_key_id")] string ApiKeyId,
+        [property: JsonPropertyName("secret_reference")] SecretReference SecretReference,
+        [property: JsonPropertyName("repair_reason")] string RepairReason);
 }

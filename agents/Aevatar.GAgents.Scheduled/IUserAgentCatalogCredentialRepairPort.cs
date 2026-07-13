@@ -5,7 +5,7 @@ namespace Aevatar.GAgents.Scheduled;
 
 public interface IUserAgentCatalogCredentialRepairPort
 {
-    Task<UserAgentCatalogCredentialRepairAcceptedReceipt> RepairMissingSecretReferenceAsync(
+    Task<UserAgentCatalogCredentialRepairResult> RepairMissingSecretReferenceAsync(
         string agentId,
         string apiKeyId,
         SecretReference secretReference,
@@ -16,6 +16,7 @@ public interface IUserAgentCatalogCredentialRepairPort
         CancellationToken ct = default);
 }
 
-public sealed record UserAgentCatalogCredentialRepairAcceptedReceipt(
+public sealed record UserAgentCatalogCredentialRepairResult(
     string RequestId,
-    DispatchAdmission Admission);
+    DispatchAdmission Admission,
+    UserAgentCatalogCredentialRepairOutcome Outcome);

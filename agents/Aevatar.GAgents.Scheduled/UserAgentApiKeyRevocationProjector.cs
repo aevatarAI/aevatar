@@ -96,7 +96,7 @@ public sealed class UserAgentApiKeyRevocationProjector
 
     private static string BuildDocumentId(UserAgentApiKeyRevocation revocation)
     {
-        var secretReference = revocation.NyxApiKeyReference?.Ref?.Trim();
+        var secretReference = ResolveSecretReferenceRef(revocation);
         return string.IsNullOrEmpty(secretReference)
             ? ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
                 revocation.AgentId.Trim(),
@@ -112,9 +112,14 @@ public sealed class UserAgentApiKeyRevocationProjector
         string.Equals(revocation.AgentId, agentId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(revocation.ApiKeyId, apiKeyId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(
-            revocation.NyxApiKeyReference?.Ref?.Trim() ?? string.Empty,
+            ResolveSecretReferenceRef(revocation),
             secretReference?.Trim() ?? string.Empty,
             StringComparison.Ordinal);
+
+    private static string ResolveSecretReferenceRef(UserAgentApiKeyRevocation revocation) =>
+        revocation.NyxApiKeyReference?.Ref?.Trim() ??
+        revocation.VaultRevocationDescriptor?.Ref?.Trim() ??
+        string.Empty;
 
     private static UserAgentApiKeyRevocationDocument Materialize(
         UserAgentCatalogMaterializationContext context,
@@ -147,6 +152,8 @@ public sealed class UserAgentApiKeyRevocationProjector
             document.NyxIdTrack = revocation.NyxIdTrack.Clone();
         if (revocation.VaultTrack is not null)
             document.VaultTrack = revocation.VaultTrack.Clone();
+        if (revocation.VaultRevocationDescriptor is not null)
+            document.VaultRevocationDescriptor = revocation.VaultRevocationDescriptor.Clone();
         document.SecretSubjectId = revocation.SecretSubjectId ?? string.Empty;
         document.RepairReason = revocation.RepairReason ?? string.Empty;
         document.RequestedBySubjectId = revocation.RequestedBySubjectId ?? string.Empty;

@@ -446,6 +446,14 @@ public sealed class UserAgentCatalogProjectorTests
                         LastError = "vault unavailable",
                         FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
                     },
+                    VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+                    {
+                        Ref = "sec-1",
+                        Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                        OwnerScopeKey = "owner-1",
+                        SubjectId = "key-1",
+                        ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+                    },
                     SecretSubjectId = "key-1",
                     RepairReason = "restore exact reference",
                     RequestedBySubjectId = "admin-1",
@@ -482,6 +490,12 @@ public sealed class UserAgentCatalogProjectorTests
         document.VaultTrack.LastHttpStatus.Should().Be(0);
         document.VaultTrack.LastError.Should().Be("vault unavailable");
         document.VaultTrack.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        document.VaultRevocationDescriptor.Ref.Should().Be("sec-1");
+        document.VaultRevocationDescriptor.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        document.VaultRevocationDescriptor.OwnerScopeKey.Should().Be("owner-1");
+        document.VaultRevocationDescriptor.SubjectId.Should().Be("key-1");
+        document.VaultRevocationDescriptor.ReferenceAvailability.Should()
+            .Be(ScheduledCredentialVaultReferenceAvailability.Confirmed);
         document.SecretSubjectId.Should().Be("key-1");
         document.RepairReason.Should().Be("restore exact reference");
         document.RequestedBySubjectId.Should().Be("admin-1");

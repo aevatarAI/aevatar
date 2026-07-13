@@ -18,6 +18,7 @@ public sealed class UserAgentApiKeyRevocationReadModelEntry
     public UserAgentApiKeyRevocationFailureKind FailureKind { get; init; }
     public ScheduledCredentialRevocationTrack? NyxIdTrack { get; init; }
     public ScheduledCredentialRevocationTrack? VaultTrack { get; init; }
+    public ScheduledCredentialVaultRevocationDescriptor? VaultRevocationDescriptor { get; init; }
     public string SecretSubjectId { get; init; } = string.Empty;
     public string RepairReason { get; init; } = string.Empty;
     public string RequestedBySubjectId { get; init; } = string.Empty;

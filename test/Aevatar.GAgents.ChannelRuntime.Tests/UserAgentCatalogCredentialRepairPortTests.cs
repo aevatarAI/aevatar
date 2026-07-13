@@ -1,7 +1,9 @@
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using NSubstitute;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -9,11 +11,11 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class UserAgentCatalogCredentialRepairPortTests
 {
     [Fact]
-    public async Task RepairMissingSecretReferenceAsync_ReturnsAcceptedReceiptWithoutWaitingForCommit()
+    public async Task RepairMissingSecretReferenceAsync_BindsBeforeDispatchAndReturnsCommittedRepair()
     {
         var fixture = new Fixture(actorExists: true);
 
-        var receipt = await fixture.Port.RepairMissingSecretReferenceAsync(
+        var result = await fixture.Port.RepairMissingSecretReferenceAsync(
             " agent-1 ",
             " key-1 ",
             CompleteReference(),
@@ -22,18 +24,50 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
             " admin-1 ",
             1234);
 
-        receipt.RequestId.Should().NotBeNullOrWhiteSpace();
-        receipt.Admission.Accepted.Should().BeTrue();
-        receipt.Admission.CommandId.Should().Be("repair-command-1");
+        result.RequestId.Should().NotBeNullOrWhiteSpace();
+        result.Admission.Accepted.Should().BeTrue();
+        result.Admission.CommandId.Should().Be("repair-command-1");
+        result.Outcome.OutcomeCase.Should().Be(
+            UserAgentCatalogCredentialRepairOutcome.OutcomeOneofCase.Repaired);
+        result.Outcome.Repaired.RequestId.Should().Be(result.RequestId);
+        fixture.ObservationBoundBeforeDispatch.Should().BeTrue();
         fixture.DispatchedCommand.Should().NotBeNull();
-        fixture.DispatchedCommand!.RequestId.Should().Be(receipt.RequestId);
-        fixture.DispatchedCommand.AgentId.Should().Be(" agent-1 ");
-        fixture.DispatchedCommand.ApiKeyId.Should().Be(" key-1 ");
+        fixture.DispatchedCommand!.RequestId.Should().Be(result.RequestId);
+        fixture.DispatchedCommand.AgentId.Should().Be("agent-1");
+        fixture.DispatchedCommand.ApiKeyId.Should().Be("key-1");
+        fixture.DispatchedCommand.SecretSubjectId.Should().Be("key-1");
+        fixture.DispatchedCommand.RepairReason.Should().Be("restore exact durable reference");
+        fixture.DispatchedCommand.RequestedBySubjectId.Should().Be("admin-1");
         fixture.DispatchedCommand.SecretReference.Should().BeEquivalentTo(CompleteReference());
+        fixture.ObservationLease.WaitCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task RepairMissingSecretReferenceAsync_CreatesWellKnownActorBeforeDispatchWhenMissing()
+    public async Task RepairMissingSecretReferenceAsync_ReturnsCommittedRejection()
+    {
+        var fixture = new Fixture(actorExists: true)
+        {
+            RejectReason = UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict,
+        };
+
+        var result = await fixture.Port.RepairMissingSecretReferenceAsync(
+            "agent-1",
+            "key-1",
+            CompleteReference(),
+            "key-1",
+            "restore exact durable reference",
+            "admin-1",
+            1234);
+
+        result.Outcome.OutcomeCase.Should().Be(
+            UserAgentCatalogCredentialRepairOutcome.OutcomeOneofCase.Rejected);
+        result.Outcome.Rejected.RequestId.Should().Be(result.RequestId);
+        result.Outcome.Rejected.Reason.Should().Be(
+            UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict);
+    }
+
+    [Fact]
+    public async Task RepairMissingSecretReferenceAsync_CreatesWellKnownActorBeforeObservationAndDispatchWhenMissing()
     {
         var fixture = new Fixture(actorExists: false);
 
@@ -52,6 +86,120 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
         fixture.DispatchedCommand.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task OutcomeProjector_PublishesOnlyCorrelationBoundCommittedRepair()
+    {
+        var eventHub = Substitute.For<IProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>>();
+        var projector = new UserAgentCatalogCredentialRepairOutcomeProjector(eventHub);
+        var context = new UserAgentCatalogCredentialRepairProjectionContext
+        {
+            RootActorId = UserAgentCatalogGAgent.WellKnownId,
+            ProjectionKind = UserAgentCatalogCredentialRepairObservationPort.ProjectionKind,
+            SessionId = "repair-request-1",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(new UserAgentCatalogCredentialRevocationRepairedEvent
+            {
+                RequestId = "different-request",
+                AgentId = "agent-1",
+                ApiKeyId = "key-1",
+            }),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(new UserAgentCatalogCredentialRevocationRepairedEvent
+            {
+                RequestId = "repair-request-1",
+                AgentId = "agent-1",
+                ApiKeyId = "key-1",
+            }),
+            CancellationToken.None);
+
+        await eventHub.Received(1).PublishAsync(
+            UserAgentCatalogGAgent.WellKnownId,
+            "repair-request-1",
+            Arg.Is<UserAgentCatalogCredentialRepairOutcome>(outcome =>
+                outcome.OutcomeCase == UserAgentCatalogCredentialRepairOutcome.OutcomeOneofCase.Repaired &&
+                outcome.Repaired.RequestId == "repair-request-1"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ObservationPort_ActivatesAndSubscribesBeforeCompletingTypedOutcome()
+    {
+        var context = new UserAgentCatalogCredentialRepairProjectionContext
+        {
+            RootActorId = UserAgentCatalogGAgent.WellKnownId,
+            ProjectionKind = UserAgentCatalogCredentialRepairObservationPort.ProjectionKind,
+            SessionId = "repair-request-1",
+        };
+        var runtimeLease = new UserAgentCatalogCredentialRepairRuntimeLease(context);
+        var activation = new RecordingActivationService(runtimeLease);
+        var release = new RecordingReleaseService();
+        var eventHub = new RecordingSessionEventHub();
+        var observationPort = new UserAgentCatalogCredentialRepairObservationPort(
+            activation,
+            release,
+            eventHub);
+
+        await using (var observation = await observationPort.BindAsync("repair-request-1"))
+        {
+            eventHub.Handler.Should().NotBeNull();
+            var wait = observation.WaitAsync();
+            await eventHub.Handler!(new UserAgentCatalogCredentialRepairOutcome
+            {
+                Repaired = new UserAgentCatalogCredentialRevocationRepairedEvent
+                {
+                    RequestId = "repair-request-1",
+                },
+            });
+
+            var outcome = await wait;
+            outcome.Repaired.RequestId.Should().Be("repair-request-1");
+        }
+
+        activation.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ProjectionScopeStartRequest
+            {
+                RootActorId = UserAgentCatalogGAgent.WellKnownId,
+                ProjectionKind = UserAgentCatalogCredentialRepairObservationPort.ProjectionKind,
+                Mode = ProjectionRuntimeMode.SessionObservation,
+                SessionId = "repair-request-1",
+            });
+        eventHub.RootActorId.Should().Be(UserAgentCatalogGAgent.WellKnownId);
+        eventHub.SessionId.Should().Be("repair-request-1");
+        eventHub.Subscription.DisposeCalls.Should().Be(1);
+        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(runtimeLease);
+    }
+
+    [Fact]
+    public async Task ObservationLease_ReleasesProjectionLeaseWhenSubscriptionDisposalFails()
+    {
+        var context = new UserAgentCatalogCredentialRepairProjectionContext
+        {
+            RootActorId = UserAgentCatalogGAgent.WellKnownId,
+            ProjectionKind = UserAgentCatalogCredentialRepairObservationPort.ProjectionKind,
+            SessionId = "repair-request-1",
+        };
+        var runtimeLease = new UserAgentCatalogCredentialRepairRuntimeLease(context);
+        var activation = new RecordingActivationService(runtimeLease);
+        var release = new RecordingReleaseService();
+        var eventHub = new RecordingSessionEventHub(throwOnDispose: true);
+        var observationPort = new UserAgentCatalogCredentialRepairObservationPort(
+            activation,
+            release,
+            eventHub);
+        var observation = await observationPort.BindAsync("repair-request-1");
+
+        Func<Task> dispose = async () => await observation.DisposeAsync();
+
+        await dispose.Should().ThrowAsync<InvalidOperationException>();
+        eventHub.Subscription.DisposeCalls.Should().Be(1);
+        release.Leases.Should().ContainSingle().Which.Should().BeSameAs(runtimeLease);
+    }
+
     private static SecretReference CompleteReference() => new()
     {
         Ref = "secret-1",
@@ -61,8 +209,107 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
         Fingerprint = "sha256:test",
     };
 
+    private static EventEnvelope CommittedEnvelope(Google.Protobuf.IMessage domainEvent)
+    {
+        var occurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = occurredAt,
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(UserAgentCatalogGAgent.WellKnownId),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Version = 1,
+                    Timestamp = occurredAt,
+                    EventData = Any.Pack(domainEvent),
+                },
+                StateRoot = Any.Pack(new UserAgentCatalogState()),
+            }),
+        };
+    }
+
+    private sealed class RecordingActivationService(UserAgentCatalogCredentialRepairRuntimeLease lease)
+        : IProjectionScopeActivationService<UserAgentCatalogCredentialRepairRuntimeLease>
+    {
+        public List<ProjectionScopeStartRequest> Requests { get; } = [];
+
+        public Task<UserAgentCatalogCredentialRepairRuntimeLease> EnsureAsync(
+            ProjectionScopeStartRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            return Task.FromResult(lease);
+        }
+    }
+
+    private sealed class RecordingReleaseService
+        : IProjectionScopeReleaseService<UserAgentCatalogCredentialRepairRuntimeLease>
+    {
+        public List<UserAgentCatalogCredentialRepairRuntimeLease> Leases { get; } = [];
+
+        public Task ReleaseIfIdleAsync(
+            UserAgentCatalogCredentialRepairRuntimeLease lease,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Leases.Add(lease);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingSessionEventHub(bool throwOnDispose = false)
+        : IProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>
+    {
+        public string? RootActorId { get; private set; }
+        public string? SessionId { get; private set; }
+        public Func<UserAgentCatalogCredentialRepairOutcome, ValueTask>? Handler { get; private set; }
+        public RecordingSubscription Subscription { get; } = new(throwOnDispose);
+
+        public Task PublishAsync(
+            string rootActorId,
+            string sessionId,
+            UserAgentCatalogCredentialRepairOutcome evt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IAsyncDisposable> SubscribeAsync(
+            string rootActorId,
+            string sessionId,
+            Func<UserAgentCatalogCredentialRepairOutcome, ValueTask> handler,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            RootActorId = rootActorId;
+            SessionId = sessionId;
+            Handler = handler;
+            return Task.FromResult<IAsyncDisposable>(Subscription);
+        }
+    }
+
+    private sealed class RecordingSubscription(bool throwOnDispose) : IAsyncDisposable
+    {
+        public int DisposeCalls { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls++;
+            return throwOnDispose
+                ? ValueTask.FromException(new InvalidOperationException("subscription disposal failed"))
+                : ValueTask.CompletedTask;
+        }
+    }
+
     private sealed class Fixture
     {
+        private string _requestId = string.Empty;
+
         public Fixture(bool actorExists)
         {
             var actor = Substitute.For<IActor>();
@@ -72,12 +319,15 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
                     UserAgentCatalogGAgent.WellKnownId,
                     Arg.Any<CancellationToken>())
                 .Returns(actor);
+            ObservationLease = new RecordingObservationLease(this);
+            Observation = new RecordingObservationPort(this);
             Dispatch.DispatchAsync(
                     UserAgentCatalogGAgent.WellKnownId,
                     Arg.Any<EventEnvelope>(),
                     Arg.Any<CancellationToken>())
                 .Returns(call =>
                 {
+                    ObservationBoundBeforeDispatch = ObservationBound;
                     var envelope = call.ArgAt<EventEnvelope>(1);
                     DispatchedCommand = envelope.Payload.Unpack<UserAgentCatalogRepairCredentialRevocationCommand>();
                     return new DispatchAdmission(
@@ -88,12 +338,70 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
                         "repair-command-1");
                 });
 
-            Port = new UserAgentCatalogCredentialRepairPort(Runtime, Dispatch);
+            Port = new UserAgentCatalogCredentialRepairPort(Runtime, Dispatch, Observation);
         }
 
+        public UserAgentCatalogCredentialRevocationRepairRejectionReason? RejectReason { get; init; }
         public IActorRuntime Runtime { get; } = Substitute.For<IActorRuntime>();
         public IActorDispatchPort Dispatch { get; } = Substitute.For<IActorDispatchPort>();
+        public RecordingObservationPort Observation { get; }
+        public RecordingObservationLease ObservationLease { get; }
         public UserAgentCatalogCredentialRepairPort Port { get; }
         public UserAgentCatalogRepairCredentialRevocationCommand? DispatchedCommand { get; private set; }
+        public bool ObservationBound { get; private set; }
+        public bool ObservationBoundBeforeDispatch { get; private set; }
+
+        private UserAgentCatalogCredentialRepairOutcome BuildOutcome() =>
+            RejectReason.HasValue
+                ? new UserAgentCatalogCredentialRepairOutcome
+                {
+                    Rejected = new UserAgentCatalogCredentialRevocationRepairRejectedEvent
+                    {
+                        RequestId = _requestId,
+                        AgentId = "agent-1",
+                        ApiKeyId = "key-1",
+                        Reason = RejectReason.Value,
+                    },
+                }
+                : new UserAgentCatalogCredentialRepairOutcome
+                {
+                    Repaired = new UserAgentCatalogCredentialRevocationRepairedEvent
+                    {
+                        RequestId = _requestId,
+                        AgentId = "agent-1",
+                        ApiKeyId = "key-1",
+                    },
+                };
+
+        public sealed class RecordingObservationPort(Fixture owner)
+            : IUserAgentCatalogCredentialRepairObservationPort
+        {
+            public Task<IUserAgentCatalogCredentialRepairObservationLease> BindAsync(
+                string requestId,
+                CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                owner._requestId = requestId;
+                owner.ObservationBound = true;
+                return Task.FromResult<IUserAgentCatalogCredentialRepairObservationLease>(
+                    owner.ObservationLease);
+            }
+        }
+
+        public sealed class RecordingObservationLease(Fixture owner)
+            : IUserAgentCatalogCredentialRepairObservationLease
+        {
+            public int WaitCalls { get; private set; }
+
+            public Task<UserAgentCatalogCredentialRepairOutcome> WaitAsync(
+                CancellationToken ct = default)
+            {
+                ct.ThrowIfCancellationRequested();
+                WaitCalls++;
+                return Task.FromResult(owner.BuildOutcome());
+            }
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 }

@@ -81,7 +81,7 @@ public sealed class MainnetScheduledAgentCredentialRepairAdminEndpointsTests
         var repairPort = Substitute.For<IUserAgentCatalogCredentialRepairPort>();
         var result = await ScheduledAgentCredentialRepairAdminEndpoints.HandleAsync(
             Context("token"),
-            ValidRequest() with { repair_reason = " " },
+            ValidRequest() with { RepairReason = " " },
             ElevatedAuthorizer(),
             repairPort,
             CancellationToken.None);
@@ -92,7 +92,7 @@ public sealed class MainnetScheduledAgentCredentialRepairAdminEndpointsTests
     }
 
     [Fact]
-    public async Task HandleAsync_WithElevatedCaller_ReturnsAcceptedAndDispatchesNormalizedCommand()
+    public async Task HandleAsync_WithElevatedCaller_ReturnsCommittedRepairAndDispatchesNormalizedCommand()
     {
         var repairPort = Substitute.For<IUserAgentCatalogCredentialRepairPort>();
         repairPort.RepairMissingSecretReferenceAsync(
@@ -104,30 +104,23 @@ public sealed class MainnetScheduledAgentCredentialRepairAdminEndpointsTests
                 Arg.Any<string>(),
                 Arg.Any<long>(),
                 Arg.Any<CancellationToken>())
-            .Returns(new UserAgentCatalogCredentialRepairAcceptedReceipt(
-                "repair-request-1",
-                new DispatchAdmission(
-                    true,
-                    "repair-command-1",
-                    DateTimeOffset.UtcNow,
-                    UserAgentCatalogGAgent.WellKnownId,
-                    "repair-command-1")));
+            .Returns(CommittedRepairResult());
 
         var result = await ScheduledAgentCredentialRepairAdminEndpoints.HandleAsync(
             Context("token"),
             ValidRequest() with
             {
-                agent_id = " agent-1 ",
-                api_key_id = " key-1 ",
-                repair_reason = " restore exact reference ",
+                AgentId = " agent-1 ",
+                ApiKeyId = " key-1 ",
+                RepairReason = " restore exact reference ",
             },
             ElevatedAuthorizer(),
             repairPort,
             CancellationToken.None);
 
-        StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        StatusCode(result).Should().Be(StatusCodes.Status200OK);
         var body = JsonSerializer.Serialize(((IValueHttpResult)result).Value);
-        body.Should().Contain("repair-request-1").And.Contain("repair-command-1");
+        body.Should().Contain("repaired").And.Contain("repair-request-1").And.Contain("repair-command-1");
         await repairPort.Received(1).RepairMissingSecretReferenceAsync(
             "agent-1",
             "key-1",
@@ -137,6 +130,33 @@ public sealed class MainnetScheduledAgentCredentialRepairAdminEndpointsTests
             "admin-1",
             Arg.Is<long>(value => value > 0),
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenActorCommitsRejection_ReturnsConflictWithTypedReason()
+    {
+        var repairPort = Substitute.For<IUserAgentCatalogCredentialRepairPort>();
+        repairPort.RepairMissingSecretReferenceAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<SecretReference>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<long>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CommittedRejectedResult());
+
+        var result = await ScheduledAgentCredentialRepairAdminEndpoints.HandleAsync(
+            Context("token"),
+            ValidRequest(),
+            ElevatedAuthorizer(),
+            repairPort,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status409Conflict);
+        var body = JsonSerializer.Serialize(((IValueHttpResult)result).Value);
+        body.Should().Contain("rejected").And.Contain("AliasConflict");
     }
 
     private static DefaultHttpContext Context(string? bearerToken = null)
@@ -168,6 +188,43 @@ public sealed class MainnetScheduledAgentCredentialRepairAdminEndpointsTests
                 Fingerprint = "sha256:test",
             },
             "restore exact reference");
+
+    private static UserAgentCatalogCredentialRepairResult CommittedRepairResult() =>
+        new(
+            "repair-request-1",
+            Admission(),
+            new UserAgentCatalogCredentialRepairOutcome
+            {
+                Repaired = new UserAgentCatalogCredentialRevocationRepairedEvent
+                {
+                    RequestId = "repair-request-1",
+                    AgentId = "agent-1",
+                    ApiKeyId = "key-1",
+                },
+            });
+
+    private static UserAgentCatalogCredentialRepairResult CommittedRejectedResult() =>
+        new(
+            "repair-request-1",
+            Admission(),
+            new UserAgentCatalogCredentialRepairOutcome
+            {
+                Rejected = new UserAgentCatalogCredentialRevocationRepairRejectedEvent
+                {
+                    RequestId = "repair-request-1",
+                    AgentId = "agent-1",
+                    ApiKeyId = "key-1",
+                    Reason = UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict,
+                },
+            });
+
+    private static DispatchAdmission Admission() =>
+        new(
+            true,
+            "repair-command-1",
+            DateTimeOffset.UtcNow,
+            UserAgentCatalogGAgent.WellKnownId,
+            "repair-command-1");
 
     private static int StatusCode(IResult result) =>
         result is Microsoft.AspNetCore.Http.HttpResults.ForbidHttpResult

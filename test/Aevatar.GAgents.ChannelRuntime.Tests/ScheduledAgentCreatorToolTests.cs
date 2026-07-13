@@ -1026,7 +1026,9 @@ public sealed class ScheduledAgentCreatorToolTests
                 Arg.Is<UserAgentApiKeyRevocation>(intent =>
                     intent.ApiKeyId == "key-created" &&
                     intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-                    intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Completed),
+                    intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.NotApplicable &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.NotApplicable),
                 Arg.Any<CancellationToken>(),
                 "session-token");
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
@@ -1061,7 +1063,9 @@ public sealed class ScheduledAgentCreatorToolTests
                 Arg.Is<UserAgentApiKeyRevocation>(intent =>
                     intent.ApiKeyId == "key-created" &&
                     intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-                    intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Completed),
+                    intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.NotApplicable &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.NotApplicable),
                 Arg.Any<CancellationToken>(),
                 "session-token");
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(

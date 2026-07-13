@@ -85,6 +85,46 @@ public sealed class ScheduledCredentialVaultContractTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WhenIssueFailsAfterMint_SubmitsNyxOnlyIntentWithoutFakeReference()
+    {
+        var vault = Substitute.For<ISecretVault>();
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
+        issuer.IssueAsync(
+                Arg.Any<string>(),
+                Arg.Any<ScheduledAgentServiceSlugs>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ScheduledAgentApiKeyIssueResult.FailedAfterIssue("key-a", "preflight_failed"));
+        var lifecycle = new ScheduledAgentCredentialLifecycle(vault, commandPort, issuer);
+
+        var result = await lifecycle.ProvisionAsync(
+            "token",
+            new ScheduledAgentServiceSlugs("service", null, [], false),
+            "agent-a",
+            "skill-a",
+            "scope-a",
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "owner-a",
+            "test");
+
+        result.Success.Should().BeFalse();
+        await vault.DidNotReceive().PutAsync(Arg.Any<StoreSecretRequest>(), Arg.Any<CancellationToken>());
+        await commandPort.Received(1).RequestCredentialRevocationAsync(
+            Arg.Is<UserAgentApiKeyRevocation>(intent =>
+                intent.ApiKeyId == "key-a" &&
+                intent.NyxApiKeyReference == null &&
+                intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                    ScheduledCredentialVaultReferenceAvailability.NotApplicable &&
+                intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
+                intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.NotApplicable),
+            Arg.Any<CancellationToken>(),
+            "token");
+    }
+
+    [Fact]
     public async Task ProvisionAsync_WhenVaultWriteFails_SubmitsDualTrackRevocationIntent()
     {
         var vault = Substitute.For<ISecretVault>();
@@ -117,8 +157,14 @@ public sealed class ScheduledCredentialVaultContractTests
             Arg.Is<UserAgentApiKeyRevocation>(intent =>
                 intent.AgentId == "agent-a" &&
                 intent.ApiKeyId == "key-a" &&
-                intent.NyxApiKeyReference.Ref.StartsWith("sec_", StringComparison.Ordinal) &&
-                intent.NyxApiKeyReference.OwnerScopeKey == "owner-a" &&
+                intent.NyxApiKeyReference == null &&
+                intent.VaultRevocationDescriptor.Ref.StartsWith("sec_", StringComparison.Ordinal) &&
+                intent.VaultRevocationDescriptor.Purpose ==
+                    CredentialSecretPurposes.ScheduledInvocationAgentKey &&
+                intent.VaultRevocationDescriptor.OwnerScopeKey == "owner-a" &&
+                intent.VaultRevocationDescriptor.SubjectId == "key-a" &&
+                intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                    ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed &&
                 intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
                 intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending),
             Arg.Any<CancellationToken>(),
@@ -288,6 +334,46 @@ public sealed class ScheduledCredentialVaultContractTests
                 !command.Completed &&
                 command.Error == "vault unavailable" &&
                 command.FailureKind == UserAgentApiKeyRevocationFailureKind.Transient),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecutePendingAsync_WithUnconfirmedRequestedReference_RevokesByTypedDescriptor()
+    {
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new RevokeSecretResult(true));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var lifecycle = new ScheduledAgentCredentialLifecycle(
+            vault,
+            commandPort,
+            Substitute.For<IScheduledAgentApiKeyIssuer>());
+        var pending = PendingRevocation();
+        pending.NyxApiKeyReference = null;
+        pending.NyxIdTrack.Status = ScheduledCredentialRevocationTrackStatus.Completed;
+        pending.VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+        {
+            Ref = "sec-requested",
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = "owner-requested",
+            SubjectId = "key-a",
+            ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed,
+        };
+
+        await lifecycle.ExecutePendingAsync("token", pending);
+
+        await vault.Received(1).RevokeAsync(
+            Arg.Is<RevokeSecretRequest>(request =>
+                request.Ref == "sec-requested" &&
+                request.Purpose == CredentialSecretPurposes.ScheduledNyxApiKey &&
+                request.OwnerScopeKey == "owner-requested" &&
+                request.SubjectId == "key-a"),
+            Arg.Any<CancellationToken>());
+        await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+            Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                command.Track == UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault &&
+                command.SecretReferenceRef == "sec-requested" &&
+                command.Completed),
             Arg.Any<CancellationToken>());
     }
 

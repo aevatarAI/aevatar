@@ -4,6 +4,8 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.GAgents.Scheduled.Audit;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -84,6 +86,31 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<ISkillRunnerOutboundDeliveryPort, ChannelNativeSkillRunnerOutboundDeliveryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionBootstrapActivator>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
+        services.AddEventSinkProjectionRuntimeCore<
+            UserAgentCatalogCredentialRepairProjectionContext,
+            UserAgentCatalogCredentialRepairRuntimeLease,
+            UserAgentCatalogCredentialRepairOutcome,
+            ProjectionSessionScopeGAgent<UserAgentCatalogCredentialRepairProjectionContext>>(
+            static scopeKey => new UserAgentCatalogCredentialRepairProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new UserAgentCatalogCredentialRepairRuntimeLease(context));
+        services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<UserAgentCatalogCredentialRepairOutcome>,
+            UserAgentCatalogCredentialRepairOutcomeCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>,
+            ProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<UserAgentCatalogCredentialRepairProjectionContext>,
+            UserAgentCatalogCredentialRepairOutcomeProjector>());
+        services.TryAddSingleton<
+            IUserAgentCatalogCredentialRepairObservationPort,
+            UserAgentCatalogCredentialRepairObservationPort>();
         services.TryAddSingleton<IUserAgentCatalogCredentialRepairPort, UserAgentCatalogCredentialRepairPort>();
         services.TryAddSingleton<ISkillRunnerCronSchedulePort, SkillRunnerCronSchedulePort>();
         services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();

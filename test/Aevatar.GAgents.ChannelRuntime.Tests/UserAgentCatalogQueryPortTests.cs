@@ -148,6 +148,11 @@ public sealed class UserAgentCatalogQueryPortTests
         pending[0].VaultTrack!.LastHttpStatus.Should().Be(0);
         pending[0].VaultTrack!.LastError.Should().BeEmpty();
         pending[0].VaultTrack!.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.None);
+        pending[0].VaultRevocationDescriptor.Should().NotBeNull();
+        pending[0].VaultRevocationDescriptor!.Ref.Should().Be("sec-alice-agent");
+        pending[0].VaultRevocationDescriptor!.SubjectId.Should().Be("key-alice");
+        pending[0].VaultRevocationDescriptor!.ReferenceAvailability.Should()
+            .Be(ScheduledCredentialVaultReferenceAvailability.Confirmed);
         pending[0].SecretSubjectId.Should().Be("key-alice");
         pending[0].RepairReason.Should().Be("restore exact reference");
         pending[0].RequestedBySubjectId.Should().Be("admin-1");
@@ -227,6 +232,14 @@ public sealed class UserAgentCatalogQueryPortTests
                 LastAttemptAt = Timestamp.FromDateTimeOffset(
                     new DateTimeOffset(2026, 6, 20, 10, 2, 0, TimeSpan.Zero)),
                 FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+            },
+            VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = $"sec-{agentId}",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = $"owner-{agentId}",
+                SubjectId = apiKeyId,
+                ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
             },
             SecretSubjectId = apiKeyId,
             RepairReason = "restore exact reference",

@@ -22,11 +22,15 @@ lifecycle, compensation, and retry decision without rewriting those historical r
 One `ScheduledAgentCredentialLifecycle` owns provisioning and dual-track compensation.
 The raw issued key is held by an internal redacted capability that exposes only the vault
 store operation. Public DTOs, actor state, projection documents, exceptions, and logs carry
-only stable key identifiers and `SecretReference`.
+only stable key identifiers, confirmed `SecretReference` values, and typed vault revocation
+descriptors.
 
 Vault callers may allocate `RequestedRef` before writing. The write is create-only and
 idempotent only for the exact same descriptor and secret. Garnet adapters implement this
 contract atomically with `SET NX`; every adapter must provide equivalent semantics.
+If a write fails after a caller allocates a reference, compensation records the requested
+coordinates with `REQUESTED_NOT_CONFIRMED`; it does not fabricate a `SecretReference` or
+fingerprint. Failures before any vault write use `NOT_APPLICABLE` and no vault reference.
 
 The well-known catalog actor is the sole owner of credential revocation facts. A fact uses
 the natural identity `(agent_id, api_key_id, secret_reference.ref)` and independent NyxID
@@ -40,10 +44,11 @@ Repair deletes that blocked document key before upserting the exact-reference ke
 vault revocation treats an already absent record as the postcondition being satisfied, while
 an existing unauthorized or concurrently changed record remains a failed attempt.
 
-Command ports return honest accepted-for-dispatch receipts. They do not turn the committed
-event stream into synchronous request-reply. The administrator repair endpoint therefore
-returns `202 Accepted` with stable request and command identifiers; committed repair or
-rejection is observed asynchronously from the catalog read model.
+Ordinary command ports return honest accepted-for-dispatch receipts. The dedicated repair
+port binds a request-scoped Projection Session before dispatch and correlates the committed
+repair or rejection event by request id. The administrator endpoint returns only after that
+typed committed outcome is observed; it does not treat dispatch admission as repair success
+and does not query-time replay or prime a read model.
 
 Historical rows without an exact secret reference use
 `BLOCKED_MISSING_SECRET_REF` on the vault track. This state is non-terminal, cannot execute
@@ -57,5 +62,5 @@ not applicable.
   compensation ledger instead of tool-local cleanup paths.
 - External effects begin only after the actor has committed the intent in its own turn.
 - NyxID retries require transient bearer authority; vault retries do not.
-- Repair HTTP responses describe command admission, not committed or read-model-observed
-  completion.
+- Repair HTTP responses distinguish committed repair from committed rejection and still
+  expose the underlying command admission identifier for tracing.

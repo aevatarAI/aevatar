@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using FluentAssertions;
 using NSubstitute;
 using Xunit;
@@ -79,12 +80,14 @@ public sealed class UserAgentCatalogCommandPortTests
         var fixture = new Fixture();
         const string agentId = "agent-tombstone-1";
 
-        await fixture.Port.TombstoneAsync(agentId, CancellationToken.None);
+        await fixture.Port.TombstoneAsync(agentId, CancellationToken.None, " bearer-token ");
 
         fixture.Captured.Should().ContainSingle();
         var env = fixture.Captured[0];
         env.Payload.Is(UserAgentCatalogTombstoneCommand.Descriptor).Should().BeTrue();
-        env.Payload.Unpack<UserAgentCatalogTombstoneCommand>().AgentId.Should().Be(agentId);
+        var command = env.Payload.Unpack<UserAgentCatalogTombstoneCommand>();
+        command.AgentId.Should().Be(agentId);
+        command.BearerToken.Should().Be("bearer-token");
         env.Route.PublisherActorId.Should().Be(ExpectedPublisher);
         env.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
         await fixture.Dispatch.Received(1).DispatchAsync(CatalogActorId, Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
@@ -136,6 +139,65 @@ public sealed class UserAgentCatalogCommandPortTests
         var fixture = new Fixture();
         var act = () => fixture.Port.RecordApiKeyRevocationAttemptAsync(null!, CancellationToken.None);
         await act.Should().ThrowAsync<ArgumentNullException>();
+    }
+
+    [Fact]
+    public async Task RequestCredentialRevocationAsync_DispatchesClonedFactWithTrimmedBearer()
+    {
+        var fixture = new Fixture();
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            AgentId = "agent-revoke-1",
+            ApiKeyId = "key-revoke-1",
+            SecretSubjectId = "key-revoke-1",
+            NyxApiKeyReference = new SecretReference
+            {
+                Ref = "sec-revoke-1",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = "owner-revoke-1",
+                Version = 1,
+                Fingerprint = "sha256:test",
+            },
+            VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = "sec-revoke-1",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = "owner-revoke-1",
+                SubjectId = "key-revoke-1",
+                ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+            },
+            NyxIdTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            },
+            VaultTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            },
+        };
+
+        await fixture.Port.RequestCredentialRevocationAsync(
+            revocation,
+            CancellationToken.None,
+            " bearer-token ");
+        revocation.AgentId = "mutated-after-dispatch";
+
+        fixture.Captured.Should().ContainSingle();
+        var envelope = fixture.Captured[0];
+        envelope.Payload.Is(UserAgentCatalogRequestCredentialRevocationCommand.Descriptor).Should().BeTrue();
+        var command = envelope.Payload.Unpack<UserAgentCatalogRequestCredentialRevocationCommand>();
+        command.BearerToken.Should().Be("bearer-token");
+        command.Revocation.AgentId.Should().Be("agent-revoke-1");
+        command.Revocation.ApiKeyId.Should().Be("key-revoke-1");
+        command.Revocation.NyxApiKeyReference.Ref.Should().Be("sec-revoke-1");
+        command.Revocation.VaultRevocationDescriptor.ReferenceAvailability.Should()
+            .Be(ScheduledCredentialVaultReferenceAvailability.Confirmed);
+        envelope.Route.PublisherActorId.Should().Be(ExpectedPublisher);
+        envelope.Route.Direct.TargetActorId.Should().Be(CatalogActorId);
+        await fixture.Dispatch.Received(1).DispatchAsync(
+            CatalogActorId,
+            Arg.Any<EventEnvelope>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Theory]

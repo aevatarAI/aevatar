@@ -453,6 +453,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             FailureKind = document.FailureKind,
             NyxIdTrack = document.NyxIdTrack?.Clone(),
             VaultTrack = document.VaultTrack?.Clone(),
+            VaultRevocationDescriptor = document.VaultRevocationDescriptor?.Clone(),
             SecretSubjectId = document.SecretSubjectId ?? string.Empty,
             RepairReason = document.RepairReason ?? string.Empty,
             RequestedBySubjectId = document.RequestedBySubjectId ?? string.Empty,
