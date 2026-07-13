@@ -417,6 +417,112 @@ public class NyxLarkProvisioningServiceTests
         secretVault.RevokeRequests[0].SubjectId.Should().Be("key-123");
     }
 
+    [Fact]
+    public async Task ProvisionAsync_ShouldRevokeVaultCredentialAndDeleteApiKey_WhenNyxStepFailsAfterVaultPut()
+    {
+        // The vault put happens right after the api-key create; a later NyxID step failing must
+        // compensate BOTH legs — revoke the vault record and delete the NyxID api key — or a live
+        // key stays resolvable with no registration referencing it.
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":500,"message":"upstream unavailable"}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var secretVault = new RecordingSecretVault();
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            secretVault,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[2].Path.Should().Be("/api/v1/api-keys/key-123");
+        secretVault.RevokeRequests.Should().ContainSingle();
+        secretVault.RevokeRequests[0].Ref.Should().Be(secretVault.StoredReferences.Single().Ref);
+        secretVault.RevokeRequests[0].SubjectId.Should().Be("key-123");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldStillDeleteApiKey_WhenVaultRevokeFails()
+    {
+        // The production Garnet vault revoke can fail (backend unavailable, CAS conflict); the
+        // failure must not shadow the api-key delete that follows it — deleting the NyxID key is
+        // what makes an orphaned vault record inert.
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":500,"message":"upstream unavailable"}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var secretVault = new RecordingSecretVault
+        {
+            RevokeException = new InvalidOperationException(
+                "Garnet secret vault rotate/revoke requires atomic versioned transitions."),
+        };
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            secretVault,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        // The original NyxID failure surfaces, not the revoke failure.
+        result.Error.Should().StartWith("channel_bot_id_request_failed");
+        secretVault.RevokeRequests.Should().ContainSingle();
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[2].Path.Should().Be("/api/v1/api-keys/key-123");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldCompensateRemoteAndVaultState_WhenCancelledAfterVaultPut()
+    {
+        // When the triggering failure IS the caller's cancellation, compensation must still run:
+        // reusing the cancelled token would abort every rollback delete and leak a live NyxID api
+        // key whose full_key stays resolvable in the vault.
+        using var cts = new CancellationTokenSource();
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", """{"id":"key-123","full_key":"full-key"}""");
+        handler.Enqueue(HttpMethod.Post, "/api/v1/channel-bots", () =>
+        {
+            cts.Cancel();
+            return new OperationCanceledException(cts.Token);
+        });
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var secretVault = new RecordingSecretVault();
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            secretVault,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), cts.Token);
+
+        result.Succeeded.Should().BeFalse();
+        secretVault.RevokeRequests.Should().ContainSingle();
+        handler.Requests.Should().HaveCount(3);
+        handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
+        handler.Requests[2].Path.Should().Be("/api/v1/api-keys/key-123");
+    }
+
     private static bool MatchesLocalMirror(ChannelBotRegisterCommand command, string registrationId) =>
         command.RequestedId == registrationId &&
         command.Platform == "lark" &&
@@ -462,6 +568,7 @@ public class NyxLarkProvisioningServiceTests
         public List<StoreSecretRequest> PutRequests { get; } = [];
         public List<RevokeSecretRequest> RevokeRequests { get; } = [];
         public List<SecretReference> StoredReferences { get; } = [];
+        public Exception? RevokeException { get; init; }
 
         public async Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
         {
@@ -480,26 +587,36 @@ public class NyxLarkProvisioningServiceTests
         public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default)
         {
             RevokeRequests.Add(request);
-            return _inner.RevokeAsync(request, ct);
+            return RevokeException is null
+                ? _inner.RevokeAsync(request, ct)
+                : Task.FromException<RevokeSecretResult>(RevokeException);
         }
     }
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
-        private readonly Queue<(HttpMethod? Method, string Path, string Body)> _responses = new();
+        private readonly Queue<(HttpMethod? Method, string Path, string Body, Func<Exception>? ExceptionFactory)> _responses = new();
 
         public List<(HttpMethod Method, string Path, string Body)> Requests { get; } = [];
 
-        public void Enqueue(string path, string body) => _responses.Enqueue((null, path, body));
+        public void Enqueue(string path, string body) => _responses.Enqueue((null, path, body, null));
 
-        public void Enqueue(HttpMethod method, string path, string body) => _responses.Enqueue((method, path, body));
+        public void Enqueue(HttpMethod method, string path, string body) => _responses.Enqueue((method, path, body, null));
+
+        public void Enqueue(HttpMethod method, string path, Func<Exception> exceptionFactory) =>
+            _responses.Enqueue((method, path, string.Empty, exceptionFactory));
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            // A real socket handler aborts a request whose token is already cancelled; without
+            // this check the cancellation-compensation test passes even when rollback deletes
+            // reuse the cancelled caller token.
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (_responses.Count == 0)
                 throw new InvalidOperationException("No more queued responses.");
 
-            var (expectedMethod, expectedPath, responseBody) = _responses.Dequeue();
+            var (expectedMethod, expectedPath, responseBody, exceptionFactory) = _responses.Dequeue();
             request.RequestUri.Should().NotBeNull();
             request.RequestUri!.AbsolutePath.Should().Be(expectedPath);
             if (expectedMethod is not null)
@@ -509,6 +626,9 @@ public class NyxLarkProvisioningServiceTests
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             Requests.Add((request.Method, expectedPath, body));
+
+            if (exceptionFactory is not null)
+                throw exceptionFactory();
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
