@@ -1102,6 +1102,17 @@ jest.mock("@/shared/studio/api", () => ({
       }
       return undefined;
     }),
+    deleteMember: jest.fn(async (input: { scopeId: string; memberId: string }) => {
+      mockStudioMembers = mockStudioMembers.filter(
+        (member) => member.memberId !== input.memberId,
+      );
+      return {
+        status: "delete_accepted",
+        scopeId: input.scopeId,
+        memberId: input.memberId,
+        ackedAt: "2026-07-09T08:12:00Z",
+      };
+    }),
     parseYaml: jest.fn(async (input: { yaml: string }) => ({
       document: input.yaml.includes("name: legacy_draft")
         ? {
@@ -5147,6 +5158,133 @@ describe("StudioPage", () => {
     await waitFor(() => {
       expect(message.success).toHaveBeenCalledWith(
         "Deleted workflow member workspace-demo.",
+      );
+    });
+  });
+
+  it("deletes a synced Studio member from the inventory rail", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+          okText: "Delete member",
+          cancelText: "Keep member",
+          autoFocusButton: "cancel",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    expect(confirmConfig.icon).toBeTruthy();
+    await act(async () => {
+      await confirmConfig.onOk();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.deleteMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "workspace-demo",
+      });
+    });
+    expect(studioApi.deleteWorkflow).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Deleted member workspace-demo.",
+      );
+    });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("member")).toBeNull();
+    expect(searchParams.get("focus")).toBeNull();
+  });
+
+  it("builds Studio member delete confirmation from the targeted member identity", async () => {
+    mockStudioMembers = [
+      {
+        ...mockStudioMembers[0],
+        memberId: "workspace-demo",
+        displayName: "workspace-demo",
+        teamId: "t-alpha",
+      },
+      {
+        ...mockStudioMembers[0],
+        memberId: "other-team-member",
+        displayName: "Other team member",
+        teamId: "t-alpha",
+      },
+    ];
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+          okText: "Delete member",
+          cancelText: "Keep member",
+          autoFocusButton: "cancel",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    expect(confirmConfig.icon).toBeTruthy();
+    expect(String(confirmConfig.content?.props?.children?.[0]?.props?.children?.[1]?.props?.children)).toBe(
+      "workspace-demo",
+    );
+
+    (Modal.confirm as jest.Mock).mockClear();
+
+    window.history.replaceState(
+      {},
+      "",
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aother-team-member&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aother-team-member&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete Other team member"));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+        })
+      );
+    });
+
+    const otherConfirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    expect(String(otherConfirmConfig.content?.props?.children?.[0]?.props?.children?.[1]?.props?.children)).toBe(
+      "Other team member",
+    );
+
+    await act(async () => {
+      await otherConfirmConfig.onOk();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.deleteMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "other-team-member",
+      });
+    });
+
+    await waitFor(() => {
+      expect(message.success).toHaveBeenCalledWith(
+        "Deleted member Other team member.",
       );
     });
   });
