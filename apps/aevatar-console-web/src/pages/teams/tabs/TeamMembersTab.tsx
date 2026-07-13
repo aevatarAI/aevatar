@@ -95,7 +95,7 @@ const tableInnerStyle: React.CSSProperties = {
 } as React.CSSProperties;
 
 const responsiveTableStyle = `
-@media (max-width: 760px) {
+@media (max-width: 1180px) {
   .team-members-table-header {
     display: none !important;
   }

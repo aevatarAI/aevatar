@@ -99,6 +99,7 @@ const surfaceStyle = (
   display: "flex",
   flexDirection: "column",
   gap: 16,
+  minWidth: 0,
   padding: 20,
 });
 
@@ -201,7 +202,15 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
             justifyContent: "space-between",
           }}
         >
-          <div style={{ display: "flex", flex: "1 1 520px", flexDirection: "column", gap: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              flex: "1 1 520px",
+              flexDirection: "column",
+              gap: 8,
+              minWidth: 0,
+            }}
+          >
             <Space wrap size={[8, 6]}>
               <Typography.Text strong style={{ fontSize: 16 }}>
                 {intl.formatMessage({ id: "teams.detail.overview.status.title" })}
