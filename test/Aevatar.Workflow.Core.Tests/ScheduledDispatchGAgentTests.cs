@@ -479,6 +479,74 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_WhenRequiredWorkflowTargetMissingCredentials_ShouldRejectWithoutStateMutation()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        var previousState = agent.State.Clone();
+
+        var rejected = () => agent.HandleConfigureAsync(CreateConfigureCommand(
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: CreateWorkflowServiceInvocationTarget()));
+
+        await rejected.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*requires a typed service invocation credential source*");
+        agent.State.ToByteArray().Should().Equal(previousState.ToByteArray());
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleEnsureAsync_WhenCurrentSessionCredentialHeaderIsPresent_ShouldRejectWithoutStateMutation()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        var previousState = agent.State.Clone();
+        var command = CreateEnsureCommand(
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: CreateWorkflowServiceInvocationTarget(CreateSenderNyxIdAuth()));
+        command.Headers[ScheduledDispatchCredentialRequirementRequests.LegacyConnectorHttpAuthorizationHeader] =
+            "Bearer current-session-token";
+
+        var rejected = () => agent.HandleEnsureAsync(command);
+
+        await rejected.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*current-session credentials*");
+        agent.State.ToByteArray().Should().Equal(previousState.ToByteArray());
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WhenUpdateUsesLegacyDurableBearer_ShouldRejectWithoutStateMutation()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: CreateWorkflowServiceInvocationTarget(CreateSenderNyxIdAuth())));
+        var previousState = agent.State.Clone();
+        var previousEventCount = eventStore.GetEvents(ScheduleActorId).Count;
+
+        var rejected = () => agent.HandleConfigureAsync(CreateUpdateCommand(
+            displayName: "Rejected legacy auth update",
+            target: CreateWorkflowServiceInvocationTarget(CreateLegacyDurableBearerAuth())));
+
+        await rejected.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*credential source is not supported*");
+        agent.State.ToByteArray().Should().Equal(previousState.ToByteArray());
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(previousEventCount);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchConfiguredEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task HandleDeleteAsync_WhenConfiguredEnabled_ShouldPersistDeletedStateAndCancelNextFireLease()
     {
         var eventStore = new TestEventStore();
@@ -2265,6 +2333,43 @@ public sealed class ScheduledDispatchGAgentTests
             Kind = ScheduledDispatchTargetKindState.Envelope,
             ActorId = targetActorId,
             Envelope = triggerEnvelope?.Clone(),
+        };
+
+    private static ScheduledDispatchTargetState CreateWorkflowServiceInvocationTarget(
+        ScheduledServiceInvocationAuthState? auth = null,
+        ChatRequestEvent? payload = null) =>
+        new()
+        {
+            Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+            CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService,
+            ServiceInvocation = new ScheduledServiceInvocationTargetState
+            {
+                Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                EndpointId = "chat",
+                Payload = Any.Pack(payload ?? new ChatRequestEvent { Prompt = "configured" }),
+                Auth = auth,
+            },
+        };
+
+    private static ScheduledServiceInvocationAuthState CreateSenderNyxIdAuth() =>
+        new()
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                {
+                    Platform = "lark",
+                    Tenant = "tenant-1",
+                    ExternalUserId = "ou-user-1",
+                },
+                Scope = "proxy",
+            },
+        };
+
+    private static ScheduledServiceInvocationAuthState CreateLegacyDurableBearerAuth() =>
+        new()
+        {
+            DurableSenderBearerToken = "legacy-bearer-token",
         };
 
     private static EventEnvelope CreateTriggerEnvelope(string targetActorId, IMessage payload) =>

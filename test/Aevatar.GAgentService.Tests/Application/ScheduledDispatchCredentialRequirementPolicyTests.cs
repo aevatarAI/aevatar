@@ -86,6 +86,38 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
     }
 
     [Fact]
+    public void SummarizePayloadCredentialSignal_ShouldDetectConnectorHttpAuthorizationPayload()
+    {
+        var signal = ScheduledDispatchCredentialRequirementRequests.SummarizePayloadCredentialSignal(
+            Any.Pack(new ChatRequestEvent
+            {
+                ConnectorHttpAuthorization = "Bearer current-session-token",
+            }));
+
+        signal.HasCurrentSessionCredential.Should().BeTrue();
+        signal.Source.Should().Be(nameof(ChatRequestEvent.ConnectorHttpAuthorization));
+    }
+
+    [Fact]
+    public void SummarizePayloadCredentialSignal_ShouldDetectToolContextCredentialsPayload()
+    {
+        var signal = ScheduledDispatchCredentialRequirementRequests.SummarizePayloadCredentialSignal(
+            Any.Pack(new ChatRequestEvent
+            {
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Credentials = new AgentToolCredentialsPayload
+                    {
+                        SenderNyxIdAccessToken = "sender-token",
+                    },
+                },
+            }));
+
+        signal.HasCurrentSessionCredential.Should().BeTrue();
+        signal.Source.Should().Be("ToolContext.Credentials");
+    }
+
+    [Fact]
     public void FromConfiguration_ShouldDetectCredentialBearingPayloadAndHeaders()
     {
         var request = ScheduledDispatchCredentialRequirementRequests.FromConfiguration(
