@@ -469,6 +469,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     request,
                     ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
                     ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
+                    ProjectNyxIdAccessTokenToWorkflowCallerCredential:
+                        State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
                     ScheduleId: ResolveScheduleId()),
                 ct);
             return new ScheduledDispatchReceipt(
@@ -790,7 +792,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         ScheduledDispatchTargetState target,
         IEnumerable<KeyValuePair<string, string>> headers)
     {
-        var normalizedHeaders = NormalizeHeaders(headers);
+        var normalizedHeaders = ShouldInspectRawCredentialSignalHeaders(target.CredentialRequirementTargetKind)
+            ? NormalizeCredentialSignalHeaders(headers)
+            : NormalizeHeaders(headers);
         var payload = target.Kind == ScheduledDispatchTargetKindState.ServiceInvocation
             ? target.ServiceInvocation?.Payload
             : target.Envelope?.Payload;
@@ -1553,6 +1557,31 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 continue;
             }
+
+            normalized[normalizedKey] = normalizedValue;
+        }
+
+        return normalized;
+    }
+
+    private static bool ShouldInspectRawCredentialSignalHeaders(
+        ScheduledDispatchCredentialRequirementTargetKindState targetKind) =>
+        targetKind is ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService
+            or ScheduledDispatchCredentialRequirementTargetKindState.Connector;
+
+    private static IReadOnlyDictionary<string, string> NormalizeCredentialSignalHeaders(
+        IEnumerable<KeyValuePair<string, string>>? source)
+    {
+        if (source == null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var normalized = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (key, value) in source)
+        {
+            var normalizedKey = NormalizeOptional(key);
+            var normalizedValue = NormalizeOptional(value);
+            if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
+                continue;
 
             normalized[normalizedKey] = normalizedValue;
         }
