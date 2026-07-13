@@ -212,7 +212,9 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         }
 
         var track = ResolveTrack(pending, command.Track);
-        if (track is null || track.Status == ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef)
+        if (track is null ||
+            IsTerminal(track) ||
+            track.Status == ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef)
             return;
 
         if (!command.Completed && track.AttemptCount >= MaxApiKeyRevocationAttempts)

@@ -316,6 +316,33 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleRecordApiKeyRevocationAttemptAsync_DuplicateTerminalAttemptDoesNotIncrementTrack()
+    {
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = PendingRevocation("agent-terminal", "key-terminal", "sec-terminal"),
+        });
+        await CompleteTrackAsync(
+            "agent-terminal",
+            "key-terminal",
+            "sec-terminal",
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId);
+
+        await CompleteTrackAsync(
+            "agent-terminal",
+            "key-terminal",
+            "sec-terminal",
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId);
+
+        var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        pending.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Completed);
+        pending.NyxIdTrack.AttemptCount.Should().Be(1);
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        persisted.Count(item => item.EventData.Is(UserAgentCatalogApiKeyRevocationAttemptRecordedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleTombstoneAsync_WithoutSecretReference_BlocksVaultTrackWithoutCountingAttempts()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand

@@ -128,12 +128,26 @@ public sealed class UserAgentCatalogQueryPortTests
         pending[0].OwnerScope!.MatchesStrictly(alice).Should().BeTrue();
         pending[0].NyxApiKeyReference.Should().NotBeNull();
         pending[0].NyxApiKeyReference!.Ref.Should().Be("sec-alice-agent");
+        pending[0].NyxApiKeyReference!.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        pending[0].NyxApiKeyReference!.OwnerScopeKey.Should().Be("owner-alice-agent");
+        pending[0].NyxApiKeyReference!.Version.Should().Be(1);
+        pending[0].NyxApiKeyReference!.Fingerprint.Should().Be("sha256:test");
         pending[0].NyxIdTrack.Should().NotBeNull();
         pending[0].NyxIdTrack!.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
         pending[0].NyxIdTrack!.AttemptCount.Should().Be(2);
+        pending[0].NyxIdTrack!.LastAttemptAt.Should().BeEquivalentTo(Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 6, 20, 10, 1, 0, TimeSpan.Zero)));
+        pending[0].NyxIdTrack!.LastHttpStatus.Should().Be(503);
+        pending[0].NyxIdTrack!.LastError.Should().Be("nyx unavailable");
+        pending[0].NyxIdTrack!.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
         pending[0].VaultTrack.Should().NotBeNull();
         pending[0].VaultTrack!.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Completed);
         pending[0].VaultTrack!.AttemptCount.Should().Be(1);
+        pending[0].VaultTrack!.LastAttemptAt.Should().BeEquivalentTo(Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 6, 20, 10, 2, 0, TimeSpan.Zero)));
+        pending[0].VaultTrack!.LastHttpStatus.Should().Be(0);
+        pending[0].VaultTrack!.LastError.Should().BeEmpty();
+        pending[0].VaultTrack!.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.None);
         pending[0].SecretSubjectId.Should().Be("key-alice");
         pending[0].RepairReason.Should().Be("restore exact reference");
         pending[0].RequestedBySubjectId.Should().Be("admin-1");
