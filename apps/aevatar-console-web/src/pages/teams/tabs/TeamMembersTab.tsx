@@ -19,6 +19,7 @@ import {
   DetailPill,
   FactLine,
 } from "../components/TeamDetailPrimitives";
+import "./TeamMembersTab.css";
 
 type TeamRosterMemberRow = {
   readonly automationDisabledReason: string;
@@ -76,8 +77,20 @@ const ellipsisTextStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+const tableGridMetrics = {
+  actionsMinWidth: 252,
+  columnGap: 20,
+  implementationMinWidth: 140,
+  memberMinWidth: 260,
+  rowPaddingInline: 18,
+  serviceMinWidth: 180,
+} as const;
+
 const tableGridTemplateColumns =
-  "minmax(260px, 1.4fr) minmax(140px, 0.45fr) minmax(180px, 0.7fr) 252px";
+  `minmax(${tableGridMetrics.memberMinWidth}px, 1.4fr) ` +
+  `minmax(${tableGridMetrics.implementationMinWidth}px, 0.45fr) ` +
+  `minmax(${tableGridMetrics.serviceMinWidth}px, 0.7fr) ` +
+  `${tableGridMetrics.actionsMinWidth}px`;
 
 const tableShellStyle: React.CSSProperties = {
   borderRadius: 8,
@@ -94,65 +107,14 @@ const tableInnerStyle: React.CSSProperties = {
   "--team-members-grid-template": tableGridTemplateColumns,
 } as React.CSSProperties;
 
-const responsiveTableStyle = `
-@media (max-width: 1180px) {
-  .team-members-table-header {
-    display: none !important;
-  }
-
-  .team-members-table-row {
-    align-items: flex-start !important;
-    gap: 12px !important;
-    grid-template-columns: minmax(0, 1fr) !important;
-    min-height: 0 !important;
-    padding: 16px 18px !important;
-  }
-
-  .team-members-table-actions {
-    justify-content: flex-start !important;
-    width: 100% !important;
-  }
-
-  .team-members-table-primary-actions {
-    justify-content: flex-start !important;
-    width: 100% !important;
-  }
-
-  .team-members-table-invoke-action,
-  .team-members-table-published-runs-action,
-  .team-members-table-automate-action,
-  .team-members-table-studio-action,
-  .team-members-table-entry-action,
-  .team-members-table-delete-action {
-    min-width: 0 !important;
-  }
-}
-
-@media (max-width: 420px) {
-  .team-members-table-primary-actions {
-    justify-content: flex-start !important;
-  }
-}
-
-.team-members-table-action-button {
-  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
-}
-
-.team-members-table-action-button:hover,
-.team-members-table-action-button:focus-visible {
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
-  transform: translateY(-1px);
-}
-`;
-
 const tableHeaderStyle: React.CSSProperties = {
   alignItems: "center",
   display: "grid",
   fontSize: 12,
   fontWeight: 700,
-  gap: 20,
+  gap: tableGridMetrics.columnGap,
   gridTemplateColumns: tableGridTemplateColumns,
-  padding: "10px 18px",
+  padding: `10px ${tableGridMetrics.rowPaddingInline}px`,
 };
 
 const tableHeaderActionStyle: React.CSSProperties = {
@@ -163,10 +125,10 @@ const tableHeaderActionStyle: React.CSSProperties = {
 const rosterRowBaseStyle: React.CSSProperties = {
   alignItems: "center",
   display: "grid",
-  gap: 20,
+  gap: tableGridMetrics.columnGap,
   gridTemplateColumns: tableGridTemplateColumns,
   minHeight: 82,
-  padding: "14px 18px",
+  padding: `14px ${tableGridMetrics.rowPaddingInline}px`,
 };
 
 const memberNameRowStyle: React.CSSProperties = {
@@ -366,10 +328,14 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             {statusDescription}
           </Typography.Text>
         </div>
-        <div style={tableFrameStyle}>
+        <div
+          className="team-members-table-container"
+          data-responsive-layout="container"
+          data-testid="team-members-table"
+          style={tableFrameStyle}
+        >
           <div style={tableScrollStyle}>
             <div style={tableInnerStyle}>
-              <style>{responsiveTableStyle}</style>
               {renderTableHeader()}
               {memberRosterSkeletonRowKeys.map((key, index) => (
                 <div
@@ -514,10 +480,14 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
             })}
           />
         ) : rosterRows.length > 0 ? (
-          <div style={tableFrameStyle}>
+          <div
+            className="team-members-table-container"
+            data-responsive-layout="container"
+            data-testid="team-members-table"
+            style={tableFrameStyle}
+          >
             <div style={tableScrollStyle}>
               <div style={tableInnerStyle}>
-                <style>{responsiveTableStyle}</style>
                 {renderTableHeader()}
                 {rosterRows.map((row, index) => {
                   const invokeDisabledReason = row.workflowSupported

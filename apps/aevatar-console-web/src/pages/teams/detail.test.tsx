@@ -2384,6 +2384,10 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
     await screen.findByLabelText("调用");
 
+    const memberTable = screen.getByTestId("team-members-table");
+    expect(memberTable).toHaveClass("team-members-table-container");
+    expect(memberTable).toHaveAttribute("data-responsive-layout", "container");
+
     const memberRow = document.querySelector(".team-members-table-row");
     expect(memberRow).toBeTruthy();
     expect(memberRow).toHaveStyle({
@@ -2412,15 +2416,6 @@ describe("TeamDetailPage", () => {
       within(memberActions as HTMLElement).getByLabelText("删除成员"),
     ).toBeTruthy();
 
-    const responsiveRules = collectRenderedStyleText();
-    expect(responsiveRules).toContain("@media (max-width: 1180px)");
-    expect(responsiveRules).toContain(
-      "grid-template-columns: minmax(0, 1fr) !important;",
-    );
-    expect(responsiveRules).toContain(
-      ".team-members-table-primary-actions",
-    );
-    expect(responsiveRules).toContain("width: 100% !important;");
   });
 
   it("renders member-owned automations from the backend schedules API", async () => {
