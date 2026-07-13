@@ -54,7 +54,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _skillRunnerPort,
                 _catalogCommandPort,
                 _callerScopeResolver,
-                _scheduledAgentCredentialLifecycle,
                 _toolLogger),
             new ScheduledAgentCreatorTool(
                 _skillRunnerPort,

@@ -189,6 +189,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
                 token,
                 plan.ServiceSlugs!,
                 agentId,
+                caller,
                 plan.Request!.Reference.Name,
                 plan.Request.ScopeId,
                 CredentialSecretPurposes.ScheduledInvocationAgentKey,
@@ -222,6 +223,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
                 token,
                 agentId,
                 key.ApiKeyId ?? string.Empty,
+                caller,
                 secretReference,
                 CancellationToken.None);
             _logger?.LogWarning(ex, "Scheduled agent create dispatch failed after key issue: agentId={AgentId}", agentId);

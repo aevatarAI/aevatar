@@ -206,6 +206,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 RequiredServiceSlugs: [],
                 RequiresOrnnService: false),
             deliveryTargetId.value!,
+            caller,
             skillName: string.Empty,
             scopeId: keyScopeId,
             CredentialSecretPurposes.ScheduledNyxApiKey,
@@ -236,6 +237,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 token,
                 deliveryTargetId.value!,
                 key.ApiKeyId ?? string.Empty,
+                caller,
                 secretReference,
                 CancellationToken.None);
             throw;

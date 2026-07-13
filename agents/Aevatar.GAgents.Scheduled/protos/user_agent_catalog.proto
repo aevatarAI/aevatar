@@ -115,6 +115,14 @@ message ScheduledCredentialVaultRevocationDescriptor {
   ScheduledCredentialVaultReferenceAvailability reference_availability = 5;
 }
 
+message ScheduledAgentCredentialRevocationIntent {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.OwnerScope owner_scope = 3;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 4;
+  ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 5;
+}
+
 message UserAgentApiKeyRevocation {
   string agent_id = 1;
   string api_key_id = 2;
@@ -230,8 +238,15 @@ message UserAgentCatalogRepairCredentialRevocationCommand {
 }
 
 message UserAgentCatalogRequestCredentialRevocationCommand {
-  UserAgentApiKeyRevocation revocation = 1;
+  ScheduledAgentCredentialRevocationIntent intent = 1;
   // Transient authorization for the immediate NyxID compensation attempt.
+  // Command handlers must never copy this value into events or actor state.
+  string bearer_token = 2;
+}
+
+message UserAgentCatalogRetryCredentialRevocationsCommand {
+  aevatar.OwnerScope owner_scope = 1;
+  // Transient authorization for this caller-owned retry turn.
   // Command handlers must never copy this value into events or actor state.
   string bearer_token = 2;
 }

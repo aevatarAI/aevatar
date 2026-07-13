@@ -110,17 +110,34 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
     }
 
     public async Task RequestCredentialRevocationAsync(
-        UserAgentApiKeyRevocation revocation,
+        ScheduledAgentCredentialRevocationIntent intent,
         CancellationToken ct = default,
         string bearerToken = "")
     {
-        ArgumentNullException.ThrowIfNull(revocation);
+        ArgumentNullException.ThrowIfNull(intent);
         await EnsureCatalogActorAsync(ct);
         await _actorDispatchPort.DispatchAsync(
             UserAgentCatalogGAgent.WellKnownId,
             BuildEnvelope(new UserAgentCatalogRequestCredentialRevocationCommand
             {
-                Revocation = revocation.Clone(),
+                Intent = intent.Clone(),
+                BearerToken = bearerToken?.Trim() ?? string.Empty,
+            }),
+            ct);
+    }
+
+    public async Task RetryCredentialRevocationsAsync(
+        OwnerScope ownerScope,
+        string bearerToken,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(ownerScope);
+        await EnsureCatalogActorAsync(ct);
+        await _actorDispatchPort.DispatchAsync(
+            UserAgentCatalogGAgent.WellKnownId,
+            BuildEnvelope(new UserAgentCatalogRetryCredentialRevocationsCommand
+            {
+                OwnerScope = ownerScope.Clone(),
                 BearerToken = bearerToken?.Trim() ?? string.Empty,
             }),
             ct);

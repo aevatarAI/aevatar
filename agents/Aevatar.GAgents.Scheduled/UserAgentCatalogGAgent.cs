@@ -245,11 +245,11 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
     [EventHandler]
     public async Task HandleRequestCredentialRevocationAsync(UserAgentCatalogRequestCredentialRevocationCommand command)
     {
-        if (command.Revocation is null)
+        if (command.Intent is null)
             return;
 
-        var revocation = NormalizeRevocation(command.Revocation);
-        if (string.IsNullOrWhiteSpace(revocation.AgentId) || string.IsNullOrWhiteSpace(revocation.ApiKeyId))
+        var revocation = BuildApiKeyRevocation(command.Intent);
+        if (revocation is null)
             return;
 
         var currentRevocation = FindRevocationByIdentity(State.PendingApiKeyRevocations, revocation);
@@ -274,6 +274,22 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             Revocation = revocation,
         });
         await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, revocation);
+    }
+
+    [EventHandler]
+    public async Task HandleRetryCredentialRevocationsAsync(UserAgentCatalogRetryCredentialRevocationsCommand command)
+    {
+        if (command.OwnerScope is null)
+            return;
+
+        var pendingRevocations = State.PendingApiKeyRevocations
+            .Where(revocation =>
+                revocation.OwnerScope is not null &&
+                command.OwnerScope.MatchesStrictly(revocation.OwnerScope))
+            .Select(static revocation => revocation.Clone())
+            .ToArray();
+        foreach (var pending in pendingRevocations)
+            await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, pending);
     }
 
     [EventHandler]
@@ -648,6 +664,58 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return revocation;
     }
 
+    private static UserAgentApiKeyRevocation? BuildApiKeyRevocation(
+        ScheduledAgentCredentialRevocationIntent intent)
+    {
+        var agentId = intent.AgentId?.Trim() ?? string.Empty;
+        var apiKeyId = intent.ApiKeyId?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(agentId) ||
+            string.IsNullOrEmpty(apiKeyId) ||
+            intent.OwnerScope is null)
+        {
+            return null;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            OwnerScope = intent.OwnerScope.Clone(),
+            RequestedAt = Timestamp.FromDateTimeOffset(now),
+            RequestedAtUnixMs = now.ToUnixTimeMilliseconds(),
+            SecretSubjectId = apiKeyId,
+            NyxIdTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            },
+        };
+
+        if (IsCompleteReference(intent.NyxApiKeyReference))
+        {
+            revocation.NyxApiKeyReference = intent.NyxApiKeyReference.Clone();
+            revocation.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+                intent.NyxApiKeyReference,
+                apiKeyId);
+        }
+        else if (intent.VaultRevocationDescriptor is not null)
+        {
+            revocation.VaultRevocationDescriptor = intent.VaultRevocationDescriptor.Clone();
+            NormalizeVaultDescriptor(revocation.VaultRevocationDescriptor);
+        }
+
+        revocation.VaultTrack = new ScheduledCredentialRevocationTrack
+        {
+            Status = revocation.VaultRevocationDescriptor?.ReferenceAvailability ==
+                ScheduledCredentialVaultReferenceAvailability.NotApplicable
+                    ? ScheduledCredentialRevocationTrackStatus.NotApplicable
+                    : HasExecutableVaultDescriptor(revocation)
+                        ? ScheduledCredentialRevocationTrackStatus.Pending
+                        : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
+        };
+        return revocation;
+    }
+
     private static UserAgentApiKeyRevocation NormalizeRevocation(UserAgentApiKeyRevocation source)
     {
         var revocation = source.Clone();
@@ -657,12 +725,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             ? revocation.ApiKeyId
             : revocation.SecretSubjectId.Trim();
         if (revocation.VaultRevocationDescriptor is not null)
-        {
-            revocation.VaultRevocationDescriptor.Ref = revocation.VaultRevocationDescriptor.Ref?.Trim() ?? string.Empty;
-            revocation.VaultRevocationDescriptor.Purpose = revocation.VaultRevocationDescriptor.Purpose?.Trim() ?? string.Empty;
-            revocation.VaultRevocationDescriptor.OwnerScopeKey = revocation.VaultRevocationDescriptor.OwnerScopeKey?.Trim() ?? string.Empty;
-            revocation.VaultRevocationDescriptor.SubjectId = revocation.VaultRevocationDescriptor.SubjectId?.Trim() ?? string.Empty;
-        }
+            NormalizeVaultDescriptor(revocation.VaultRevocationDescriptor);
         if (IsCompleteReference(revocation.NyxApiKeyReference))
         {
             revocation.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
@@ -695,6 +758,14 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             revocation.VaultTrack.Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef;
         }
         return revocation;
+    }
+
+    private static void NormalizeVaultDescriptor(ScheduledCredentialVaultRevocationDescriptor descriptor)
+    {
+        descriptor.Ref = descriptor.Ref?.Trim() ?? string.Empty;
+        descriptor.Purpose = descriptor.Purpose?.Trim() ?? string.Empty;
+        descriptor.OwnerScopeKey = descriptor.OwnerScopeKey?.Trim() ?? string.Empty;
+        descriptor.SubjectId = descriptor.SubjectId?.Trim() ?? string.Empty;
     }
 
     private static UserAgentApiKeyRevocation? FindRevocationByIdentity(

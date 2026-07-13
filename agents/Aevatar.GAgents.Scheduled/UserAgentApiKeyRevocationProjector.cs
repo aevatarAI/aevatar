@@ -52,11 +52,18 @@ public sealed class UserAgentApiKeyRevocationProjector
                     attempt.SecretReferenceRef));
             if (completed &&
                 !string.IsNullOrWhiteSpace(attempt.AgentId) &&
-                !string.IsNullOrWhiteSpace(attempt.ApiKeyId) &&
-                !string.IsNullOrWhiteSpace(attempt.SecretReferenceRef))
+                !string.IsNullOrWhiteSpace(attempt.ApiKeyId))
             {
+                var documentId = string.IsNullOrWhiteSpace(attempt.SecretReferenceRef)
+                    ? ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
+                        attempt.AgentId.Trim(),
+                        attempt.ApiKeyId.Trim())
+                    : BuildDocumentId(
+                        attempt.AgentId,
+                        attempt.ApiKeyId,
+                        attempt.SecretReferenceRef);
                 await _writeDispatcher.DeleteAsync(
-                    BuildDocumentId(attempt.AgentId, attempt.ApiKeyId, attempt.SecretReferenceRef),
+                    documentId,
                     ct);
             }
         }
