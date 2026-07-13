@@ -1,6 +1,6 @@
 ---
 title: "定时任务调用凭证的权威来源模型"
-status: proposed
+status: accepted
 owner: eanzhao
 ---
 
@@ -41,6 +41,8 @@ owner: eanzhao
 4. **校验下沉**：把当前困在 endpoint private static 的 binding/owner 校验下沉到 application/domain 统一路径，HTTP 与 internal 入口走同一套校验语义。
 5. **create/update 期只做无副作用 validation**：不再用「真 mint」做预检；改用 binding 存在性（已有的 read-only `bindingQueryPort.ResolveAsync`）+ scope 归属判断；fire/run-now 才签发短 token（具体 introspection 机制见 Open Questions，受限于 NyxID 既有 surface）。
 6. **删除 legacy header/metadata auth 残留**：清理已无活写入路径的防御 strip 代码（保留 proto `reserved`）。
+
+Issue #2409 落地的是本 ADR 的 required-credential policy 切片：先采用 schedule-local `IScheduledDispatchCredentialRequirementPolicy`，并把 `credential_requirement_target_kind` 持久化为 schedule actor 的 typed input classification。它不是 allow/deny 决策缓存；未来若引入 governance-backed `ServicePolicySpec.invoke_required_credentials`，新 provider 必须替换当前 schedule-local provider，而不能并存为第二套权威。
 
 `oneof` 草图见 Required Contract。无 opt-in 不变量：收敛后默认凭证语义对既有 schedule 保持等价（迁移期 reducer 双读旧格式），但历史 raw bearer 状态只允许 fail-closed，不允许继续成功调用。
 

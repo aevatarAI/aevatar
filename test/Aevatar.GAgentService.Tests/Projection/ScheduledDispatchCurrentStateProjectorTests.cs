@@ -122,8 +122,55 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.Should().NotBeNull();
         document!.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8("durable-run-key").ToByteArray()).Should().Be(-1);
         document.ToString().Should().NotContain("durable-run-key");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.LegacyDurableSenderBearer.ToString());
         document.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.StateVersion.Should().Be(10);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeCredentialRequirementFacts()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-workflow", identity);
+        state.ScheduleKind = ScheduledDispatchScheduleKindState.Workflow;
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                {
+                    Platform = "nyxid",
+                    ExternalUserId = "owner-1",
+                },
+                Scope = "proxy",
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-workflow"),
+            WrapCommitted(
+                state,
+                version: 13,
+                eventId: "evt-credential",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:45:00+00:00")));
+
+        var document = await store.GetAsync("schedule-workflow");
+        document.Should().NotBeNull();
+        document!.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService.ToString());
+        document.CredentialSourceKind.Should().Be(ScheduledDispatchCredentialSourceKind.SenderNyxId.ToString());
+        document.StateVersion.Should().Be(13);
     }
 
     [Fact]
@@ -171,6 +218,8 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         AssertDocumentDoesNotContain(document!, "owner-scope-projector");
         AssertDocumentDoesNotContain(document!, "fp-projector");
         AssertDocumentDoesNotContain(document!, "resolved-full-key");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.DurableCredentialReference.ToString());
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.StateVersion.Should().Be(11);
     }
@@ -221,6 +270,8 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         AssertDocumentDoesNotContain(document!, "sec-sensitive-reference");
         AssertDocumentDoesNotContain(document!, "api-key-sensitive-id");
         AssertDocumentDoesNotContain(document!, "sensitive-fingerprint");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey.ToString());
         document.StateVersion.Should().Be(10);
     }
 

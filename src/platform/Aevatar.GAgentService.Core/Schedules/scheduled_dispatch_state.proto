@@ -77,6 +77,7 @@ message ScheduledDispatchTargetState
   aevatar.EventEnvelope envelope = 3;
   ScheduledServiceInvocationTargetState service_invocation = 4;
   reserved 5;
+  ScheduledDispatchCredentialRequirementTargetKindState credential_requirement_target_kind = 6;
 }
 
 enum ScheduledDispatchTargetKindState
@@ -85,6 +86,16 @@ enum ScheduledDispatchTargetKindState
   SCHEDULED_DISPATCH_TARGET_KIND_STATE_ENVELOPE = 1;
   SCHEDULED_DISPATCH_TARGET_KIND_STATE_SERVICE_INVOCATION = 2;
   reserved 3;
+}
+
+enum ScheduledDispatchCredentialRequirementTargetKindState
+{
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_ENVELOPE = 1;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_STATIC_SERVICE = 2;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_SCRIPTING_SERVICE = 3;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_WORKFLOW_SERVICE = 4;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_CONNECTOR = 5;
 }
 
 message ScheduledServiceInvocationTargetState

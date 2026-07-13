@@ -40,7 +40,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 [" trace "] = " enabled ",
                 [" "] = "ignored",
             },
-            ScopeId: " scope-1 "));
+            ScopeId: " scope-1 ",
+            Auth: CreateDefaultAuth()));
 
         receipt.ScheduleId.Should().Be("daily-report");
         receipt.ScheduleActorId.Should().Be("actor:daily-report");
@@ -61,7 +62,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
         });
         configured.Configuration.Target.ServiceInvocation.EndpointId.Should().Be("chat");
         configured.Configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
-        configured.Configuration.Target.ServiceInvocation.Auth.Should().BeNull();
+        configured.Configuration.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+        configured.Configuration.Target.ServiceInvocation.Auth.Should().NotBeNull();
+        configured.Configuration.Target.ServiceInvocation.Auth!.SenderNyxId.Should().NotBeNull();
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
@@ -96,7 +100,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Timezone: " UTC ",
             Enabled: true,
             Headers: new Dictionary<string, string> { [" trace "] = " enabled " },
-            ScopeId: " scope-1 "));
+            ScopeId: " scope-1 ",
+            Auth: CreateDefaultAuth()));
 
         receipt.ScheduleId.Should().Be("daily-report");
         actorPort.EnsureScheduleIds.Should().Equal("daily-report");
@@ -122,6 +127,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.Payload.Unpack<ChatRequestEvent>().Metadata.Should().Contain("trace", "enabled");
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
     }
 
     [Fact]
@@ -174,6 +181,23 @@ public sealed class WorkflowScheduleApplicationServiceTests
         invocation.Auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
         invocation.Auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         invocation.Auth.SenderNyxId.Scope.Should().Be("proxy");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectWorkflowScheduleWithoutCredentialSource()
+    {
+        var service = CreateService(new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        });
+
+        var act = () => service.CreateAsync(CreateConfiguration("no-auth-schedule") with
+        {
+            Auth = null,
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*requires a typed service invocation credential source*");
     }
 
     [Fact]
@@ -583,7 +607,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
                     ["workflow.schedule.source_actor_id"] = "caller-extension",
                 },
                 ScopeId: " ",
-                TenantId: "tenant-1"));
+                TenantId: "tenant-1",
+                Auth: CreateDefaultAuth()));
 
         receipt.Should().BeEquivalentTo(new
         {
@@ -863,7 +888,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
             {
                 ["caller"] = "kept",
             },
-            ScopeId: "scope-1"));
+            ScopeId: "scope-1",
+            Auth: CreateDefaultAuth()));
 
         var created = actorPort.Created.Single();
         created.Configuration.Headers.Should().Contain(new KeyValuePair<string, string>("caller", "kept"));
@@ -1131,7 +1157,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Timezone: "UTC",
             Enabled: true,
             Headers: new Dictionary<string, string>(),
-            ScopeId: "scope-1");
+            ScopeId: "scope-1",
+            Auth: CreateDefaultAuth());
+
+    private static WorkflowScheduleAuth CreateDefaultAuth() =>
+        new(new WorkflowScheduleNyxIdCredentialSource(
+            new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+            "proxy"));
 
     private static WorkflowScheduleConfiguration CreateScopeOwnerWorkflowConfiguration(string scheduleId) =>
         CreateConfiguration(scheduleId) with
@@ -1191,6 +1223,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 Headers: new Dictionary<string, string>(),
                 ScheduleActorId: string.Empty,
                 Prompt: "saved prompt",
-                ScheduleKind: ScheduledDispatchScheduleKind.Workflow),
+                ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+                CredentialRequirementTargetKind: ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+                CredentialSourceKind: ScheduledDispatchCredentialSourceKind.SenderNyxId),
             []);
 }
