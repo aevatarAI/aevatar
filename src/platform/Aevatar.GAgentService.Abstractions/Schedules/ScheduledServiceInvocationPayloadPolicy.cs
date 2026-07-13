@@ -40,6 +40,7 @@ public static class ScheduledServiceInvocationPayloadPolicy
     private static void StripScheduleOwnedCredentialFields(ChatRequestEvent chatRequest)
     {
         chatRequest.ConnectorHttpAuthorization = string.Empty;
+        chatRequest.CallerDurableCredential = null;
         chatRequest.Metadata.Remove(ConnectorHttpAuthorizationKey);
         chatRequest.Headers.Remove(ConnectorHttpAuthorizationKey);
 

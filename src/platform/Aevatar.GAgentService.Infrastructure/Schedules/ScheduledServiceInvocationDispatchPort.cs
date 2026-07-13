@@ -78,7 +78,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             return EnrichChatPayload(
                 dispatch.Request,
                 dispatch.Headers,
-                credential: null);
+                credential: null,
+                projectNyxIdAccessTokenToWorkflowCallerCredential:
+                    dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
         }
 
         if (!exchange.Result.Succeeded)
@@ -89,11 +91,12 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
 
         _logger.LogInformation(
-            "Scheduled service invocation NyxID credential exchange succeeded. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} credentialRole={CredentialRole} hasAccessToken={HasAccessToken}",
+            "Scheduled service invocation NyxID credential exchange succeeded. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} credentialRole={CredentialRole} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential} hasAccessToken={HasAccessToken}",
             dispatch.ScheduleId ?? string.Empty,
             FormatServiceKey(dispatch.Request.Identity),
             dispatch.Request.EndpointId ?? string.Empty,
             ToErrorSubject(exchange.Role),
+            dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential,
             !string.IsNullOrWhiteSpace(exchange.Result.AccessToken));
 
         var token = NormalizeNyxIdAccessToken(exchange.Result.AccessToken, exchange.Role);
@@ -107,13 +110,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             dispatch.Headers,
             new ExchangedCredential(
                 exchange.Role,
-<<<<<<< HEAD
-                NormalizeNyxIdAccessToken(exchange.Result.AccessToken, ToErrorSubject(exchange.Role))));
-=======
                 token,
                 durableCallerCredential),
             dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     private async Task<DurableCallerCredentialRef> StoreDurableCallerCredentialAsync(
@@ -317,7 +316,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private static ServiceInvocationRequest EnrichChatPayload(
         ServiceInvocationRequest request,
         IReadOnlyDictionary<string, string>? headers,
-        ExchangedCredential? credential)
+        ExchangedCredential? credential,
+        bool projectNyxIdAccessTokenToWorkflowCallerCredential)
     {
         var sanitizedRequest = ScheduledServiceInvocationPayloadPolicy.StripScheduleOwnedCredentialFields(request);
         if ((headers == null || headers.Count == 0) && credential == null)
@@ -364,20 +364,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     SenderNyxIdAccessToken = IsSenderCredential(credential.Role)
                         ? token
                         : existingControl.SenderNyxIdAccessToken,
-                };
+            };
             chatRequest.LlmControl = control.ToPayload();
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-            if (projectNyxIdAccessTokenToWorkflowCallerCredential)
-=======
             if (projectWorkflowCallerCredential)
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             {
                 chatRequest.ConnectorHttpAuthorization = string.Empty;
                 chatRequest.CallerDurableCredential = credential.DurableCallerCredential?.Clone();
             }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         }
 
         cloned.Payload = Any.Pack(chatRequest);

@@ -146,10 +146,6 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         string workflowRunActorId,
         Aevatar.Workflow.Abstractions.WorkflowCallerCredential callerCredential)
     {
-<<<<<<< HEAD
-        var callerCredential = BuildWorkflowCallerCredential(source, invocationRequest.ScheduleId);
-=======
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         _logger.LogInformation(
             "Workflow service invocation caller credential prepared. scheduleId={ScheduleId} serviceKey={ServiceKey} endpointId={EndpointId} workflowRunActorId={WorkflowRunActorId} hasConnectorAuthorization={HasConnectorAuthorization} hasLlmOwnerToken={HasLlmOwnerToken} callerCredentialSourceKind={CallerCredentialSourceKind} hasCallerBearerToken={HasCallerBearerToken}",
             invocationRequest.ScheduleId ?? string.Empty,
@@ -207,16 +203,6 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(
         ChatRequestEvent source,
-<<<<<<< HEAD
-        string? scheduleId)
-    {
-        if (string.IsNullOrWhiteSpace(scheduleId))
-        {
-            var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
-            if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
-                return connectorCredential;
-        }
-=======
         ServiceInvocationRequest invocationRequest)
     {
         if (source.CallerDurableCredential != null)
@@ -246,10 +232,12 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             };
         }
 
-        var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
-        if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
-            return connectorCredential;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+        if (string.IsNullOrWhiteSpace(invocationRequest.ScheduleId))
+        {
+            var connectorCredential = BuildWorkflowCallerCredentialFromConnectorAuthorization(source.ConnectorHttpAuthorization);
+            if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
+                return connectorCredential;
+        }
 
         return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
     }

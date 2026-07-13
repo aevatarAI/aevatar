@@ -434,31 +434,16 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
             var stateTarget = State.Target;
             Logger.LogInformation(
-<<<<<<< HEAD
-<<<<<<< HEAD
-                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
-=======
-                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
-=======
                 "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
                 ResolveScheduleId(),
                 State.ScheduleKind,
                 HasServiceInvocationAuth(stateTarget),
                 HasScopeOwnerNyxId(stateTarget),
                 HasSenderNyxId(stateTarget),
-<<<<<<< HEAD
-<<<<<<< HEAD
-                HasLegacyDurableSenderBearerBlocked(stateTarget));
-=======
-=======
                 HasDurableCredentialReference(stateTarget),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
                 HasScheduledInvocationAgentKey(stateTarget),
                 HasLegacyDurableSenderBearerBlocked(stateTarget),
                 State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             if (HasLegacyDurableSenderBearerBlocked(stateTarget))
             {
                 // Ops-grade transition signal (#2586): a schedule provisioned before the durable-bearer
@@ -1048,13 +1033,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                State.Enabled == command.Enabled &&
                State.ScheduleKind == command.ScheduleKind &&
                DictionaryEquals(State.Headers, normalizedHeaders) &&
-<<<<<<< HEAD
                EnvelopePayloadEquals(State.TriggerEnvelope, normalizedTriggerEnvelope) &&
-               TargetEquals(NormalizeTarget(State.Target), normalizedTarget);
-=======
-               EnvelopePayloadEquals(State.TriggerEnvelope, command.TriggerEnvelope) &&
                TargetEquals(NormalizeTarget(State.Target, State.ScheduleKind), normalizedTarget);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     private void EnsureConfiguredForWrite(string operation)
@@ -1111,29 +1091,21 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
-<<<<<<< HEAD
                 Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
-=======
-                Envelope = target.Envelope?.Clone(),
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
                     scheduleKind),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             },
             _ => new ScheduledDispatchTargetState
             {
                 Kind = ScheduledDispatchTargetKindState.Envelope,
                 ActorId = NormalizeOptional(target.ActorId),
-<<<<<<< HEAD
                 Envelope = target.Envelope == null ? null : NormalizeTriggerEnvelope(target.Envelope),
-=======
-                Envelope = target.Envelope?.Clone(),
                 CredentialRequirementTargetKind = ResolveCredentialRequirementTargetKind(
                     target.CredentialRequirementTargetKind,
                     ScheduledDispatchTargetKindState.Envelope,
                     scheduleKind),
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             },
         };
     }
