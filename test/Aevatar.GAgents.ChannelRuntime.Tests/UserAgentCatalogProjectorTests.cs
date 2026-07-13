@@ -405,6 +405,8 @@ public sealed class UserAgentCatalogProjectorTests
         var dispatcher = new RecordingRevocationWriteDispatcher();
         var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
         var owner = OwnerScope.ForNyxIdNative("user-1");
+        var nyxAttemptedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 1, 0, TimeSpan.Zero));
+        var vaultAttemptedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 2, 0, TimeSpan.Zero));
         var state = new UserAgentCatalogState
         {
             PendingApiKeyRevocations =
@@ -418,12 +420,36 @@ public sealed class UserAgentCatalogProjectorTests
                     {
                         Ref = "sec-1",
                         Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                        OwnerScopeKey = "owner-1",
+                        Version = 1,
+                        Fingerprint = "sha256:test",
                     },
                     RequestedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 0, 0, TimeSpan.Zero)),
                     AttemptCount = 1,
                     LastHttpStatus = 503,
                     LastError = "upstream unavailable",
                     FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                        AttemptCount = 2,
+                        LastAttemptAt = nyxAttemptedAt,
+                        LastHttpStatus = 503,
+                        LastError = "nyx unavailable",
+                        FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                        AttemptCount = 1,
+                        LastAttemptAt = vaultAttemptedAt,
+                        LastError = "vault unavailable",
+                        FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                    },
+                    SecretSubjectId = "key-1",
+                    RepairReason = "restore exact reference",
+                    RequestedBySubjectId = "admin-1",
+                    RequestedAtUnixMs = 1_750_412_800_000,
                 },
             },
         };
@@ -439,8 +465,114 @@ public sealed class UserAgentCatalogProjectorTests
         document.AttemptCount.Should().Be(1);
         document.LastHttpStatus.Should().Be(503);
         document.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        document.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        document.NyxIdTrack.AttemptCount.Should().Be(2);
+        document.NyxIdTrack.LastAttemptAt.Should().BeEquivalentTo(nyxAttemptedAt);
+        document.NyxIdTrack.LastError.Should().Be("nyx unavailable");
+        document.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        document.VaultTrack.AttemptCount.Should().Be(1);
+        document.VaultTrack.LastAttemptAt.Should().BeEquivalentTo(vaultAttemptedAt);
+        document.VaultTrack.LastError.Should().Be("vault unavailable");
+        document.SecretSubjectId.Should().Be("key-1");
+        document.RepairReason.Should().Be("restore exact reference");
+        document.RequestedBySubjectId.Should().Be("admin-1");
+        document.RequestedAtUnixMs.Should().Be(1_750_412_800_000);
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-revoke-pending");
+    }
+
+    [Fact]
+    public async Task ApiKeyRevocationProjector_WithBlockedReference_UsesStableBlockedDocumentId()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var state = new UserAgentCatalogState
+        {
+            PendingApiKeyRevocations =
+            {
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-blocked",
+                    ApiKeyId = "key-blocked",
+                    SecretSubjectId = "key-blocked",
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
+                    },
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-revoke-blocked", 8, state),
+            CancellationToken.None);
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Id.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked("agent-blocked", "key-blocked"));
+        document.NyxApiKeyReference.Should().BeNull();
+        document.VaultTrack.Status.Should().Be(
+            ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef);
+    }
+
+    [Fact]
+    public async Task ApiKeyRevocationProjector_WithRepair_DeletesBlockedKeyAndUpsertsExactKey()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var repairedReference = new SecretReference
+        {
+            Ref = "sec-repaired",
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = "owner-repaired",
+            Version = 1,
+            Fingerprint = "sha256:repaired",
+        };
+        var state = new UserAgentCatalogState
+        {
+            PendingApiKeyRevocations =
+            {
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-repaired",
+                    ApiKeyId = "key-repaired",
+                    SecretSubjectId = "key-repaired",
+                    NyxApiKeyReference = repairedReference,
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                    },
+                },
+            },
+        };
+        var repaired = new UserAgentCatalogCredentialRevocationRepairedEvent
+        {
+            AgentId = "agent-repaired",
+            ApiKeyId = "key-repaired",
+            SecretReference = repairedReference,
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-revoke-repaired", 9, state, Any.Pack(repaired)),
+            CancellationToken.None);
+
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked("agent-repaired", "key-repaired"));
+        dispatcher.Upserts.Should().ContainSingle().Which.Id.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.Build(
+                "agent-repaired",
+                "key-repaired",
+                "sec-repaired"));
     }
 
     [Fact]
@@ -473,10 +605,11 @@ public sealed class UserAgentCatalogProjectorTests
     [Fact]
     public void CredentialRevocationDocumentId_UsesUtf8LengthPrefixedNaturalKey()
     {
-        var first = ScheduledAgentCredentialRevocationDocumentIds.Build("代理", "key-a", "sec-a");
-        var second = ScheduledAgentCredentialRevocationDocumentIds.Build("代理", "key-a", "sec-b");
+        var first = ScheduledAgentCredentialRevocationDocumentIds.Build("a", "bc", "d");
+        var second = ScheduledAgentCredentialRevocationDocumentIds.Build("ab", "c", "d");
 
         first.Should().StartWith("scr1_");
+        string.Concat("a", "bc", "d").Should().Be(string.Concat("ab", "c", "d"));
         first.Should().NotBe(second);
         first.Should().NotContain("=");
     }

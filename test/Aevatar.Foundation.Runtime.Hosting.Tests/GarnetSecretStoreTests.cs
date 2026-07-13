@@ -266,6 +266,14 @@ public sealed class GarnetSecretStoreTests
         revoked.Revoked.Should().BeTrue();
         keyValueStore.Values.Should().BeEmpty();
 
+        var replayed = await vault.RevokeAsync(new RevokeSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test replay revoke"));
+        replayed.Revoked.Should().BeTrue("the exact revocation postcondition is already satisfied");
+
         var afterRevoke = await vault.ResolveAsync(new ResolveSecretRequest(
             stored.Reference.Ref,
             "api-token",

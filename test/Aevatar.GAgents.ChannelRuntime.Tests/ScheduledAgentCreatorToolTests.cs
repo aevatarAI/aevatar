@@ -496,6 +496,31 @@ public sealed class ScheduledAgentCreatorToolTests
         });
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenOwnerLlmConfigQueryFails_ShouldFailBeforeKeyCreation()
+    {
+        var handler = CreateSuccessHandler();
+        var ownerLlmConfigSource = Substitute.For<IOwnerLlmConfigSource>();
+        ownerLlmConfigSource.GetForScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<OwnerLlmConfig>>(_ => throw new InvalidOperationException("owner config unavailable"));
+        var harness = CreateHarness(handler: handler, ownerLlmConfigSource: ownerLlmConfigSource);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("owner_llm_config_unavailable");
+            document.RootElement.GetProperty("detail").GetString().Should().Be("owner config unavailable");
+            handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
     [Theory]
     [InlineData("/api/v1/proxy/s/chrono-llm", "chrono-llm")]
     [InlineData("/api/v1/proxy/s/chrono-llm/v1", "chrono-llm")]

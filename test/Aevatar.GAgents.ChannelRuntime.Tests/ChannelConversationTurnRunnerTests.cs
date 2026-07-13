@@ -2317,6 +2317,8 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())
             .AddSingleton<ISecretVault>(new InMemorySecretVault())
             .AddSingleton<ScheduledAgentCredentialLifecycle>()
+            .AddSingleton<IScheduledAgentCredentialLifecycle>(
+                sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>())
             .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://example.com" },
                 new HttpClient(new RecordingJsonHandler("""{"ok":true}"""))
@@ -4419,6 +4421,8 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())
             .AddSingleton<ISecretVault>(new InMemorySecretVault())
             .AddSingleton<ScheduledAgentCredentialLifecycle>()
+            .AddSingleton<IScheduledAgentCredentialLifecycle>(
+                sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>())
             .AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory())
             .AddSingleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>()
             .AddSingleton<ChannelSlashCommandRegistry>()

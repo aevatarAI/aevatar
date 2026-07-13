@@ -63,17 +63,15 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
-        var secretVault = new InMemorySecretVault();
+        var credentialLifecycle = Substitute.For<IScheduledAgentCredentialLifecycle>();
 
-        var missingQuery = () => new AgentDeliveryTargetTool(null!, commandPort, resolver, secretVault);
-        var missingCommand = () => new AgentDeliveryTargetTool(queryPort, null!, resolver, secretVault);
-        var missingResolver = () => new AgentDeliveryTargetTool(queryPort, commandPort, null!, secretVault);
-        var missingSecretVault = () => new AgentDeliveryTargetTool(queryPort, commandPort, resolver, null!);
+        var missingQuery = () => new AgentDeliveryTargetTool(null!, commandPort, resolver, credentialLifecycle);
+        var missingCommand = () => new AgentDeliveryTargetTool(queryPort, null!, resolver, credentialLifecycle);
+        var missingResolver = () => new AgentDeliveryTargetTool(queryPort, commandPort, null!, credentialLifecycle);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
         missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
-        missingSecretVault.Should().Throw<ArgumentNullException>().WithParameterName("secretVault");
     }
 
     [Fact]
@@ -265,7 +263,11 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), new RecordingApiKeyIssuer());
+        var tool = new AgentDeliveryTargetTool(
+            queryPort,
+            commandPort,
+            resolver,
+            CreateCredentialLifecycle(commandPort, new InMemorySecretVault(), new RecordingApiKeyIssuer()));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -314,7 +316,11 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
+        var tool = new AgentDeliveryTargetTool(
+            queryPort,
+            commandPort,
+            resolver,
+            CreateCredentialLifecycle(commandPort, new InMemorySecretVault(), issuer));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -364,8 +370,10 @@ public sealed class AgentDeliveryTargetToolTests
             queryPort,
             commandPort,
             resolver,
-            new InMemorySecretVault(),
-            new RecordingApiKeyIssuer());
+            CreateCredentialLifecycle(
+                commandPort,
+                new InMemorySecretVault(),
+                new RecordingApiKeyIssuer()));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -410,7 +418,11 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
+        var tool = new AgentDeliveryTargetTool(
+            queryPort,
+            commandPort,
+            resolver,
+            CreateCredentialLifecycle(commandPort, new InMemorySecretVault(), issuer));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -894,7 +906,7 @@ public sealed class AgentDeliveryTargetToolTests
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
-        var source = new AgentDeliveryTargetToolSource(queryPort, commandPort, callerScopeResolver, new InMemorySecretVault());
+        var source = new AgentDeliveryTargetToolSource(queryPort, commandPort, callerScopeResolver);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle();
@@ -962,17 +974,14 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
-        var secretVault = new InMemorySecretVault();
 
-        var missingQuery = () => new AgentDeliveryTargetToolSource(null!, commandPort, resolver, secretVault);
-        var missingCommand = () => new AgentDeliveryTargetToolSource(queryPort, null!, resolver, secretVault);
-        var missingResolver = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, null!, secretVault);
-        var missingSecretVault = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, resolver, null!);
+        var missingQuery = () => new AgentDeliveryTargetToolSource(null!, commandPort, resolver);
+        var missingCommand = () => new AgentDeliveryTargetToolSource(queryPort, null!, resolver);
+        var missingResolver = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
         missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
-        missingSecretVault.Should().Throw<ArgumentNullException>().WithParameterName("secretVault");
     }
 
     [Fact]
@@ -1208,13 +1217,30 @@ public sealed class AgentDeliveryTargetToolTests
     private static AgentDeliveryTargetTool CreateTool(IServiceCollection? services = null)
     {
         var provider = (services ?? CreateDefaultServices()).BuildServiceProvider();
+        var commandPort = provider.GetService<IUserAgentCatalogCommandPort>() ??
+                          Substitute.For<IUserAgentCatalogCommandPort>();
+        var credentialLifecycle = provider.GetService<IScheduledAgentCredentialLifecycle>();
+        var issuer = provider.GetService<IScheduledAgentApiKeyIssuer>();
+        if (credentialLifecycle is null && issuer is not null)
+        {
+            credentialLifecycle = CreateCredentialLifecycle(
+                commandPort,
+                provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
+                issuer);
+        }
+
         return new AgentDeliveryTargetTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
-            provider.GetService<IUserAgentCatalogCommandPort>() ?? Substitute.For<IUserAgentCatalogCommandPort>(),
+            commandPort,
             provider.GetRequiredService<ICallerScopeResolver>(),
-            provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
-            provider.GetService<IScheduledAgentApiKeyIssuer>());
+            credentialLifecycle);
     }
+
+    private static IScheduledAgentCredentialLifecycle CreateCredentialLifecycle(
+        IUserAgentCatalogCommandPort commandPort,
+        ISecretVault secretVault,
+        IScheduledAgentApiKeyIssuer issuer) =>
+        new ScheduledAgentCredentialLifecycle(secretVault, commandPort, issuer);
 
     private static IServiceCollection CreateDefaultServices()
     {

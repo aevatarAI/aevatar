@@ -192,6 +192,56 @@ public sealed class ScheduledCredentialVaultContractTests
     }
 
     [Fact]
+    public async Task ExecutePendingAsync_WhenNyxIdRevocationThrows_RecordsTransientFailure()
+    {
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
+        issuer.RevokeAsync("token", "key-a", Arg.Any<CancellationToken>())
+            .Returns<Task<ScheduledAgentApiKeyRevokeResult>>(
+                _ => throw new InvalidOperationException("nyx unavailable"));
+        var lifecycle = new ScheduledAgentCredentialLifecycle(
+            Substitute.For<ISecretVault>(),
+            commandPort,
+            issuer);
+        var pending = PendingRevocation();
+        pending.VaultTrack.Status = ScheduledCredentialRevocationTrackStatus.Completed;
+
+        await lifecycle.ExecutePendingAsync("token", pending);
+
+        await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+            Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                command.Track == UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId &&
+                !command.Completed &&
+                command.Error == "nyx unavailable" &&
+                command.FailureKind == UserAgentApiKeyRevocationFailureKind.Transient &&
+                command.SecretReferenceRef == "sec-a"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecutePendingAsync_WhenNyxIdRevocationIsCanceled_PropagatesCancellation()
+    {
+        var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
+        issuer.RevokeAsync("token", "key-a", Arg.Any<CancellationToken>())
+            .Returns<Task<ScheduledAgentApiKeyRevokeResult>>(
+                _ => throw new OperationCanceledException("canceled"));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var lifecycle = new ScheduledAgentCredentialLifecycle(
+            Substitute.For<ISecretVault>(),
+            commandPort,
+            issuer);
+        var pending = PendingRevocation();
+        pending.VaultTrack.Status = ScheduledCredentialRevocationTrackStatus.Completed;
+
+        var execute = () => lifecycle.ExecutePendingAsync("token", pending);
+
+        await execute.Should().ThrowAsync<OperationCanceledException>();
+        await commandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+            Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ExecutePendingAsync_WhenVaultReferenceIsNotActive_RecordsProviderFailure()
     {
         var vault = Substitute.For<ISecretVault>();

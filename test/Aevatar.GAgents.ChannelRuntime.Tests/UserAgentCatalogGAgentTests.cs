@@ -203,6 +203,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 Error = "upstream unavailable",
                 FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
                 Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+                SecretReferenceRef = "sec-retry",
             });
 
         var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
@@ -219,6 +220,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 HttpStatus = 404,
                 FailureKind = UserAgentApiKeyRevocationFailureKind.None,
                 Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+                SecretReferenceRef = "sec-retry",
             });
 
         _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
@@ -232,9 +234,85 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 Completed = true,
                 FailureKind = UserAgentApiKeyRevocationFailureKind.None,
                 Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault,
+                SecretReferenceRef = "sec-retry",
             });
 
         _agent.State.PendingApiKeyRevocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRequestCredentialRevocationAsync_ExactDuplicateDoesNotCreateAnotherFact()
+    {
+        var revocation = PendingRevocation("agent-duplicate", "key-duplicate", "sec-duplicate");
+
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = revocation,
+        });
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = revocation.Clone(),
+        });
+
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle();
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        persisted.Count(item => item.EventData.Is(UserAgentCatalogApiKeyRevocationRequestedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleRequestCredentialRevocationAsync_AliasConflictPreservesOriginalFact()
+    {
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = PendingRevocation("agent-alias", "key-alias", "sec-original"),
+        });
+
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = PendingRevocation("agent-alias", "key-alias", "sec-conflict"),
+        });
+
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
+            .Which.NyxApiKeyReference.Ref.Should().Be("sec-original");
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        persisted.Count(item => item.EventData.Is(UserAgentCatalogApiKeyRevocationRequestedEvent.Descriptor))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleRecordApiKeyRevocationAttemptAsync_LatePreviousReferenceDoesNotAdvanceCurrentFact()
+    {
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = PendingRevocation("agent-rotated", "key-rotated", "sec-r1"),
+        });
+        await CompleteTrackAsync(
+            "agent-rotated",
+            "key-rotated",
+            "sec-r1",
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId);
+        await CompleteTrackAsync(
+            "agent-rotated",
+            "key-rotated",
+            "sec-r1",
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault);
+        _agent.State.PendingApiKeyRevocations.Should().BeEmpty();
+
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = PendingRevocation("agent-rotated", "key-rotated", "sec-r2"),
+        });
+        await CompleteTrackAsync(
+            "agent-rotated",
+            "key-rotated",
+            "sec-r1",
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId);
+
+        var current = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        current.NyxApiKeyReference.Ref.Should().Be("sec-r2");
+        current.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        current.NyxIdTrack.AttemptCount.Should().Be(0);
     }
 
     [Fact]
@@ -782,6 +860,42 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             Error = "upstream unavailable",
             FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
             Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+        };
+
+    private async Task CompleteTrackAsync(
+        string agentId,
+        string apiKeyId,
+        string secretReferenceRef,
+        UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track track) =>
+        await _agent.HandleRecordApiKeyRevocationAttemptAsync(
+            new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+            {
+                AgentId = agentId,
+                ApiKeyId = apiKeyId,
+                Completed = true,
+                FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+                Track = track,
+                SecretReferenceRef = secretReferenceRef,
+            });
+
+    private static UserAgentApiKeyRevocation PendingRevocation(
+        string agentId,
+        string apiKeyId,
+        string secretReferenceRef) =>
+        new()
+        {
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            SecretSubjectId = apiKeyId,
+            NyxApiKeyReference = CompleteReference(secretReferenceRef, apiKeyId),
+            NyxIdTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            },
+            VaultTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            },
         };
 
     private static SecretReference CompleteReference(string reference, string subjectId) => new()
