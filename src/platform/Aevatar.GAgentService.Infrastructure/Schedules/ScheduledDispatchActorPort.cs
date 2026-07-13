@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Core.Schedules;
@@ -298,6 +299,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
                 {
                     CredentialId = durable.CredentialId,
+                    SecretReference = durable.SecretReference.Clone(),
                 },
             },
             ScheduledInvocationAgentKeyCredentialReference agentKey => new ScheduledServiceInvocationAuthState

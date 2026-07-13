@@ -1159,6 +1159,66 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_ForDurableCredentialReferenceAuth_ShouldPassReferenceWithoutResolvingSecret()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            dispatch,
+            serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            enabled: false,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "configured-service" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent
+                    {
+                        Prompt = "configured",
+                    }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+                        {
+                            CredentialId = "credential-1",
+                            SecretReference = new SecretReference
+                            {
+                                Ref = "sec-1",
+                                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                                OwnerScopeKey = "owner-scope-1",
+                            },
+                        },
+                    },
+                },
+            }));
+
+        var scheduledFireAt = new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero);
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+        });
+
+        var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
+        auth.Should().NotBeNull();
+        auth!.SenderNyxId.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.Durable.Should().NotBeNull();
+        auth.Durable!.CredentialId.Should().Be("credential-1");
+        auth.Durable.SecretReference.Ref.Should().Be("sec-1");
+        serviceInvocationDispatch.Requests.Should().ContainSingle();
+        agent.State.Target!.ServiceInvocation!.Auth!.Durable!.CredentialId.Should().Be("credential-1");
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleEnsureAsync_WhenServiceInvocationNoOpOmitsAuth_ShouldPreserveExistingAuthWithoutConfiguredEvent()
     {
         var eventStore = new TestEventStore();

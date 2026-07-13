@@ -779,11 +779,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithDurableReference_ShouldRejectBeforeExchange()
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReference_ShouldResolveVaultAndProjectDurableCallerCredential()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
+        var secretVault = new RecordingSecretVault("durable-run-key");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
         var original = new ServiceInvocationRequest
         {
             CommandId = "cmd-invoke",
@@ -794,18 +795,119 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 LlmControl = new LLMControlContextPayload { ModelOverride = "opus" },
             }),
         };
-        var auth = new ScheduledServiceInvocationAuth(
-            new ScheduledServiceInvocationDurableCredentialReference("durable-run-key"));
+        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference());
 
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
             auth,
+<<<<<<< HEAD
             Headers: null));
+=======
+            Headers: null,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-durable"));
+
+        credentialExchange.Sources.Should().BeEmpty();
+        var resolve = secretVault.ResolveRequests.Should().ContainSingle().Which;
+        resolve.Ref.Should().Be("sec-1");
+        resolve.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        resolve.OwnerScopeKey.Should().Be("owner-scope-1");
+        resolve.SubjectId.Should().Be("credential-1");
+        var store = secretVault.StoreRequests.Should().ContainSingle().Which;
+        store.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerDurableBearerToken);
+        store.OwnerScopeKey.Should().Be("schedule:schedule-durable");
+        store.SubjectId.Should().Be("credential-1");
+        store.Secret.Should().Be("durable-run-key");
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
+        invokedChat.CallerDurableCredential.Should().NotBeNull();
+        invokedChat.CallerDurableCredential.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerDurableBearerToken);
+        invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-durable");
+        invokedChat.CallerDurableCredential.SubjectId.Should().Be("credential-1");
+        invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        invokedChat.LlmControl.ModelOverride.Should().Be("opus");
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReferenceAndDefaultProjection_ShouldInjectSenderToken()
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
+        var secretVault = new RecordingSecretVault("durable-run-key");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
+        var original = new ServiceInvocationRequest
+        {
+            CommandId = "cmd-invoke",
+            CorrelationId = "corr-invoke",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                LlmControl = new LLMControlContextPayload { ModelOverride = "opus" },
+            }),
+        };
+        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference());
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            original,
+            auth,
+            ScheduleId: "schedule-durable"));
+
+        credentialExchange.Sources.Should().BeEmpty();
+        var resolve = secretVault.ResolveRequests.Should().ContainSingle().Which;
+        resolve.Ref.Should().Be("sec-1");
+        resolve.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        resolve.OwnerScopeKey.Should().Be("owner-scope-1");
+        resolve.SubjectId.Should().Be("credential-1");
+        secretVault.StoreRequests.Should().BeEmpty();
+        var invoked = invocationPort.Requests.Should().ContainSingle().Which;
+        var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
+        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
+        invokedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
+        invokedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        invokedChat.LlmControl.ModelOverride.Should().Be("opus");
+        invokedChat.CallerDurableCredential.Should().BeNull();
+        original.Payload.Unpack<ChatRequestEvent>().LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(DurableCredentialReferenceFailureCases))]
+    public async Task ScheduledServiceInvocationDispatchPort_WithDurableCredentialReferenceFailure_ShouldFailBeforeInvocation(
+        string scenario,
+        ISecretVault? secretVault,
+        ScheduledServiceInvocationDurableCredentialReference credential,
+        string expectedMessage,
+        int expectedResolveCount)
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("ignored-subject-token");
+        var port = secretVault == null
+            ? new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange)
+            : new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
+        var auth = new ScheduledServiceInvocationAuth(credential);
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-durable"));
+>>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*durable credential reference exchange is not available*");
+            .WithMessage(expectedMessage, because: scenario);
         credentialExchange.Sources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
+        if (secretVault is RecordingSecretVault recordingSecretVault)
+        {
+            recordingSecretVault.ResolveRequests.Should().HaveCount(expectedResolveCount);
+            recordingSecretVault.StoreRequests.Should().BeEmpty();
+        }
     }
 
     [Theory]
@@ -988,10 +1090,71 @@ public sealed class ScheduledDispatchServiceInvocationTests
             .NotBeAssignableTo<IActorDispatchPort>();
     }
 
+    public static TheoryData<string, ISecretVault?, ScheduledServiceInvocationDurableCredentialReference, string, int>
+        DurableCredentialReferenceFailureCases() => new()
+        {
+            {
+                "missing-vault",
+                null,
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential vault is not configured.",
+                0
+            },
+            {
+                "incomplete-reference",
+                new RecordingSecretVault("durable-run-key"),
+                CreateDurableCredentialReference(referenceRef: " "),
+                "Scheduled service invocation durable credential reference is incomplete.",
+                0
+            },
+            {
+                "wrong-purpose",
+                new RecordingSecretVault("durable-run-key"),
+                CreateDurableCredentialReference(purpose: "wrong-purpose"),
+                "Scheduled service invocation durable credential reference purpose is invalid.",
+                0
+            },
+            {
+                "unresolved-secret",
+                new RecordingSecretVault(null),
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential reference could not be resolved.",
+                1
+            },
+            {
+                "empty-secret",
+                new RecordingSecretVault(string.Empty, resolveWhitespaceSecret: true),
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential reference resolved an empty access token.",
+                1
+            },
+            {
+                "malformed-secret",
+                new RecordingSecretVault("Bearer durable-run-key"),
+                CreateDurableCredentialReference(),
+                "Scheduled service invocation durable credential reference resolved an invalid access token.",
+                1
+            },
+        };
+
     private static ScheduledServiceInvocationNyxIdCredentialSource CreateCredentialSource() =>
         new(
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
             "proxy");
+
+    private static ScheduledServiceInvocationDurableCredentialReference CreateDurableCredentialReference(
+        string credentialId = "credential-1",
+        string referenceRef = "sec-1",
+        string purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+        string ownerScopeKey = "owner-scope-1") =>
+        new(
+            credentialId,
+            new SecretReference
+            {
+                Ref = referenceRef,
+                Purpose = purpose,
+                OwnerScopeKey = ownerScopeKey,
+            });
 
     private static DurableCallerCredentialRef CreateDurableCallerCredentialRef() =>
         new()
@@ -1040,6 +1203,57 @@ public sealed class ScheduledDispatchServiceInvocationTests
             error == null
                 ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
                 : ScheduledServiceInvocationCredentialExchangeResult.Failure(error);
+    }
+
+    private sealed class RecordingSecretVault(
+        string? secret,
+        bool resolveWhitespaceSecret = false) : ISecretVault
+    {
+        public List<ResolveSecretRequest> ResolveRequests { get; } = [];
+        public List<StoreSecretRequest> StoreRequests { get; } = [];
+        private SecretReference? _storedReference;
+        private string? _storedSubjectId;
+        private string? _storedSecret;
+
+        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StoreRequests.Add(request);
+            _storedReference = new SecretReference
+            {
+                Ref = "sec-workflow-caller-1",
+                Purpose = request.Purpose,
+                OwnerScopeKey = request.OwnerScopeKey,
+                Version = 1,
+            };
+            _storedSubjectId = request.SubjectId;
+            _storedSecret = request.Secret;
+            return Task.FromResult(new StoreSecretResult(_storedReference.Clone()));
+        }
+
+        public Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ResolveRequests.Add(request);
+            if (_storedReference != null &&
+                string.Equals(request.Ref, _storedReference.Ref, StringComparison.Ordinal) &&
+                string.Equals(request.Purpose, _storedReference.Purpose, StringComparison.Ordinal) &&
+                string.Equals(request.OwnerScopeKey, _storedReference.OwnerScopeKey, StringComparison.Ordinal) &&
+                string.Equals(request.SubjectId, _storedSubjectId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new ResolveSecretResult(_storedReference.Clone(), _storedSecret));
+            }
+
+            return Task.FromResult(secret == null || (string.IsNullOrWhiteSpace(secret) && !resolveWhitespaceSecret)
+                ? new ResolveSecretResult(null, null)
+                : new ResolveSecretResult(CreateDurableCredentialReference().SecretReference.Clone(), secret));
+        }
+
+        public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker
