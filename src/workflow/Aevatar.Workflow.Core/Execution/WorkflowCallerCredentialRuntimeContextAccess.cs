@@ -20,9 +20,21 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         {
             ClearCallerCredential = true,
         };
+        var hasDurableCredential = HasDurableCallerCredential(credential?.DurableCallerCredential);
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
         if (parsed.IsInvalid)
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
+        if (hasDurableCredential && parsed.IsValid)
+            throw new ArgumentException("Workflow caller credential must not carry both durable and bearer credentials.", nameof(credential));
+        if (hasDurableCredential)
+        {
+            delta.CallerCredential = new WorkflowCallerCredential
+            {
+                DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
+            };
+            return delta;
+        }
+
         if (parsed.IsMissing)
             return delta;
 
@@ -44,6 +56,9 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         };
         return delta;
     }
+
+    private static bool HasDurableCallerCredential(DurableCallerCredentialRef? reference) =>
+        reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
 
     public static Task SetCredentialAsync(
         IWorkflowExecutionStateHost stateHost,

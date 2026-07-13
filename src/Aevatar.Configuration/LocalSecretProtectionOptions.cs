@@ -1,15 +1,27 @@
 namespace Aevatar.Configuration;
 
-public sealed record LocalSecretProtectionOptions(bool AllowPlaintextSecrets)
+public enum LocalSecretMasterKeySource
+{
+    Auto,
+    Disabled,
+}
+
+public sealed record LocalSecretProtectionOptions(
+    bool AllowPlaintextSecrets,
+    LocalSecretMasterKeySource MasterKeySource = LocalSecretMasterKeySource.Auto)
 {
     public const string AllowPlaintextSecretsEnv = "AEVATAR_ALLOW_PLAINTEXT_SECRETS";
 
     public static LocalSecretProtectionOptions FromEnvironment() =>
         new(IsEnvironmentPlaintextOptInEnabled());
 
-    public static readonly LocalSecretProtectionOptions NoPlaintextNoKeychain = new(false);
+    public static readonly LocalSecretProtectionOptions NoPlaintextNoKeychain =
+        new(false, LocalSecretMasterKeySource.Disabled);
 
-    public static readonly LocalSecretProtectionOptions DevelopmentPlaintextNoKeychain = new(true);
+    public static readonly LocalSecretProtectionOptions DevelopmentPlaintextNoKeychain =
+        new(true, LocalSecretMasterKeySource.Disabled);
+
+    public bool UseLocalMasterKeySources => MasterKeySource == LocalSecretMasterKeySource.Auto;
 
     public static bool IsEnvironmentPlaintextOptInEnabled() =>
         string.Equals(

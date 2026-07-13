@@ -2,8 +2,8 @@ syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
 
-import "Protos/voice_presence.proto";
 import "Credentials/credential_secret_references.proto";
+import "Protos/voice_presence.proto";
 
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
@@ -64,6 +64,7 @@ message ChatRequestEvent  {
   LLMControlContextPayload llm_control = 10;
   // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
   string connector_http_authorization = 11;
+  aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 12;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 

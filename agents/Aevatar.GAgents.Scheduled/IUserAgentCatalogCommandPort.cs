@@ -27,6 +27,10 @@ public interface IUserAgentCatalogCommandPort
         string agentId,
         CancellationToken ct = default);
 
+    Task RecordApiKeyRevocationAttemptAsync(
+        UserAgentCatalogRecordApiKeyRevocationAttemptCommand command,
+        CancellationToken ct = default);
+
     Task ShareAsync(
         string agentId,
         OwnerScope ownerScope,

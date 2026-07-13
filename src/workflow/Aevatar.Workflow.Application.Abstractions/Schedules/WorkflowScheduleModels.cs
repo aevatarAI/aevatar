@@ -15,7 +15,15 @@ public sealed record WorkflowScheduleConfiguration(
     string? Namespace = null,
     string? ServiceId = null,
     string? RevisionId = null,
-    WorkflowScheduleAuth? Auth = null);
+    WorkflowScheduleAuth? Auth = null,
+    WorkflowScheduleMutationContext? MutationContext = null);
+
+public sealed record WorkflowScheduleMutationContext(
+    string? AuthenticatedScopeId = null,
+    WorkflowScheduleNyxIdSubjectRef? AuthenticatedNyxIdOwnerSubject = null)
+{
+    public static WorkflowScheduleMutationContext None { get; } = new();
+}
 
 public sealed record WorkflowScheduleNyxIdSubjectRef(
     string Platform,
@@ -28,7 +36,7 @@ public sealed record WorkflowScheduleNyxIdCredentialSource(
 
 public sealed record WorkflowScheduleScopeOwnerNyxIdCredentialSource(
     string Scope,
-    WorkflowScheduleNyxIdSubjectRef OwnerSubject);
+    WorkflowScheduleNyxIdSubjectRef? OwnerSubject = null);
 
 public sealed record WorkflowScheduleAuth(
     WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null,
