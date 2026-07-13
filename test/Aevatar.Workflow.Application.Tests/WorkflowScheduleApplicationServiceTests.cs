@@ -80,6 +80,32 @@ public sealed class WorkflowScheduleApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldMapOneShotWorkflowSchedule()
+    {
+        var actorPort = new FakeWorkflowScheduleActorPort
+        {
+            ResolveActorId = string.Empty,
+        };
+        var service = CreateService(actorPort);
+        var fireAt = DateTimeOffset.UtcNow.AddHours(1);
+
+        await service.CreateAsync(CreateConfiguration("one-shot") with
+        {
+            CronExpression = "0 9 * * *",
+            ScheduleMode = WorkflowScheduleMode.OneShotAtUtc,
+            OneShotFireAt = fireAt,
+        });
+
+        var configuration = actorPort.Created.Should().ContainSingle().Which.Configuration;
+        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
+        configuration.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
+        configuration.CronExpression.Should().BeEmpty();
+        configuration.OneShotFireAt.Should().Be(fireAt.ToUniversalTime());
+        configuration.Target.Kind.Should().Be(ScheduledDispatchTargetKind.ServiceInvocation);
+        configuration.Target.ServiceInvocation!.EndpointId.Should().Be("chat");
+    }
+
+    [Fact]
     public async Task WorkflowScheduleCommandPort_EnsureAsync_ShouldMapWorkflowScheduleAndDispatchEnsure()
     {
         var actorPort = new FakeWorkflowScheduleActorPort();
@@ -815,8 +841,14 @@ public sealed class WorkflowScheduleApplicationServiceTests
     public async Task ListAsync_ShouldRequestWorkflowFilteredReadModelPage()
     {
         var queryPort = new FakeWorkflowScheduleQueryPort();
+        var fireAt = new DateTimeOffset(2026, 7, 14, 1, 30, 0, TimeSpan.Zero);
         queryPort.ListResult = new ScheduledDispatchListResult(
-            [CreateDetail("workflow-1").Schedule],
+            [CreateDetail(
+                "workflow-1",
+                cronExpression: string.Empty,
+                scheduleMode: ScheduledDispatchScheduleMode.OneShotAtUtc,
+                oneShotFireAt: fireAt,
+                completed: true).Schedule],
             "next-workflow",
             1);
         var service = CreateService(new FakeWorkflowScheduleActorPort(), queryPort);
@@ -826,6 +858,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var summary = result.Items.Should().ContainSingle().Subject;
         summary.ScheduleId.Should().Be("workflow-1");
         summary.Prompt.Should().Be("saved prompt");
+        summary.ScheduleMode.Should().Be(WorkflowScheduleMode.OneShotAtUtc);
+        summary.OneShotFireAt.Should().Be(fireAt);
+        summary.Completed.Should().BeTrue();
         result.NextCursor.Should().Be("next-workflow");
         result.TotalCount.Should().Be(1);
         queryPort.LastQuery.Should().Be(new ScheduledDispatchListQuery(
@@ -1192,7 +1227,10 @@ public sealed class WorkflowScheduleApplicationServiceTests
     private static ScheduledDispatchDetail CreateDetail(
         string scheduleId,
         string workflowName = "direct",
-        string cronExpression = "*/15 * * * *") =>
+        string cronExpression = "*/15 * * * *",
+        ScheduledDispatchScheduleMode scheduleMode = ScheduledDispatchScheduleMode.RecurringCron,
+        DateTimeOffset? oneShotFireAt = null,
+        bool completed = false) =>
         new(
             new ScheduledDispatchSummary(
                 ScheduleId: scheduleId,
@@ -1225,6 +1263,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 Prompt: "saved prompt",
                 ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
                 CredentialRequirementTargetKind: ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
-                CredentialSourceKind: ScheduledDispatchCredentialSourceKind.SenderNyxId),
+                CredentialSourceKind: ScheduledDispatchCredentialSourceKind.SenderNyxId,
+                ScheduleMode: scheduleMode,
+                OneShotFireAt: oneShotFireAt,
+                Completed: completed),
             []);
 }

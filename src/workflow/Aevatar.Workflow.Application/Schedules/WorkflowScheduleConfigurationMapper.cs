@@ -28,7 +28,9 @@ internal static class WorkflowScheduleConfigurationMapper
             configuration.Timezone,
             configuration.Enabled,
             BuildWorkflowScheduleHeaders(configuration),
-            ScheduledDispatchScheduleKind.Workflow)
+            ScheduledDispatchScheduleKind.Workflow,
+            ToScheduledDispatchScheduleMode(configuration.ScheduleMode),
+            configuration.OneShotFireAt)
         {
             CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
         };
@@ -72,6 +74,11 @@ internal static class WorkflowScheduleConfigurationMapper
         return request;
     }
 
+    private static ScheduledDispatchScheduleMode ToScheduledDispatchScheduleMode(WorkflowScheduleMode mode) =>
+        mode == WorkflowScheduleMode.OneShotAtUtc
+            ? ScheduledDispatchScheduleMode.OneShotAtUtc
+            : ScheduledDispatchScheduleMode.RecurringCron;
+
     private static ScheduledServiceInvocationAuth? BuildWorkflowServiceInvocationAuth(
         WorkflowScheduleConfiguration configuration)
     {
@@ -80,8 +87,18 @@ internal static class WorkflowScheduleConfigurationMapper
 
         var hasSenderNyxId = configuration.Auth.SenderNyxId != null;
         var hasScopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId != null;
-        if (hasSenderNyxId == hasScopeOwnerNyxId)
-            throw new ArgumentException("Exactly one workflow schedule NyxID credential source is required.", nameof(configuration.Auth));
+        var hasScheduledInvocationAgentKey = configuration.Auth.ScheduledInvocationAgentKey != null;
+        if (new[] { hasSenderNyxId, hasScopeOwnerNyxId, hasScheduledInvocationAgentKey }.Count(static hasSource => hasSource) != 1)
+            throw new ArgumentException("Exactly one workflow schedule credential source is required.", nameof(configuration.Auth));
+
+        if (hasScheduledInvocationAgentKey)
+        {
+            var agentKey = configuration.Auth.ScheduledInvocationAgentKey!;
+            return new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
+                agentKey.SecretReference,
+                NormalizeRequired(agentKey.ApiKeyId, nameof(agentKey.ApiKeyId)),
+                agentKey.KeyExpiresAtUnixMs));
+        }
 
         if (hasScopeOwnerNyxId)
         {

@@ -45,7 +45,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        if (State.Enabled && !string.IsNullOrWhiteSpace(State.CronExpression))
+        if (State.Enabled && !State.Completed && IsConfigured())
         {
             await DetectOverdueArmedFireAsync(DateTimeOffset.UtcNow, ct);
             if (State.PendingNextFireAt != null)
@@ -86,6 +86,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             .On<ScheduledDispatchEnabledEvent>(ApplyEnabled)
             .On<ScheduledDispatchDisabledEvent>(ApplyDisabled)
             .On<ScheduledDispatchDeletedEvent>(ApplyDeleted)
+            .On<ScheduledDispatchCompletedEvent>(ApplyCompleted)
             .On<ScheduledDispatchNextFireIntentRecordedEvent>(ApplyNextFireIntentRecorded)
             .On<ScheduledDispatchNextFireScheduledEvent>(ApplyNextFireScheduled)
             .On<ScheduledDispatchFireStartedEvent>(ApplyFireStarted)
@@ -108,6 +109,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Headers,
             command.Target,
             command.ScheduleKind,
+            command.ScheduleMode,
+            command.OneShotFireAt,
             isCreate: true);
 
     [EventHandler]
@@ -124,6 +127,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Headers,
             command.Target,
             command.ScheduleKind,
+            command.ScheduleMode,
+            command.OneShotFireAt,
             isCreate: false);
 
     [EventHandler]
@@ -143,6 +148,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 command.Headers,
                 command.Target,
                 command.ScheduleKind,
+                command.ScheduleMode,
+                command.OneShotFireAt,
                 isCreate: true);
             return;
         }
@@ -153,7 +160,9 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.TriggerEnvelope,
             command.CronExpression,
             command.Timezone,
-            command.ScheduleKind);
+            command.ScheduleKind,
+            command.ScheduleMode,
+            command.OneShotFireAt);
         if (MatchesConfiguredDefinition(command))
             return;
 
@@ -169,6 +178,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.Headers,
             command.Target,
             command.ScheduleKind,
+            command.ScheduleMode,
+            command.OneShotFireAt,
             isCreate: false);
     }
 
@@ -184,6 +195,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         IEnumerable<KeyValuePair<string, string>> headers,
         ScheduledDispatchTargetState? target,
         ScheduledDispatchScheduleKindState scheduleKind,
+        ScheduledDispatchScheduleModeState scheduleMode,
+        Timestamp? oneShotFireAt,
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -193,9 +206,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
-        EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone, scheduleKind);
+        EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone, scheduleKind, scheduleMode, oneShotFireAt);
 
         var now = DateTimeOffset.UtcNow;
+        var normalizedMode = NormalizeScheduleMode(scheduleMode);
+        var normalizedOneShotFireAt = NormalizeOneShotFireAt(normalizedMode, oneShotFireAt);
         var configuredTarget = PreserveExistingServiceInvocationAuth(
             NormalizeTarget(target, scheduleKind),
             isCreate);
@@ -224,13 +239,17 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             DisplayName = NormalizeOptional(displayName),
             TargetActorId = NormalizeOptional(targetActorId),
             TriggerEnvelope = triggerEnvelope.Clone(),
-            CronExpression = NormalizeRequired(cronExpression, nameof(cronExpression)),
+            CronExpression = NormalizeCronExpression(normalizedMode, cronExpression),
             Timezone = ScheduledDispatchCalculator.NormalizeTimezone(timezone),
             Enabled = enabled,
             ConfiguredAt = Timestamp.FromDateTimeOffset(now),
             PayloadTypeUrl = ResolvePayloadTypeUrl(triggerEnvelope),
             Target = configuredTarget,
             ScheduleKind = scheduleKind,
+            ScheduleMode = normalizedMode,
+            OneShotFireAt = normalizedOneShotFireAt.HasValue
+                ? Timestamp.FromDateTimeOffset(normalizedOneShotFireAt.Value)
+                : null,
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
             configured.Headers[key] = value;
@@ -299,6 +318,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return;
         }
 
+        if (!command.Manual && State.Completed)
+        {
+            Logger.LogInformation("Scheduled dispatch {ActorId} ignored fire because it is completed.", Id);
+            return;
+        }
+
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
         if (!command.Manual && !State.Enabled)
         {
@@ -353,7 +378,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 State.NextFireLease?.Generation,
                 priorRecord?.Status,
                 command.Manual);
-            if (!command.Manual)
+            if (!command.Manual && !IsOneShot())
                 await EnsureNextFireScheduledAsync(scheduledFireAt, ct);
             return;
         }
@@ -420,7 +445,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         if (!command.Manual)
-            await EnsureNextFireScheduledAsync(scheduledFireAt, CancellationToken.None);
+        {
+            if (IsOneShot())
+                await CompleteOneShotAsync(CancellationToken.None);
+            else
+                await EnsureNextFireScheduledAsync(scheduledFireAt, CancellationToken.None);
+        }
     }
 
     private async Task<ScheduledDispatchReceipt> DispatchPreparedTargetAsync(
@@ -829,15 +859,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task EnsureNextFireScheduledAsync(DateTimeOffset fromUtc, CancellationToken ct)
     {
-        if (!State.Enabled || string.IsNullOrWhiteSpace(State.CronExpression))
+        if (!State.Enabled || State.Completed)
             return;
 
-        if (!ScheduledDispatchCalculator.TryGetNextOccurrence(
-                State.CronExpression,
-                State.Timezone,
-                fromUtc,
-                out var nextFireAtUtc,
-                out var error))
+        if (!TryResolveNextFireAt(fromUtc, out var nextFireAtUtc, out var error))
         {
             Logger.LogWarning("Scheduled dispatch {ActorId} could not compute next fire: {Error}", Id, error);
             return;
@@ -859,6 +884,44 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             NextFireAt = Timestamp.FromDateTimeOffset(nextFireAtUtc),
             RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         }, ct);
+    }
+
+    private bool TryResolveNextFireAt(
+        DateTimeOffset fromUtc,
+        out DateTimeOffset nextFireAtUtc,
+        out string? error)
+    {
+        if (IsOneShot())
+        {
+            if (!State.OneShotFireAt.HasValue)
+            {
+                nextFireAtUtc = default;
+                error = "One-shot fire time is not configured.";
+                return false;
+            }
+
+            nextFireAtUtc = State.OneShotFireAt.Value.ToUniversalTime();
+            error = null;
+            return true;
+        }
+
+        return ScheduledDispatchCalculator.TryGetNextOccurrence(
+            State.CronExpression,
+            State.Timezone,
+            fromUtc,
+            out nextFireAtUtc,
+            out error);
+    }
+
+    private async Task CompleteOneShotAsync(CancellationToken ct)
+    {
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        await PersistDomainEventAsync(new ScheduledDispatchCompletedEvent
+        {
+            Reason = "one_shot_fired",
+            CompletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        }, ct);
+        await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
 
     private async Task ActivateNextFireIntentAsync(
@@ -1005,11 +1068,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             ? ScheduledDispatchTargetKindState.ServiceInvocation
             : ScheduledDispatchTargetKindState.Envelope;
 
+    private bool IsOneShot() =>
+        State.ScheduleMode == ScheduledDispatchScheduleModeState.OneShotAtUtc;
+
     private bool IsConfigured() =>
         !State.Deleted &&
         !string.IsNullOrWhiteSpace(State.ScheduleId) &&
-        !string.IsNullOrWhiteSpace(State.CronExpression) &&
+        HasConfiguredSchedule() &&
         State.TriggerEnvelope?.Payload != null;
+
+    private bool HasConfiguredSchedule() =>
+        IsOneShot()
+            ? State.OneShotFireAt.HasValue
+            : !string.IsNullOrWhiteSpace(State.CronExpression);
 
     private bool MatchesConfiguredDefinition(ScheduledDispatchEnsureCommand command)
     {
@@ -1020,8 +1091,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var normalizedScheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
         var normalizedDisplayName = NormalizeOptional(command.DisplayName);
         var normalizedTargetActorId = NormalizeOptional(command.TargetActorId);
-        var normalizedCronExpression = NormalizeRequired(command.CronExpression, nameof(command.CronExpression));
+        var normalizedMode = NormalizeScheduleMode(command.ScheduleMode);
+        var normalizedCronExpression = normalizedMode == ScheduledDispatchScheduleModeState.OneShotAtUtc
+            ? string.Empty
+            : NormalizeRequired(command.CronExpression, nameof(command.CronExpression));
         var normalizedTimezone = ScheduledDispatchCalculator.NormalizeTimezone(command.Timezone);
+        var normalizedOneShotFireAt = NormalizeOneShotFireAt(normalizedMode, command.OneShotFireAt);
 
         return string.Equals(State.ScheduleId, normalizedScheduleId, StringComparison.Ordinal) &&
                string.Equals(State.DisplayName, normalizedDisplayName, StringComparison.Ordinal) &&
@@ -1031,6 +1106,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                string.Equals(State.PayloadTypeUrl, ResolvePayloadTypeUrl(command.TriggerEnvelope), StringComparison.Ordinal) &&
                State.Enabled == command.Enabled &&
                State.ScheduleKind == command.ScheduleKind &&
+               State.ScheduleMode == normalizedMode &&
+               State.OneShotFireAt == normalizedOneShotFireAt &&
                DictionaryEquals(State.Headers, normalizedHeaders) &&
                EnvelopePayloadEquals(State.TriggerEnvelope, command.TriggerEnvelope) &&
                TargetEquals(NormalizeTarget(State.Target, State.ScheduleKind), normalizedTarget);
@@ -1049,16 +1126,29 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         EventEnvelope? triggerEnvelope,
         string cronExpression,
         string timezone,
-        ScheduledDispatchScheduleKindState scheduleKind)
+        ScheduledDispatchScheduleKindState scheduleKind,
+        ScheduledDispatchScheduleModeState scheduleMode,
+        Timestamp? oneShotFireAt)
     {
         if (triggerEnvelope == null || triggerEnvelope.Payload == null)
             throw new ArgumentException("Trigger envelope with payload is required.", nameof(triggerEnvelope));
         _ = NormalizeTarget(target, scheduleKind);
         _ = NormalizeRequired(targetActorId, nameof(targetActorId));
-        _ = NormalizeRequired(cronExpression, nameof(cronExpression));
 
+        var normalizedMode = NormalizeScheduleMode(scheduleMode);
+        if (normalizedMode == ScheduledDispatchScheduleModeState.OneShotAtUtc)
+        {
+            var normalizedOneShotFireAt = NormalizeOneShotFireAt(normalizedMode, oneShotFireAt);
+            if (!normalizedOneShotFireAt.HasValue)
+                throw new ArgumentException("One-shot fire time is required.", nameof(oneShotFireAt));
+            if (normalizedOneShotFireAt.Value <= DateTimeOffset.UtcNow)
+                throw new ArgumentException("One-shot fire time must be in the future.", nameof(oneShotFireAt));
+            return;
+        }
+
+        var normalizedCronExpression = NormalizeRequired(cronExpression, nameof(cronExpression));
         if (!ScheduledDispatchCalculator.TryGetNextOccurrence(
-                cronExpression,
+                normalizedCronExpression,
                 timezone,
                 DateTimeOffset.UtcNow,
                 out _,
@@ -1322,6 +1412,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             next.Headers[key] = value;
         next.Target = NormalizeTarget(evt.Target, evt.ScheduleKind);
         next.ScheduleKind = evt.ScheduleKind;
+        next.ScheduleMode = NormalizeScheduleMode(evt.ScheduleMode);
+        next.OneShotFireAt = NormalizeOneShotFireAt(next.ScheduleMode, evt.OneShotFireAt);
+        next.Completed = false;
+        next.CompletedAt = null;
         if (!next.Enabled)
         {
             next.NextFireAt = null;
@@ -1364,6 +1458,23 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.Deleted = true;
         next.DeletedAt = deletedAt;
         next.UpdatedAt = deletedAt;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyCompleted(
+        ScheduledDispatchState current,
+        ScheduledDispatchCompletedEvent evt)
+    {
+        var next = current.Clone();
+        var completedAt = evt.CompletedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        next.Completed = true;
+        next.CompletedAt = completedAt;
+        next.Enabled = false;
+        next.NextFireAt = null;
+        next.NextFireLease = null;
+        next.PendingNextFireAt = null;
+        next.PendingNextFireRequestedAt = null;
+        next.UpdatedAt = completedAt;
         return next;
     }
 
@@ -1506,6 +1617,25 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static int ResolveTimestampNanos(Timestamp? timestamp) =>
         timestamp?.Nanos ?? 0;
+
+    private static ScheduledDispatchScheduleModeState NormalizeScheduleMode(ScheduledDispatchScheduleModeState mode) =>
+        mode == ScheduledDispatchScheduleModeState.OneShotAtUtc
+            ? ScheduledDispatchScheduleModeState.OneShotAtUtc
+            : ScheduledDispatchScheduleModeState.RecurringCron;
+
+    private static string NormalizeCronExpression(
+        ScheduledDispatchScheduleModeState mode,
+        string? cronExpression) =>
+        mode == ScheduledDispatchScheduleModeState.OneShotAtUtc
+            ? string.Empty
+            : NormalizeRequired(cronExpression, nameof(cronExpression));
+
+    private static DateTimeOffset? NormalizeOneShotFireAt(
+        ScheduledDispatchScheduleModeState mode,
+        Timestamp? oneShotFireAt) =>
+        mode == ScheduledDispatchScheduleModeState.OneShotAtUtc
+            ? oneShotFireAt?.ToDateTimeOffset().ToUniversalTime()
+            : null;
 
     private static string NormalizeRequired(string? value, string parameterName)
     {
