@@ -1,9 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 using NSubstitute;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -11,44 +9,35 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class UserAgentCatalogCredentialRepairPortTests
 {
     [Fact]
-    public async Task RepairMissingSecretReferenceAsync_WaitsForMatchingCommittedSuccess()
+    public async Task RepairMissingSecretReferenceAsync_ReturnsAcceptedReceiptWithoutWaitingForCommit()
     {
-        var fixture = new Fixture();
-        fixture.CommittedResultFactory = command => new UserAgentCatalogCredentialRevocationRepairedEvent
-        {
-            RequestId = command.RequestId,
-            AgentId = command.AgentId,
-            ApiKeyId = command.ApiKeyId,
-        };
+        var fixture = new Fixture(actorExists: true);
 
-        var result = await fixture.Port.RepairMissingSecretReferenceAsync(
-            "agent-1",
-            "key-1",
+        var receipt = await fixture.Port.RepairMissingSecretReferenceAsync(
+            " agent-1 ",
+            " key-1 ",
             CompleteReference(),
-            "key-1",
-            "restore exact durable reference",
-            "admin-1",
+            " key-1 ",
+            " restore exact durable reference ",
+            " admin-1 ",
             1234);
 
-        result.Repaired.Should().BeTrue();
-        result.RejectionReason.Should().Be(UserAgentCatalogCredentialRevocationRepairRejectionReason.Unspecified);
+        receipt.RequestId.Should().NotBeNullOrWhiteSpace();
+        receipt.Admission.Accepted.Should().BeTrue();
+        receipt.Admission.CommandId.Should().Be("repair-command-1");
         fixture.DispatchedCommand.Should().NotBeNull();
-        fixture.SubscriptionDisposed.Should().BeTrue();
+        fixture.DispatchedCommand!.RequestId.Should().Be(receipt.RequestId);
+        fixture.DispatchedCommand.AgentId.Should().Be(" agent-1 ");
+        fixture.DispatchedCommand.ApiKeyId.Should().Be(" key-1 ");
+        fixture.DispatchedCommand.SecretReference.Should().BeEquivalentTo(CompleteReference());
     }
 
     [Fact]
-    public async Task RepairMissingSecretReferenceAsync_ReturnsMatchingCommittedRejection()
+    public async Task RepairMissingSecretReferenceAsync_CreatesWellKnownActorBeforeDispatchWhenMissing()
     {
-        var fixture = new Fixture();
-        fixture.CommittedResultFactory = command => new UserAgentCatalogCredentialRevocationRepairRejectedEvent
-        {
-            RequestId = command.RequestId,
-            AgentId = command.AgentId,
-            ApiKeyId = command.ApiKeyId,
-            Reason = UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict,
-        };
+        var fixture = new Fixture(actorExists: false);
 
-        var result = await fixture.Port.RepairMissingSecretReferenceAsync(
+        await fixture.Port.RepairMissingSecretReferenceAsync(
             "agent-1",
             "key-1",
             CompleteReference(),
@@ -57,8 +46,10 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
             "admin-1",
             1234);
 
-        result.Repaired.Should().BeFalse();
-        result.RejectionReason.Should().Be(UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict);
+        await fixture.Runtime.Received(1).CreateAsync<UserAgentCatalogGAgent>(
+            UserAgentCatalogGAgent.WellKnownId,
+            Arg.Any<CancellationToken>());
+        fixture.DispatchedCommand.Should().NotBeNull();
     }
 
     private static SecretReference CompleteReference() => new()
@@ -72,60 +63,37 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
 
     private sealed class Fixture
     {
-        private Func<CommittedStateEventPublished, Task>? _handler;
-
-        public Fixture()
+        public Fixture(bool actorExists)
         {
-            Runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId).Returns(Substitute.For<IActor>());
-            SubscriptionProvider.SubscribeAsync<CommittedStateEventPublished>(
+            var actor = Substitute.For<IActor>();
+            Runtime.GetAsync(UserAgentCatalogGAgent.WellKnownId)
+                .Returns(actorExists ? actor : null);
+            Runtime.CreateAsync<UserAgentCatalogGAgent>(
                     UserAgentCatalogGAgent.WellKnownId,
-                    Arg.Any<Func<CommittedStateEventPublished, Task>>(),
                     Arg.Any<CancellationToken>())
-                .Returns(call =>
-                {
-                    _handler = call.ArgAt<Func<CommittedStateEventPublished, Task>>(1);
-                    return Task.FromResult<IAsyncDisposable>(
-                        new RecordingSubscription(() => SubscriptionDisposed = true));
-                });
+                .Returns(actor);
             Dispatch.DispatchAsync(
                     UserAgentCatalogGAgent.WellKnownId,
                     Arg.Any<EventEnvelope>(),
                     Arg.Any<CancellationToken>())
-                .Returns(async call =>
+                .Returns(call =>
                 {
                     var envelope = call.ArgAt<EventEnvelope>(1);
                     DispatchedCommand = envelope.Payload.Unpack<UserAgentCatalogRepairCredentialRevocationCommand>();
-                    var committedEvent = CommittedResultFactory(DispatchedCommand);
-                    await _handler!(new CommittedStateEventPublished
-                    {
-                        StateEvent = new StateEvent
-                        {
-                            EventData = Any.Pack(committedEvent),
-                        },
-                    });
-                    return DispatchAdmissionFactory.Create(UserAgentCatalogGAgent.WellKnownId, envelope);
+                    return new DispatchAdmission(
+                        true,
+                        "repair-command-1",
+                        DateTimeOffset.UtcNow,
+                        UserAgentCatalogGAgent.WellKnownId,
+                        "repair-command-1");
                 });
 
-            Port = new UserAgentCatalogCredentialRepairPort(Runtime, Dispatch, SubscriptionProvider);
+            Port = new UserAgentCatalogCredentialRepairPort(Runtime, Dispatch);
         }
 
         public IActorRuntime Runtime { get; } = Substitute.For<IActorRuntime>();
         public IActorDispatchPort Dispatch { get; } = Substitute.For<IActorDispatchPort>();
-        public IActorEventSubscriptionProvider SubscriptionProvider { get; } =
-            Substitute.For<IActorEventSubscriptionProvider>();
         public UserAgentCatalogCredentialRepairPort Port { get; }
-        public Func<UserAgentCatalogRepairCredentialRevocationCommand, Google.Protobuf.IMessage> CommittedResultFactory
-            { get; set; } = null!;
         public UserAgentCatalogRepairCredentialRevocationCommand? DispatchedCommand { get; private set; }
-        public bool SubscriptionDisposed { get; private set; }
-    }
-
-    private sealed class RecordingSubscription(Action dispose) : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync()
-        {
-            dispose();
-            return ValueTask.CompletedTask;
-        }
     }
 }

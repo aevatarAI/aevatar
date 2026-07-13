@@ -80,11 +80,12 @@ public sealed class ScheduledCredentialVaultContractTests
         await vault.DidNotReceive().PutAsync(Arg.Any<StoreSecretRequest>(), Arg.Any<CancellationToken>());
         await commandPort.DidNotReceive().RequestCredentialRevocationAsync(
             Arg.Any<UserAgentApiKeyRevocation>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            Arg.Any<string>());
     }
 
     [Fact]
-    public async Task ProvisionAsync_WhenVaultWriteFails_CommitsDualTrackRevocationIntent()
+    public async Task ProvisionAsync_WhenVaultWriteFails_SubmitsDualTrackRevocationIntent()
     {
         var vault = Substitute.For<ISecretVault>();
         vault.PutAsync(Arg.Any<StoreSecretRequest>(), Arg.Any<CancellationToken>())
@@ -120,7 +121,8 @@ public sealed class ScheduledCredentialVaultContractTests
                 intent.NyxApiKeyReference.OwnerScopeKey == "owner-a" &&
                 intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
                 intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending),
-            Arg.Any<CancellationToken>());
+            Arg.Any<CancellationToken>(),
+            "token");
     }
 
     [Fact]
@@ -159,4 +161,106 @@ public sealed class ScheduledCredentialVaultContractTests
             "test"));
         resolved.Secret.Should().Be("raw-secret");
     }
+
+    [Fact]
+    public async Task ExecutePendingAsync_WhenBothTracksSucceed_RecordsTypedCompletionForEachTrack()
+    {
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new RevokeSecretResult(true));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
+        issuer.RevokeAsync("token", "key-a", Arg.Any<CancellationToken>())
+            .Returns(ScheduledAgentApiKeyRevokeResult.Complete(204));
+        var lifecycle = new ScheduledAgentCredentialLifecycle(vault, commandPort, issuer);
+
+        await lifecycle.ExecutePendingAsync("token", PendingRevocation());
+
+        await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+            Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                command.Track == UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId &&
+                command.Completed &&
+                command.HttpStatus == 204 &&
+                command.FailureKind == UserAgentApiKeyRevocationFailureKind.None),
+            Arg.Any<CancellationToken>());
+        await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+            Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                command.Track == UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault &&
+                command.Completed &&
+                command.FailureKind == UserAgentApiKeyRevocationFailureKind.None),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecutePendingAsync_WhenVaultReferenceIsNotActive_RecordsProviderFailure()
+    {
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new RevokeSecretResult(false));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var lifecycle = new ScheduledAgentCredentialLifecycle(
+            vault,
+            commandPort,
+            Substitute.For<IScheduledAgentApiKeyIssuer>());
+        var pending = PendingRevocation();
+        pending.NyxIdTrack.Status = ScheduledCredentialRevocationTrackStatus.Completed;
+
+        await lifecycle.ExecutePendingAsync("token", pending);
+
+        await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+            Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                command.Track == UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault &&
+                !command.Completed &&
+                command.Error == "secret_reference_not_active" &&
+                command.FailureKind == UserAgentApiKeyRevocationFailureKind.ProviderError),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecutePendingAsync_WhenVaultThrows_RecordsTransientFailure()
+    {
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
+            .Returns<Task<RevokeSecretResult>>(_ => throw new InvalidOperationException("vault unavailable"));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var lifecycle = new ScheduledAgentCredentialLifecycle(
+            vault,
+            commandPort,
+            Substitute.For<IScheduledAgentApiKeyIssuer>());
+        var pending = PendingRevocation();
+        pending.NyxIdTrack.Status = ScheduledCredentialRevocationTrackStatus.Completed;
+
+        await lifecycle.ExecutePendingAsync("token", pending);
+
+        await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
+            Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
+                command.Track == UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault &&
+                !command.Completed &&
+                command.Error == "vault unavailable" &&
+                command.FailureKind == UserAgentApiKeyRevocationFailureKind.Transient),
+            Arg.Any<CancellationToken>());
+    }
+
+    private static UserAgentApiKeyRevocation PendingRevocation() => new()
+    {
+        AgentId = "agent-a",
+        ApiKeyId = "key-a",
+        SecretSubjectId = "key-a",
+        NyxApiKeyReference = new SecretReference
+        {
+            Ref = "sec-a",
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = "owner-a",
+            Version = 1,
+            Fingerprint = "sha256:test",
+        },
+        NyxIdTrack = new ScheduledCredentialRevocationTrack
+        {
+            Status = ScheduledCredentialRevocationTrackStatus.Pending,
+        },
+        VaultTrack = new ScheduledCredentialRevocationTrack
+        {
+            Status = ScheduledCredentialRevocationTrackStatus.Pending,
+        },
+    };
 }

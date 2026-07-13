@@ -13,22 +13,20 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _mapper;
-    private readonly ScheduledAgentCredentialLifecycle? _credentialLifecycle;
+    private readonly ScheduledAgentCredentialLifecycle _credentialLifecycle;
     private readonly ILogger<ScheduledAgentCreatorTool>? _logger;
 
     internal ScheduledAgentCreatorTool(
         ISkillRunnerCommandPort skillRunnerPort,
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper mapper,
-        ScheduledAgentApiKeyIssuer apiKeyIssuer,
-        ILogger<ScheduledAgentCreatorTool>? logger = null,
-        ScheduledAgentCredentialLifecycle? credentialLifecycle = null)
+        ScheduledAgentCredentialLifecycle credentialLifecycle,
+        ILogger<ScheduledAgentCreatorTool>? logger = null)
     {
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
-        ArgumentNullException.ThrowIfNull(apiKeyIssuer);
-        _credentialLifecycle = credentialLifecycle;
+        _credentialLifecycle = credentialLifecycle ?? throw new ArgumentNullException(nameof(credentialLifecycle));
         _logger = logger;
     }
 
@@ -184,9 +182,6 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         var plan = _mapper.Plan(argumentsJson, caller, agentId);
         if (!plan.Success)
             return plan.ErrorJson ?? """{"error":"validation_error"}""";
-        if (_credentialLifecycle is null)
-            return """{"error":"scheduled_credential_lifecycle_unavailable"}""";
-
         ScheduledAgentCredentialProvisionResult provisioned;
         try
         {
@@ -224,6 +219,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         catch (Exception ex)
         {
             await _credentialLifecycle.RequestRevocationAsync(
+                token,
                 agentId,
                 key.ApiKeyId ?? string.Empty,
                 secretReference,

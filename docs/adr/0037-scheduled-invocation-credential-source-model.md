@@ -152,11 +152,3 @@ issue-2406 Phase 1 采用无副作用 admission：create/update/ensure 只校验
 ## Outcome
 
 接受并实现后，定时任务调用凭证只有一个权威 typed 来源（`oneof`：NyxId source + role / durable reference），无 raw secret 落 state，所有入口共用同一套下沉校验，通用 API 不再能写入裸 bearer——在 aevatar-only 边界内闭合 discussion #2402 的 5 路径，并与 ADR-0018 / 0033 的零 secret material 范式归一。
-
-## Credential lifecycle and compensation
-
-Scheduled credential creation, deletion, and future rotation use one lifecycle. The lifecycle preallocates the vault reference, performs a create-only idempotent vault write, and passes only the resulting `SecretReference` into actor initialization. The issued raw key is held by an opaque redacted object and is never exposed as a public record property or persisted in actor state, projection documents, or logs.
-
-Deletion commits the catalog tombstone and credential revocation intent before external side effects run. The catalog actor owns the durable revocation fact with independent NyxID and vault tracks. A revocation is removed only when both tracks are `COMPLETED` or `NOT_APPLICABLE`; retryable failures remain observable.
-
-Historical rows without an exact secret reference use `vault_track=BLOCKED_MISSING_SECRET_REF`. The blocked track is not executable, does not increment attempts, and is not terminal. Only the Mainnet Host administrator repair endpoint can submit an exact descriptor; normal tools and the general catalog command surface do not expose repair authority.

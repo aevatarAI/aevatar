@@ -974,7 +974,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenMintedKeyPreflightForbidden_ShouldReturnActionableErrorAndCommitRevocationIntent()
+    public async Task ExecuteAsync_WhenMintedKeyPreflightForbidden_ShouldReturnActionableErrorAndSubmitRevocationIntent()
     {
         var handler = CreateSuccessHandler();
         handler.Add(
@@ -1002,7 +1002,8 @@ public sealed class ScheduledAgentCreatorToolTests
                     intent.ApiKeyId == "key-created" &&
                     intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
                     intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Completed),
-                Arg.Any<CancellationToken>());
+                Arg.Any<CancellationToken>(),
+                "session-token");
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
                 Arg.Any<InitializeSkillRunnerCommand>(),
@@ -1012,7 +1013,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenMintedKeyPreflightNotFound_ShouldReturnNotFoundAndCommitRevocationIntent()
+    public async Task ExecuteAsync_WhenMintedKeyPreflightNotFound_ShouldReturnNotFoundAndSubmitRevocationIntent()
     {
         var handler = CreateSuccessHandler();
         handler.Add(
@@ -1036,7 +1037,8 @@ public sealed class ScheduledAgentCreatorToolTests
                     intent.ApiKeyId == "key-created" &&
                     intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
                     intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Completed),
-                Arg.Any<CancellationToken>());
+                Arg.Any<CancellationToken>(),
+                "session-token");
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
                 Arg.Any<InitializeSkillRunnerCommand>(),
@@ -1068,7 +1070,8 @@ public sealed class ScheduledAgentCreatorToolTests
                     intent.ApiKeyId == "key-created" &&
                     intent.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
                     intent.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending),
-                Arg.Any<CancellationToken>());
+                Arg.Any<CancellationToken>(),
+                "session-token");
         });
     }
 
@@ -1155,8 +1158,7 @@ public sealed class ScheduledAgentCreatorToolTests
             provider.GetRequiredService<ISkillRunnerCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            provider.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
-            credentialLifecycle: provider.GetRequiredService<ScheduledAgentCredentialLifecycle>());
+            provider.GetRequiredService<ScheduledAgentCredentialLifecycle>());
 
         return new CreatorHarness(tool, handler, skillRunnerPort, queryPort, catalogCommandPort);
     }

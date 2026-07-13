@@ -38,17 +38,6 @@ internal sealed class ScheduledAgentCreateRequestMapper
         "run_immediately",
     };
 
-    private readonly ISecretVault? _compatibilitySecretVault;
-
-    public ScheduledAgentCreateRequestMapper()
-    {
-    }
-
-    public ScheduledAgentCreateRequestMapper(ISecretVault secretVault)
-    {
-        _compatibilitySecretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
-    }
-
     public ScheduledAgentCreatePlanResult Plan(string argumentsJson, OwnerScope caller, string agentId)
     {
         ArgumentNullException.ThrowIfNull(caller);
@@ -254,26 +243,6 @@ internal sealed class ScheduledAgentCreateRequestMapper
             Command: command,
             RunImmediately: request.RunImmediately,
             ErrorJson: null);
-    }
-
-    internal async Task<ScheduledAgentCreateMapResult> MapAsync(
-        ScheduledAgentCreatePlannedRequest request,
-        ScheduledAgentApiKeyIssueResult issuedKey,
-        CancellationToken ct = default)
-    {
-        if (_compatibilitySecretVault is null || issuedKey.Secret is null || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId))
-            return ScheduledAgentCreateMapResult.Failed("api_key_unavailable");
-
-        var reference = await issuedKey.Secret.Use(secret => _compatibilitySecretVault.PutAsync(new StoreSecretRequest(
-            CredentialSecretPurposes.ScheduledInvocationAgentKey,
-            BuildScheduledNyxApiKeyOwnerScopeKey(request.Caller, request.ScopeId, request.ConversationId, request.ReceiveTarget.Primary.ReceiveId),
-            issuedKey.ApiKeyId,
-            secret,
-            "scheduled-agent-create",
-            issuedKey.KeyExpiresAtUnixMs > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(issuedKey.KeyExpiresAtUnixMs)
-                : null), ct));
-        return Map(request, issuedKey, reference.Reference);
     }
 
     internal static string BuildScheduledNyxApiKeyOwnerScopeKey(

@@ -49,6 +49,6 @@ Channel-originated `agent_builder.run_agent` uses the same admission command ins
 
 ## Scheduled credential lifecycle
 
-Runner creation does not let the request mapper write secrets. A single scheduled credential lifecycle provisions the requested vault reference, maps the typed reference into `InitializeSkillRunnerCommand`, and records compensation intent if initialization fails. Delete tools submit tombstones only; bearer-bound retry execution consumes the projected committed revocation fact and advances NyxID and vault tracks independently.
+Runner creation does not let the request mapper write secrets. A single scheduled credential lifecycle provisions the requested vault reference, maps the typed reference into `InitializeSkillRunnerCommand`, and submits compensation intent if initialization fails. Delete tools pass transient bearer authority in the tombstone command; the catalog actor commits the revocation intent and tombstone before invoking the dual-track executor. The bearer is not persisted. Failed tracks remain durable and bearer-bound sessions may retry them independently.
 
 A vault track in `BLOCKED_MISSING_SECRET_REF` remains visible and cannot be cleared by attempt limits. Exact repair is a Host/Admin maintenance operation and is intentionally absent from ordinary runner tools, query ports, and the general catalog mutation interface.

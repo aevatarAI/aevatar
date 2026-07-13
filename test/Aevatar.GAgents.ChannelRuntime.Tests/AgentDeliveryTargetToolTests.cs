@@ -433,7 +433,8 @@ public sealed class AgentDeliveryTargetToolTests
                 Arg.Is<UserAgentApiKeyRevocation>(revocation =>
                     revocation.AgentId == "aelf-twitter-approval" &&
                     revocation.ApiKeyId == "key-aelf-twitter-approval"),
-                Arg.Any<CancellationToken>());
+                Arg.Any<CancellationToken>(),
+                "session-token");
         }
         finally
         {
@@ -693,7 +694,10 @@ public sealed class AgentDeliveryTargetToolTests
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-2","confirm":true}""");
 
             result.Should().Contain("not found");
-            await commandPort.DidNotReceive().TombstoneAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await commandPort.DidNotReceive().TombstoneAsync(
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<string>());
         }
         finally
         {
@@ -720,7 +724,7 @@ public sealed class AgentDeliveryTargetToolTests
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; test asserts caller-scoped guard and command dispatch.
-        commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>())
+        commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         commandPort.RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -749,7 +753,10 @@ public sealed class AgentDeliveryTargetToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
-            await commandPort.Received(1).TombstoneAsync("agent-3", Arg.Any<CancellationToken>());
+            await commandPort.Received(1).TombstoneAsync(
+                "agent-3",
+                Arg.Any<CancellationToken>(),
+                "session-token");
             issuer.RevokedApiKeyIds.Should().BeEmpty();
             await commandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -762,7 +769,7 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_Delete_WithPendingApiKeyRevocation_RecordsFailureDetails()
+    public async Task ExecuteAsync_Delete_DoesNotRecordRevocationAttemptInToolLayer()
     {
         var caller = OwnerScope.ForNyxIdNative("user-1");
 
@@ -777,7 +784,7 @@ public sealed class AgentDeliveryTargetToolTests
                 OwnerScope = caller,
             }));
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        commandPort.TombstoneAsync("agent-pending-revoke", Arg.Any<CancellationToken>())
+        commandPort.TombstoneAsync("agent-pending-revoke", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         commandPort.RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -844,7 +851,7 @@ public sealed class AgentDeliveryTargetToolTests
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; accepted JSON remains a tool-boundary concern.
-        commandPort.TombstoneAsync("agent-7", Arg.Any<CancellationToken>())
+        commandPort.TombstoneAsync("agent-7", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
@@ -1163,7 +1170,7 @@ public sealed class AgentDeliveryTargetToolTests
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; accepted JSON remains a tool-boundary concern.
-        commandPort.TombstoneAsync("agent-slow", Arg.Any<CancellationToken>())
+        commandPort.TombstoneAsync("agent-slow", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
 
         var resolver = Substitute.For<ICallerScopeResolver>();

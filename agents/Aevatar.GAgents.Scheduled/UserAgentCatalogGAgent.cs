@@ -17,6 +17,13 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
     public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
     private const int MaxApiKeyRevocationAttempts = 3;
+    private readonly IScheduledAgentCredentialRevocationExecutor _credentialRevocationExecutor;
+
+    public UserAgentCatalogGAgent(IScheduledAgentCredentialRevocationExecutor credentialRevocationExecutor)
+    {
+        _credentialRevocationExecutor = credentialRevocationExecutor ??
+            throw new ArgumentNullException(nameof(credentialRevocationExecutor));
+    }
 
     protected override UserAgentCatalogState TransitionState(UserAgentCatalogState current, IMessage evt) =>
         StateTransitionMatcher
@@ -140,11 +147,13 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         }
 
         var existing = State.Entries.First(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
+        UserAgentApiKeyRevocation? revocation = null;
         if (!existing.Tombstoned && ShouldRequestApiKeyRevocation(existing))
         {
+            revocation = BuildApiKeyRevocation(existing);
             await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
             {
-                Revocation = BuildApiKeyRevocation(existing),
+                Revocation = revocation,
             });
         }
 
@@ -153,6 +162,9 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             AgentId = command.AgentId.Trim(),
             TombstoneStateVersion = NextCommittedVersion(),
         });
+
+        if (revocation is not null)
+            await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, revocation);
     }
 
     [EventHandler]
@@ -207,13 +219,18 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
     }
 
     [EventHandler]
-    public Task HandleRequestCredentialRevocationAsync(UserAgentCatalogRequestCredentialRevocationCommand command) =>
-        command.Revocation is null
-            ? Task.CompletedTask
-            : PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
-            {
-                Revocation = NormalizeRevocation(command.Revocation),
-            });
+    public async Task HandleRequestCredentialRevocationAsync(UserAgentCatalogRequestCredentialRevocationCommand command)
+    {
+        if (command.Revocation is null)
+            return;
+
+        var revocation = NormalizeRevocation(command.Revocation);
+        await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
+        {
+            Revocation = revocation,
+        });
+        await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, revocation);
+    }
 
     [EventHandler]
     public async Task HandleRepairCredentialRevocationAsync(UserAgentCatalogRepairCredentialRevocationCommand command)
@@ -279,6 +296,11 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             RequestedBySubjectId = requestedBySubjectId,
             RequestedAtUnixMs = command.RequestedAtUnixMs,
         });
+
+        var repaired = State.PendingApiKeyRevocations.First(revocation =>
+            string.Equals(revocation.AgentId, agentId, StringComparison.Ordinal) &&
+            string.Equals(revocation.ApiKeyId, apiKeyId, StringComparison.Ordinal));
+        await _credentialRevocationExecutor.ExecutePendingAsync(string.Empty, repaired);
     }
 
     private Task PersistRepairRejectedAsync(

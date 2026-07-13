@@ -126,7 +126,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             {
                 "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _credentialLifecycle, token, caller, root, ct),
                 "upsert" => await UpsertAsync(_queryPort, _commandPort, caller, root, ct),
-                "delete" => await DeleteAsync(_queryPort, _commandPort, caller, root, ct),
+                "delete" => await DeleteAsync(_queryPort, _commandPort, token, caller, root, ct),
                 _ => await ListAsync(_queryPort, caller, ct),
             };
         }
@@ -202,28 +202,20 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             keyScopeId,
             conversationId.value!,
             deliveryTargetId.value!);
-        ScheduledAgentCredentialProvisionResult provisioned;
-        try
-        {
-            provisioned = await credentialLifecycle.ProvisionAsync(
-                token,
-                new ScheduledAgentServiceSlugs(
-                    nyxProviderSlug.value!,
-                    FailureNotificationSlug: null,
-                    RequiredServiceSlugs: [],
-                    RequiresOrnnService: false),
-                deliveryTargetId.value!,
-                skillName: string.Empty,
-                scopeId: keyScopeId,
-                CredentialSecretPurposes.ScheduledNyxApiKey,
-                ownerScopeKey,
-                "delivery-target-create",
-                ct);
-        }
-        catch
-        {
-            throw;
-        }
+        var provisioned = await credentialLifecycle.ProvisionAsync(
+            token,
+            new ScheduledAgentServiceSlugs(
+                nyxProviderSlug.value!,
+                FailureNotificationSlug: null,
+                RequiredServiceSlugs: [],
+                RequiresOrnnService: false),
+            deliveryTargetId.value!,
+            skillName: string.Empty,
+            scopeId: keyScopeId,
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            ownerScopeKey,
+            "delivery-target-create",
+            ct);
         if (!provisioned.IssuedKey.Success)
             return provisioned.IssuedKey.ToErrorJson();
 
@@ -232,26 +224,20 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         try
         {
-            await commandPort.UpsertAsync(
-                new UserAgentCatalogUpsertCommand
-                {
-                    AgentId = deliveryTargetId.value!,
-                    ConversationId = conversationId.value!,
-                    NyxProviderSlug = nyxProviderSlug.value!,
-                    NyxApiKey = string.Empty,
-                    NyxApiKeyReference = secretReference,
-                    ApiKeyId = key.ApiKeyId ?? string.Empty,
-                    AgentType = "delivery_target",
-                    TemplateName = "explicit_delivery_target",
-                    ScopeId = keyScopeId,
-                    TargetPlatform = targetPlatform,
-                    OwnerScope = caller.Clone(),
-                },
-                ct);
+            await commandPort.UpsertAsync(BuildCreateCommand(
+                deliveryTargetId.value!,
+                conversationId.value!,
+                nyxProviderSlug.value!,
+                keyScopeId,
+                targetPlatform,
+                caller,
+                key,
+                secretReference), ct);
         }
         catch
         {
             await credentialLifecycle.RequestRevocationAsync(
+                token,
                 deliveryTargetId.value!,
                 key.ApiKeyId ?? string.Empty,
                 secretReference,
@@ -429,9 +415,34 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         });
     }
 
+    private static UserAgentCatalogUpsertCommand BuildCreateCommand(
+        string deliveryTargetId,
+        string conversationId,
+        string nyxProviderSlug,
+        string scopeId,
+        string targetPlatform,
+        OwnerScope caller,
+        ScheduledAgentApiKeyIssueResult issuedKey,
+        SecretReference secretReference) =>
+        new()
+        {
+            AgentId = deliveryTargetId,
+            ConversationId = conversationId,
+            NyxProviderSlug = nyxProviderSlug,
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = secretReference,
+            ApiKeyId = issuedKey.ApiKeyId ?? string.Empty,
+            AgentType = "delivery_target",
+            TemplateName = "explicit_delivery_target",
+            ScopeId = scopeId,
+            TargetPlatform = targetPlatform,
+            OwnerScope = caller.Clone(),
+        };
+
     private static async Task<string> DeleteAsync(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
+        string bearerToken,
         OwnerScope caller,
         JsonElement args,
         CancellationToken ct)
@@ -460,7 +471,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        await commandPort.TombstoneAsync(agentId, ct);
+        await commandPort.TombstoneAsync(agentId, ct, bearerToken);
 
         return JsonSerializer.Serialize(new
         {

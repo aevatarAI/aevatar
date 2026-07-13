@@ -61,6 +61,7 @@ public sealed class ScheduledAgentCredentialLifecycle : IScheduledAgentCredentia
         }
 
         var reference = await StoreIssuedSecretAsync(
+            token,
             issuedKey,
             agentId,
             purpose,
@@ -71,6 +72,7 @@ public sealed class ScheduledAgentCredentialLifecycle : IScheduledAgentCredentia
     }
 
     private async Task<SecretReference> StoreIssuedSecretAsync(
+        string token,
         ScheduledAgentApiKeyIssueResult issuedKey,
         string agentId,
         string purpose,
@@ -103,7 +105,7 @@ public sealed class ScheduledAgentCredentialLifecycle : IScheduledAgentCredentia
         catch
         {
             await RequestRevocationAsync(
-                token: string.Empty,
+                token,
                 agentId,
                 issuedKey.ApiKeyId!,
                 new SecretReference

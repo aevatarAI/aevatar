@@ -5,6 +5,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Scheduled;
 
@@ -15,6 +16,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     private InMemoryEventStore _store = null!;
     private UserAgentCatalogGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
+    private IScheduledAgentCredentialRevocationExecutor _credentialRevocationExecutor = null!;
 
     public async Task InitializeAsync()
     {
@@ -28,7 +30,8 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
 
         _serviceProvider = services.BuildServiceProvider();
 
-        _agent = new UserAgentCatalogGAgent
+        _credentialRevocationExecutor = Substitute.For<IScheduledAgentCredentialRevocationExecutor>();
+        _agent = new UserAgentCatalogGAgent(_credentialRevocationExecutor)
         {
             Services = _serviceProvider,
             EventSourcingBehaviorFactory =
@@ -163,6 +166,11 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogUpsertedEvent",
                 "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogApiKeyRevocationRequestedEvent",
                 "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogTombstonedEvent");
+        await _credentialRevocationExecutor.Received(1).ExecutePendingAsync(
+            string.Empty,
+            Arg.Is<UserAgentApiKeyRevocation>(item =>
+                item.AgentId == "agent-with-key" && item.ApiKeyId == "key-1"),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -310,6 +318,120 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             .Unpack<UserAgentCatalogCredentialRevocationRepairRejectedEvent>();
         rejected.RequestId.Should().Be("repair-request-2");
         rejected.Reason.Should().Be(UserAgentCatalogCredentialRevocationRepairRejectionReason.NotBlocked);
+    }
+
+    [Fact]
+    public async Task HandleRepairCredentialRevocationAsync_InvalidRequest_CommitsTypedRejection()
+    {
+        await _agent.HandleRepairCredentialRevocationAsync(new UserAgentCatalogRepairCredentialRevocationCommand
+        {
+            RequestId = "repair-invalid",
+            AgentId = "agent-invalid",
+            ApiKeyId = "key-invalid",
+            SecretReference = CompleteReference("secret-invalid", "key-invalid"),
+            SecretSubjectId = "different-subject",
+            RepairReason = "restore exact durable reference",
+            RequestedBySubjectId = "admin-1",
+            RequestedAtUnixMs = 1234,
+        });
+
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        var rejected = persisted.Should().ContainSingle().Subject.EventData
+            .Unpack<UserAgentCatalogCredentialRevocationRepairRejectedEvent>();
+        rejected.RequestId.Should().Be("repair-invalid");
+        rejected.Reason.Should().Be(UserAgentCatalogCredentialRevocationRepairRejectionReason.InvalidRequest);
+    }
+
+    [Fact]
+    public async Task HandleRepairCredentialRevocationAsync_ConflictingSecretAlias_CommitsTypedRejection()
+    {
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = new UserAgentApiKeyRevocation
+            {
+                AgentId = "agent-target",
+                ApiKeyId = "key-target",
+                SecretSubjectId = "key-target",
+                NyxIdTrack = new ScheduledCredentialRevocationTrack
+                {
+                    Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                },
+                VaultTrack = new ScheduledCredentialRevocationTrack
+                {
+                    Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
+                },
+            },
+        });
+        await _agent.HandleRequestCredentialRevocationAsync(new UserAgentCatalogRequestCredentialRevocationCommand
+        {
+            Revocation = new UserAgentApiKeyRevocation
+            {
+                AgentId = "agent-existing",
+                ApiKeyId = "key-existing",
+                SecretSubjectId = "key-existing",
+                NyxApiKeyReference = CompleteReference("secret-shared", "key-existing"),
+                NyxIdTrack = new ScheduledCredentialRevocationTrack
+                {
+                    Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                },
+                VaultTrack = new ScheduledCredentialRevocationTrack
+                {
+                    Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                },
+            },
+        });
+
+        await _agent.HandleRepairCredentialRevocationAsync(new UserAgentCatalogRepairCredentialRevocationCommand
+        {
+            RequestId = "repair-conflict",
+            AgentId = "agent-target",
+            ApiKeyId = "key-target",
+            SecretReference = CompleteReference("secret-shared", "key-target"),
+            SecretSubjectId = "key-target",
+            RepairReason = "restore exact durable reference",
+            RequestedBySubjectId = "admin-1",
+            RequestedAtUnixMs = 1234,
+        });
+
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        var rejected = persisted.Last().EventData
+            .Unpack<UserAgentCatalogCredentialRevocationRepairRejectedEvent>();
+        rejected.RequestId.Should().Be("repair-conflict");
+        rejected.Reason.Should().Be(UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict);
+    }
+
+    [Fact]
+    public async Task HandleTombstoneAsync_InvokesExecutorOnlyAfterIntentAndTombstoneAreCommitted()
+    {
+        var committedBeforeExecution = false;
+        _credentialRevocationExecutor.ExecutePendingAsync(
+                "bearer-token",
+                Arg.Any<UserAgentApiKeyRevocation>(),
+                Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                var events = await _store.GetEventsAsync(_agent.Id);
+                committedBeforeExecution = events.TakeLast(2).Select(item => item.EventData.TypeUrl)
+                    .SequenceEqual(
+                    [
+                        "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogApiKeyRevocationRequestedEvent",
+                        "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogTombstonedEvent",
+                    ]);
+            });
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-ordered",
+            ApiKeyId = "key-ordered",
+            NyxApiKeyReference = CompleteReference("secret-ordered", "key-ordered"),
+        });
+
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand
+        {
+            AgentId = "agent-ordered",
+            BearerToken = "bearer-token",
+        });
+
+        committedBeforeExecution.Should().BeTrue();
     }
 
     [Fact]

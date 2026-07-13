@@ -50,10 +50,15 @@ internal static class ScheduledAgentCredentialRepairAdminEndpoints
         if (string.IsNullOrWhiteSpace(request.agent_id) ||
             string.IsNullOrWhiteSpace(request.api_key_id) ||
             reference is null ||
+            string.IsNullOrWhiteSpace(reference.Ref) ||
+            string.IsNullOrWhiteSpace(reference.Purpose) ||
+            string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
+            reference.Version <= 0 ||
+            string.IsNullOrWhiteSpace(reference.Fingerprint) ||
             string.IsNullOrWhiteSpace(request.repair_reason))
             return Results.BadRequest(new { error = "invalid_repair_request" });
 
-        var result = await repairPort.RepairMissingSecretReferenceAsync(
+        var receipt = await repairPort.RepairMissingSecretReferenceAsync(
             request.agent_id.Trim(),
             request.api_key_id.Trim(),
             reference,
@@ -62,12 +67,12 @@ internal static class ScheduledAgentCredentialRepairAdminEndpoints
             caller.UserId,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             ct);
-        return result.Repaired
-            ? Results.Ok(new { status = "repaired" })
-            : Results.Conflict(new
+        return Results.Accepted(
+            value: new
             {
-                error = "credential_repair_rejected",
-                reason = result.RejectionReason.ToString(),
+                status = "accepted",
+                request_id = receipt.RequestId,
+                command_id = receipt.Admission.CommandId,
             });
     }
 

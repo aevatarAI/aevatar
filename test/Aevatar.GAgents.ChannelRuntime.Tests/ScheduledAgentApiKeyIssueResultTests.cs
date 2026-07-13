@@ -16,5 +16,7 @@ public sealed class ScheduledAgentApiKeyIssueResultTests
 
         JsonSerializer.Serialize(result).Should().NotContain("full-secret-key");
         result.ToString().Should().NotContain("full-secret-key");
+        typeof(ScheduledAgentApiKeyIssueResult).GetProperties()
+            .Should().NotContain(property => property.Name == "Secret");
     }
 }
