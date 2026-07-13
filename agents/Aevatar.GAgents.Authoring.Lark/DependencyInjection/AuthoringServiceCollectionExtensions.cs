@@ -31,6 +31,7 @@ public static class AuthoringServiceCollectionExtensions
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
         services.TryAddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
+        services.TryAddSingleton<ScheduledAgentCredentialLifecycle>();
         if (!services.Any(IsAgentBuilderToolSourceRegistration))
             services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), AgentToolSourceFactory));
 
@@ -52,5 +53,6 @@ public static class AuthoringServiceCollectionExtensions
             sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
             sp.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
             sp.GetService<ILogger<AgentBuilderTool>>(),
-            sp.GetService<ILogger<ScheduledAgentCreatorTool>>());
+            sp.GetService<ILogger<ScheduledAgentCreatorTool>>(),
+            sp.GetRequiredService<ScheduledAgentCredentialLifecycle>());
 }

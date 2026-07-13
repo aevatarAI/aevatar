@@ -46,3 +46,9 @@ accepted delivery 先提交 `SkillRunnerExternalTriggerAdmittedEvent`，再通�
 `scheduled_agent_creator` 是 runner creation surface；它可以声明 `external_trigger_sources`，但不引入第二套 runner 创建工具。Ornn skill reference / workflow execution 仍按 Ornn skill fetch 与 workflow dispatch 的既有链路执行；external trigger admission 只决定“何时请求已有 runner 执行”，不改变 Ornn repository、Ornn runtime 或外部仓库能力。
 
 Channel-originated `agent_builder.run_agent` uses the same admission command instead of the manual trigger path when the typed tool context carries a stable channel message id. The channel source id is deterministic: `channel:<platform>:<registration_scope_id>`. Creation must declare that id with `kind=channel_inbound`; if it is missing or disabled, the runner accepts the delivery command and then commits `SkillRunnerExternalTriggerRejectedEvent`.
+
+## Scheduled credential lifecycle
+
+Runner creation does not let the request mapper write secrets. A single scheduled credential lifecycle provisions the requested vault reference, maps the typed reference into `InitializeSkillRunnerCommand`, and records compensation intent if initialization fails. Delete tools submit tombstones only; bearer-bound retry execution consumes the projected committed revocation fact and advances NyxID and vault tracks independently.
+
+A vault track in `BLOCKED_MISSING_SECRET_REF` remains visible and cannot be cleared by attempt limits. Exact repair is a Host/Admin maintenance operation and is intentionally absent from ordinary runner tools, query ports, and the general catalog mutation interface.

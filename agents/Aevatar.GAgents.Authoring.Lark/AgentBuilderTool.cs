@@ -21,6 +21,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly IScheduledAgentApiKeyIssuer _scheduledAgentApiKeyIssuer;
+    private readonly ScheduledAgentCredentialLifecycle? _credentialLifecycle;
     private readonly ILogger<AgentBuilderTool>? _logger;
 
     // Refactor (iter1/cluster-002):
@@ -33,7 +34,8 @@ public sealed class AgentBuilderTool : IAgentTool
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
         IScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
-        ILogger<AgentBuilderTool>? logger = null)
+        ILogger<AgentBuilderTool>? logger = null,
+        ScheduledAgentCredentialLifecycle? credentialLifecycle = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
@@ -41,6 +43,7 @@ public sealed class AgentBuilderTool : IAgentTool
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _scheduledAgentApiKeyIssuer = scheduledAgentApiKeyIssuer ?? throw new ArgumentNullException(nameof(scheduledAgentApiKeyIssuer));
+        _credentialLifecycle = credentialLifecycle;
         _logger = logger;
     }
 
@@ -260,16 +263,6 @@ public sealed class AgentBuilderTool : IAgentTool
 
         await catalogCommandPort.TombstoneAsync(entry.AgentId, ct);
 
-        var revocationResult = string.IsNullOrWhiteSpace(entry.ApiKeyId)
-            ? null
-            : await scheduledAgentApiKeyIssuer.RevokeAsync(token, entry.ApiKeyId, ct);
-        if (revocationResult is not null)
-        {
-            await catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
-                BuildRevocationAttemptCommand(entry.AgentId, entry.ApiKeyId, revocationResult),
-                ct);
-        }
-
         var retriedPendingRevocations = await RetryPendingApiKeyRevocationsAsync(
             queryPort,
             catalogCommandPort,
@@ -286,9 +279,9 @@ public sealed class AgentBuilderTool : IAgentTool
             status = "accepted",
             agent_id = entry.AgentId,
             revoked_api_key_id = entry.ApiKeyId,
-            api_key_revocation_status = ResolveRevocationStatus(revocationResult),
+            api_key_revocation_status = string.IsNullOrWhiteSpace(entry.ApiKeyId) ? "not_applicable" : "pending",
             api_key_revocation_retry_count = retriedPendingRevocations,
-            delete_notice = $"Delete submitted for `{entry.AgentId}`. API key revocation: `{ResolveRevocationStatus(revocationResult)}`.",
+            delete_notice = $"Delete submitted for `{entry.AgentId}`. Credential revocation is pending committed-intent processing.",
             agents,
             total = agents.Length,
             note = "Tombstone is propagating. Run /agents in a few seconds to confirm the agent is gone.",
@@ -307,6 +300,7 @@ public sealed class AgentBuilderTool : IAgentTool
             HttpStatus = result.HttpStatus,
             Error = result.Error,
             FailureKind = result.FailureKind,
+            Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
         };
 
     private static string ResolveRevocationStatus(ScheduledAgentApiKeyRevokeResult? result) =>
@@ -346,10 +340,10 @@ public sealed class AgentBuilderTool : IAgentTool
                 continue;
             }
 
-            var result = await scheduledAgentApiKeyIssuer.RevokeAsync(token, pending.ApiKeyId, ct);
-            await catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
-                BuildRevocationAttemptCommand(pending.AgentId, pending.ApiKeyId, result),
-                ct);
+            if (_credentialLifecycle is null)
+                continue;
+
+            await _credentialLifecycle.ExecutePendingAsync(token, pending, ct);
             retried++;
         }
 

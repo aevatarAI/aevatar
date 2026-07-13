@@ -17,6 +17,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _scheduledAgentMapper;
     private readonly ScheduledAgentApiKeyIssuer _scheduledAgentApiKeyIssuer;
+    private readonly ScheduledAgentCredentialLifecycle _scheduledAgentCredentialLifecycle;
     private readonly ILogger<AgentBuilderTool>? _toolLogger;
     private readonly ILogger<ScheduledAgentCreatorTool>? _creatorToolLogger;
 
@@ -29,7 +30,8 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         ScheduledAgentCreateRequestMapper scheduledAgentMapper,
         ScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
         ILogger<AgentBuilderTool>? toolLogger = null,
-        ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null)
+        ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null,
+        ScheduledAgentCredentialLifecycle? scheduledAgentCredentialLifecycle = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
@@ -38,6 +40,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _scheduledAgentMapper = scheduledAgentMapper ?? throw new ArgumentNullException(nameof(scheduledAgentMapper));
         _scheduledAgentApiKeyIssuer = scheduledAgentApiKeyIssuer ?? throw new ArgumentNullException(nameof(scheduledAgentApiKeyIssuer));
+        _scheduledAgentCredentialLifecycle = scheduledAgentCredentialLifecycle;
         _toolLogger = toolLogger;
         _creatorToolLogger = creatorToolLogger;
     }
@@ -54,13 +57,15 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _catalogCommandPort,
                 _callerScopeResolver,
                 _scheduledAgentApiKeyIssuer,
-                _toolLogger),
+                _toolLogger,
+                _scheduledAgentCredentialLifecycle),
             new ScheduledAgentCreatorTool(
                 _skillRunnerPort,
                 _callerScopeResolver,
                 _scheduledAgentMapper,
                 _scheduledAgentApiKeyIssuer,
-                _creatorToolLogger),
+                _creatorToolLogger,
+                _scheduledAgentCredentialLifecycle),
         ];
         return Task.FromResult(tools);
     }

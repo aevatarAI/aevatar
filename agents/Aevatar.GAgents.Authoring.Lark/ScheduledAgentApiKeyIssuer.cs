@@ -88,12 +88,13 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             return issuedKey;
 
         var ornnSlug = GetOrnnServiceSlug();
-        var preflight = await PreflightSkillFetchAsync(client, issuedKey.FullKey!, ornnSlug, skillName, ct);
+        var preflight = await issuedKey.Secret!.Use(fullKey =>
+            PreflightSkillFetchAsync(client, fullKey, ornnSlug, skillName, ct));
         if (preflight.Success)
             return issuedKey;
 
-        await TryRevokeAsync(token, issuedKey.ApiKeyId ?? string.Empty, CancellationToken.None);
-        return ScheduledAgentApiKeyIssueResult.Failed(
+        return ScheduledAgentApiKeyIssueResult.FailedAfterIssue(
+            issuedKey.ApiKeyId ?? string.Empty,
             preflight.Error ?? "scheduled_skill_preflight_failed",
             preflight.Detail,
             preflight.Hint,
@@ -132,30 +133,6 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             status ?? 0,
             detail,
             ClassifyRevocationFailure(status));
-    }
-
-    public async Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(apiKeyId))
-            return;
-
-        try
-        {
-            var result = await RevokeAsync(token, apiKeyId, ct);
-            if (!result.Completed)
-            {
-                _logger?.LogWarning(
-                    "Scheduled agent API key rollback remains pending: apiKeyId={ApiKeyId} status={Status} failureKind={FailureKind} error={Error}",
-                    apiKeyId,
-                    result.HttpStatus,
-                    result.FailureKind,
-                    result.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Scheduled agent API key rollback failed: apiKeyId={ApiKeyId}", apiKeyId);
-        }
     }
 
     private static UserAgentApiKeyRevocationFailureKind ClassifyRevocationFailure(int? status) =>

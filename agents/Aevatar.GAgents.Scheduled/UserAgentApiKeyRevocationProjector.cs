@@ -44,8 +44,18 @@ public sealed class UserAgentApiKeyRevocationProjector
         if (stateEvent.EventData.Is(UserAgentCatalogApiKeyRevocationAttemptRecordedEvent.Descriptor))
         {
             var attempt = stateEvent.EventData.Unpack<UserAgentCatalogApiKeyRevocationAttemptRecordedEvent>();
-            if (attempt.Completed && !string.IsNullOrWhiteSpace(attempt.AgentId))
-                await _writeDispatcher.DeleteAsync(BuildDocumentId(attempt.AgentId), ct);
+            var completed = !state.PendingApiKeyRevocations.Any(revocation =>
+                string.Equals(revocation.AgentId, attempt.AgentId, StringComparison.Ordinal) &&
+                string.Equals(revocation.ApiKeyId, attempt.ApiKeyId, StringComparison.Ordinal));
+            if (completed &&
+                !string.IsNullOrWhiteSpace(attempt.AgentId) &&
+                !string.IsNullOrWhiteSpace(attempt.ApiKeyId) &&
+                !string.IsNullOrWhiteSpace(attempt.SecretReferenceRef))
+            {
+                await _writeDispatcher.DeleteAsync(
+                    BuildDocumentId(attempt.AgentId, attempt.ApiKeyId, attempt.SecretReferenceRef),
+                    ct);
+            }
         }
 
         foreach (var revocation in state.PendingApiKeyRevocations)
@@ -62,7 +72,11 @@ public sealed class UserAgentApiKeyRevocationProjector
         }
     }
 
-    public static string BuildDocumentId(string agentId) => agentId.Trim();
+    public static string BuildDocumentId(string agentId, string apiKeyId, string secretReference) =>
+        ScheduledAgentCredentialRevocationDocumentIds.Build(
+            agentId.Trim(),
+            apiKeyId.Trim(),
+            secretReference.Trim());
 
     private static UserAgentApiKeyRevocationDocument Materialize(
         UserAgentCatalogMaterializationContext context,
@@ -72,7 +86,10 @@ public sealed class UserAgentApiKeyRevocationProjector
     {
         var document = new UserAgentApiKeyRevocationDocument
         {
-            Id = BuildDocumentId(revocation.AgentId),
+            Id = BuildDocumentId(
+                revocation.AgentId,
+                revocation.ApiKeyId,
+                revocation.NyxApiKeyReference?.Ref ?? string.Empty),
             AgentId = revocation.AgentId,
             ApiKeyId = revocation.ApiKeyId,
             RequestedAtUtc = revocation.RequestedAt?.Clone(),
@@ -91,6 +108,14 @@ public sealed class UserAgentApiKeyRevocationProjector
             document.NyxApiKeyReference = revocation.NyxApiKeyReference.Clone();
         if (revocation.OwnerScope is not null)
             document.OwnerScope = revocation.OwnerScope.Clone();
+        if (revocation.NyxIdTrack is not null)
+            document.NyxIdTrack = revocation.NyxIdTrack.Clone();
+        if (revocation.VaultTrack is not null)
+            document.VaultTrack = revocation.VaultTrack.Clone();
+        document.SecretSubjectId = revocation.SecretSubjectId ?? string.Empty;
+        document.RepairReason = revocation.RepairReason ?? string.Empty;
+        document.RequestedBySubjectId = revocation.RequestedBySubjectId ?? string.Empty;
+        document.RequestedAtUnixMs = revocation.RequestedAtUnixMs;
 
         return document;
     }

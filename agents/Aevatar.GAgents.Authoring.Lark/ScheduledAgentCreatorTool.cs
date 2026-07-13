@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
@@ -12,7 +13,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _mapper;
-    private readonly ScheduledAgentApiKeyIssuer _apiKeyIssuer;
+    private readonly ScheduledAgentCredentialLifecycle? _credentialLifecycle;
     private readonly ILogger<ScheduledAgentCreatorTool>? _logger;
 
     internal ScheduledAgentCreatorTool(
@@ -20,12 +21,14 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper mapper,
         ScheduledAgentApiKeyIssuer apiKeyIssuer,
-        ILogger<ScheduledAgentCreatorTool>? logger = null)
+        ILogger<ScheduledAgentCreatorTool>? logger = null,
+        ScheduledAgentCredentialLifecycle? credentialLifecycle = null)
     {
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
-        _apiKeyIssuer = apiKeyIssuer ?? throw new ArgumentNullException(nameof(apiKeyIssuer));
+        ArgumentNullException.ThrowIfNull(apiKeyIssuer);
+        _credentialLifecycle = credentialLifecycle;
         _logger = logger;
     }
 
@@ -181,17 +184,38 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         var plan = _mapper.Plan(argumentsJson, caller, agentId);
         if (!plan.Success)
             return plan.ErrorJson ?? """{"error":"validation_error"}""";
+        if (_credentialLifecycle is null)
+            return """{"error":"scheduled_credential_lifecycle_unavailable"}""";
 
-        var key = await _apiKeyIssuer.IssueAsync(token, plan.ServiceSlugs!, agentId, plan.Request!.Reference.Name, plan.Request!.ScopeId, ct);
-        if (!key.Success)
-            return key.ToErrorJson();
-
-        var mapped = await _mapper.MapAsync(plan.Request!, key, ct);
-        if (!mapped.Success)
+        ScheduledAgentCredentialProvisionResult provisioned;
+        try
         {
-            await _apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, ct);
-            return mapped.ErrorJson ?? """{"error":"validation_error"}""";
+            provisioned = await _credentialLifecycle.ProvisionAsync(
+                token,
+                plan.ServiceSlugs!,
+                agentId,
+                plan.Request!.Reference.Name,
+                plan.Request.ScopeId,
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                ScheduledAgentCreateRequestMapper.BuildScheduledNyxApiKeyOwnerScopeKey(
+                    plan.Request.Caller,
+                    plan.Request.ScopeId,
+                    plan.Request.ConversationId,
+                    plan.Request.ReceiveTarget.Primary.ReceiveId),
+                "scheduled-agent-create",
+                ct);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger?.LogWarning(ex, "Scheduled credential vault provisioning failed: agentId={AgentId}", agentId);
+            return JsonSerializer.Serialize(new { error = "secret_vault_put_failed", detail = ex.Message });
+        }
+        if (!provisioned.IssuedKey.Success)
+            return provisioned.IssuedKey.ToErrorJson();
+
+        var key = provisioned.IssuedKey;
+        var secretReference = provisioned.SecretReference!;
+        var mapped = _mapper.Map(plan.Request, key, secretReference);
 
         try
         {
@@ -199,7 +223,11 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         }
         catch (Exception ex)
         {
-            await _apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, CancellationToken.None);
+            await _credentialLifecycle.RequestRevocationAsync(
+                agentId,
+                key.ApiKeyId ?? string.Empty,
+                secretReference,
+                CancellationToken.None);
             _logger?.LogWarning(ex, "Scheduled agent create dispatch failed after key issue: agentId={AgentId}", agentId);
             return JsonSerializer.Serialize(new { error = "initialize_failed", detail = ex.Message });
         }
@@ -212,4 +240,5 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             note = "Scheduled agent create accepted for dispatch. Use agent_builder agent_status to observe projection state.",
         });
     }
+
 }

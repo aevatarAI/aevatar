@@ -53,6 +53,24 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
         ct.ThrowIfCancellationRequested();
     }
 
+    public async Task<bool> SetIfAbsentAsync(
+        string key,
+        ReadOnlyMemory<byte> value,
+        TimeSpan? expiry,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ct.ThrowIfCancellationRequested();
+
+        var created = await _database.StringSetAsync(
+            key,
+            value.ToArray(),
+            ToExpiration(expiry),
+            When.NotExists);
+        ct.ThrowIfCancellationRequested();
+        return created;
+    }
+
     public async Task<bool> CompareSetAsync(
         string key,
         ReadOnlyMemory<byte> expectedValue,

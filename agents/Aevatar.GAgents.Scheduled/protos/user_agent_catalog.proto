@@ -83,6 +83,23 @@ enum UserAgentApiKeyRevocationFailureKind {
   USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_PROVIDER_ERROR = 4;
 }
 
+enum ScheduledCredentialRevocationTrackStatus {
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_UNSPECIFIED = 0;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_PENDING = 1;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_BLOCKED_MISSING_SECRET_REF = 2;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_COMPLETED = 3;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_NOT_APPLICABLE = 4;
+}
+
+message ScheduledCredentialRevocationTrack {
+  ScheduledCredentialRevocationTrackStatus status = 1;
+  int32 attempt_count = 2;
+  google.protobuf.Timestamp last_attempt_at = 3;
+  int32 last_http_status = 4;
+  string last_error = 5;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 6;
+}
+
 message UserAgentApiKeyRevocation {
   string agent_id = 1;
   string api_key_id = 2;
@@ -94,6 +111,12 @@ message UserAgentApiKeyRevocation {
   int32 last_http_status = 8;
   string last_error = 9;
   UserAgentApiKeyRevocationFailureKind failure_kind = 10;
+  ScheduledCredentialRevocationTrack nyx_id_track = 11;
+  ScheduledCredentialRevocationTrack vault_track = 12;
+  string secret_subject_id = 13;
+  string repair_reason = 14;
+  string requested_by_subject_id = 15;
+  int64 requested_at_unix_ms = 16;
 }
 
 message UserAgentCatalogState {
@@ -167,6 +190,28 @@ message UserAgentCatalogRecordApiKeyRevocationAttemptCommand {
   int32 http_status = 4;
   string error = 5;
   UserAgentApiKeyRevocationFailureKind failure_kind = 6;
+  enum Track {
+    TRACK_UNSPECIFIED = 0;
+    TRACK_NYX_ID = 1;
+    TRACK_VAULT = 2;
+  }
+  Track track = 7;
+  string secret_reference_ref = 8;
+}
+
+message UserAgentCatalogRepairCredentialRevocationCommand {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.credentials.SecretReference secret_reference = 3;
+  string secret_subject_id = 4;
+  string repair_reason = 5;
+  string requested_by_subject_id = 6;
+  int64 requested_at_unix_ms = 7;
+  string request_id = 8;
+}
+
+message UserAgentCatalogRequestCredentialRevocationCommand {
+  UserAgentApiKeyRevocation revocation = 1;
 }
 
 message UserAgentCatalogUpsertedEvent {
@@ -190,6 +235,33 @@ message UserAgentCatalogApiKeyRevocationAttemptRecordedEvent {
   string error = 5;
   UserAgentApiKeyRevocationFailureKind failure_kind = 6;
   google.protobuf.Timestamp attempted_at = 7;
+  UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Track track = 8;
+  string secret_reference_ref = 9;
+}
+
+message UserAgentCatalogCredentialRevocationRepairedEvent {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.credentials.SecretReference secret_reference = 3;
+  string secret_subject_id = 4;
+  string repair_reason = 5;
+  string requested_by_subject_id = 6;
+  int64 requested_at_unix_ms = 7;
+  string request_id = 8;
+}
+
+enum UserAgentCatalogCredentialRevocationRepairRejectionReason {
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_UNSPECIFIED = 0;
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_INVALID_REQUEST = 1;
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_NOT_BLOCKED = 2;
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_ALIAS_CONFLICT = 3;
+}
+
+message UserAgentCatalogCredentialRevocationRepairRejectedEvent {
+  string request_id = 1;
+  string agent_id = 2;
+  string api_key_id = 3;
+  UserAgentCatalogCredentialRevocationRepairRejectionReason reason = 4;
 }
 
 message UserAgentCatalogTombstonesCompactedEvent {
@@ -284,4 +356,10 @@ message UserAgentApiKeyRevocationDocument {
   string last_event_id = 13;
   google.protobuf.Timestamp updated_at_utc = 14;
   string actor_id = 15;
+  ScheduledCredentialRevocationTrack nyx_id_track = 16;
+  ScheduledCredentialRevocationTrack vault_track = 17;
+  string secret_subject_id = 18;
+  string repair_reason = 19;
+  string requested_by_subject_id = 20;
+  int64 requested_at_unix_ms = 21;
 }

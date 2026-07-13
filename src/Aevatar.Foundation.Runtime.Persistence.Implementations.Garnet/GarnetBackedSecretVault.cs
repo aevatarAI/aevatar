@@ -36,7 +36,9 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var record = new GarnetSecretVaultRecord
         {
-            Ref = GarnetSecretRecordIds.NewSecretReference("sec_"),
+            Ref = string.IsNullOrWhiteSpace(request.RequestedRef)
+                ? GarnetSecretRecordIds.NewSecretReference("sec_")
+                : request.RequestedRef.Trim(),
             Purpose = request.Purpose,
             OwnerScopeKey = request.OwnerScopeKey,
             SubjectId = request.SubjectId,
@@ -51,8 +53,15 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             _keyring,
             GarnetSecretRecordIds.VaultAssociatedData(record));
 
-        await _store.SetAsync(BuildKey(record.Ref), record.ToByteArray(), expiry: null, ct);
-        return new StoreSecretResult(ToReference(record));
+        var bytes = record.ToByteArray();
+        if (await _store.SetIfAbsentAsync(BuildKey(record.Ref), bytes, expiry: null, ct))
+            return new StoreSecretResult(ToReference(record));
+
+        var existing = await ReadRecordAsync(record.Ref, ct);
+        if (existing.Record is not null && SameCreateRequest(existing.Record, record, request.Secret))
+            return new StoreSecretResult(ToReference(existing.Record));
+
+        throw new InvalidOperationException("Secret reference already exists with a different descriptor or secret.");
     }
 
     public async Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default)
@@ -226,6 +235,26 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         string.Equals(record.OwnerScopeKey, ownerScopeKey, StringComparison.Ordinal) &&
         string.Equals(record.SubjectId, subjectId, StringComparison.Ordinal);
 
+    private bool SameCreateRequest(
+        GarnetSecretVaultRecord existing,
+        GarnetSecretVaultRecord requested,
+        string secret)
+    {
+        if (existing.Status != GarnetSecretRecordStatus.Active ||
+            !string.Equals(existing.Purpose, requested.Purpose, StringComparison.Ordinal) ||
+            !string.Equals(existing.OwnerScopeKey, requested.OwnerScopeKey, StringComparison.Ordinal) ||
+            !string.Equals(existing.SubjectId, requested.SubjectId, StringComparison.Ordinal) ||
+            existing.ExpiresAtUnixMs != requested.ExpiresAtUnixMs ||
+            !string.Equals(existing.Fingerprint, requested.Fingerprint, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var decrypted = TryDecrypt(existing);
+        return decrypted.FailureReason == SecretResolutionFailureReason.None &&
+               string.Equals(decrypted.Secret, secret, StringComparison.Ordinal);
+    }
+
     private static SecretReference ToReference(GarnetSecretVaultRecord record) => new()
     {
         Ref = record.Ref,
@@ -248,6 +277,8 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OwnerScopeKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SubjectId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Secret);
+        if (request.RequestedRef is not null && string.IsNullOrWhiteSpace(request.RequestedRef))
+            throw new ArgumentException("RequestedRef must be null or non-empty.", nameof(request));
     }
 
     private static void ValidateResolveRequest(ResolveSecretRequest request)

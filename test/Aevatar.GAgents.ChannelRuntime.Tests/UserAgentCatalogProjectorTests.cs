@@ -431,7 +431,7 @@ public sealed class UserAgentCatalogProjectorTests
         await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-revoke-pending", 7, state), CancellationToken.None);
 
         var document = dispatcher.Upserts.Should().ContainSingle().Subject;
-        document.Id.Should().Be("agent-1");
+        document.Id.Should().Be(ScheduledAgentCredentialRevocationDocumentIds.Build("agent-1", "key-1", "sec-1"));
         document.AgentId.Should().Be("agent-1");
         document.ApiKeyId.Should().Be("key-1");
         document.NyxApiKeyReference.Ref.Should().Be("sec-1");
@@ -457,6 +457,7 @@ public sealed class UserAgentCatalogProjectorTests
             HttpStatus = 404,
             FailureKind = UserAgentApiKeyRevocationFailureKind.None,
             AttemptedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 0, 0, TimeSpan.Zero)),
+            SecretReferenceRef = "sec-1",
         };
 
         await projector.ProjectAsync(
@@ -464,8 +465,20 @@ public sealed class UserAgentCatalogProjectorTests
             BuildCommittedEnvelope("evt-revoke-complete", 8, state, Any.Pack(completed)),
             CancellationToken.None);
 
-        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-1");
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.Build("agent-1", "key-1", "sec-1"));
         dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void CredentialRevocationDocumentId_UsesUtf8LengthPrefixedNaturalKey()
+    {
+        var first = ScheduledAgentCredentialRevocationDocumentIds.Build("代理", "key-a", "sec-a");
+        var second = ScheduledAgentCredentialRevocationDocumentIds.Build("代理", "key-a", "sec-b");
+
+        first.Should().StartWith("scr1_");
+        first.Should().NotBe(second);
+        first.Should().NotContain("=");
     }
 
     [Fact]

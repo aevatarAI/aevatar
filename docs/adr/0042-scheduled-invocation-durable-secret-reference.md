@@ -46,3 +46,9 @@ or the scheduled invocation agent-key tag `7`; the next new source tag starts at
   adapter late-resolves the full key for the single invocation attempt.
 - ADR-0037 remains the broader credential-source model, with this ADR superseding only its
   durable reference wording and locking the tag policy.
+
+## Requested references and dual-track revocation
+
+`ISecretVault.PutAsync` accepts an optional caller-allocated `RequestedRef`. A requested reference is create-only: repeating the exact descriptor and secret is idempotent, while reusing the reference for a different owner, subject, expiry, or secret fails closed. Garnet implements the operation with atomic `SET NX`; in-memory implementations preserve the same observable contract.
+
+Scheduled credential revocation is catalog-owned and split into NyxID and vault tracks. External revoke calls are consequences of an already committed intent, never prerequisites for creating the durable fact. The natural identity is `(agent_id, api_key_id, secret_reference.ref)`.

@@ -381,6 +381,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
+        app.MapScheduledAgentCredentialRepairAdminEndpoints();
         app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 

@@ -104,6 +104,21 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
     }
 
+    public async Task RequestCredentialRevocationAsync(
+        UserAgentApiKeyRevocation revocation,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(revocation);
+        await EnsureCatalogActorAsync(ct);
+        await _actorDispatchPort.DispatchAsync(
+            UserAgentCatalogGAgent.WellKnownId,
+            BuildEnvelope(new UserAgentCatalogRequestCredentialRevocationCommand
+            {
+                Revocation = revocation.Clone(),
+            }),
+            ct);
+    }
+
     public async Task ShareAsync(
         string agentId,
         OwnerScope ownerScope,

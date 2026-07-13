@@ -429,7 +429,11 @@ public sealed class AgentDeliveryTargetToolTests
                 """);
 
             await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("dispatch failed");
-            issuer.RevokedApiKeyIds.Should().ContainSingle().Which.Should().Be("key-aelf-twitter-approval");
+            await commandPort.Received(1).RequestCredentialRevocationAsync(
+                Arg.Is<UserAgentApiKeyRevocation>(revocation =>
+                    revocation.AgentId == "aelf-twitter-approval" &&
+                    revocation.ApiKeyId == "key-aelf-twitter-approval"),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -746,12 +750,9 @@ public sealed class AgentDeliveryTargetToolTests
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
             await commandPort.Received(1).TombstoneAsync("agent-3", Arg.Any<CancellationToken>());
-            issuer.RevokedApiKeyIds.Should().ContainSingle().Which.Should().Be("key-agent-3");
-            await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "agent-3" &&
-                    command.ApiKeyId == "key-agent-3" &&
-                    command.Completed),
+            issuer.RevokedApiKeyIds.Should().BeEmpty();
+            await commandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -811,14 +812,9 @@ public sealed class AgentDeliveryTargetToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
-            await commandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "agent-pending-revoke" &&
-                    command.ApiKeyId == "key-pending-revoke" &&
-                    !command.Completed &&
-                    command.HttpStatus == 403 &&
-                    command.Error == "api key owner mismatch" &&
-                    command.FailureKind == UserAgentApiKeyRevocationFailureKind.Unauthorized),
+            issuer.RevokedApiKeyIds.Should().BeEmpty();
+            await commandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -1265,11 +1261,6 @@ public sealed class AgentDeliveryTargetToolTests
             return Task.FromResult(RevokeResult);
         }
 
-        public Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
-        {
-            RevokedApiKeyIds.Add(apiKeyId);
-            return Task.CompletedTask;
-        }
     }
 
     private sealed record IssueCall(

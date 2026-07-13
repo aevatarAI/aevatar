@@ -17,9 +17,10 @@ public sealed class InMemorySecretVault : ISecretVault
         ct.ThrowIfCancellationRequested();
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var requestedRef = request.RequestedRef?.Trim();
         var reference = new SecretReference
         {
-            Ref = NewReference(),
+            Ref = string.IsNullOrEmpty(requestedRef) ? NewReference() : requestedRef,
             Purpose = request.Purpose,
             Fingerprint = Fingerprint(request.Secret),
             Version = 1,
@@ -30,6 +31,14 @@ public sealed class InMemorySecretVault : ISecretVault
 
         lock (_gate)
         {
+            if (_secrets.TryGetValue(reference.Ref, out var existing))
+            {
+                if (SameCreateRequest(existing, reference, request.SubjectId, request.Secret))
+                    return Task.FromResult(new StoreSecretResult(existing.Reference.Clone()));
+
+                throw new InvalidOperationException("Secret reference already exists with a different descriptor or secret.");
+            }
+
             _secrets[reference.Ref] = new StoredSecret(reference, request.SubjectId, request.Secret, Revoked: false);
         }
 
@@ -132,7 +141,19 @@ public sealed class InMemorySecretVault : ISecretVault
         string subjectId) =>
         string.Equals(storedSecret.Reference.Purpose, purpose, StringComparison.Ordinal) &&
         string.Equals(storedSecret.Reference.OwnerScopeKey, ownerScopeKey, StringComparison.Ordinal) &&
-        string.Equals(storedSecret.SubjectId, subjectId, StringComparison.Ordinal);
+               string.Equals(storedSecret.SubjectId, subjectId, StringComparison.Ordinal);
+
+    private static bool SameCreateRequest(
+        StoredSecret storedSecret,
+        SecretReference reference,
+        string subjectId,
+        string secret) =>
+        !storedSecret.Revoked &&
+        string.Equals(storedSecret.Reference.Purpose, reference.Purpose, StringComparison.Ordinal) &&
+        string.Equals(storedSecret.Reference.OwnerScopeKey, reference.OwnerScopeKey, StringComparison.Ordinal) &&
+        string.Equals(storedSecret.SubjectId, subjectId, StringComparison.Ordinal) &&
+        string.Equals(storedSecret.Secret, secret, StringComparison.Ordinal) &&
+        storedSecret.Reference.ExpiresAtUnixMs == reference.ExpiresAtUnixMs;
 
     private string NewReference()
     {

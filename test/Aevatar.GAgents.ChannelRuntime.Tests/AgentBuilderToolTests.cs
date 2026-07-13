@@ -117,7 +117,7 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-1");
-            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
             doc.RootElement.GetProperty("agents").GetArrayLength().Should().Be(0);
             doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Delete submitted");
             doc.RootElement.GetProperty("note").GetString()
@@ -133,14 +133,9 @@ public sealed class AgentBuilderToolTests
                 "skill-runner-1",
                 Arg.Any<CancellationToken>());
 
-            handler.Requests.Should().ContainSingle(x =>
-                x.Method == HttpMethod.Delete &&
-                x.Path == "/api/v1/api-keys/key-1");
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-1" &&
-                    command.ApiKeyId == "key-1" &&
-                    command.Completed),
+            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Delete);
+            await catalogCommandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command => command.ApiKeyId == "key-1"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -210,14 +205,8 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
 
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-fail" &&
-                    command.ApiKeyId == "key-fail" &&
-                    !command.Completed &&
-                    command.HttpStatus == 503 &&
-                    command.Error == "upstream unavailable" &&
-                    command.FailureKind == UserAgentApiKeyRevocationFailureKind.Transient),
+            await catalogCommandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command => command.ApiKeyId == "key-fail"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -249,6 +238,23 @@ public sealed class AgentBuilderToolTests
                     AgentId = "skill-runner-old",
                     ApiKeyId = "key-old",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+                    NyxApiKeyReference = new SecretReference
+                    {
+                        Ref = "secret-old",
+                        Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                        OwnerScopeKey = "scheduled-agent:key-old",
+                        Version = 1,
+                        Fingerprint = "sha256:test",
+                    },
+                    SecretSubjectId = "key-old",
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                    },
                     AttemptCount = 1,
                     LastHttpStatus = 503,
                     FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
@@ -300,7 +306,7 @@ public sealed class AgentBuilderToolTests
             doc.RootElement.GetProperty("api_key_revocation_retry_count").GetInt32().Should().Be(1);
 
             handler.Requests.Select(static request => request.Path)
-                .Should().BeEquivalentTo("/api/v1/api-keys/key-current", "/api/v1/api-keys/key-old");
+                .Should().BeEquivalentTo("/api/v1/api-keys/key-old");
             await queryPort.Received(1).QueryPendingApiKeyRevocationsByCallerAsync(
                 Arg.Any<OwnerScope>(),
                 Arg.Any<CancellationToken>());
@@ -380,13 +386,10 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
             doc.RootElement.GetProperty("api_key_revocation_retry_count").GetInt32().Should().Be(0);
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-drift-revoke" &&
-                    command.ApiKeyId == "key-current" &&
-                    command.Completed),
+            await catalogCommandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command => command.ApiKeyId == "key-current"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -463,7 +466,7 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-stuck");
-            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
             doc.RootElement.GetProperty("delete_notice").GetString()
                 .Should().Contain("Delete submitted for");
             // The new copy must point users at /agents to verify rather than
@@ -1676,17 +1679,23 @@ public sealed class AgentBuilderToolTests
     private static AgentBuilderTool CreateTool(IServiceCollection services)
     {
         var provider = services.BuildServiceProvider();
+        var issuer = provider.GetService<IScheduledAgentApiKeyIssuer>() ??
+                     new ScheduledAgentApiKeyIssuer(
+                         provider.GetRequiredService<INyxIdApiClientFactory>(),
+                         new ScheduledAgentCreatorOptions());
+        var lifecycle = new ScheduledAgentCredentialLifecycle(
+            provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
+            provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
+            issuer);
         return new AgentBuilderTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
             provider.GetService<ISkillRunnerExecutionQueryPort>() ?? Substitute.For<ISkillRunnerExecutionQueryPort>(),
             provider.GetRequiredService<ISkillRunnerCommandPort>(),
             provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
-            provider.GetService<IScheduledAgentApiKeyIssuer>() ??
-            new ScheduledAgentApiKeyIssuer(
-                provider.GetRequiredService<INyxIdApiClientFactory>(),
-                new ScheduledAgentCreatorOptions()),
-            provider.GetService<ILogger<AgentBuilderTool>>());
+            issuer,
+            provider.GetService<ILogger<AgentBuilderTool>>(),
+            lifecycle);
     }
 
     private static ProjectionIndexSchemaDriftException CreateExecutionProjectionDrift() =>

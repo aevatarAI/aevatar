@@ -137,6 +137,8 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 Ref = "sec-1",
                 Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
                 OwnerScopeKey = "scope-key-1",
+                Version = 1,
+                Fingerprint = "sha256:test",
             },
             OwnerScope = owner,
         });
@@ -152,6 +154,8 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         pending.ApiKeyId.Should().Be("key-1");
         pending.NyxApiKeyReference.Ref.Should().Be("sec-1");
         pending.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
+        pending.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        pending.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
 
         var persisted = await _store.GetEventsAsync(_agent.Id);
         persisted.Select(static item => item.EventData.TypeUrl)
@@ -162,13 +166,21 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRecordApiKeyRevocationAttemptAsync_FailureKeepsPendingAndCompletionClearsIt()
+    public async Task HandleRecordApiKeyRevocationAttemptAsync_ClearsOnlyAfterBothTracksComplete()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
         {
             AgentId = "agent-retry",
             ConversationId = "conv-a",
             ApiKeyId = "key-retry",
+            NyxApiKeyReference = new SecretReference
+            {
+                Ref = "sec-retry",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = "scope-retry",
+                Version = 1,
+                Fingerprint = "sha256:retry",
+            },
             OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
         });
         await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand { AgentId = "agent-retry" });
@@ -182,6 +194,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 HttpStatus = 503,
                 Error = "upstream unavailable",
                 FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
             });
 
         var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
@@ -197,9 +210,106 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 Completed = true,
                 HttpStatus = 404,
                 FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+                Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+            });
+
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
+            .Which.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Completed);
+
+        await _agent.HandleRecordApiKeyRevocationAttemptAsync(
+            new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+            {
+                AgentId = "agent-retry",
+                ApiKeyId = "key-retry",
+                Completed = true,
+                FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+                Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault,
             });
 
         _agent.State.PendingApiKeyRevocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleTombstoneAsync_WithoutSecretReference_BlocksVaultTrackWithoutCountingAttempts()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-blocked",
+            ApiKeyId = "key-blocked",
+            OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+        });
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand { AgentId = "agent-blocked" });
+
+        var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        pending.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef);
+
+        await _agent.HandleRecordApiKeyRevocationAttemptAsync(new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
+        {
+            AgentId = "agent-blocked",
+            ApiKeyId = "key-blocked",
+            Completed = false,
+            Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault,
+        });
+
+        pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        pending.VaultTrack.AttemptCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleRepairCredentialRevocationAsync_BlockedReference_CommitsRepairAndMovesVaultToPending()
+    {
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-repair",
+            ApiKeyId = "key-repair",
+            OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
+        });
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand { AgentId = "agent-repair" });
+
+        await _agent.HandleRepairCredentialRevocationAsync(new UserAgentCatalogRepairCredentialRevocationCommand
+        {
+            RequestId = "repair-request-1",
+            AgentId = "agent-repair",
+            ApiKeyId = "key-repair",
+            SecretReference = CompleteReference("secret-repair", "key-repair"),
+            SecretSubjectId = "key-repair",
+            RepairReason = "restore exact durable reference",
+            RequestedBySubjectId = "admin-1",
+            RequestedAtUnixMs = 1234,
+        });
+
+        var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
+        pending.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        pending.NyxApiKeyReference.Ref.Should().Be("secret-repair");
+        pending.RepairReason.Should().Be("restore exact durable reference");
+        pending.RequestedBySubjectId.Should().Be("admin-1");
+        pending.RequestedAtUnixMs.Should().Be(1234);
+
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        var repaired = persisted.Last().EventData.Unpack<UserAgentCatalogCredentialRevocationRepairedEvent>();
+        repaired.RequestId.Should().Be("repair-request-1");
+    }
+
+    [Fact]
+    public async Task HandleRepairCredentialRevocationAsync_NotBlocked_CommitsTypedRejection()
+    {
+        await _agent.HandleRepairCredentialRevocationAsync(new UserAgentCatalogRepairCredentialRevocationCommand
+        {
+            RequestId = "repair-request-2",
+            AgentId = "missing-agent",
+            ApiKeyId = "missing-key",
+            SecretReference = CompleteReference("secret-missing", "missing-key"),
+            SecretSubjectId = "missing-key",
+            RepairReason = "restore exact durable reference",
+            RequestedBySubjectId = "admin-1",
+            RequestedAtUnixMs = 1234,
+        });
+
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        var rejected = persisted.Should().ContainSingle().Subject.EventData
+            .Unpack<UserAgentCatalogCredentialRevocationRepairRejectedEvent>();
+        rejected.RequestId.Should().Be("repair-request-2");
+        rejected.Reason.Should().Be(UserAgentCatalogCredentialRevocationRepairRejectionReason.NotBlocked);
     }
 
     [Fact]
@@ -549,7 +659,17 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             HttpStatus = 503,
             Error = "upstream unavailable",
             FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+            Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
         };
+
+    private static SecretReference CompleteReference(string reference, string subjectId) => new()
+    {
+        Ref = reference,
+        Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+        OwnerScopeKey = $"scheduled-agent:{subjectId}",
+        Version = 1,
+        Fingerprint = "sha256:test",
+    };
 
     private sealed class InMemoryEventStore : IEventStore
     {

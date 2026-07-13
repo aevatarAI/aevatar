@@ -28,8 +28,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly IUserAgentCatalogCommandPort _commandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
-    private readonly ISecretVault _secretVault;
-    private readonly IScheduledAgentApiKeyIssuer? _apiKeyIssuer;
+    private readonly ScheduledAgentCredentialLifecycle? _credentialLifecycle;
 
     public AgentDeliveryTargetTool(
         IUserAgentCatalogQueryPort queryPort,
@@ -41,8 +40,10 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
-        _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
-        _apiKeyIssuer = apiKeyIssuer;
+        ArgumentNullException.ThrowIfNull(secretVault);
+        _credentialLifecycle = apiKeyIssuer is null
+            ? null
+            : new ScheduledAgentCredentialLifecycle(secretVault, commandPort, apiKeyIssuer);
     }
 
     public string Name => "agent_delivery_targets";
@@ -123,9 +124,9 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         {
             return action switch
             {
-                "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _secretVault, _apiKeyIssuer, token, caller, root, ct),
+                "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _credentialLifecycle, token, caller, root, ct),
                 "upsert" => await UpsertAsync(_queryPort, _commandPort, caller, root, ct),
-                "delete" => await DeleteAsync(_queryPort, _commandPort, _apiKeyIssuer, token, caller, root, ct),
+                "delete" => await DeleteAsync(_queryPort, _commandPort, caller, root, ct),
                 _ => await ListAsync(_queryPort, caller, ct),
             };
         }
@@ -137,14 +138,13 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
         ICallerScopeResolver callerScopeResolver,
-        ISecretVault secretVault,
-        IScheduledAgentApiKeyIssuer? apiKeyIssuer,
+        ScheduledAgentCredentialLifecycle? credentialLifecycle,
         string token,
         OwnerScope caller,
         JsonElement args,
         CancellationToken ct)
     {
-        if (apiKeyIssuer is null)
+        if (credentialLifecycle is null)
         {
             return JsonSerializer.Serialize(new
             {
@@ -197,27 +197,38 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         }
 
         var keyScopeId = keyScope.RegistrationScopeId;
-        var key = await apiKeyIssuer.IssueAsync(
-            token,
-            new ScheduledAgentServiceSlugs(
-                nyxProviderSlug.value!,
-                FailureNotificationSlug: null,
-                RequiredServiceSlugs: [],
-                RequiresOrnnService: false),
-            deliveryTargetId.value!,
-            skillName: string.Empty,
-            scopeId: keyScopeId,
-            ct);
-        if (!key.Success)
-            return key.ToErrorJson();
+        var ownerScopeKey = BuildScheduledNyxApiKeyOwnerScopeKey(
+            caller,
+            keyScopeId,
+            conversationId.value!,
+            deliveryTargetId.value!);
+        ScheduledAgentCredentialProvisionResult provisioned;
+        try
+        {
+            provisioned = await credentialLifecycle.ProvisionAsync(
+                token,
+                new ScheduledAgentServiceSlugs(
+                    nyxProviderSlug.value!,
+                    FailureNotificationSlug: null,
+                    RequiredServiceSlugs: [],
+                    RequiresOrnnService: false),
+                deliveryTargetId.value!,
+                skillName: string.Empty,
+                scopeId: keyScopeId,
+                CredentialSecretPurposes.ScheduledNyxApiKey,
+                ownerScopeKey,
+                "delivery-target-create",
+                ct);
+        }
+        catch
+        {
+            throw;
+        }
+        if (!provisioned.IssuedKey.Success)
+            return provisioned.IssuedKey.ToErrorJson();
 
-        var storedKey = await secretVault.PutAsync(new StoreSecretRequest(
-            CredentialSecretPurposes.ScheduledNyxApiKey,
-            BuildScheduledNyxApiKeyOwnerScopeKey(caller, keyScopeId, conversationId.value!, deliveryTargetId.value!),
-            key.ApiKeyId ?? string.Empty,
-            key.FullKey ?? string.Empty,
-            "delivery-target-create"),
-            ct);
+        var key = provisioned.IssuedKey;
+        var secretReference = provisioned.SecretReference!;
 
         try
         {
@@ -228,7 +239,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                     ConversationId = conversationId.value!,
                     NyxProviderSlug = nyxProviderSlug.value!,
                     NyxApiKey = string.Empty,
-                    NyxApiKeyReference = storedKey.Reference,
+                    NyxApiKeyReference = secretReference,
                     ApiKeyId = key.ApiKeyId ?? string.Empty,
                     AgentType = "delivery_target",
                     TemplateName = "explicit_delivery_target",
@@ -240,7 +251,11 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         }
         catch
         {
-            await apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, CancellationToken.None);
+            await credentialLifecycle.RequestRevocationAsync(
+                deliveryTargetId.value!,
+                key.ApiKeyId ?? string.Empty,
+                secretReference,
+                CancellationToken.None);
             throw;
         }
 
@@ -417,8 +432,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private static async Task<string> DeleteAsync(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
-        IScheduledAgentApiKeyIssuer? apiKeyIssuer,
-        string token,
         OwnerScope caller,
         JsonElement args,
         CancellationToken ct)
@@ -449,36 +462,15 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
 
         await commandPort.TombstoneAsync(agentId, ct);
 
-        var revocationResult = apiKeyIssuer is null || string.IsNullOrWhiteSpace(exists.ApiKeyId)
-            ? null
-            : await apiKeyIssuer.RevokeAsync(token, exists.ApiKeyId, ct);
-        if (revocationResult is not null)
-        {
-            await commandPort.RecordApiKeyRevocationAttemptAsync(
-                new UserAgentCatalogRecordApiKeyRevocationAttemptCommand
-                {
-                    AgentId = exists.AgentId,
-                    ApiKeyId = exists.ApiKeyId,
-                    Completed = revocationResult.Completed,
-                    HttpStatus = revocationResult.HttpStatus,
-                    Error = revocationResult.Error,
-                    FailureKind = revocationResult.FailureKind,
-                },
-                ct);
-        }
-
         return JsonSerializer.Serialize(new
         {
             status = "accepted",
             agent_id = agentId,
             delivery_target_id = agentId,
-            api_key_revocation_status = ResolveRevocationStatus(revocationResult),
+            api_key_revocation_status = string.IsNullOrWhiteSpace(exists.ApiKeyId) ? "not_applicable" : "pending",
             note = "Tombstone accepted. Projection is propagating; try 'list' in a few seconds to confirm the delivery target is gone.",
         });
     }
-
-    private static string ResolveRevocationStatus(ScheduledAgentApiKeyRevokeResult? result) =>
-        result is null ? "not_applicable" : result.Completed ? "completed" : "pending";
 
     private static (string? value, string? error) GetRequired(JsonElement args, string errorMessage, params string[] keys)
     {
