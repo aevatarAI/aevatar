@@ -393,6 +393,141 @@ public sealed class WorkflowRunDeliveryGAgentTests
         failed.ErrorCode.Should().Be("resolver_unavailable");
     }
 
+    [Fact]
+    public async Task TerminalWorkflowEvent_ShouldUseBotRegistrationIdAsConversationBotIdentity()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var composer = new PlainTextComposer("lark");
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var (vault, credential) = await MintDeliveryCredentialAsync();
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler, composer),
+            deferredDispatchPort,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault));
+        deferredDispatchPort.Inner = new DirectActorDispatchPort(agent);
+
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        composer.ComposedConversations.Should().ContainSingle();
+        var conversation = composer.ComposedConversations.Single();
+        // Bot identity is the stable registration id; the vault secret ref only authorizes the
+        // delivery and must never double as the bot identity.
+        conversation.Bot.Value.Should().Be("bot-reg-1");
+        conversation.ToString().Should().NotContain(credential.SecretReference.Ref);
+    }
+
+    [Fact]
+    public async Task TerminalWorkflowEvent_WithoutBotRegistrationId_ShouldFallBackToSharedRelayBotAlias()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var composer = new PlainTextComposer("lark");
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var (vault, credential) = await MintDeliveryCredentialAsync();
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler, composer),
+            deferredDispatchPort,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault));
+        deferredDispatchPort.Inner = new DirectActorDispatchPort(agent);
+
+        var request = StartRequest(credential);
+        request.BotRegistrationId = string.Empty;
+        await agent.HandleEventAsync(Envelope(request));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        composer.ComposedConversations.Should().ContainSingle();
+        var conversation = composer.ComposedConversations.Single();
+        // Deliveries registered before the registration id was persisted keep the relay's shared
+        // bot alias — never the secret ref.
+        conversation.Bot.Value.Should().Be("nyx-relay-bot");
+        conversation.ToString().Should().NotContain(credential.SecretReference.Ref);
+    }
+
+    [Fact]
+    public async Task RevokedCredentialHandle_ShouldFailClosedWithoutHttpRequest()
+    {
+        var eventStore = new InMemoryEventStore();
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var (vault, credential) = await MintDeliveryCredentialAsync();
+        await vault.RevokeAsync(new RevokeSecretRequest(
+            credential.SecretReference.Ref,
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            RegistrationScopeId,
+            AgentApiKeyId,
+            "test-revoke"));
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler),
+            deferredDispatchPort,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault),
+            eventStore);
+        deferredDispatchPort.Inner = new DirectActorDispatchPort(agent);
+
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        agent.State.ErrorCode.Should().Be("credential_handle_missing");
+        nyxHandler.Requests.Should().BeEmpty();
+        var failed = await LastFailedEventAsync(eventStore);
+        failed.ErrorCode.Should().Be("credential_handle_missing");
+    }
+
+    [Fact]
+    public async Task OwnerScopeMismatchCredentialHandle_ShouldFailClosedWithoutHttpRequest()
+    {
+        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
+        var nyxHandler = new RecordingJsonHandler();
+        var deferredDispatchPort = new DeferredDispatchPort();
+        var (vault, credential) = await MintDeliveryCredentialAsync();
+        credential.SecretReference.OwnerScopeKey = "registration-scope-other";
+        var agent = await CreateAgentAsync(
+            projectionPort,
+            CreateOutboundPort(nyxHandler),
+            deferredDispatchPort,
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(vault));
+        deferredDispatchPort.Inner = new DirectActorDispatchPort(agent);
+
+        await agent.HandleEventAsync(Envelope(StartRequest(credential)));
+        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
+        {
+            RunFinished = new WorkflowRunFinishedEventPayload
+            {
+                Result = Any.Pack(new WorkflowRunResultPayload { Output = "done" }),
+            },
+        });
+
+        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        agent.State.ErrorCode.Should().Be("credential_handle_missing");
+        nyxHandler.Requests.Should().BeEmpty();
+    }
+
     private static async Task<(InMemorySecretVault Vault, ChannelWorkflowResultDeliveryCredential Credential)>
         MintDeliveryCredentialAsync()
     {
@@ -479,7 +614,9 @@ public sealed class WorkflowRunDeliveryGAgentTests
             .Last();
     }
 
-    private static NyxIdRelayOutboundPort CreateOutboundPort(HttpMessageHandler handler)
+    private static NyxIdRelayOutboundPort CreateOutboundPort(
+        HttpMessageHandler handler,
+        PlainTextComposer? composer = null)
     {
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -488,7 +625,7 @@ public sealed class WorkflowRunDeliveryGAgentTests
         return new NyxIdRelayOutboundPort(
             client,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
-            [new PlainTextComposer("lark")]);
+            [composer ?? new PlainTextComposer("lark")]);
     }
 
     private sealed class DeferredDispatchPort : IActorDispatchPort
@@ -632,8 +769,13 @@ public sealed class WorkflowRunDeliveryGAgentTests
     {
         public ChannelId Channel { get; } = ChannelId.From(platform);
 
-        public PlainTextPayload Compose(MessageContent intent, ComposeContext context) =>
-            new(intent.Text ?? string.Empty);
+        public List<ConversationReference> ComposedConversations { get; } = [];
+
+        public PlainTextPayload Compose(MessageContent intent, ComposeContext context)
+        {
+            ComposedConversations.Add(context.Conversation.Clone());
+            return new(intent.Text ?? string.Empty);
+        }
 
         object IMessageComposer.Compose(MessageContent intent, ComposeContext context) =>
             Compose(intent, context);

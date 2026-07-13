@@ -241,14 +241,18 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 apiKeyId,
                 routeId);
 
+            // Compensation runs detached from the caller's token: when the triggering failure IS
+            // the caller's cancellation, the same token would abort every rollback delete and leave
+            // a live NyxID api key whose full_key stays resolvable in the vault with no
+            // registration referencing it.
             if (!localMirrorAccepted && routeId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, ct), "channel_route", routeId, _logger);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteConversationRouteAsync(request.AccessToken, routeId, CancellationToken.None), "channel_route", routeId, _logger);
             if (!localMirrorAccepted && channelBotId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, ct), "channel_bot", channelBotId, _logger);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteChannelBotAsync(request.AccessToken, channelBotId, CancellationToken.None), "channel_bot", channelBotId, _logger);
             if (!localMirrorAccepted && workflowResultDeliveryCredential is not null && apiKeyId is not null)
                 await TryRevokeWorkflowResultDeliveryCredentialAsync(workflowResultDeliveryCredential, apiKeyId, registrationId);
             if (!localMirrorAccepted && apiKeyId is not null)
-                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, ct), "api_key", apiKeyId, _logger);
+                await NyxApiResponseHelper.TryRollbackAsync(() => _nyxClient.DeleteApiKeyAsync(request.AccessToken, apiKeyId, CancellationToken.None), "api_key", apiKeyId, _logger);
 
             return Failure(localMirrorAccepted
                 ? "local_mirror_accepted_remote_cleanup_skipped"
@@ -303,10 +307,9 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
     }
 
     /// <summary>
-    /// Best-effort vault compensation when provisioning fails after the vault write. The Garnet
-    /// vault's revoke lands with the CAS revoke/rotate infrastructure (#2689); until then a
-    /// failed revoke only orphans an inert record, because the NyxID api key itself is deleted
-    /// in the same rollback chain.
+    /// Best-effort vault compensation when provisioning fails after the vault write. A failed
+    /// revoke is logged and must never shadow the NyxID api-key delete that follows it in the
+    /// rollback chain — deleting the api key is what makes an orphaned vault record inert.
     /// </summary>
     private async Task TryRevokeWorkflowResultDeliveryCredentialAsync(
         SecretReference credential,
@@ -324,7 +327,10 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                     $"lark-channel-bot-provisioning-rollback:{registrationId}"),
                 CancellationToken.None);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        // No OperationCanceledException carve-out: the revoke runs detached from the caller's
+        // token, so any exception here (including a vault-internal timeout) must not shadow the
+        // api-key delete that follows in the rollback chain.
+        catch (Exception ex)
         {
             _logger.LogWarning(
                 ex,
