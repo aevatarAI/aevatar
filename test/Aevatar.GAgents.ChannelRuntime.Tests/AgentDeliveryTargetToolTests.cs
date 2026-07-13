@@ -627,6 +627,66 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_Upsert_UsesRequestedDeliveryPlatformInsteadOfCallerPlatform()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "agent-1",
+                ConversationId = "oc_chat_existing",
+                NyxProviderSlug = "api-lark-bot",
+                TargetPlatform = "lark",
+                OwnerScope = caller,
+            }));
+
+        UserAgentCatalogUpsertCommand? captured = null;
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Do<UserAgentCatalogUpsertCommand>(command => captured = command), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "upsert",
+                  "agent_id": "agent-1",
+                  "platform": "lark",
+                  "conversation_id": "oc_chat_1",
+                  "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("platform").GetString().Should().Be("lark");
+            captured.Should().NotBeNull();
+            captured!.TargetPlatform.Should().Be("lark");
+            captured.ChannelAddress.Platform.Should().Be("lark");
+            captured.OwnerScope!.Platform.Should().Be(OwnerScope.NyxIdPlatform);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Delete_Requires_Confirm()
     {
         var caller = OwnerScope.ForNyxIdNative("user-1");

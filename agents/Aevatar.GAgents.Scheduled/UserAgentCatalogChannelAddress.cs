@@ -55,23 +55,37 @@ public static class UserAgentCatalogChannelAddress
         string? existingFallbackAddressId = null,
         string? existingFallbackAddressType = null)
     {
-        var merged = incoming?.Clone() ?? existing?.Clone() ?? new ChannelDeliveryAddress();
-        merged.Platform = MergeNonEmpty(merged.Platform, platform);
-        merged.ProviderSlug = MergeNonEmpty(merged.ProviderSlug, providerSlug);
-        merged.ConversationId = MergeNonEmpty(merged.ConversationId, conversationId);
+        var merged = new ChannelDeliveryAddress
+        {
+            Platform = MergeNonEmpty(incoming?.Platform, platform, existing?.Platform),
+            ProviderSlug = MergeNonEmpty(incoming?.ProviderSlug, providerSlug, existing?.ProviderSlug),
+            ConversationId = MergeNonEmpty(incoming?.ConversationId, conversationId, existing?.ConversationId),
+        };
 
-        var primary = merged.Primary ?? new ChannelDeliveryAddressEndpoint();
-        primary.AddressId = MergeNonEmpty(primary.AddressId, incomingAddressId, existingAddressId, merged.ConversationId);
-        primary.AddressType = MergeNonEmpty(primary.AddressType, incomingAddressType, existingAddressType);
-        merged.Primary = primary;
+        merged.Primary = new ChannelDeliveryAddressEndpoint
+        {
+            AddressId = MergeNonEmpty(
+                incoming?.Primary?.AddressId,
+                incomingAddressId,
+                existing?.Primary?.AddressId,
+                existingAddressId,
+                merged.ConversationId),
+            AddressType = MergeNonEmpty(
+                incoming?.Primary?.AddressType,
+                incomingAddressType,
+                existing?.Primary?.AddressType,
+                existingAddressType),
+        };
 
         var fallbackId = MergeNonEmpty(
-            merged.Fallback?.AddressId,
+            incoming?.Fallback?.AddressId,
             incomingFallbackAddressId,
+            existing?.Fallback?.AddressId,
             existingFallbackAddressId);
         var fallbackType = MergeNonEmpty(
-            merged.Fallback?.AddressType,
+            incoming?.Fallback?.AddressType,
             incomingFallbackAddressType,
+            existing?.Fallback?.AddressType,
             existingFallbackAddressType);
         if (!string.IsNullOrWhiteSpace(fallbackId) || !string.IsNullOrWhiteSpace(fallbackType))
         {

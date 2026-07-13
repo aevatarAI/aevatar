@@ -364,12 +364,6 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (nyxProviderSlug.error != null)
             return nyxProviderSlug.error;
 
-        // Platform argument is informational only — the canonical platform on the
-        // upsert is the caller's platform from OwnerScope. Disregard it to avoid the
-        // LLM steering an upsert into a different platform bucket than the surface
-        // the request actually came from.
-        var platform = caller.Platform;
-
         // Issue #466 review: this tool no longer accepts NyxApiKey as an argument
         // (avoiding LLM credential exposure). Existing credentials are preserved
         // through the actor's MergeNonEmpty policy — but a *create* with no existing
@@ -385,6 +379,9 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 hint = "agent_delivery_targets.upsert is a rebind operation only — it preserves the existing API key. Use action=create to create a new delivery target with server-side credentials.",
             });
         }
+
+        var requestedPlatform = Normalize(GetStr(args, "platform"));
+        var platform = requestedPlatform ?? Normalize(ResolveDeliveryPlatform(existingForCaller)) ?? caller.Platform;
 
         // Refactor (iter4/cluster-009):
         //   Old pattern: Upsert mapped command-port Observed to a synchronous upserted status.
