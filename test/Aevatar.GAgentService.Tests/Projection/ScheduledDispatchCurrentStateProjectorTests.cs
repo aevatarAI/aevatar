@@ -129,11 +129,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     }
 
     [Fact]
-<<<<<<< HEAD
     public async Task ProjectAsync_ShouldMaterializeCredentialRequirementFacts()
-=======
-    public async Task ProjectAsync_ShouldNotProjectDurableCredentialReference()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
         var projector = new ScheduledDispatchCurrentStateProjector(
@@ -146,7 +142,6 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             Namespace = "default",
             ServiceId = "svc",
         };
-<<<<<<< HEAD
         var state = CreateServiceInvocationState("schedule-workflow", identity);
         state.ScheduleKind = ScheduledDispatchScheduleKindState.Workflow;
         state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
@@ -159,26 +154,10 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                     ExternalUserId = "owner-1",
                 },
                 Scope = "proxy",
-=======
-        var state = CreateServiceInvocationState("schedule-durable-reference", identity);
-        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
-        {
-            Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
-            {
-                CredentialId = "credential-projector-1",
-                SecretReference = new SecretReference
-                {
-                    Ref = "sec-projector-1",
-                    Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
-                    OwnerScopeKey = "owner-scope-projector",
-                    Fingerprint = "fp-projector",
-                },
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             },
         };
 
         await projector.ProjectAsync(
-<<<<<<< HEAD
             CreateContext("scheduled-dispatch:schedule-workflow"),
             WrapCommitted(
                 state,
@@ -192,7 +171,39 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService.ToString());
         document.CredentialSourceKind.Should().Be(ScheduledDispatchCredentialSourceKind.SenderNyxId.ToString());
         document.StateVersion.Should().Be(13);
-=======
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotProjectDurableCredentialReference()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-durable-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+            {
+                CredentialId = "credential-projector-1",
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-projector-1",
+                    Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                    OwnerScopeKey = "owner-scope-projector",
+                    Fingerprint = "fp-projector",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
             CreateContext("scheduled-dispatch:schedule-durable-reference"),
             WrapCommitted(
                 state,
@@ -258,7 +269,6 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         AssertDocumentDoesNotContain(document!, "api-key-sensitive-id");
         AssertDocumentDoesNotContain(document!, "sensitive-fingerprint");
         document.StateVersion.Should().Be(10);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     [Theory]

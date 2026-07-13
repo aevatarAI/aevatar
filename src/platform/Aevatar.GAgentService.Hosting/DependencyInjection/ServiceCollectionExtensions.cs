@@ -167,11 +167,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
         services.AddScheduledCredentialExchangePort();
-<<<<<<< HEAD
         services.TryAddSingleton<IScheduledDispatchCredentialRequirementPolicy, DefaultScheduledDispatchCredentialRequirementPolicy>();
-=======
         services.AddScheduledCredentialAdmissionPort();
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
@@ -240,11 +237,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
         services.AddScheduledCredentialExchangePort();
-<<<<<<< HEAD
         services.TryAddSingleton<IScheduledDispatchCredentialRequirementPolicy, DefaultScheduledDispatchCredentialRequirementPolicy>();
-=======
         services.AddScheduledCredentialAdmissionPort();
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();

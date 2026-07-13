@@ -206,11 +206,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             configuredTarget,
             headers);
         Logger.LogInformation(
-<<<<<<< HEAD
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} credentialRequirementTargetKind={CredentialRequirementTargetKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
-=======
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} credentialRequirementTargetKind={CredentialRequirementTargetKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
             NormalizeRequired(scheduleId, nameof(scheduleId)),
             isCreate,
             configuredTarget.Kind,

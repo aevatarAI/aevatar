@@ -2,12 +2,7 @@ using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-<<<<<<< HEAD
 using Aevatar.GAgents.Channel.Identity.Abstractions;
-=======
-using Aevatar.Foundation.Abstractions.Credentials;
-using Aevatar.GAgents.Channel.Abstractions;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -257,8 +252,6 @@ public static class ScheduledDispatchEndpoints
         }
     }
 
-<<<<<<< HEAD
-=======
     private static ScheduledDispatchMutationContext ResolveMutationContext(HttpContext http)
     {
         ArgumentNullException.ThrowIfNull(http);
@@ -267,7 +260,6 @@ public static class ScheduledDispatchEndpoints
             ResolveAuthenticatedNyxIdOwnerSubject(http));
     }
 
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
     {
         ArgumentNullException.ThrowIfNull(http);

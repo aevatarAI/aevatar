@@ -11,31 +11,22 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private readonly IScheduledDispatchActorPort _actorPort;
     private readonly IScheduledDispatchQueryPort _queryPort;
     private readonly IScheduledDispatchTargetPreparationService _targetPreparationService;
-<<<<<<< HEAD
-    private readonly IScheduledDispatchCredentialRequirementPolicy _credentialRequirementPolicy;
-=======
     private readonly IScheduledDispatchCredentialAdmissionPort _credentialAdmissionPort;
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
+    private readonly IScheduledDispatchCredentialRequirementPolicy _credentialRequirementPolicy;
 
     public ScheduledDispatchApplicationService(
         IScheduledDispatchActorPort actorPort,
         IScheduledDispatchQueryPort queryPort,
         IScheduledDispatchTargetPreparationService targetPreparationService,
-<<<<<<< HEAD
+        IScheduledDispatchCredentialAdmissionPort credentialAdmissionPort,
         IScheduledDispatchCredentialRequirementPolicy? credentialRequirementPolicy = null)
-=======
-        IScheduledDispatchCredentialAdmissionPort credentialAdmissionPort)
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _targetPreparationService = targetPreparationService ?? throw new ArgumentNullException(nameof(targetPreparationService));
-<<<<<<< HEAD
+        _credentialAdmissionPort = credentialAdmissionPort ?? throw new ArgumentNullException(nameof(credentialAdmissionPort));
         _credentialRequirementPolicy = credentialRequirementPolicy ??
             DefaultScheduledDispatchCredentialRequirementPolicy.Instance;
-=======
-        _credentialAdmissionPort = credentialAdmissionPort ?? throw new ArgumentNullException(nameof(credentialAdmissionPort));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     }
 
     public async Task<ScheduledDispatchMutationReceipt> CreateAsync(
