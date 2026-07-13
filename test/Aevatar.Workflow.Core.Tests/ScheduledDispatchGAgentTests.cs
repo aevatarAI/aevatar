@@ -2491,7 +2491,6 @@ public sealed class ScheduledDispatchGAgentTests
             Envelope = triggerEnvelope?.Clone(),
         };
 
-<<<<<<< HEAD
     private static ChatRequestEvent CreateCredentialBearingChatRequest(string prompt) =>
         new()
         {
@@ -2541,7 +2540,7 @@ public sealed class ScheduledDispatchGAgentTests
         chatRequest.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
         chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
     }
-=======
+
     private static ScheduledDispatchTargetState CreateWorkflowServiceInvocationTarget(
         ScheduledServiceInvocationAuthState? auth = null,
         ChatRequestEvent? payload = null) =>
@@ -2578,7 +2577,6 @@ public sealed class ScheduledDispatchGAgentTests
         {
             DurableSenderBearerToken = "legacy-bearer-token",
         };
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private static EventEnvelope CreateTriggerEnvelope(string targetActorId, IMessage payload) =>
         new()
@@ -2620,6 +2618,7 @@ public sealed class ScheduledDispatchGAgentTests
         public List<ServiceInvocationRequest> Requests { get; } = [];
         public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
         public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
+        public List<bool> ProjectNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
 
         public Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
             dispatch => new ScheduledServiceInvocationDispatchReceipt(
@@ -2637,6 +2636,8 @@ public sealed class ScheduledDispatchGAgentTests
             ct.ThrowIfCancellationRequested();
             Requests.Add(dispatch.Request.Clone());
             Auths.Add(dispatch.Auth);
+            ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Add(
+                dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
             Headers.Add(dispatch.Headers == null
                 ? null
                 : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));

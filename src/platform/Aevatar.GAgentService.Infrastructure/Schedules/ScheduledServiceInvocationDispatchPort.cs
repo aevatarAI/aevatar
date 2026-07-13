@@ -364,7 +364,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     SenderNyxIdAccessToken = IsSenderCredential(credential.Role)
                         ? token
                         : existingControl.SenderNyxIdAccessToken,
-            };
+                };
             chatRequest.LlmControl = control.ToPayload();
             if (projectWorkflowCallerCredential)
             {

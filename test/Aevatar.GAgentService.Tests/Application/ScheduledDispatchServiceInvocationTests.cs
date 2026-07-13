@@ -77,7 +77,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     Any.Pack(new ChatRequestEvent
                     {
                         Prompt = "hello",
-<<<<<<< HEAD
                         ConnectorHttpAuthorization = "Bearer stored-connector-token",
                         Headers =
                         {
@@ -88,13 +87,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
                         {
                             [ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey] = "Bearer metadata-token",
                             ["trace"] = "kept",
-=======
-                        ConnectorHttpAuthorization = "Bearer connector-secret",
+                        },
                         CallerDurableCredential = new DurableCallerCredentialRef
                         {
                             Ref = "forged",
                             Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
                         },
                         ToolContext = new AgentToolExecutionContextPayload
                         {
@@ -351,11 +348,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuth_ShouldClearStoredConnectorAuthorization()
-=======
     public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuthAndWorkflowProjection_ShouldProjectOwnerTokenToDurableCallerCredential()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
@@ -380,16 +373,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var auth = new ScheduledServiceInvocationAuth(
             ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
 
-<<<<<<< HEAD
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(original, auth));
-
-        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("owner-token");
-        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
-=======
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
             auth,
@@ -413,7 +396,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             invokedChat.CallerDurableCredential.SubjectId,
             "test"));
         resolved.Secret.Should().Be("owner-token");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         var originalChat = original.Payload.Unpack<ChatRequestEvent>();
         originalChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         originalChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
@@ -450,7 +432,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithAuth_ShouldExchangeAndInjectSenderTokenIntoClonedChatPayload()
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndWorkflowProjection_ShouldProjectSenderTokenToDurableCallerCredential()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
@@ -485,13 +467,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
             {
                 ["connector.http.authorization"] = "Bearer header-token",
                 ["schedule"] = "scheduled",
-<<<<<<< HEAD
-            }));
-=======
             },
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
             ScheduleId: "schedule-sender"));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         credentialExchange.Sources.Should().ContainSingle()
             .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
@@ -501,12 +479,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
-<<<<<<< HEAD
-=======
         invokedChat.CallerDurableCredential.Should().NotBeNull();
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-sender");
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("lark:tenant-1:ou-user-1");
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         invokedChat.Metadata.Should().Contain("trace", "kept");
         invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
         invokedChat.Metadata.Should().Contain("schedule", "scheduled");
@@ -800,9 +775,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
             auth,
-<<<<<<< HEAD
-            Headers: null));
-=======
             Headers: null,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
             ScheduleId: "schedule-durable"));
@@ -897,7 +869,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             auth,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
             ScheduleId: "schedule-durable"));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage(expectedMessage, because: scenario);
