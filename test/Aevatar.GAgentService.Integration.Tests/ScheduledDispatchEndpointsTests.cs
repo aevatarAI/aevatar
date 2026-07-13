@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -187,11 +188,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task Create_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser()
-=======
     public async Task Create_ShouldPassScopeOwnerMutationContextFromAuthenticatedUser()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -226,11 +223,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task Create_ShouldForwardScopeOwnerNyxIdFromAuthenticatedUserWithoutEndpointBindingGate()
-=======
     public async Task Create_ShouldMapScopeOwnerMissingBindingFromApplication()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var service = new RecordingScheduledDispatchApplicationService
         {
@@ -253,23 +246,12 @@ public sealed class ScheduledDispatchEndpointsTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
-        auth.Should().NotBeNull();
-        auth!.ScopeOwnerNyxId.Should().NotBeNull();
-        auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
-        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            "owner-user-1"));
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Created.Should().BeEmpty();
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task Create_ShouldForwardScopeOwnerNyxIdScopeWithoutEndpointExchangeGate()
-=======
     public async Task Create_ShouldMapScopeOwnerScopeMismatchFromApplicationWithoutIssuingToken()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var service = new RecordingScheduledDispatchApplicationService
         {
@@ -283,10 +265,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 Scope = "schedule:workflow",
             },
         });
-<<<<<<< HEAD
-=======
 
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         var result = await CreateAsync(
             request,
             service,
@@ -295,28 +274,12 @@ public sealed class ScheduledDispatchEndpointsTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-<<<<<<< HEAD
-        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        var auth = service.Created.Should().ContainSingle().Which.Target.ServiceInvocation!.Auth;
-        auth.Should().NotBeNull();
-        auth!.ScopeOwnerNyxId.Should().NotBeNull();
-        auth.ScopeOwnerNyxId!.Scope.Should().Be("schedule:workflow");
-        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            "owner-user-1"));
-    }
-
-    [Fact]
-    public async Task Update_ShouldPersistScopeOwnerNyxIdFromAuthenticatedUser()
-=======
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         service.Created.Should().BeEmpty();
     }
 
     [Fact]
     public async Task Update_ShouldPassScopeOwnerMutationContextFromAuthenticatedUser()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var service = new RecordingScheduledDispatchApplicationService();
         var request = CreateServiceInvocationRequestWithAuth(new ScheduledServiceInvocationAuthHttpRequest
@@ -330,11 +293,7 @@ public sealed class ScheduledDispatchEndpointsTests
             "schedule-owner",
             request,
             service,
-<<<<<<< HEAD
-            CreateHttpContext(uid: "owner-user-1"));
-=======
             CreateHttpContext(scopeId: "scope-1", uid: "owner-user-1"));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -440,11 +399,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-<<<<<<< HEAD
-    public async Task Update_ShouldForwardScopeOwnerNyxIdFromAuthenticatedUserWithoutEndpointBindingGate()
-=======
     public async Task Update_ShouldMapScopeOwnerMissingBindingFromApplication()
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
     {
         var service = new RecordingScheduledDispatchApplicationService
         {
@@ -1649,11 +1604,6 @@ public sealed class ScheduledDispatchEndpointsTests
             var schedules = new RecordingScheduledDispatchApplicationService();
             var catalogReader = new FakeServiceCatalogQueryReader();
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
-<<<<<<< HEAD
-            builder.Services.AddSingleton<IScheduledDispatchApplicationService>(schedules);
-            builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
-            builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
-=======
             var bindingQuery = new FakeExternalIdentityBindingQueryPort();
             bindingQuery.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-owner-1";
             var credentialExchange = new FakeScheduledServiceInvocationCredentialExchangePort();
@@ -1662,7 +1612,6 @@ public sealed class ScheduledDispatchEndpointsTests
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
             builder.Services.AddSingleton<IExternalIdentityBindingQueryPort>(bindingQuery);
             builder.Services.AddSingleton<IScheduledServiceInvocationCredentialExchangePort>(credentialExchange);
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
             var app = builder.Build();
             app.Use(static (context, next) =>
@@ -1794,14 +1743,10 @@ public sealed class ScheduledDispatchEndpointsTests
             ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
-<<<<<<< HEAD
-            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Create);
-            Created.Add(configuration);
-=======
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             if (CreateException != null)
                 throw CreateException;
 
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Create);
             Created.Add(configuration);
             CreateContexts.Add(context);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
@@ -1838,14 +1783,10 @@ public sealed class ScheduledDispatchEndpointsTests
             ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
-<<<<<<< HEAD
-            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Update);
-            Updated.Add((scheduleId, configuration));
-=======
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             if (UpdateException != null)
                 throw UpdateException;
 
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Update);
             Updated.Add((scheduleId, configuration));
             UpdateContexts.Add(context);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
@@ -1984,12 +1925,16 @@ public sealed class ScheduledDispatchEndpointsTests
             ScheduledDispatchConfiguration configuration,
             ScheduledDispatchCredentialRequirementOperation operation)
         {
-<<<<<<< HEAD
             var request = ScheduledDispatchCredentialRequirementRequests.FromConfiguration(configuration, operation);
             var decision = DefaultScheduledDispatchCredentialRequirementPolicy.Instance.Evaluate(request);
             if (!decision.Allowed)
                 throw new ArgumentException(decision.Message, nameof(configuration));
-=======
+        }
+    }
+
+    private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
+        new()
+        {
             Platform = OwnerScope.NyxIdPlatform,
             Tenant = string.Empty,
             ExternalUserId = externalUserId,
@@ -2028,8 +1973,6 @@ public sealed class ScheduledDispatchEndpointsTests
             }
 
             return Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
         }
     }
-
 }

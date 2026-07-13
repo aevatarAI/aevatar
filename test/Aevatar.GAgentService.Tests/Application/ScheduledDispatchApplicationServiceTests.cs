@@ -1174,13 +1174,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         };
         var service = new ScheduledDispatchApplicationService(
             actorPort,
-<<<<<<< HEAD
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
-=======
-            new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
         var enabled = await service.EnableAsync(" schedule-1 ", " resume ");
         var disabled = await service.DisableAsync("schedule-1", null!);
@@ -1313,7 +1308,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             queryPort,
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.RunNowAsync("schedule-workflow-no-auth");
 
@@ -1551,25 +1547,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
     private static ScheduledDispatchConfiguration CreateServiceInvocationConfiguration(
         string scheduleId,
-<<<<<<< HEAD
         ScheduledDispatchScheduleKind scheduleKind,
         ScheduledDispatchCredentialRequirementTargetKind credentialRequirementTargetKind,
         Any? payload = null) =>
         new ScheduledDispatchConfiguration(
             scheduleId,
             string.Empty,
-=======
-        ScheduledServiceInvocationAuth auth) =>
-        new(
-            scheduleId,
-            "Invoke",
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
             new ScheduledDispatchTargetDescriptor(
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
-<<<<<<< HEAD
                     payload ?? Any.Pack(new Empty()))),
             "0 9 * * *",
             "UTC",
@@ -1579,6 +1567,24 @@ public sealed class ScheduledDispatchApplicationServiceTests
         {
             CredentialRequirementTargetKind = credentialRequirementTargetKind,
         };
+
+    private static ScheduledDispatchConfiguration CreateServiceInvocationConfiguration(
+        string scheduleId,
+        ScheduledServiceInvocationAuth auth) =>
+        new(
+            scheduleId,
+            "Invoke",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
+                    "run",
+                    Any.Pack(new StringValue { Value = "invoke" }),
+                    Auth: auth)),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
 
     private static ScheduledDispatchDetail CreateSummaryDetail(
         string scheduleId,
@@ -1615,13 +1621,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 CredentialRequirementTargetKind: credentialRequirementTargetKind,
                 CredentialSourceKind: credentialSourceKind),
             []);
-=======
-                    Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: auth)),
-            "0 9 * * *",
-            "UTC",
-            true,
-            new Dictionary<string, string>());
 
     private static ScheduledDispatchConfiguration CreateScopeOwnerConfiguration(
         string scheduleId = "scope-owner-schedule",
@@ -1724,7 +1723,6 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "key-schedule",
             expiresAtUnixMs);
     }
->>>>>>> origin/feat/2026-07-10_scheduled-agent-key-credential
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {
