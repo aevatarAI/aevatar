@@ -14,7 +14,8 @@ public sealed record NyxLarkProvisioningRequest(
     string WebhookBaseUrl,
     string ScopeId,
     string Label,
-    string NyxProviderSlug);
+    string NyxProviderSlug,
+    string DefaultSkillName = "");
 
 public sealed record NyxLarkProvisioningResult(
     bool Succeeded,
@@ -42,7 +43,8 @@ public sealed record NyxChannelBotProvisioningRequest(
     string Label,
     string NyxProviderSlug,
     NyxChannelLarkCredentials? Lark = null,
-    IReadOnlyDictionary<string, string>? Credentials = null);
+    IReadOnlyDictionary<string, string>? Credentials = null,
+    string DefaultSkillName = "");
 
 public sealed record NyxChannelBotProvisioningResult(
     bool Succeeded,
@@ -216,6 +218,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 channelBotId,
                 routeId,
                 workflowResultDeliveryCredential,
+                request.DefaultSkillName,
                 ct);
             localMirrorAccepted = true;
 
@@ -357,7 +360,8 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 WebhookBaseUrl: request.WebhookBaseUrl,
                 ScopeId: request.ScopeId,
                 Label: request.Label,
-                NyxProviderSlug: request.NyxProviderSlug),
+                NyxProviderSlug: request.NyxProviderSlug,
+                DefaultSkillName: request.DefaultSkillName),
             ct);
 
         return ToGenericResult(result);
@@ -540,6 +544,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         string channelBotId,
         string routeId,
         SecretReference? workflowResultDeliveryCredential,
+        string defaultSkillName,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -556,6 +561,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             NyxConversationRouteId = routeId,
             WebhookUrl = webhookUrl,
             WorkflowResultDeliveryCredential = workflowResultDeliveryCredential?.Clone(),
+            DefaultSkillName = defaultSkillName ?? string.Empty,
         };
 
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);

@@ -37,6 +37,13 @@ message ChannelBotRegistrationEntry {
   // capturing the NyxID full_key; such bots fail closed for wait=stream workflow
   // background delivery until re-registered.
   aevatar.credentials.SecretReference workflow_result_delivery_credential = 15;
+  // Ornn skill this bot's plain inbound text messages are routed to. When set,
+  // a non-command message is treated as an invocation of this skill with the
+  // full message text as its arguments (same deterministic pre-turn use_skill
+  // path as an explicit "/<skill> <text>" trigger). Empty = generic assistant
+  // turn (pre-binding behavior). Explicit triggers and local slash commands
+  // always take priority over this default.
+  string default_skill_name = 16;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -66,6 +73,8 @@ message ChannelBotRegisterCommand {
   reserved 9, 10;
   reserved "credential_ref", "nyx_reply_credential_ref";
   aevatar.credentials.SecretReference workflow_result_delivery_credential = 11;
+  // Optional inbound default-skill binding; see ChannelBotRegistrationEntry.default_skill_name.
+  string default_skill_name = 12;
 }
 
 message ChannelBotUnregisterCommand {
@@ -136,6 +145,8 @@ message ChannelBotRegistrationDocument {
   // the /channels status endpoint can report active/pending without a NyxID call.
   google.protobuf.Timestamp last_inbound_at_utc = 15;
   aevatar.credentials.SecretReference workflow_result_delivery_credential = 16;
+  // Mirrors ChannelBotRegistrationEntry.default_skill_name.
+  string default_skill_name = 17;
 }
 
 // ─── Relay / conversation normalization ───

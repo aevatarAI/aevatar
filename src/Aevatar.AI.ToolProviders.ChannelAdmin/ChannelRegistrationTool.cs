@@ -94,6 +94,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Human-readable label for the Nyx channel bot (optional)"
             },
+            "default_skill_name": {
+              "type": "string",
+              "description": "Optional Ornn skill to bind this bot's plain inbound messages to. When set, every non-command message deterministically runs this skill with the message text as its arguments. Explicit /<skill> triggers and local slash commands still take priority."
+            },
             "registration_id": {
               "type": "string",
               "description": "Registration ID for delete"
@@ -225,6 +229,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             nyx_channel_bot_id = entry.NyxChannelBotId,
             nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
             nyx_conversation_route_id = entry.NyxConversationRouteId,
+            default_skill_name = entry.DefaultSkillName,
         }).ToList();
 
         return JsonSerializer.Serialize(
@@ -259,7 +264,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
                     AppId: ResolveCredential(args, credentials, platform, "app_id"),
                     AppSecret: ResolveCredential(args, credentials, platform, "app_secret"),
                     VerificationToken: ResolveCredential(args, credentials, platform, "verification_token")),
-                Credentials: credentials),
+                Credentials: credentials,
+                DefaultSkillName: GetStr(args, "default_skill_name")?.Trim() ?? string.Empty),
             ct);
 
         return SerializeRegistrationPayload(

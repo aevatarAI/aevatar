@@ -104,6 +104,27 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.NyxConversationRouteId.Should().Be("route-1");
         entry.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("reg-1"));
         entry.Tombstoned.Should().BeFalse();
+        entry.DefaultSkillName.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRegister_PersistsCanonicalDefaultSkillName()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            RequestedId = "reg-bound",
+            NyxChannelBotId = "bot-1",
+            NyxAgentApiKeyId = "key-1",
+            // Leading trigger token and mixed case must normalize to the parser's
+            // canonical skill-name form so inbound routing compares 1:1.
+            DefaultSkillName = " /WhatsApp-Reply-Draft ",
+        });
+
+        _agent.State.Registrations.Single(r => r.Id == "reg-bound")
+            .DefaultSkillName.Should().Be("whatsapp-reply-draft");
     }
 
     [Fact]

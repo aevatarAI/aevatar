@@ -2221,6 +2221,101 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRoutePlainTextThroughDefaultSkillBinding()
+    {
+        var registration = BuildRegistrationEntry();
+        registration.DefaultSkillName = "whatsapp-reply-draft";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        // Multi-line plain message: the whole body must become the bound skill's arguments.
+        const string message = "Dear parents, Ms. Melody is away 5th-12th June.\nPlease text her to arrange make-up lessons.";
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                message,
+                "msg-default-skill-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("bound to the `whatsapp-reply-draft` skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.CommandName.Should().Be("whatsapp-reply-draft");
+        recovery.PrimarySkillName.Should().Be("whatsapp-reply-draft");
+        recovery.CommandArguments.Should().Be(message);
+        recovery.DiscoveryRequested.Should().BeFalse();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldPreferExplicitSkillTriggerOverDefaultSkillBinding()
+    {
+        var registration = BuildRegistrationEntry();
+        registration.DefaultSkillName = "whatsapp-reply-draft";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/goal ship command fix",
+                "msg-default-skill-explicit-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext).SkillRecovery;
+        recovery.PrimarySkillName.Should().Be("goal");
+        recovery.CommandArguments.Should().Be("ship command fix");
+        result.LlmReplyRequest.Activity.Content.Text.Should().NotContain("whatsapp-reply-draft");
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldKeepGenericLlmTurn_WhenNoDefaultSkillBound()
+    {
+        var registrationQueryPort = BuildRegistrationQueryPort();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        const string message = "Dear parents, Ms. Melody is away 5th-12th June.";
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                message,
+                "msg-unbound-plain-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Be(message);
+        var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeFalse();
+        recovery.PrimarySkillName.Should().BeNull();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldCarryRelayReplyToken_WhenNormalRelayTextFallsBackToLlm()
     {
         var registrationQueryPort = BuildRegistrationQueryPort();

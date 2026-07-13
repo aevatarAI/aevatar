@@ -11,7 +11,8 @@ public sealed record NyxTelegramProvisioningRequest(
     string WebhookBaseUrl,
     string ScopeId,
     string Label,
-    string NyxProviderSlug);
+    string NyxProviderSlug,
+    string DefaultSkillName = "");
 
 public sealed record NyxTelegramProvisioningResult(
     bool Succeeded,
@@ -121,6 +122,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 apiKeyId,
                 channelBotId,
                 routeId,
+                request.DefaultSkillName,
                 ct);
             localMirrorAccepted = true;
 
@@ -179,7 +181,8 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 WebhookBaseUrl: request.WebhookBaseUrl,
                 ScopeId: request.ScopeId,
                 Label: request.Label,
-                NyxProviderSlug: request.NyxProviderSlug),
+                NyxProviderSlug: request.NyxProviderSlug,
+                DefaultSkillName: request.DefaultSkillName),
             ct);
 
         return ToGenericResult(result);
@@ -265,6 +268,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         string apiKeyId,
         string channelBotId,
         string routeId,
+        string defaultSkillName,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -280,6 +284,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
             NyxAgentApiKeyId = apiKeyId,
             NyxChannelBotId = channelBotId,
             NyxConversationRouteId = routeId,
+            DefaultSkillName = defaultSkillName ?? string.Empty,
         };
 
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);

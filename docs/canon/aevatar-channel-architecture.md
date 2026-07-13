@@ -869,6 +869,18 @@ Nyx relay 中明确的 workflow-run 文本意图不走普通 LLM / tool selectio
 
 NyxidChat 的 draft-run interaction port 不在 `ConversationGAgent` turn 内执行 workflow；它创建/定位 run-scoped `ChannelWorkflowDraftRunGAgent` 并投递 `ChannelWorkflowDraftRunStartRequested` 后返回 accepted。`ChannelWorkflowDraftRunGAgent` 作为单次 draft-run owner 只持久化 start fact，然后把现有 `IWorkflowChatRunInteractionPort` 交给非 actor bridge pump；该 bridge 只把 workflow frames / terminal facts 回投为 `ChannelWorkflowDraftRunFrameObserved` / `ChannelWorkflowDraftRunInteractionCompleted` continuation。run actor 在自己的 continuation handler 中做 stale check、渲染 frame，并把结果转成已有 channel streaming carriers：增量帧回投 `LlmReplyStreamChunkEvent`，终态帧回投 `LlmReplyReadyEvent`。这些事件都发回同一个 `ConversationGAgent` actor，由它继续执行去重、流式合并、最终回复发送、history append 与 pending cleanup；workflow runtime 不直接操作 channel outbound，也不新增第二条 relay 回复链路。
 
+### 5.6.3 Registration-level default-skill binding（channel→skill 确定性绑定）
+
+一个 channel bot 注册可以携带可选的 `default_skill_name`（`ChannelBotRegistrationEntry.default_skill_name`，issue #2355）：绑定后，该 bot 收到的**普通文本消息**（非本地 slash、非 `/<skill>`/`::<skill>` 显式触发、非 card action）确定性地按"调用该 Ornn skill、整条消息文本为 `args`"处理，走与显式 skill 触发完全相同的 pre-turn 合成 `use_skill` 链路（`SkillRecoveryOrchestrator` 在模型 turn 前执行工具调用），不依赖模型自己发出 tool call。
+
+约束与语义：
+
+- **显式触发优先**：`/init` 等本地 slash、`/workflow run` 内建、`/<skill>` / `::<skill>` 显式触发、card action 路由全部先于 default binding；binding 只认领"什么都没匹配"的普通文本 turn。
+- **注册即事实**：绑定存在 `ChannelBotRegistrationEntry`（actor 持久态）并投影到 `ChannelBotRegistrationDocument`；写入时归一化为 parser 规范形（小写、去前导 trigger token）。同 `requested_id` 重注册即更新绑定。
+- **入口对称**：HTTP facade `POST /api/channels/registrations`（`default_skill_name` 字段）与 agent tool `channel_registrations`（`register_channel_via_nyx` 的 `default_skill_name` 参数）均可设置；list 输出回显该字段。
+- **sender gate 不变**：与显式 skill 触发一致，未绑定 NyxID 的 sender 不启用（tool dispatch 对 unbound sender 关闭）。
+- **不感知具体 skill 名**：binding 值是 host/user 数据，路由逻辑只做通用 skill 触发合成，生产代码不 hardcode 任何 skill 名。
+
 ### 5.7 Middleware Pipeline（窄范围）
 
 ```csharp
