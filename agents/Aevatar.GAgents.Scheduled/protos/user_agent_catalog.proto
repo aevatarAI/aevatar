@@ -100,6 +100,21 @@ message ScheduledCredentialRevocationTrack {
   UserAgentApiKeyRevocationFailureKind failure_kind = 6;
 }
 
+enum ScheduledCredentialVaultReferenceAvailability {
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_UNSPECIFIED = 0;
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_NOT_APPLICABLE = 1;
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_REQUESTED_NOT_CONFIRMED = 2;
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_CONFIRMED = 3;
+}
+
+message ScheduledCredentialVaultRevocationDescriptor {
+  string ref = 1;
+  string purpose = 2;
+  string owner_scope_key = 3;
+  string subject_id = 4;
+  ScheduledCredentialVaultReferenceAvailability reference_availability = 5;
+}
+
 message UserAgentApiKeyRevocation {
   string agent_id = 1;
   string api_key_id = 2;
@@ -117,6 +132,7 @@ message UserAgentApiKeyRevocation {
   string repair_reason = 14;
   string requested_by_subject_id = 15;
   int64 requested_at_unix_ms = 16;
+  ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 17;
 }
 
 message UserAgentCatalogState {
@@ -270,6 +286,13 @@ message UserAgentCatalogCredentialRevocationRepairRejectedEvent {
   UserAgentCatalogCredentialRevocationRepairRejectionReason reason = 4;
 }
 
+message UserAgentCatalogCredentialRepairOutcome {
+  oneof outcome {
+    UserAgentCatalogCredentialRevocationRepairedEvent repaired = 1;
+    UserAgentCatalogCredentialRevocationRepairRejectedEvent rejected = 2;
+  }
+}
+
 message UserAgentCatalogTombstonesCompactedEvent {
   repeated string agent_ids = 1;
   int64 safe_state_version = 2;
@@ -368,4 +391,5 @@ message UserAgentApiKeyRevocationDocument {
   string repair_reason = 19;
   string requested_by_subject_id = 20;
   int64 requested_at_unix_ms = 21;
+  ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 22;
 }

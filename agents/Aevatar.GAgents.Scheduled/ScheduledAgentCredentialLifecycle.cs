@@ -74,15 +74,13 @@ public sealed class ScheduledAgentCredentialLifecycle
                     token,
                     agentId,
                     issuedKey.ApiKeyId,
-                    new SecretReference
+                    null,
+                    new ScheduledCredentialVaultRevocationDescriptor
                     {
-                        Ref = "sec_" + Guid.NewGuid().ToString("N"),
-                        Purpose = purpose,
-                        OwnerScopeKey = ownerScopeKey,
-                        Version = 1,
-                        Fingerprint = "unknown",
+                        SubjectId = issuedKey.ApiKeyId,
+                        ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.NotApplicable,
                     },
-                    ScheduledCredentialRevocationTrackStatus.Completed,
+                    ScheduledCredentialRevocationTrackStatus.NotApplicable,
                     CancellationToken.None);
             }
             return new ScheduledAgentCredentialProvisionResult(issuedKey, null);
@@ -136,15 +134,16 @@ public sealed class ScheduledAgentCredentialLifecycle
                 token,
                 agentId,
                 issuedKey.ApiKeyId!,
-                new SecretReference
+                null,
+                new ScheduledCredentialVaultRevocationDescriptor
                 {
                     Ref = requestedRef,
                     Purpose = purpose,
                     OwnerScopeKey = ownerScopeKey,
-                    Version = 1,
-                    Fingerprint = "unknown",
-                    ExpiresAtUnixMs = issuedKey.KeyExpiresAtUnixMs,
+                    SubjectId = issuedKey.ApiKeyId,
+                    ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed,
                 },
+                ScheduledCredentialRevocationTrackStatus.Pending,
                 CancellationToken.None);
             throw;
         }
@@ -189,16 +188,17 @@ public sealed class ScheduledAgentCredentialLifecycle
             }
         }
 
+        var vaultDescriptor = ResolveVaultRevocationDescriptor(pending);
         if (pending.VaultTrack?.Status == ScheduledCredentialRevocationTrackStatus.Pending &&
-            pending.NyxApiKeyReference is not null)
+            vaultDescriptor is not null)
         {
             try
             {
                 var revoked = await _secretVault.RevokeAsync(new RevokeSecretRequest(
-                    pending.NyxApiKeyReference.Ref,
-                    pending.NyxApiKeyReference.Purpose,
-                    pending.NyxApiKeyReference.OwnerScopeKey,
-                    pending.SecretSubjectId,
+                    vaultDescriptor.Ref,
+                    vaultDescriptor.Purpose,
+                    vaultDescriptor.OwnerScopeKey,
+                    vaultDescriptor.SubjectId,
                     "scheduled-credential-revocation"), ct);
                 await RecordTrackAsync(
                     pending,
@@ -236,6 +236,7 @@ public sealed class ScheduledAgentCredentialLifecycle
             agentId,
             apiKeyId,
             reference,
+            ConfirmedDescriptor(reference, apiKeyId),
             ScheduledCredentialRevocationTrackStatus.Pending,
             ct);
 
@@ -243,17 +244,20 @@ public sealed class ScheduledAgentCredentialLifecycle
         string token,
         string agentId,
         string apiKeyId,
-        SecretReference reference,
+        SecretReference? reference,
+        ScheduledCredentialVaultRevocationDescriptor vaultDescriptor,
         ScheduledCredentialRevocationTrackStatus vaultStatus,
-        CancellationToken ct) =>
-        _catalogCommandPort.RequestCredentialRevocationAsync(new UserAgentApiKeyRevocation
+        CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var revocation = new UserAgentApiKeyRevocation
         {
             AgentId = agentId,
             ApiKeyId = apiKeyId,
-            NyxApiKeyReference = reference.Clone(),
             SecretSubjectId = apiKeyId,
-            RequestedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            VaultRevocationDescriptor = vaultDescriptor.Clone(),
+            RequestedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(now),
+            RequestedAtUnixMs = now.ToUnixTimeMilliseconds(),
             NyxIdTrack = new ScheduledCredentialRevocationTrack
             {
                 Status = ScheduledCredentialRevocationTrackStatus.Pending,
@@ -262,7 +266,12 @@ public sealed class ScheduledAgentCredentialLifecycle
             {
                 Status = vaultStatus,
             },
-        }, ct, token);
+        };
+        if (reference is not null)
+            revocation.NyxApiKeyReference = reference.Clone();
+
+        return _catalogCommandPort.RequestCredentialRevocationAsync(revocation, ct, token);
+    }
 
     private Task RecordTrackAsync(
         UserAgentApiKeyRevocation pending,
@@ -282,9 +291,45 @@ public sealed class ScheduledAgentCredentialLifecycle
                 Error = error ?? string.Empty,
                 FailureKind = failureKind,
                 Track = track,
-                SecretReferenceRef = pending.NyxApiKeyReference?.Ref ?? string.Empty,
+                SecretReferenceRef = ResolveSecretReferenceRef(pending),
             },
             ct);
+
+    private static ScheduledCredentialVaultRevocationDescriptor? ResolveVaultRevocationDescriptor(
+        UserAgentApiKeyRevocation pending)
+    {
+        if (pending.NyxApiKeyReference is not null)
+            return ConfirmedDescriptor(pending.NyxApiKeyReference, pending.SecretSubjectId);
+
+        var descriptor = pending.VaultRevocationDescriptor;
+        return IsExecutableDescriptor(descriptor) ? descriptor.Clone() : null;
+    }
+
+    private static ScheduledCredentialVaultRevocationDescriptor ConfirmedDescriptor(
+        SecretReference reference,
+        string subjectId) =>
+        new()
+        {
+            Ref = reference.Ref,
+            Purpose = reference.Purpose,
+            OwnerScopeKey = reference.OwnerScopeKey,
+            SubjectId = subjectId,
+            ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+        };
+
+    private static bool IsExecutableDescriptor(ScheduledCredentialVaultRevocationDescriptor? descriptor) =>
+        descriptor is not null &&
+        descriptor.ReferenceAvailability is ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed or
+            ScheduledCredentialVaultReferenceAvailability.Confirmed &&
+        !string.IsNullOrWhiteSpace(descriptor.Ref) &&
+        !string.IsNullOrWhiteSpace(descriptor.Purpose) &&
+        !string.IsNullOrWhiteSpace(descriptor.OwnerScopeKey) &&
+        !string.IsNullOrWhiteSpace(descriptor.SubjectId);
+
+    private static string ResolveSecretReferenceRef(UserAgentApiKeyRevocation pending) =>
+        pending.NyxApiKeyReference?.Ref?.Trim() ??
+        pending.VaultRevocationDescriptor?.Ref?.Trim() ??
+        string.Empty;
 
     private static UserAgentApiKeyRevocation ToRevocation(UserAgentApiKeyRevocationReadModelEntry pending)
     {
@@ -299,6 +344,7 @@ public sealed class ScheduledAgentCredentialLifecycle
             RequestedAtUnixMs = pending.RequestedAtUnixMs,
             NyxIdTrack = pending.NyxIdTrack?.Clone(),
             VaultTrack = pending.VaultTrack?.Clone(),
+            VaultRevocationDescriptor = pending.VaultRevocationDescriptor?.Clone(),
         };
         if (pending.NyxApiKeyReference is not null)
             revocation.NyxApiKeyReference = pending.NyxApiKeyReference.Clone();
