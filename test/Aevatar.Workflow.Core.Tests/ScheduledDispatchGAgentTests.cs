@@ -2368,7 +2368,7 @@ public sealed class ScheduledDispatchGAgentTests
                 return ScheduledDispatchCredentialRequirementDecision.Deny(
                     credentialRequired,
                     ScheduledDispatchCredentialViolationCode.CredentialRequired,
-                    "Scheduled dispatch target requires senderNyxId or scopeOwnerNyxId credential source.");
+                    "Scheduled dispatch target requires a typed service invocation credential source.");
             }
 
             return ScheduledDispatchCredentialRequirementDecision.Allow(credentialRequired);

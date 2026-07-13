@@ -29,6 +29,8 @@ public enum ScheduledDispatchCredentialSourceKind
     ScopeOwnerNyxId = 2,
     LegacyDurableSenderBearer = 3,
     Multiple = 4,
+    DurableCredentialReference = 5,
+    ScheduledInvocationAgentKey = 6,
 }
 
 public enum ScheduledDispatchCredentialViolationCode
@@ -122,32 +124,22 @@ public static class ScheduledDispatchCredentialRequirementRequests
     public static ScheduledDispatchCredentialSourceSummary SummarizeAuth(
         ScheduledServiceInvocationAuth? auth)
     {
-        if (auth == null)
+        if (auth?.Source == null)
             return new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.None);
 
-        if (!string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken))
-            return new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.LegacyDurableSenderBearer);
-
-        var sourceCount = 0;
-        var kind = ScheduledDispatchCredentialSourceKind.None;
-        if (auth.SenderNyxId != null)
+        var kind = auth.Source switch
         {
-            sourceCount++;
-            kind = ScheduledDispatchCredentialSourceKind.SenderNyxId;
-        }
-
-        if (auth.ScopeOwnerNyxId != null)
-        {
-            sourceCount++;
-            kind = ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId;
-        }
-
-        return sourceCount switch
-        {
-            0 => new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.None),
-            1 => new ScheduledDispatchCredentialSourceSummary(kind),
-            _ => new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.Multiple),
+            ScheduledServiceInvocationNyxIdCredentialSource { Role: ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner } =>
+                ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId,
+            ScheduledServiceInvocationNyxIdCredentialSource =>
+                ScheduledDispatchCredentialSourceKind.SenderNyxId,
+            ScheduledServiceInvocationDurableCredentialReference =>
+                ScheduledDispatchCredentialSourceKind.DurableCredentialReference,
+            ScheduledInvocationAgentKeyCredentialReference =>
+                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+            _ => ScheduledDispatchCredentialSourceKind.Multiple,
         };
+        return new ScheduledDispatchCredentialSourceSummary(kind);
     }
 
     public static ScheduledDispatchPayloadCredentialSignal SummarizePayloadCredentialSignal(

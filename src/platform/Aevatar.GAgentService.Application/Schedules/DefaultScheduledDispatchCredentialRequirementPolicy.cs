@@ -18,7 +18,7 @@ public sealed class DefaultScheduledDispatchCredentialRequirementPolicy
             return ScheduledDispatchCredentialRequirementDecision.Deny(
                 credentialRequired,
                 ScheduledDispatchCredentialViolationCode.CurrentSessionCredential,
-                $"Scheduled dispatch cannot persist current-session credentials from {request.PayloadCredentialSignal.Source}; configure senderNyxId or scopeOwnerNyxId instead.");
+                $"Scheduled dispatch cannot persist current-session credentials from {request.PayloadCredentialSignal.Source}; configure a typed service invocation credential source instead.");
         }
 
         return request.CredentialSource.Kind switch
@@ -38,7 +38,7 @@ public sealed class DefaultScheduledDispatchCredentialRequirementPolicy
                     ScheduledDispatchCredentialRequirementDecision.Deny(
                         credentialRequired,
                         ScheduledDispatchCredentialViolationCode.CredentialRequired,
-                        $"Scheduled dispatch target '{request.TargetKind}' requires senderNyxId or scopeOwnerNyxId credential source."),
+                        $"Scheduled dispatch target '{request.TargetKind}' requires a typed service invocation credential source."),
             _ => ScheduledDispatchCredentialRequirementDecision.Allow(credentialRequired),
         };
     }

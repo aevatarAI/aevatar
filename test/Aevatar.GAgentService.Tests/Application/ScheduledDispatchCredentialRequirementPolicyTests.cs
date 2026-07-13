@@ -40,12 +40,14 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
         decision.Allowed.Should().BeFalse();
         decision.CredentialRequired.Should().BeTrue();
         decision.ViolationCode.Should().Be(ScheduledDispatchCredentialViolationCode.CredentialRequired);
-        decision.Message.Should().Contain("requires senderNyxId or scopeOwnerNyxId");
+        decision.Message.Should().Contain("requires a typed service invocation credential source");
     }
 
     [Theory]
     [InlineData(ScheduledDispatchCredentialSourceKind.SenderNyxId)]
     [InlineData(ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId)]
+    [InlineData(ScheduledDispatchCredentialSourceKind.DurableCredentialReference)]
+    [InlineData(ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey)]
     public void Evaluate_ShouldAllowTypedCredentialSources_ForRequiredTargets(
         ScheduledDispatchCredentialSourceKind credentialSourceKind)
     {

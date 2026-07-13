@@ -423,15 +423,8 @@ public sealed class ScheduledDispatchEndpointsTests
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        var auth = service.Updated.Should().ContainSingle().Which.Configuration.Target.ServiceInvocation!.Auth;
-        auth.Should().NotBeNull();
-        auth!.ScopeOwnerNyxId.Should().NotBeNull();
-        auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
-        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            "owner-user-1"));
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.Updated.Should().BeEmpty();
     }
 
     [Fact]

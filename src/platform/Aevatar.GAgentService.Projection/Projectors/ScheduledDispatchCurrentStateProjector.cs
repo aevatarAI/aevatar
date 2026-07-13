@@ -217,16 +217,15 @@ public sealed class ScheduledDispatchCurrentStateProjector
 
         var sourceCount = 0;
         var sourceKind = ScheduledDispatchCredentialSourceKind.None;
+        AddCredentialSourceKind(ResolveOneofCredentialSourceKind(auth), ref sourceCount, ref sourceKind);
         if (auth.SenderNyxId != null)
         {
-            sourceCount++;
-            sourceKind = ScheduledDispatchCredentialSourceKind.SenderNyxId;
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.SenderNyxId, ref sourceCount, ref sourceKind);
         }
 
         if (auth.ScopeOwnerNyxId != null)
         {
-            sourceCount++;
-            sourceKind = ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId;
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId, ref sourceCount, ref sourceKind);
         }
 
         return sourceCount switch
@@ -235,6 +234,33 @@ public sealed class ScheduledDispatchCurrentStateProjector
             1 => sourceKind,
             _ => ScheduledDispatchCredentialSourceKind.Multiple,
         };
+    }
+
+    private static ScheduledDispatchCredentialSourceKind ResolveOneofCredentialSourceKind(
+        ScheduledServiceInvocationAuthState auth) =>
+        auth.SourceCase switch
+        {
+            ScheduledServiceInvocationAuthState.SourceOneofCase.NyxId =>
+                auth.NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
+                    ? ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId
+                    : ScheduledDispatchCredentialSourceKind.SenderNyxId,
+            ScheduledServiceInvocationAuthState.SourceOneofCase.Durable =>
+                ScheduledDispatchCredentialSourceKind.DurableCredentialReference,
+            ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey =>
+                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+            _ => ScheduledDispatchCredentialSourceKind.None,
+        };
+
+    private static void AddCredentialSourceKind(
+        ScheduledDispatchCredentialSourceKind candidate,
+        ref int sourceCount,
+        ref ScheduledDispatchCredentialSourceKind sourceKind)
+    {
+        if (candidate == ScheduledDispatchCredentialSourceKind.None)
+            return;
+
+        sourceCount++;
+        sourceKind = candidate;
     }
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>

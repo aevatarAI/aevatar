@@ -218,6 +218,8 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         AssertDocumentDoesNotContain(document!, "owner-scope-projector");
         AssertDocumentDoesNotContain(document!, "fp-projector");
         AssertDocumentDoesNotContain(document!, "resolved-full-key");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.DurableCredentialReference.ToString());
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.StateVersion.Should().Be(11);
     }
@@ -268,6 +270,8 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         AssertDocumentDoesNotContain(document!, "sec-sensitive-reference");
         AssertDocumentDoesNotContain(document!, "api-key-sensitive-id");
         AssertDocumentDoesNotContain(document!, "sensitive-fingerprint");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey.ToString());
         document.StateVersion.Should().Be(10);
     }
 

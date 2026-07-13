@@ -740,16 +740,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var sourceCount = 0;
         var kind = ScheduledDispatchCredentialSourceKind.None;
+        AddCredentialSourceKind(ResolveOneofCredentialSourceKind(auth), ref sourceCount, ref kind);
         if (auth.SenderNyxId != null)
         {
-            sourceCount++;
-            kind = ScheduledDispatchCredentialSourceKind.SenderNyxId;
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.SenderNyxId, ref sourceCount, ref kind);
         }
 
         if (auth.ScopeOwnerNyxId != null)
         {
-            sourceCount++;
-            kind = ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId;
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId, ref sourceCount, ref kind);
         }
 
         return sourceCount switch
@@ -758,6 +757,33 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             1 => new ScheduledDispatchCredentialSourceSummary(kind),
             _ => new ScheduledDispatchCredentialSourceSummary(ScheduledDispatchCredentialSourceKind.Multiple),
         };
+    }
+
+    private static ScheduledDispatchCredentialSourceKind ResolveOneofCredentialSourceKind(
+        ScheduledServiceInvocationAuthState auth) =>
+        auth.SourceCase switch
+        {
+            ScheduledServiceInvocationAuthState.SourceOneofCase.NyxId =>
+                auth.NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
+                    ? ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId
+                    : ScheduledDispatchCredentialSourceKind.SenderNyxId,
+            ScheduledServiceInvocationAuthState.SourceOneofCase.Durable =>
+                ScheduledDispatchCredentialSourceKind.DurableCredentialReference,
+            ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey =>
+                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+            _ => ScheduledDispatchCredentialSourceKind.None,
+        };
+
+    private static void AddCredentialSourceKind(
+        ScheduledDispatchCredentialSourceKind candidate,
+        ref int sourceCount,
+        ref ScheduledDispatchCredentialSourceKind kind)
+    {
+        if (candidate == ScheduledDispatchCredentialSourceKind.None)
+            return;
+
+        sourceCount++;
+        kind = candidate;
     }
 
     private static ScheduledDispatchPayloadCredentialSignal SummarizePayloadCredentialSignal(

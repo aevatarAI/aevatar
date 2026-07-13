@@ -197,7 +197,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         });
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*requires senderNyxId or scopeOwnerNyxId*");
+            .WithMessage("*requires a typed service invocation credential source*");
     }
 
     [Fact]

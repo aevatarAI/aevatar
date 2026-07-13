@@ -288,7 +288,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.CreateAsync(CreateServiceInvocationConfiguration(
             "schedule-workflow-no-auth",
@@ -296,7 +297,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ScheduledDispatchCredentialRequirementTargetKind.WorkflowService));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*requires senderNyxId or scopeOwnerNyxId*");
+            .WithMessage("*requires a typed service invocation credential source*");
         actorPort.Created.Should().BeEmpty();
     }
 
@@ -307,7 +308,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
         var act = () => service.UpdateAsync(
             "schedule-workflow-no-auth",
@@ -317,7 +319,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 ScheduledDispatchCredentialRequirementTargetKind.WorkflowService));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*requires senderNyxId or scopeOwnerNyxId*");
+            .WithMessage("*requires a typed service invocation credential source*");
         actorPort.Updated.Should().BeEmpty();
     }
 
@@ -328,7 +330,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
         await service.CreateAsync(CreateServiceInvocationConfiguration(
             "schedule-static-no-auth",
@@ -347,7 +350,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var service = new ScheduledDispatchApplicationService(
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
-            new ScheduledDispatchTargetPreparationService());
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
 
         var payloadCredential = () => service.CreateAsync(CreateServiceInvocationConfiguration(
             "schedule-payload-credential",
@@ -1314,7 +1318,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var act = () => service.RunNowAsync("schedule-workflow-no-auth");
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*requires senderNyxId or scopeOwnerNyxId*");
+            .WithMessage("*requires a typed service invocation credential source*");
         actorPort.RunNow.Should().BeEmpty();
     }
 
