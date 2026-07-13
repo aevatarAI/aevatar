@@ -54,6 +54,7 @@ public sealed class UserAgentApiKeyRevocationProjector
                 !string.IsNullOrWhiteSpace(attempt.AgentId) &&
                 !string.IsNullOrWhiteSpace(attempt.ApiKeyId))
             {
+                await DeleteLegacyDocumentAsync(attempt.AgentId, ct);
                 var documentId = string.IsNullOrWhiteSpace(attempt.SecretReferenceRef)
                     ? ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
                         attempt.AgentId.Trim(),
@@ -73,6 +74,7 @@ public sealed class UserAgentApiKeyRevocationProjector
             if (!string.IsNullOrWhiteSpace(repaired.AgentId) &&
                 !string.IsNullOrWhiteSpace(repaired.ApiKeyId))
             {
+                await DeleteLegacyDocumentAsync(repaired.AgentId, ct);
                 await _writeDispatcher.DeleteAsync(
                     ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
                         repaired.AgentId.Trim(),
@@ -89,6 +91,7 @@ public sealed class UserAgentApiKeyRevocationProjector
                 continue;
             }
 
+            await DeleteLegacyDocumentAsync(revocation.AgentId, ct);
             await _writeDispatcher.UpsertAsync(
                 Materialize(context, stateEvent, revocation, updatedAt),
                 ct);
@@ -100,6 +103,11 @@ public sealed class UserAgentApiKeyRevocationProjector
             agentId.Trim(),
             apiKeyId.Trim(),
             secretReference.Trim());
+
+    private Task<ProjectionWriteResult> DeleteLegacyDocumentAsync(
+        string agentId,
+        CancellationToken ct) =>
+        _writeDispatcher.DeleteAsync(agentId.Trim(), ct);
 
     private static string BuildDocumentId(UserAgentApiKeyRevocation revocation)
     {

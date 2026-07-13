@@ -52,6 +52,45 @@ public sealed class ScheduledCredentialVaultContractTests
     }
 
     [Fact]
+    public async Task InMemoryVault_RevokeMissingReference_ReturnsSuccess()
+    {
+        var vault = new Aevatar.Foundation.Abstractions.Credentials.Testing.InMemorySecretVault();
+
+        var revoked = await vault.RevokeAsync(new RevokeSecretRequest(
+            "sec-missing",
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "owner-scope",
+            "key-a",
+            "test missing revoke"));
+
+        revoked.Revoked.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task InMemoryVault_RevokeSameReferenceTwice_ReturnsSuccessBothTimes()
+    {
+        var vault = new Aevatar.Foundation.Abstractions.Credentials.Testing.InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "owner-scope",
+            "key-a",
+            "opaque-secret",
+            "test"));
+        var request = new RevokeSecretRequest(
+            stored.Reference.Ref,
+            stored.Reference.Purpose,
+            stored.Reference.OwnerScopeKey,
+            "key-a",
+            "test repeated revoke");
+
+        var first = await vault.RevokeAsync(request);
+        var second = await vault.RevokeAsync(request);
+
+        first.Revoked.Should().BeTrue();
+        second.Revoked.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ProvisionAsync_WhenIssueFails_DoesNotWriteVaultOrRevocationIntent()
     {
         var vault = Substitute.For<ISecretVault>();
@@ -297,6 +336,29 @@ public sealed class ScheduledCredentialVaultContractTests
             issuer);
         var pending = PendingRevocation();
         pending.VaultTrack.Status = ScheduledCredentialRevocationTrackStatus.Completed;
+
+        var execute = () => lifecycle.ExecutePendingAsync("token", pending);
+
+        await execute.Should().ThrowAsync<OperationCanceledException>();
+        await commandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+            Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecutePendingAsync_WhenVaultRevocationIsCanceled_PropagatesWithoutRecordingFailure()
+    {
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
+            .Returns<Task<RevokeSecretResult>>(
+                _ => throw new OperationCanceledException("canceled"));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var lifecycle = new ScheduledAgentCredentialLifecycle(
+            vault,
+            commandPort,
+            Substitute.For<IScheduledAgentApiKeyIssuer>());
+        var pending = PendingRevocation();
+        pending.NyxIdTrack.Status = ScheduledCredentialRevocationTrackStatus.Completed;
 
         var execute = () => lifecycle.ExecutePendingAsync("token", pending);
 

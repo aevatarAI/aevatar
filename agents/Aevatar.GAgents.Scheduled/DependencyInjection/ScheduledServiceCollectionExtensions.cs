@@ -127,6 +127,7 @@ public static class ScheduledServiceCollectionExtensions
                 sp.GetRequiredService<NyxIdNativeCallerScopeResolver>(),
             },
             sp.GetService<Microsoft.Extensions.Logging.ILogger<CompositeCallerScopeResolver>>()));
+        services.AddHostedService<UserAgentApiKeyRevocationReadModelKeyMigrationService>();
         services.AddHostedService<UserAgentCatalogStartupService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITombstoneCompactionTarget, UserAgentCatalogTombstoneCompactionTarget>());

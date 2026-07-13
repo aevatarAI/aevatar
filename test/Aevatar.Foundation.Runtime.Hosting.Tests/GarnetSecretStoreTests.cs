@@ -322,6 +322,35 @@ public sealed class GarnetSecretStoreTests
         resolved.Secret.Should().Be("initial-secret");
     }
 
+    [Fact]
+    public async Task GarnetBackedSecretVault_WhenCompetingRevokeDeletesFirst_ReturnsSuccess()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var vault = new GarnetBackedSecretVault(
+            keyValueStore,
+            CreateOptions(),
+            CreateKeyring(),
+            ManualTime.Start);
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store"));
+        keyValueStore.RejectNextCompareDelete = true;
+        keyValueStore.DeleteOnNextRejectedCompareDelete = true;
+
+        var revoked = await vault.RevokeAsync(new RevokeSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test concurrent revoke"));
+
+        revoked.Revoked.Should().BeTrue();
+        keyValueStore.Values.Should().BeEmpty();
+    }
+
     [GarnetIntegrationFact]
     public async Task GarnetSecretKeyValueStore_ShouldCompareSetAndCompareDeleteWithExactBytes()
     {
@@ -838,6 +867,8 @@ public sealed class GarnetSecretStoreTests
 
         public bool RejectNextCompareDelete { get; set; }
 
+        public bool DeleteOnNextRejectedCompareDelete { get; set; }
+
         public Task<byte[]?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -899,6 +930,12 @@ public sealed class GarnetSecretStoreTests
             if (RejectNextCompareDelete)
             {
                 RejectNextCompareDelete = false;
+                if (DeleteOnNextRejectedCompareDelete)
+                {
+                    DeleteOnNextRejectedCompareDelete = false;
+                    Values.Remove(key);
+                    Expirations.Remove(key);
+                }
                 return Task.FromResult(false);
             }
 

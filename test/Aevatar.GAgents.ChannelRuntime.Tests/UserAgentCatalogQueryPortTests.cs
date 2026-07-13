@@ -162,6 +162,32 @@ public sealed class UserAgentCatalogQueryPortTests
             .Should().Contain($"{nameof(UserAgentApiKeyRevocationDocument.OwnerScope)}.{nameof(OwnerScope.SenderId)}");
     }
 
+    [Fact]
+    public async Task QueryPendingApiKeyRevocationsByCallerAsync_CollapsesLegacyAndCanonicalCopies()
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-a");
+        var legacy = BuildRevocationDocument("agent-a", "key-a", owner);
+        var canonical = legacy.Clone();
+        canonical.Id = ScheduledAgentCredentialRevocationDocumentIds.Build(
+            canonical.AgentId,
+            canonical.ApiKeyId,
+            canonical.NyxApiKeyReference.Ref);
+        canonical.LastError = "canonical-copy";
+        var port = new UserAgentCatalogQueryPort(
+            new RecordingDocumentReader([]),
+            new RecordingRevocationDocumentReader([legacy, canonical]));
+
+        var pending = await port.QueryPendingApiKeyRevocationsByCallerAsync(
+            owner,
+            CancellationToken.None);
+
+        pending.Should().ContainSingle();
+        pending[0].AgentId.Should().Be("agent-a");
+        pending[0].ApiKeyId.Should().Be("key-a");
+        pending[0].LastError.Should().Be("canonical-copy");
+        pending[0].CatalogAuthorityStateVersion.Should().Be(3);
+    }
+
     private static UserAgentCatalogDocument BuildDocument(string agentId, OwnerScope ownerScope) =>
         new()
         {
