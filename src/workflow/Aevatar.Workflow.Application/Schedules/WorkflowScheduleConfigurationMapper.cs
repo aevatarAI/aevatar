@@ -28,7 +28,10 @@ internal static class WorkflowScheduleConfigurationMapper
             configuration.Timezone,
             configuration.Enabled,
             BuildWorkflowScheduleHeaders(configuration),
-            ScheduledDispatchScheduleKind.Workflow);
+            ScheduledDispatchScheduleKind.Workflow)
+        {
+            CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+        };
     }
 
     public static ScheduledDispatchMutationContext ToScheduledDispatchMutationContext(

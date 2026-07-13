@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -50,7 +51,10 @@ public sealed class ScheduledDispatchEndpointsTests
                 "0 9 * * *",
                 "UTC",
                 true,
-                new Dictionary<string, string> { ["trace"] = "1" }));
+                new Dictionary<string, string> { ["trace"] = "1" })
+            {
+                CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            });
     }
 
     [Fact]
@@ -1021,7 +1025,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldLeaveAuthOmittedForActorPreservation()
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldReturnBadRequest()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
         host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
@@ -1053,10 +1057,8 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
-        var configuration = host.Schedules.Updated.Should().ContainSingle().Which.Configuration;
-        configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
-        configuration.Target.ServiceInvocation!.Auth.Should().BeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Updated.Should().BeEmpty();
     }
 
     [Fact]
@@ -1089,6 +1091,19 @@ public sealed class ScheduledDispatchEndpointsTests
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
                 revisionId = "rev-chat",
+                auth = new
+                {
+                    senderNyxId = new
+                    {
+                        subject = new
+                        {
+                            platform = "nyxid",
+                            tenant = "tenant-1",
+                            externalUserId = "user-42",
+                        },
+                        scope = "proxy",
+                    },
+                },
             },
         });
 
@@ -1101,7 +1116,8 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.EndpointId.Should().Be("chat");
         invocation.Payload.TypeUrl.Should().Be("type.googleapis.com/aevatar.ai.ChatRequestEvent");
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("refresh standup");
-        invocation.Auth.Should().BeNull();
+        invocation.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
     }
 
@@ -1723,6 +1739,7 @@ public sealed class ScheduledDispatchEndpointsTests
             if (CreateException != null)
                 throw CreateException;
 
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Create);
             Created.Add(configuration);
             CreateContexts.Add(context);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
@@ -1740,6 +1757,7 @@ public sealed class ScheduledDispatchEndpointsTests
             ScheduledDispatchMutationContext? context = null,
             CancellationToken ct = default)
         {
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Ensure);
             Ensured.Add(configuration);
             EnsureContexts.Add(context);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
@@ -1761,6 +1779,7 @@ public sealed class ScheduledDispatchEndpointsTests
             if (UpdateException != null)
                 throw UpdateException;
 
+            AdmitCredentialRequirement(configuration, ScheduledDispatchCredentialRequirementOperation.Update);
             Updated.Add((scheduleId, configuration));
             UpdateContexts.Add(context);
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
@@ -1894,6 +1913,16 @@ public sealed class ScheduledDispatchEndpointsTests
                 AckedAt: DateTimeOffset.UtcNow,
                 AckStage: "accepted"));
         }
+
+        private static void AdmitCredentialRequirement(
+            ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchCredentialRequirementOperation operation)
+        {
+            var request = ScheduledDispatchCredentialRequirementRequests.FromConfiguration(configuration, operation);
+            var decision = DefaultScheduledDispatchCredentialRequirementPolicy.Instance.Evaluate(request);
+            if (!decision.Allowed)
+                throw new ArgumentException(decision.Message, nameof(configuration));
+        }
     }
 
     private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
@@ -1939,5 +1968,4 @@ public sealed class ScheduledDispatchEndpointsTests
             return Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
         }
     }
-
 }

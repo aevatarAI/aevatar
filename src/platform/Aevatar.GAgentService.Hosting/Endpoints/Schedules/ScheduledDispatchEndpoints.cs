@@ -2,8 +2,7 @@ using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Credentials;
-using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -397,7 +396,10 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             Timezone: Timezone ?? string.Empty,
             Enabled: Enabled,
             Headers: Headers ?? new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduleKind: scheduleKind);
+            ScheduleKind: scheduleKind)
+        {
+            CredentialRequirementTargetKind = resolvedTarget.CredentialRequirementTargetKind,
+        };
     }
 
     private async Task<ResolvedScheduledDispatchTarget> ResolveTargetAsync(
@@ -412,7 +414,13 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             throw new ArgumentException("Exactly one scheduled dispatch target is required.");
 
         if (Envelope != null)
-            return new ResolvedScheduledDispatchTarget(Envelope.ToTarget(), IsWorkflowServiceTarget: false);
+        {
+            return new ResolvedScheduledDispatchTarget(
+                Envelope.ToTarget(),
+                IsWorkflowServiceTarget: false,
+                ScheduledDispatchCredentialRequirementTargetKind.Envelope);
+        }
+
         return await ServiceInvocation!.ToResolvedTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
     }
 
@@ -474,7 +482,8 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
 
     internal sealed record ResolvedScheduledDispatchTarget(
         ScheduledDispatchTargetDescriptor Target,
-        bool IsWorkflowServiceTarget);
+        bool IsWorkflowServiceTarget,
+        ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind);
 }
 
 public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
@@ -525,7 +534,8 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
         var implementationRevision = await ResolveImplementationRevisionAsync(catalogReader, revisionCatalogReader, revisionId, ct);
         return new ScheduledDispatchConfigurationHttpRequest.ResolvedScheduledDispatchTarget(
             target,
-            IsWorkflowRevision(implementationRevision));
+            IsWorkflowRevision(implementationRevision),
+            ResolveCredentialRequirementTargetKind(implementationRevision));
     }
 
     public ScheduledDispatchTargetDescriptor ToTarget(
@@ -613,6 +623,36 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
              ServiceEndpointContractMath.ImplementationKindWorkflow,
              StringComparison.OrdinalIgnoreCase) ||
          revision.Implementation?.Workflow != null);
+
+    private static ScheduledDispatchCredentialRequirementTargetKind ResolveCredentialRequirementTargetKind(
+        ServiceRevisionSnapshot? revision)
+    {
+        if (revision == null)
+            return ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+
+        if (IsWorkflowRevision(revision))
+            return ScheduledDispatchCredentialRequirementTargetKind.WorkflowService;
+
+        if (string.Equals(
+                revision.ImplementationKind,
+                ServiceEndpointContractMath.ImplementationKindStatic,
+                StringComparison.OrdinalIgnoreCase) ||
+            revision.Implementation?.Static != null)
+        {
+            return ScheduledDispatchCredentialRequirementTargetKind.StaticService;
+        }
+
+        if (string.Equals(
+                revision.ImplementationKind,
+                ServiceEndpointContractMath.ImplementationKindScripting,
+                StringComparison.OrdinalIgnoreCase) ||
+            revision.Implementation?.Scripting != null)
+        {
+            return ScheduledDispatchCredentialRequirementTargetKind.ScriptingService;
+        }
+
+        return ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+    }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

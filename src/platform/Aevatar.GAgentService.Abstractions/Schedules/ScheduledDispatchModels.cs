@@ -196,7 +196,11 @@ public sealed record ScheduledDispatchConfiguration(
     string Timezone,
     bool Enabled,
     IReadOnlyDictionary<string, string> Headers,
-    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic);
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic)
+{
+    public ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind { get; init; } =
+        ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+}
 
 public sealed record PreparedScheduledDispatchTarget(
     string? TargetActorId,
@@ -232,7 +236,11 @@ public sealed record ScheduledDispatchSummary(
     ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
     bool Deleted = false,
     int OverdueFireDetectedCount = 0,
-    DateTimeOffset? LastOverdueFireAt = null);
+    DateTimeOffset? LastOverdueFireAt = null,
+    ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind =
+        ScheduledDispatchCredentialRequirementTargetKind.Unspecified,
+    ScheduledDispatchCredentialSourceKind CredentialSourceKind =
+        ScheduledDispatchCredentialSourceKind.None);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,
