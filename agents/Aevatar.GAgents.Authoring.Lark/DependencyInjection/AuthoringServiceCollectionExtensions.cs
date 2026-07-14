@@ -36,7 +36,6 @@ public static class AuthoringServiceCollectionExtensions
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
         services.TryAddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
         services.TryAddSingleton<IScheduledAgentCredentialLifecycle, ScheduledAgentCredentialLifecycle>();
-        services.TryAddSingleton<IStudioScheduledCredentialMaterializer, StudioScheduledCredentialMaterializer>();
         if (!services.Any(IsAgentBuilderToolSourceRegistration))
             services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), AgentToolSourceFactory));
 

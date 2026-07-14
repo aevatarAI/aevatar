@@ -13,6 +13,8 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class StudioMemberWorkflowSchedulePortTests
 {
+    private static readonly DateTimeOffset TestNow = DateTimeOffset.UnixEpoch.AddDays(20_000);
+
     [Fact]
     public async Task EnsureAsync_HappyPath_SchedulesExistingBoundWorkflowMember()
     {
@@ -243,6 +245,55 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         result.ScheduleId.Should().Be(attemptedScheduleIds[1]);
     }
 
+    [Theory]
+    [InlineData(-1, CredentialSecretPurposes.ScheduledInvocationAgentKey,
+        "scheduled_credential_expiry_mismatch")]
+    [InlineData(25, CredentialSecretPurposes.ScheduledInvocationAgentKey,
+        "scheduled_credential_expiry_mismatch")]
+    [InlineData(20, "unrelated-purpose",
+        "scheduled_credential_purpose_mismatch")]
+    public async Task CreateAsync_WhenMaterializedCredentialDoesNotMatchPlan_ShouldRevokeWithoutScheduling(
+        int expiresAfterHours,
+        string purpose,
+        string expectedError)
+    {
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer
+        {
+            Credential = CreateCredential(TestNow.AddHours(expiresAfterHours), purpose),
+        };
+        var sut = NewPort(scheduleService, materializer: materializer);
+
+        var action = () => ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(expectedError);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        materializer.RevokeCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenAllScheduleGenerationsAreTombstoned_ShouldRevokeCredential()
+    {
+        var scheduleService = new RecordingScheduleService { TombstonedAttempts = 50 };
+        var materializer = new RecordingCredentialMaterializer();
+        var sut = NewPort(scheduleService, materializer: materializer);
+
+        var action = () => ScheduleAsync(sut, Request("scope-1", "member-1"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Studio member workflow schedule for member 'member-1' exhausted 50 deleted schedule generations.");
+        scheduleService.EnsureCallCount.Should().Be(50);
+        scheduleService.Configurations.Select(static configuration => configuration.ScheduleId)
+            .Should().OnlyHaveUniqueItems();
+        var attemptedScheduleIds = scheduleService.Configurations
+            .Select(static configuration => configuration.ScheduleId)
+            .ToArray();
+        attemptedScheduleIds[0].Should().NotEndWith(".2");
+        attemptedScheduleIds[^1].Should().Be($"{attemptedScheduleIds[0]}.50");
+        materializer.RevokeCallCount.Should().Be(1);
+    }
+
     [Fact]
     public async Task EnsureAsync_ShouldUseDeterministicScheduleIdPerScopeAndMember()
     {
@@ -282,7 +333,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 SubjectExternalUserId = "sender-alpha",
                 VerifiedBindingId = "binding-alpha",
             },
-            CredentialExpiresAtUtc: DateTimeOffset.Parse("2026-08-01T00:00:00Z"))
+            CredentialExpiresAtUtc: TestNow.AddHours(24))
         {
             ProvisioningBearerToken = "bearer-alpha",
         };
@@ -293,7 +344,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         IScheduledInvocationAuthorizationPlanner? planner = null,
         IStudioScheduledCredentialMaterializer? materializer = null) =>
         new(memberService ?? new RecordingMemberService { Detail = CreateWorkflowMemberDetail() }, schedule,
-            planner ?? new RecordingAuthorizationPlanner(), materializer ?? new RecordingCredentialMaterializer());
+            planner ?? new RecordingAuthorizationPlanner(), materializer ?? new RecordingCredentialMaterializer(),
+            new FixedTimeProvider(TestNow));
 
     private static async Task<StudioMemberWorkflowScheduleResult> ScheduleAsync(
         StudioMemberWorkflowSchedulePort port,
@@ -303,6 +355,18 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         preflight.Success.Should().BeTrue();
         return await port.CreateAsync(request, preflight.Plan!.PermissionDigest);
     }
+
+    private static StudioScheduledCredential CreateCredential(DateTimeOffset expiresAtUtc, string purpose) =>
+        new(
+            "key-alpha",
+            new SecretReference
+            {
+                Ref = "secret-alpha",
+                Purpose = purpose,
+                OwnerScopeKey = "schedule:test",
+                ExpiresAtUnixMs = expiresAtUtc.ToUnixTimeMilliseconds(),
+            },
+            expiresAtUtc);
 
     private static StudioMemberDetailResponse CreateWorkflowMemberDetail(
         string implementationKind = MemberImplementationKindNames.Workflow,
@@ -427,7 +491,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 CredentialPolicy = new ScheduledInvocationCredentialPolicy
                 {
                     Scopes = "read proxy",
-                    ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+                    ExpiresAt = Timestamp.FromDateTimeOffset(TestNow.AddHours(24)),
                     PolicyVersion = "scheduled-invocation-auth/v1",
                 },
                 Disclosure = new Aevatar.Studio.Application.Authorization.ScheduledInvocationAuthorizationDisclosure
@@ -471,6 +535,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public string? BearerToken { get; private set; }
         public ScheduledInvocationAuthorizationPlan? Plan { get; private set; }
         public Aevatar.Foundation.Abstractions.OwnerScope? OwnerScope { get; private set; }
+        public StudioScheduledCredential? Credential { get; init; }
 
         public Task<StudioScheduledCredential> MaterializeAsync(
             string bearerToken,
@@ -483,16 +548,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             BearerToken = bearerToken;
             Plan = plan;
             OwnerScope = ownerScope;
-            return Task.FromResult(new StudioScheduledCredential(
-                "key-alpha",
-                new SecretReference
-                {
-                    Ref = "secret-alpha",
-                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
-                    OwnerScopeKey = $"schedule:{scheduleId}",
-                    ExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-31T00:00:00Z").ToUnixTimeMilliseconds(),
-                },
-                DateTimeOffset.Parse("2026-07-31T00:00:00Z")));
+            return Task.FromResult(Credential ?? CreateCredential(
+                TestNow.AddHours(20),
+                CredentialSecretPurposes.ScheduledInvocationAgentKey));
         }
 
         public Task RevokeAsync(
@@ -505,6 +563,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             RevokeCallCount++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 
     private sealed class RecordingScheduleService : IScheduledDispatchApplicationService

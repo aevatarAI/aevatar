@@ -37,6 +37,7 @@ internal static class StudioHostingServiceCollectionExtensions
                     System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
             });
         services.AddHttpContextAccessor();
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         services.Configure<NyxIdLlmCatalogCacheOptions>(

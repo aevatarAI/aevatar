@@ -24,17 +24,29 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private readonly IScheduledDispatchApplicationService _scheduleService;
     private readonly IScheduledInvocationAuthorizationPlanner _authorizationPlanner;
     private readonly IStudioScheduledCredentialMaterializer _credentialMaterializer;
+    private readonly TimeProvider _timeProvider;
 
     public StudioMemberWorkflowSchedulePort(
         IStudioMemberService memberService,
         IScheduledDispatchApplicationService scheduleService,
         IScheduledInvocationAuthorizationPlanner authorizationPlanner,
         IStudioScheduledCredentialMaterializer credentialMaterializer)
+        : this(memberService, scheduleService, authorizationPlanner, credentialMaterializer, TimeProvider.System)
+    {
+    }
+
+    internal StudioMemberWorkflowSchedulePort(
+        IStudioMemberService memberService,
+        IScheduledDispatchApplicationService scheduleService,
+        IScheduledInvocationAuthorizationPlanner authorizationPlanner,
+        IStudioScheduledCredentialMaterializer credentialMaterializer,
+        TimeProvider timeProvider)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
         _authorizationPlanner = authorizationPlanner ?? throw new ArgumentNullException(nameof(authorizationPlanner));
         _credentialMaterializer = credentialMaterializer ?? throw new ArgumentNullException(nameof(credentialMaterializer));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public async Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
@@ -89,7 +101,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ScheduledDispatchMutationReceipt schedule;
         try
         {
-            EnsureCredentialMatchesPlan(credential, current.Plan);
+            EnsureCredentialMatchesPlan(credential, current.Plan, _timeProvider.GetUtcNow());
             schedule = await EnsureScheduleAsync(
                 scheduleId,
                 request.DisplayName,
@@ -160,7 +172,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 [],
                 authority,
                 request.CredentialExpiresAtUtc,
-                DateTimeOffset.UtcNow)
+                _timeProvider.GetUtcNow())
             {
                 ServiceGrantsNotRequired = false,
             });
@@ -324,9 +336,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
     private static void EnsureCredentialMatchesPlan(
         StudioScheduledCredential credential,
-        ScheduledInvocationAuthorizationPlan plan)
+        ScheduledInvocationAuthorizationPlan plan,
+        DateTimeOffset now)
     {
-        if (credential.ExpiresAtUtc <= DateTimeOffset.UtcNow ||
+        if (credential.ExpiresAtUtc <= now ||
             credential.ExpiresAtUtc > plan.CredentialPolicy.ExpiresAt.ToDateTimeOffset())
             throw new InvalidOperationException("scheduled_credential_expiry_mismatch");
         if (!string.Equals(credential.SecretReference.Purpose,
