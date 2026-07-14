@@ -54,9 +54,8 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             _keyring,
             GarnetSecretRecordIds.VaultAssociatedData(record));
 
-<<<<<<< HEAD
         var bytes = record.ToByteArray();
-        if (await _store.SetIfAbsentAsync(BuildKey(record.Ref), bytes, expiry: null, ct))
+        if (await _store.SetIfAbsentAsync(BuildKey(record.Ref), bytes, StorageTtl(expiresAtUnixMs, now), ct))
             return new StoreSecretResult(ToReference(record));
 
         var existing = await ReadRecordAsync(record.Ref, ct);
@@ -64,14 +63,6 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             return new StoreSecretResult(ToReference(existing.Record));
 
         throw new InvalidOperationException("Secret reference already exists with a different descriptor or secret.");
-=======
-        await _store.SetAsync(
-            BuildKey(record.Ref),
-            record.ToByteArray(),
-            StorageTtl(expiresAtUnixMs, now),
-            ct);
-        return new StoreSecretResult(ToReference(record));
->>>>>>> origin/feature/integrate
     }
 
     public async Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default)
