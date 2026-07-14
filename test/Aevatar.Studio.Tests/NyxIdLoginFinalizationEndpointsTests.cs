@@ -38,7 +38,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload.Should().BeEquivalentTo(new NyxIdLoginConfigurationResponse(
             "https://nyx.example",
             "broker-client-1",
-            "openid broker proxy"));
+            "openid broker proxy",
+            ["https://nyx.example/api/v1/proxy/s/aevatar"]));
     }
 
     [Fact]
@@ -217,6 +218,57 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         broker.RevokedBindingIds.Should().ContainSingle().Which.Should().Be("bnd-new");
         refreshDispatch.Commands.Should().BeEmpty();
         dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Finalize_ShouldRefreshBinding_WhenExistingBindingLacksRequiredService()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+            BindingId: "bnd-new",
+            IdToken: CreateIdToken(new { uid = "owner-user-1" }),
+            AccessToken: "access-token"));
+        var queryPort = new FakeExternalIdentityBindingQueryPort();
+        queryPort.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-existing";
+        var refreshDispatch = new RecordingBindingRefreshDispatch();
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
+            broker,
+            new ServiceAccessMismatchCapabilityBroker(),
+            queryPort,
+            new RecordingBindingDispatch(),
+            refreshDispatch,
+            NullLoggerFactory.Instance);
+
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.BindingDispatchAccepted.Should().BeTrue();
+        refreshDispatch.Commands.Should().ContainSingle().Which.BindingId.Should().Be("bnd-new");
+    }
+
+    [Fact]
+    public async Task Finalize_ShouldReturnConflict_WhenRequiredServiceWasNotGranted()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(null, null, null))
+        {
+            ExchangeError = new NyxIdRequiredServiceAccessException(
+                "https://nyx.example/api/v1/proxy/s/aevatar"),
+        };
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
+            broker,
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
+            NullLoggerFactory.Instance);
+
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
     }
 
     [Fact]
@@ -411,6 +463,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
     private sealed class RecordingBrokerCallback(BrokerAuthorizationCodeResult result) : INyxIdBrokerCallbackClient
     {
+        public Exception? ExchangeError { get; init; }
         public List<string> RevokedBindingIds { get; } = [];
         public List<(string Code, string CodeVerifier, string RedirectUri)> Exchanges { get; } = [];
 
@@ -430,6 +483,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             CancellationToken ct = default)
         {
             Exchanges.Add((authorizationCode, codeVerifier, redirectUri));
+            if (ExchangeError is not null)
+                return Task.FromException<BrokerAuthorizationCodeResult>(ExchangeError);
             return Task.FromResult(result);
         }
 
@@ -494,6 +549,17 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             CapabilityScope scope,
             CancellationToken ct = default) =>
             throw new BindingRevokedException(externalSubject);
+    }
+
+    private sealed class ServiceAccessMismatchCapabilityBroker : StubCapabilityBroker
+    {
+        public override Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            throw new BindingServiceAccessMismatchException(
+                externalSubject,
+                "https://nyx.example/api/v1/proxy/s/aevatar");
     }
 
     private sealed class FailingCapabilityBroker : StubCapabilityBroker

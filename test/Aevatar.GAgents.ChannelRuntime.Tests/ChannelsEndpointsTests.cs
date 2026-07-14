@@ -109,6 +109,9 @@ public sealed class ChannelsEndpointsTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
+        html.Should().Contain("\"resources\":[\"https://id.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain("searchParams.append(\"resource\"");
+        html.Should().Contain("form.append(\"resource\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
     }
 }

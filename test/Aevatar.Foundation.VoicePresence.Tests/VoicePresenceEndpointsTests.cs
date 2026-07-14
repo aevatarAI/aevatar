@@ -226,19 +226,21 @@ public class VoicePresenceEndpointsTests
     }
 
     [Fact]
-    public async Task Request_should_close_websocket_when_attach_fails_after_upgrade()
+    public async Task Request_should_close_websocket_when_transport_conflicts_after_upgrade()
     {
-        var socket = new FakeWebSocket(WebSocketState.Open);
+        var socket = new RecordingCloseWebSocket(WebSocketState.Open);
         var mediaPort = new RecordingVolatileMediaStreamPort(
-            attachAsync: static (_, _) => throw new InvalidOperationException("already attached"));
+            attachAsync: static (_, _) => throw new VoiceTransportAlreadyAttachedException());
         using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
         var context = CreateHttpContext(app);
-        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Features.Set<IHttpWebSocketFeature>(new RecordingHttpWebSocketFeature(socket));
         context.Request.RouteValues["actorId"] = "agent-1";
 
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         socket.CloseCalls.ShouldBe(1);
+        socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
+        socket.LastCloseDescription.ShouldBe(VoiceTransportAlreadyAttachedException.Reason);
         socket.State.ShouldBe(WebSocketState.Closed);
     }
 
@@ -258,6 +260,25 @@ public class VoicePresenceEndpointsTests
         socket.CloseCalls.ShouldBe(1);
         socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
         socket.LastCloseDescription.ShouldBe(VoiceVolatileMediaStreamUnavailableException.Reason);
+        socket.State.ShouldBe(WebSocketState.Closed);
+    }
+
+    [Fact]
+    public async Task Request_should_close_websocket_with_typed_reason_when_provider_credential_is_unavailable()
+    {
+        var socket = new RecordingCloseWebSocket(WebSocketState.Open);
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: static (_, _) => throw new RealtimeProviderCredentialException("broker response omitted secret"));
+        using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new RecordingHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        socket.CloseCalls.ShouldBe(1);
+        socket.LastCloseStatus.ShouldBe(WebSocketCloseStatus.PolicyViolation);
+        socket.LastCloseDescription.ShouldBe(VoiceWebSocketAttachExecutor.VoiceProviderCredentialUnavailableReason);
         socket.State.ShouldBe(WebSocketState.Closed);
     }
 
@@ -510,7 +531,7 @@ public class VoicePresenceEndpointsTests
             Task.CompletedTask);
         var mediaPort = new NonDisposingRecordingVolatileMediaStreamPort
         {
-            AttachException = new InvalidOperationException("already attached"),
+            AttachException = new VoiceTransportAlreadyAttachedException(),
         };
         var executor = new VoiceWhipAttachExecutor(mediaPort, factory);
         await using var app = CreateApp(new RecordingRealtimeSession(), mediaPort);

@@ -3274,10 +3274,17 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                     ? outbound.NyxProviderSlug
                     : request.ProviderSlugOverride.Trim(),
                 NyxApiKey: outbound.NyxApiKey,
-                LarkReceiveId: outbound.LarkReceiveId,
-                LarkReceiveIdType: outbound.LarkReceiveIdType,
-                LarkReceiveIdFallback: outbound.LarkReceiveIdFallback,
-                LarkReceiveIdTypeFallback: outbound.LarkReceiveIdTypeFallback,
+                ChannelAddress: UserAgentCatalogChannelAddress.ToModel(
+                    null,
+                    "lark",
+                    string.IsNullOrWhiteSpace(request.ProviderSlugOverride)
+                        ? outbound.NyxProviderSlug
+                        : request.ProviderSlugOverride.Trim(),
+                    outbound.ConversationId,
+                    outbound.LarkReceiveId,
+                    outbound.LarkReceiveIdType,
+                    outbound.LarkReceiveIdFallback,
+                    outbound.LarkReceiveIdTypeFallback),
                 OutputFormat: outbound.OutputFormat,
                 TemplateName: string.Empty,
                 AgentType: string.Empty);

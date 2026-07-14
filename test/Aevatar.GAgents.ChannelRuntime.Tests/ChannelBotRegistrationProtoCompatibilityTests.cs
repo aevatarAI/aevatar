@@ -25,6 +25,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("last_inbound_at_utc")!.FieldNumber.Should().Be(14);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(15);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(16);
     }
 
     [Fact]
@@ -41,6 +42,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("credential_ref").Should().BeNull();
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(11);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(12);
     }
 
     [Fact]
@@ -62,6 +64,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("last_inbound_at_utc")!.FieldNumber.Should().Be(15);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(16);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(17);
     }
 
     [Fact]

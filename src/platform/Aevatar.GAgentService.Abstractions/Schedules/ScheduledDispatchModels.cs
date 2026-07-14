@@ -17,6 +17,12 @@ public enum ScheduledDispatchScheduleKind
     SkillRunner = 2,
 }
 
+public enum ScheduledDispatchScheduleMode
+{
+    RecurringCron = 0,
+    OneShotAtUtc = 1,
+}
+
 public sealed record ScheduledDispatchTargetDescriptor(
     ScheduledDispatchTargetKind Kind,
     string? ActorId = null,
@@ -196,7 +202,9 @@ public sealed record ScheduledDispatchConfiguration(
     string Timezone,
     bool Enabled,
     IReadOnlyDictionary<string, string> Headers,
-    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic)
+    ScheduledDispatchScheduleKind ScheduleKind = ScheduledDispatchScheduleKind.Generic,
+    ScheduledDispatchScheduleMode ScheduleMode = ScheduledDispatchScheduleMode.RecurringCron,
+    DateTimeOffset? OneShotFireAt = null)
 {
     public ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind { get; init; } =
         ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
@@ -240,7 +248,10 @@ public sealed record ScheduledDispatchSummary(
     ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind =
         ScheduledDispatchCredentialRequirementTargetKind.Unspecified,
     ScheduledDispatchCredentialSourceKind CredentialSourceKind =
-        ScheduledDispatchCredentialSourceKind.None);
+        ScheduledDispatchCredentialSourceKind.None,
+    ScheduledDispatchScheduleMode ScheduleMode = ScheduledDispatchScheduleMode.RecurringCron,
+    DateTimeOffset? OneShotFireAt = null,
+    bool Completed = false);
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,

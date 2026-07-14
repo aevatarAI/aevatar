@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Observatory;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -265,6 +266,115 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         detail.FinalOutput.Should().BeEmpty();
         detail.Steps.Should().BeEmpty();
         detail.Statistics.TotalSteps.Should().Be(0);
+        detail.Diagnostics.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldSurfaceDiagnostics_WhenRunFailed()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Failed, started: 1, updated: 9);
+        snapshot.LastError = "current state failure";
+        snapshot.SagaStatus = WorkflowSagaStatus.CompensationDeadLetter;
+        snapshot.DeadLetterFailedCompensationStepId = "refund";
+        snapshot.DeadLetterRemainingUncompensated = 2;
+        snapshot.DeadLetterError = "refund failed";
+        var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
+        var report = new WorkflowRunReport
+        {
+            FinalError = "final report failure",
+            EndedAt = DateTimeOffset.UnixEpoch.AddSeconds(9),
+            Steps =
+            [
+                new WorkflowRunStepTrace
+                {
+                    StepId = "publish",
+                    StepType = "tool_call",
+                    TargetRole = "publisher",
+                    RequestedAt = DateTimeOffset.UnixEpoch.AddSeconds(3),
+                    CompletedAt = DateTimeOffset.UnixEpoch.AddSeconds(4),
+                    Success = false,
+                    Error = "tool rejected request",
+                    NextStepId = "notify",
+                    BranchKey = "error",
+                },
+                new WorkflowRunStepTrace
+                {
+                    StepId = "notify",
+                    StepType = "llm_call",
+                    TargetRole = "notifier",
+                    RequestedAt = DateTimeOffset.UnixEpoch.AddSeconds(5),
+                },
+            ],
+            Timeline =
+            [
+                ToolCallEvent("publish_tool", "call-1", "{}", "{}", success: false),
+            ],
+        };
+        report.Timeline[0].StepId = "publish";
+        report.Timeline[0].StepType = "tool_call";
+        report.Timeline[0].Data["error"] = "tool call failed";
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort { Report = report });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Diagnostics.Should().Contain(log =>
+            log.Code == "compensation_dead_letter" &&
+            log.StepId == "refund" &&
+            log.Message == "refund failed");
+        detail.Diagnostics.Should().Contain(log =>
+            log.Code == "current_state_last_error" &&
+            log.Message == "current state failure");
+        detail.Diagnostics.Should().Contain(log =>
+            log.Code == "final_error" &&
+            log.Message == "final report failure");
+        detail.Diagnostics.Should().Contain(log =>
+            log.Code == "step_failed" &&
+            log.StepId == "publish" &&
+            log.StepType == "tool_call" &&
+            log.TargetRole == "publisher" &&
+            log.Message == "tool rejected request");
+        detail.Diagnostics.Should().Contain(log =>
+            log.Code == "tool_call_failed" &&
+            log.StepId == "publish" &&
+            log.Message == "tool call failed");
+        detail.Diagnostics.Should().Contain(log =>
+            log.Code == "active_step" &&
+            log.StepId == "notify");
+        detail.Diagnostics.Should().Contain(log =>
+            log.Code == "last_known_step" &&
+            log.StepId == "notify");
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldSurfaceCurrentStateDiagnostic_WhenReportNotYetMaterialized()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.TimedOut, started: 1, updated: 9);
+        snapshot.LastError = "timeout waiting for role";
+        var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort { Report = null });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Diagnostics.Should().Contain(log =>
+            log.Code == "current_state_last_error" &&
+            log.Message == "timeout waiting for role");
+    }
+
+    [Fact]
+    public async Task GetRunForScopeAsync_ShouldExplainProblemTerminalWithoutFailureDetail()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Stopped, started: 1, updated: 9);
+        var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort { Report = null });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        detail!.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "terminal_without_failure_detail" &&
+            diagnostic.Severity == "warning");
     }
 
     [Fact]
@@ -374,6 +484,73 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunAsync_ShouldResolveRunAcrossScopes_AndReturnDetail()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            Snapshots =
+            [
+                Snapshot("run-foreign", OtherScope, WorkflowRunCompletionStatus.Completed),
+            ],
+        };
+        var artifact = new FakeArtifactQueryPort
+        {
+            Report = new WorkflowRunReport { FinalOutput = "done" },
+        };
+        var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
+
+        var detail = await service.GetRunAsync("run-foreign");
+
+        detail.Should().NotBeNull();
+        detail!.Summary.RunId.Should().Be("run-foreign");
+        detail.Summary.ScopeId.Should().Be(OtherScope);
+        detail.FinalOutput.Should().Be("done");
+        currentState.GetRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
+        artifact.ReportRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
+    }
+
+    [Fact]
+    public async Task GetRunAsync_ShouldReturnNull_WhenRunMissingOrScopeMissing()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            Snapshots =
+            [
+                Snapshot("run-without-scope", string.Empty, WorkflowRunCompletionStatus.Completed),
+            ],
+        };
+        var artifact = new FakeArtifactQueryPort();
+        var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
+
+        (await service.GetRunAsync("missing")).Should().BeNull();
+        (await service.GetRunAsync("run-without-scope")).Should().BeNull();
+        artifact.ReportRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetRunGraphAsync_ShouldResolveRunAcrossScopes_AndReturnGraph()
+    {
+        var currentState = new FakeCurrentStateQueryPort
+        {
+            Snapshots =
+            [
+                Snapshot("run-foreign", OtherScope, WorkflowRunCompletionStatus.Completed),
+            ],
+        };
+        var subgraph = new WorkflowRunGraphExportSubgraph { RootNodeId = "run-foreign" };
+        subgraph.Nodes.Add(new WorkflowRunGraphExportNode { NodeId = "run-foreign", NodeType = "WorkflowRun" });
+        var artifact = new FakeArtifactQueryPort { Subgraph = subgraph };
+        var service = new WorkflowRunObservatoryQueryService(currentState, artifact);
+
+        var graph = await service.GetRunGraphAsync("run-foreign");
+
+        graph.Should().NotBeNull();
+        graph!.RootNodeId.Should().Be("run-foreign");
+        currentState.GetRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
+        artifact.GraphRequests.Should().ContainSingle().Which.Should().Be("run-foreign");
+    }
+
+    [Fact]
     public async Task ListRunsForScopeAsync_ShouldPopulateScopeIdOnSummaries()
     {
         var currentState = new FakeCurrentStateQueryPort
@@ -443,12 +620,23 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
         public bool WorkflowActorCurrentStateQueryEnabled => true;
         public IReadOnlyList<WorkflowActorSnapshot> ListResult { get; init; } = [];
         public WorkflowActorSnapshot? SingleResult { get; init; }
+        public IReadOnlyList<WorkflowActorSnapshot> Snapshots { get; init; } = [];
         public WorkflowActorCurrentStateListQuery? LastListQuery { get; private set; }
+        public List<string> GetRequests { get; } = [];
 
-        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(SingleResult != null && string.Equals(SingleResult.ActorId, actorId, StringComparison.Ordinal)
-                ? SingleResult
-                : null);
+        public Task<WorkflowActorSnapshot?> GetWorkflowActorCurrentStateAsync(string actorId, CancellationToken ct = default)
+        {
+            GetRequests.Add(actorId);
+            if (SingleResult != null)
+            {
+                return Task.FromResult(string.Equals(SingleResult.ActorId, actorId, StringComparison.Ordinal)
+                    ? SingleResult
+                    : null);
+            }
+
+            return Task.FromResult(Snapshots.FirstOrDefault(snapshot =>
+                string.Equals(snapshot.ActorId, actorId, StringComparison.Ordinal)));
+        }
 
         public Task<IReadOnlyList<WorkflowActorSnapshot>> ListWorkflowActorCurrentStatesAsync(int take = 200, CancellationToken ct = default) =>
             Task.FromResult(ListResult);

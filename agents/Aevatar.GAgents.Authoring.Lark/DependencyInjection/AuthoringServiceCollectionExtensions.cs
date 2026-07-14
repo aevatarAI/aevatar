@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -52,6 +53,8 @@ public static class AuthoringServiceCollectionExtensions
             sp.GetRequiredService<IUserAgentCatalogQueryPort>(),
             sp.GetRequiredService<ISkillRunnerExecutionQueryPort>(),
             sp.GetRequiredService<ISkillRunnerCommandPort>(),
+            sp.GetRequiredService<IScheduledDispatchApplicationService>(),
+            sp.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             sp.GetRequiredService<IUserAgentCatalogCommandPort>(),
             sp.GetRequiredService<ICallerScopeResolver>(),
             sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),

@@ -489,6 +489,30 @@
   .usage-cell .uv .unit { font-size: 11px; color: var(--muted); font-weight: 500; margin-left: 2px; }
   .usage-cell.accent .uv { color: var(--accent); }
 
+  .diagnostic-strip {
+    margin-top: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel);
+    overflow: hidden;
+  }
+  .diagnostic-strip.has-error { border-color: color-mix(in oklab, var(--err) 42%, var(--border)); background: var(--err-soft); }
+  .diag-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 11px 14px; border-bottom: 1px solid var(--border-soft); }
+  .diag-title { font-weight: 700; color: var(--fg-strong); }
+  .diag-sub { font-size: 12px; color: var(--muted); }
+  .diag-body { padding: 11px 14px; display: grid; gap: 9px; }
+  .diag-item { display: grid; gap: 5px; padding: 10px 11px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: color-mix(in oklab, var(--panel) 86%, transparent); }
+  .diag-item.error { border-color: color-mix(in oklab, var(--err) 34%, var(--border)); }
+  .diag-item.warning { border-color: color-mix(in oklab, var(--warn) 34%, var(--border)); }
+  .diag-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted-2); font-family: var(--mono); }
+  .diag-code { font-weight: 700; color: var(--fg); }
+  .diag-msg { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+  .diag-hint { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+  .diag-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+  .issue-pre {
+    margin: 0; padding: 12px 13px; max-height: 300px; overflow: auto;
+    background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+    font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--fg);
+    white-space: pre-wrap; word-break: break-word;
+  }
+
   /* ---- Tabs ------------------------------------------------------------- */
   .tabs { display: inline-flex; gap: 3px; padding: 3px; margin: 20px 0 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-pill); }
   .tab {
@@ -916,8 +940,8 @@
    scope-gated bearer APIs; the page itself is the anonymous static shell.
    A small client cache backs the synchronous render contract (DataSource.*):
      listRuns(status) <- GET /api/workflow/observatory/runs
-     getRun(runId)    <- GET /api/workflow/observatory/runs/{runId}
-     getGraph(runId)  <- GET /api/workflow/observatory/runs/{runId}/graph
+     getRun(runId)    <- GET /api/workflow/observatory/runs/{runId}; admin drilldown uses /admin/runs/{runId}
+     getGraph(runId)  <- GET /api/workflow/observatory/runs/{runId}/graph; admin drilldown uses /admin/runs/{runId}/graph
    Read-only: there are no edit/run/stop calls anywhere.
    =========================================================================== */
 const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
@@ -928,6 +952,7 @@ const CFG = {
   nyxidApi: BACKEND_CONSOLE_CONFIG.nyxidApi || "",
   clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
   scope: BACKEND_CONSOLE_CONFIG.scope || "",
+  resources: Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [],
   redirectUri: location.origin + "/auto/callback",
   storageKey: BACKEND_CONSOLE_CONFIG.storageKey || "",
   pollMs: 3000
@@ -960,6 +985,7 @@ async function beginLogin(){
   u.searchParams.set("client_id", CFG.clientId);
   u.searchParams.set("redirect_uri", CFG.redirectUri);
   u.searchParams.set("scope", CFG.scope);
+  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
   u.searchParams.set("state", st);
   u.searchParams.set("code_challenge", challenge);
   u.searchParams.set("code_challenge_method", "S256");
@@ -980,6 +1006,7 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
+  CFG.resources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
   if(!res.ok){ console.warn("observatory: token exchange failed", res.status); return false; }
@@ -1020,7 +1047,7 @@ const DataSource = {
 
 /* 06-20-observatory-admin-cross-scope: cross-scope admin view state (drives the admin bar + API scope params). */
 const ALL_SCOPES = "__all__";
-const adminState = { isAdmin:false, role:"", email:"", ownScope:"", currentScope:null, inputDraft:"", candidates:null, message:"" };
+const adminState = { isAdmin:false, role:"", email:"", ownScope:"", currentScope:null, inputDraft:"", runIdDraft:"", candidates:null, message:"" };
 function runScopeParam(runId){
   if(!adminState.isAdmin) return "";
   const run = cache.runs.find(r => r.runId === runId);
@@ -1157,7 +1184,7 @@ function writeScopeHash(){
 function clearSession(){
   cache.account=null; cache.runs=[]; cache.details={}; cache.graphs={};
   adminState.isAdmin=false; adminState.role=""; adminState.email=""; adminState.ownScope="";
-  adminState.currentScope=null; adminState.inputDraft=""; adminState.candidates=null; adminState.message="";
+  adminState.currentScope=null; adminState.inputDraft=""; adminState.runIdDraft=""; adminState.candidates=null; adminState.message="";
 }
 function signOut(){ clearToken(); clearSession(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
 function signOutSilent(){ clearToken(); clearSession(); state.signedIn=false; state.scenario="login"; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
@@ -1205,6 +1232,14 @@ function deriveNodeStatus(graph, detail){
 const $ = (sel, root=document) => root.querySelector(sel);
 const el = (tag, attrs={}, html) => { const n=document.createElement(tag); for(const k in attrs){ if(k==="class")n.className=attrs[k]; else if(k.startsWith("on")&&typeof attrs[k]==="function")n.addEventListener(k.slice(2),attrs[k]); else if(attrs[k]!=null)n.setAttribute(k,attrs[k]); } if(html!=null)n.innerHTML=html; return n; };
 const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function copyText(value){
+  try { await navigator.clipboard.writeText(value || ""); }
+  catch(e){
+    const ta=document.createElement("textarea"); ta.value=value||""; document.body.appendChild(ta); ta.select();
+    try{document.execCommand("copy");}catch(_){ }
+    ta.remove();
+  }
+}
 
 const STATUS_LABEL = { running:"运行中", completed:"已完成", failed:"失败", timed_out:"已超时", stopped:"已停止", disabled:"已禁用", unknown:"未知", not_found:"未找到" };
 const KIND = {
@@ -1653,6 +1688,7 @@ function renderDetail(){
 
   const inner = el("div", { class:"detail-inner" });
   inner.appendChild(renderRunHeader(detail));
+  inner.appendChild(renderDiagnosticStrip(detail));
   inner.appendChild(renderTabs());
 
   const tp = el("div", {});
@@ -1660,11 +1696,16 @@ function renderDetail(){
   timelinePanel.appendChild(renderTimeline(detail));
   if(state.activeTab !== "timeline") timelinePanel.hidden = true;
 
+  const diagnosticsPanel = el("div", { class:"tabpanel", id:"panel-diagnostics", role:"tabpanel", "aria-labelledby":"tab-diagnostics", tabindex:"0" });
+  diagnosticsPanel.appendChild(renderDiagnostics(detail));
+  if(state.activeTab !== "diagnostics") diagnosticsPanel.hidden = true;
+
   const graphPanel = el("div", { class:"tabpanel", id:"panel-graph", role:"tabpanel", "aria-labelledby":"tab-graph", tabindex:"0" });
   graphPanel.appendChild(renderGraph(detail));
   if(state.activeTab !== "graph") graphPanel.hidden = true;
 
   tp.appendChild(timelinePanel);
+  tp.appendChild(diagnosticsPanel);
   tp.appendChild(graphPanel);
   inner.appendChild(tp);
 
@@ -1746,13 +1787,113 @@ function renderRunHeader(detail){
   return head;
 }
 
+function issuePayload(detail){
+  const steps = detail.steps || [];
+  const diagnostics = detail.diagnostics || [];
+  return JSON.stringify({
+    runId: detail.summary.runId,
+    scopeId: detail.summary.scopeId,
+    workflow: detail.summary.workflowName,
+    status: detail.summary.status,
+    stateVersion: detail.summary.stateVersion,
+    finalError: detail.finalError || "",
+    diagnostics: diagnostics.map(t => ({
+      severity: t.severity,
+      code: t.code,
+      source: t.source,
+      stepId: t.stepId,
+      stepType: t.stepType,
+      targetRole: t.targetRole,
+      message: t.message,
+      hint: t.hint,
+      timestampUtc: t.timestampUtc
+    })),
+    failedSteps: steps.filter(s => s.success === false || s.error).map(s => ({
+      stepId: s.stepId,
+      stepType: s.stepType,
+      targetRole: s.targetRole,
+      error: s.error,
+      requestedAtUtc: s.requestedAtUtc,
+      completedAtUtc: s.completedAtUtc,
+      nextStepId: s.nextStepId,
+      branchKey: s.branchKey
+    })),
+    lastKnownStep: steps.slice().reverse().find(s => s.stepId || s.stepType || s.targetRole) || null
+  }, null, 2);
+}
+
+function renderDiagnosticStrip(detail){
+  const diagnostics = detail.diagnostics || [];
+  if(!diagnostics.length && !["failed","timed_out","stopped"].includes(detail.summary.status)) return document.createDocumentFragment();
+  const hasProblem = diagnostics.some(t => t.severity === "error" || t.severity === "warning") || ["failed","timed_out","stopped"].includes(detail.summary.status);
+  const box = el("section", { class:"diagnostic-strip"+(hasProblem?" has-error":""), "aria-label":"失败诊断" });
+  const head = el("div", { class:"diag-head" });
+  head.innerHTML = `<span class="diag-title">${hasProblem ? "失败诊断" : "当前位置"}</span><span class="diag-sub">${diagnostics.length ? `${diagnostics.length} 条诊断信息` : "暂未收集到更多诊断信息"}</span>`;
+  box.appendChild(head);
+  if(diagnostics.length){
+    const body = el("div", { class:"diag-body" });
+    diagnostics.slice(0, 3).forEach(t => body.appendChild(renderDiagnosticItem(t)));
+    if(diagnostics.length > 3) body.appendChild(el("div", { class:"diag-hint" }, `另有 ${diagnostics.length - 3} 条，打开“诊断”页签查看完整 payload。`));
+    box.appendChild(body);
+  } else {
+    box.appendChild(el("div", { class:"diag-body" }, `<div class="diag-hint">运行已进入 ${esc(STATUS_LABEL[detail.summary.status] || detail.summary.status)}，但 final error 或失败 step 尚未物化。提交 issue 时请附上 run id 与 state version。</div>`));
+  }
+  return box;
+}
+
+function renderDiagnosticItem(t){
+  const item = el("div", { class:"diag-item "+(t.severity||"info") });
+  item.innerHTML = `
+    <div class="diag-meta">
+      <span class="diag-code">${esc((t.severity||"info").toUpperCase())} · ${esc(t.code||"diagnostic")}</span>
+      <span>${esc(clockUTC(t.timestampUtc))}</span>
+      <span>${esc(t.source||"observatory")}</span>
+      ${t.stepId ? `<span>step ${esc(t.stepId)}</span>` : ""}
+      ${t.stepType ? `<span>${esc(t.stepType)}</span>` : ""}
+      ${t.targetRole ? `<span>@${esc(t.targetRole)}</span>` : ""}
+    </div>
+    <div class="diag-msg">${esc(t.message||"—")}</div>
+    ${t.hint ? `<div class="diag-hint">${esc(t.hint)}</div>` : ""}`;
+  return item;
+}
+
+function renderDiagnostics(detail){
+  const wrap = el("div", {});
+  const diagnostics = detail.diagnostics || [];
+  const actions = el("div", { class:"diag-actions" });
+  const copy = el("button", { class:"copybtn", type:"button", "aria-label":"复制 issue payload" }, `${ICON.copy}<span>复制 issue payload</span>`);
+  copy.addEventListener("click", async () => {
+    await copyText(issuePayload(detail));
+    copy.classList.add("done"); copy.querySelector("span").textContent = "已复制";
+    setTimeout(() => { copy.classList.remove("done"); copy.querySelector("span").textContent = "复制 issue payload"; }, 1400);
+  });
+  actions.appendChild(copy);
+  wrap.appendChild(actions);
+  if(diagnostics.length){
+    const body = el("div", { class:"diag-body" });
+    diagnostics.forEach(t => body.appendChild(renderDiagnosticItem(t)));
+    wrap.appendChild(body);
+  } else {
+    wrap.appendChild(el("div", { class:"diag-body" }, `<div class="diag-hint">本次运行暂无诊断信息。若运行状态异常，请复制下面 payload 一并提交。</div>`));
+  }
+  wrap.appendChild(el("pre", { class:"issue-pre scroll" }, esc(issuePayload(detail))));
+  return wrap;
+}
+
 function renderTabs(){
   const tablist = el("div", { class:"tabs", role:"tablist", "aria-label":"详情视图" });
-  [["timeline","时间线",ICON.step],["graph","拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']].forEach(([id,lab,ic]) => {
+  [["timeline","时间线",ICON.step],["diagnostics","诊断",ICON.alert],["graph","拓扑图",'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>']].forEach(([id,lab,ic]) => {
     const t = el("button", { class:"tab", id:"tab-"+id, role:"tab", "aria-selected": String(state.activeTab===id), "aria-controls":"panel-"+id, tabindex: state.activeTab===id?"0":"-1" }, `${ic}<span>${lab}</span>`);
     t.addEventListener("click", () => { state.activeTab = id; if(id === "graph") loadGraph(state.selectedRunId); render(); });
     t.addEventListener("keydown", (e) => {
-      if(e.key==="ArrowRight"||e.key==="ArrowLeft"){ e.preventDefault(); state.activeTab = state.activeTab==="timeline"?"graph":"timeline"; if(state.activeTab === "graph") loadGraph(state.selectedRunId); render(); $("#tab-"+state.activeTab)?.focus(); }
+      if(e.key==="ArrowRight"||e.key==="ArrowLeft"){
+        e.preventDefault();
+        const order=["timeline","diagnostics","graph"];
+        const delta=e.key==="ArrowRight"?1:-1;
+        state.activeTab = order[(order.indexOf(state.activeTab)+delta+order.length)%order.length];
+        if(state.activeTab === "graph") loadGraph(state.selectedRunId);
+        render(); $("#tab-"+state.activeTab)?.focus();
+      }
     });
     tablist.appendChild(t);
   });
@@ -2364,6 +2505,11 @@ function goToInput(){
   if(raw.indexOf("@") >= 0) resolveEmail(raw); else setScope(raw);
 }
 
+function openRunInput(){
+  const runId = (adminState.runIdDraft || "").trim();
+  if(runId) selectRun(runId);
+}
+
 async function resolveEmail(email){
   adminState.message = "解析中…"; render();
   try {
@@ -2385,12 +2531,17 @@ function renderAdminBar(){
     : (adminState.currentScope ? "正在查看 scope <b>" + esc(adminState.currentScope) + "</b>" : "正在查看 <b>我的运行</b>");
   bar.appendChild(view);
 
-  const input = el("input", { class:"ab-input", type:"text", placeholder:"输入邮箱或 scope id 前往…", "aria-label":"邮箱或 scope id", value: adminState.inputDraft || "" });
+  const input = el("input", { class:"ab-input", type:"text", placeholder:"输入邮箱或 scope id…", "aria-label":"邮箱或 scope id", value: adminState.inputDraft || "" });
   input.addEventListener("input", e => { adminState.inputDraft = e.target.value; });
   input.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); goToInput(); } });
   bar.appendChild(input);
 
   const go = el("button", { class:"chip" }, "前往"); go.addEventListener("click", goToInput); bar.appendChild(go);
+  const runInput = el("input", { class:"ab-input", type:"text", placeholder:"输入完整 run id…", "aria-label":"完整 run id", value: adminState.runIdDraft || "" });
+  runInput.addEventListener("input", e => { adminState.runIdDraft = e.target.value; });
+  runInput.addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); openRunInput(); } });
+  bar.appendChild(runInput);
+  const openRun = el("button", { class:"chip" }, "打开运行"); openRun.addEventListener("click", openRunInput); bar.appendChild(openRun);
   const all = el("button", { class:"chip", "aria-pressed": String(adminState.currentScope === ALL_SCOPES) }, "全部 scope");
   all.addEventListener("click", () => setScope(ALL_SCOPES)); bar.appendChild(all);
   if(adminState.currentScope){
@@ -2407,7 +2558,7 @@ function renderAdminBar(){
     });
     bar.appendChild(cands);
   }
-  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id），并非“该用户的全部运行”；全部 scope 为最近若干条视图。"));
+  bar.appendChild(el("div", { class:"ab-hint" }, "邮箱解析为该 NyxID 用户的 scope id（≈用户 id）；全部 scope 为最近若干条视图。"));
   return bar;
 }
 
@@ -2427,7 +2578,10 @@ async function refreshRuns(){
 
 async function refreshDetail(runId){
   try {
-    const detail = await api("/api/workflow/observatory/runs/" + encodeURIComponent(runId) + runScopeParam(runId));
+    const detailUrl = adminState.isAdmin
+      ? "/api/workflow/observatory/admin/runs/" + encodeURIComponent(runId)
+      : "/api/workflow/observatory/runs/" + encodeURIComponent(runId) + runScopeParam(runId);
+    const detail = await api(detailUrl);
     if(detail === null){
       delete cache.details[runId];
       if(state.selectedRunId === runId) state.scenario = "notFound";
@@ -2452,7 +2606,10 @@ async function loadDetail(runId){
 async function loadGraph(runId){
   if(!runId || cache.graphs[runId]) return;
   try {
-    const g = await api("/api/workflow/observatory/runs/" + encodeURIComponent(runId) + "/graph" + runScopeParam(runId));
+    const graphUrl = adminState.isAdmin
+      ? "/api/workflow/observatory/admin/runs/" + encodeURIComponent(runId) + "/graph"
+      : "/api/workflow/observatory/runs/" + encodeURIComponent(runId) + "/graph" + runScopeParam(runId);
+    const g = await api(graphUrl);
     if(g){
       g.nodeStatus = deriveNodeStatus(g, cache.details[runId]);
       cache.graphs[runId] = g;
@@ -2463,7 +2620,7 @@ async function loadGraph(runId){
 
 /* ---- near-live polling (~3s, paused when tab hidden); history & live share it ---- */
 function runsSig(runs){ return runs.map(r => r.runId + ":" + r.status + ":" + r.updatedAtUtc + ":" + r.stateVersion).join("|"); }
-function detailSig(d){ return d ? (d.summary.status + ":" + d.summary.stateVersion + ":" + ((d.timeline && d.timeline.length) || 0)) : "none"; }
+function detailSig(d){ return d ? (d.summary.status + ":" + d.summary.stateVersion + ":" + ((d.timeline && d.timeline.length) || 0) + ":" + ((d.diagnostics && d.diagnostics.length) || 0)) : "none"; }
 let lastRunsSig = "", lastDetailSig = "";
 
 async function poll(){

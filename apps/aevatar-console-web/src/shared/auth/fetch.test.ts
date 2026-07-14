@@ -94,6 +94,7 @@ describe('authFetch', () => {
           baseUrl: "https://nyx.example",
           clientId: "broker-client-1",
           scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+          resources: ["https://nyx.example/api/v1/proxy/s/aevatar"],
         }),
       } as Response)
       .mockResolvedValueOnce({

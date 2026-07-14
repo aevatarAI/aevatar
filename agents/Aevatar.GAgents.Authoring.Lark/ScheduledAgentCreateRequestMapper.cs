@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 
@@ -110,6 +111,10 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (!TryParseOutputFormat(args.Str("output_format"), out var outputFormat, out var outputFormatError))
             return ScheduledAgentCreatePlanResult.Failed(outputFormatError);
 
+        var externalTriggerSources = args.ExternalTriggerSources("external_trigger_sources");
+        if (externalTriggerSources.Count > 0)
+            return ScheduledAgentCreatePlanResult.Failed("external_trigger_sources are not supported for scheduled workflow agents");
+
         if (!args.TryStringArray("required_service_slugs", out var requiredServiceSlugs, out var requiredServiceSlugsError))
             return ScheduledAgentCreatePlanResult.Failed(requiredServiceSlugsError);
 
@@ -141,6 +146,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
         return new ScheduledAgentCreatePlanResult(
             Success: true,
             Request: new ScheduledAgentCreatePlannedRequest(
+                AgentId: agentId,
                 Reference: reference,
                 DisplayName: Normalize(args.Str("display_name")),
                 ExecutionPrompt: Normalize(args.Str("execution_prompt")),
@@ -158,7 +164,6 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 MaxHistoryMessages: args.TryInt("max_history_messages", out var maxHistoryMessages) ? maxHistoryMessages : null,
                 RequiresNyxidProxySuccess: args.Bool("requires_nyxid_proxy_success") ?? false,
                 OutputFormat: outputFormat,
-                ExternalTriggerSources: args.ExternalTriggerSources("external_trigger_sources"),
                 RunImmediately: args.Bool("run_immediately") ?? false,
                 ConversationId: conversationId,
                 PrimaryOutboundSlug: primarySlug,
@@ -185,63 +190,29 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId))
             return ScheduledAgentCreateMapResult.Failed("api_key_unavailable");
 
-        var command = new InitializeSkillRunnerCommand
-        {
-            SkillName = request.Reference.Name,
-            TemplateName = request.DisplayName ?? request.Reference.Name,
-            SkillRef = string.IsNullOrWhiteSpace(request.Reference.Name)
-                ? null
-                : new SkillRunnerSkillReference
-                {
-                    Name = request.Reference.Name,
-                    Source = SkillRunnerSkillSource.Ornn,
-                },
-            ExecutionPrompt = request.ExecutionPrompt ??
-                              ResolveDefaultExecutionPrompt(request),
-            ScheduleCron = request.ScheduleCron,
-            ScheduleTimezone = request.ScheduleTimezone,
-            ScheduleMode = request.ScheduleMode,
-            OneShotRunAt = request.OneShotRunAtUtc.HasValue
-                ? Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(request.OneShotRunAtUtc.Value)
-                : null,
-            OneShotMessage = request.OneShotMessage ?? string.Empty,
-            Enabled = true,
-            ScopeId = request.ScopeId,
-            ProviderName = request.ProviderName ?? string.Empty,
-            Model = request.Model ?? string.Empty,
-            RequiresNyxidProxySuccess = request.RequiresNyxidProxySuccess,
-            OutputFormat = request.OutputFormat,
-            OutboundConfig = new SkillRunnerOutboundConfig
-            {
-                ConversationId = request.ConversationId,
-                NyxProviderSlug = request.PrimaryOutboundSlug,
-                NyxApiKey = string.Empty,
-                NyxApiKeyReference = secretReference.Clone(),
-                ApiKeyId = issuedKey.ApiKeyId,
-                LarkReceiveId = request.ReceiveTarget.Primary.ReceiveId,
-                LarkReceiveIdType = request.ReceiveTarget.Primary.ReceiveIdType,
-                LarkReceiveIdFallback = request.ReceiveTarget.Fallback?.ReceiveId ?? string.Empty,
-                LarkReceiveIdTypeFallback = request.ReceiveTarget.Fallback?.ReceiveIdType ?? string.Empty,
-                OwnerScope = request.Caller.Clone(),
-                FailureNotificationProviderSlug = request.FailureNotificationSlug ?? string.Empty,
-                OutputFormat = request.OutputFormat,
-            },
-        };
+        var schedule = new WorkflowScheduleConfiguration(
+            ScheduleId: request.AgentId,
+            DisplayName: request.DisplayName ?? request.Reference.Name,
+            WorkflowName: ResolveWorkflowName(request),
+            Prompt: ResolveWorkflowPrompt(request),
+            CronExpression: request.ScheduleMode == SkillRunnerScheduleMode.OneShot
+                ? string.Empty
+                : request.ScheduleCron,
+            Timezone: request.ScheduleTimezone,
+            Enabled: true,
+            Headers: BuildWorkflowHeaders(request, issuedKey),
+            ScopeId: request.ScopeId,
+            Auth: BuildWorkflowScheduleAuth(secretReference, issuedKey),
+            ScheduleMode: request.ScheduleMode == SkillRunnerScheduleMode.OneShot
+                ? WorkflowScheduleMode.OneShotAtUtc
+                : WorkflowScheduleMode.RecurringCron,
+            OneShotFireAt: request.OneShotRunAtUtc);
 
-        if (request.Temperature.HasValue)
-            command.Temperature = request.Temperature.Value;
-        if (request.MaxTokens.HasValue)
-            command.MaxTokens = request.MaxTokens.Value;
-        if (request.MaxToolRounds.HasValue)
-            command.MaxToolRounds = request.MaxToolRounds.Value;
-        if (request.MaxHistoryMessages.HasValue)
-            command.MaxHistoryMessages = request.MaxHistoryMessages.Value;
-        command.ExternalTriggerSources.AddRange(request.ExternalTriggerSources);
+        var catalog = BuildCatalogUpsertCommand(request, issuedKey, secretReference);
 
         return new ScheduledAgentCreateMapResult(
             Success: true,
-            Command: command,
-            RunImmediately: request.RunImmediately,
+            Request: new ScheduledWorkflowAgentCreateRequest(schedule, catalog, request.RunImmediately),
             ErrorJson: null);
     }
 
@@ -379,10 +350,78 @@ internal sealed class ScheduledAgentCreateRequestMapper
         return true;
     }
 
-    private static string ResolveDefaultExecutionPrompt(ScheduledAgentCreatePlannedRequest request) =>
+    private static string ResolveWorkflowName(ScheduledAgentCreatePlannedRequest request) =>
+        string.IsNullOrWhiteSpace(request.Reference.Name)
+            ? ScheduledWorkflowAgentDefaults.DefaultWorkflowName
+            : request.Reference.Name;
+
+    private static string ResolveWorkflowPrompt(ScheduledAgentCreatePlannedRequest request) =>
         request.ScheduleMode == SkillRunnerScheduleMode.OneShot && string.IsNullOrWhiteSpace(request.Reference.Name)
-            ? "Send the configured one-shot reminder message exactly as written."
-            : "Execute the configured Ornn skill and return plain text only.";
+            ? request.OneShotMessage ?? string.Empty
+            : request.ExecutionPrompt ?? "Execute the configured workflow and return plain text only.";
+
+    private static WorkflowScheduleAuth BuildWorkflowScheduleAuth(
+        SecretReference secretReference,
+        ScheduledAgentApiKeyIssueResult issuedKey) =>
+        new(ScheduledInvocationAgentKey: new WorkflowScheduleAgentKeyCredentialReference(
+            secretReference.Clone(),
+            issuedKey.ApiKeyId ?? string.Empty,
+            issuedKey.KeyExpiresAtUnixMs));
+
+    private static IReadOnlyDictionary<string, string> BuildWorkflowHeaders(
+        ScheduledAgentCreatePlannedRequest request,
+        ScheduledAgentApiKeyIssueResult issuedKey)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["scheduled_agent.agent_type"] = ScheduledWorkflowAgentDefaults.AgentType,
+            ["scheduled_agent.conversation_id"] = request.ConversationId,
+            ["scheduled_agent.output_format"] = request.OutputFormat.ToString(),
+            ["scheduled_agent.api_key_id"] = issuedKey.ApiKeyId ?? string.Empty,
+            ["scheduled_agent.nyx_provider_slug"] = request.PrimaryOutboundSlug,
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.Model))
+            headers["workflow.llm.model"] = request.Model;
+        if (!string.IsNullOrWhiteSpace(request.ProviderName))
+            headers["workflow.llm.provider"] = request.ProviderName;
+        if (request.MaxToolRounds.HasValue)
+            headers["workflow.llm.max_tool_rounds"] = request.MaxToolRounds.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (request.MaxHistoryMessages.HasValue)
+            headers["workflow.llm.max_history_messages"] = request.MaxHistoryMessages.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        return headers;
+    }
+
+    private static UserAgentCatalogUpsertCommand BuildCatalogUpsertCommand(
+        ScheduledAgentCreatePlannedRequest request,
+        ScheduledAgentApiKeyIssueResult issuedKey,
+        SecretReference secretReference) =>
+        new()
+        {
+            AgentId = request.AgentId,
+            ConversationId = request.ConversationId,
+            NyxProviderSlug = request.PrimaryOutboundSlug,
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = secretReference.Clone(),
+            AgentType = ScheduledWorkflowAgentDefaults.AgentType,
+            TemplateName = request.DisplayName ?? request.Reference.Name,
+            ScopeId = request.ScopeId,
+            ApiKeyId = issuedKey.ApiKeyId ?? string.Empty,
+            ScheduleCron = request.ScheduleCron,
+            ScheduleTimezone = request.ScheduleTimezone,
+            TargetPlatform = "lark",
+            ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                "lark",
+                request.PrimaryOutboundSlug,
+                request.ConversationId,
+                request.ReceiveTarget.Primary.ReceiveId,
+                request.ReceiveTarget.Primary.ReceiveIdType,
+                request.ReceiveTarget.Fallback?.ReceiveId,
+                request.ReceiveTarget.Fallback?.ReceiveIdType),
+            OwnerScope = request.Caller.Clone(),
+            OutputFormat = request.OutputFormat,
+        };
 
     private static bool TryParseOutputFormat(
         string? value,
@@ -629,18 +668,17 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
 internal sealed record ScheduledAgentCreateMapResult(
     bool Success,
-    InitializeSkillRunnerCommand? Command,
-    bool RunImmediately,
+    ScheduledWorkflowAgentCreateRequest? Request,
     string? ErrorJson)
 {
     public static ScheduledAgentCreateMapResult Failed(string error) =>
-        new(false, null, false, JsonSerializer.Serialize(new { error = "validation_error", detail = error }));
+        new(false, null, JsonSerializer.Serialize(new { error = "validation_error", detail = error }));
 
     public static ScheduledAgentCreateMapResult JsonError(string error) =>
-        new(false, null, false, JsonSerializer.Serialize(new { error = error }));
+        new(false, null, JsonSerializer.Serialize(new { error = error }));
 
     public static ScheduledAgentCreateMapResult RawError(string json) =>
-        new(false, null, false, json);
+        new(false, null, json);
 }
 
 internal sealed record ScheduledAgentCreatePlanResult(
@@ -660,6 +698,7 @@ internal sealed record ScheduledAgentCreatePlanResult(
 }
 
 internal sealed record ScheduledAgentCreatePlannedRequest(
+    string AgentId,
     ScheduledSkillReference Reference,
     string? DisplayName,
     string? ExecutionPrompt,
@@ -677,7 +716,6 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     int? MaxHistoryMessages,
     bool RequiresNyxidProxySuccess,
     SkillRunnerOutputFormat OutputFormat,
-    IReadOnlyList<ExternalTriggerSource> ExternalTriggerSources,
     bool RunImmediately,
     string ConversationId,
     string PrimaryOutboundSlug,

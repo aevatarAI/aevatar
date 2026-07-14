@@ -51,6 +51,7 @@ public sealed class ChannelBotRegistrationProjector
             NyxConversationRouteId = entry.NyxConversationRouteId ?? string.Empty,
             WorkflowResultDeliveryCredential = entry.WorkflowResultDeliveryCredential?.Clone(),
             LastInboundAtUtc = entry.LastInboundAtUtc,
+            DefaultSkillName = entry.DefaultSkillName ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             ActorId = context.RootActorId,

@@ -353,6 +353,7 @@ const CFG = {
   authority: BACKEND_CONSOLE_CONFIG.authority || "",
   clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
   scope: BACKEND_CONSOLE_CONFIG.scope || "",
+  resources: Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [],
   redirectUri: location.origin + "/auto/callback",
   storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
 };
@@ -384,6 +385,7 @@ async function beginLogin(){
   u.searchParams.set("client_id", CFG.clientId);
   u.searchParams.set("redirect_uri", CFG.redirectUri);
   u.searchParams.set("scope", CFG.scope);
+  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
   u.searchParams.set("state", st);
   u.searchParams.set("code_challenge", challenge);
   u.searchParams.set("code_challenge_method", "S256");
@@ -404,6 +406,7 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
+  CFG.resources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
   if(!res.ok){ console.warn("voice: token exchange failed", res.status); return false; }
@@ -902,7 +905,8 @@ async function ensureVoiceRoute(onStep){
    Voice client engine — a real in-browser /ws/voice client.
 
    Wire format mirrors voice-presence AevatarVoiceClient.cs exactly:
-     connect:  wss://<same-origin>/ws/voice?codec=pcm16&mode=half_duplex&access_token=<NyxID JWT>
+     connect:  wss://<same-origin>/ws/voice?codec=pcm16&mode=half_duplex
+               NyxID JWT travels only in Sec-WebSocket-Protocol "aevatar-bearer.<token>".
      up   (client→server):  BINARY = PCM16 mono 24kHz mic frames
                             TEXT   = {"drainAcknowledged":{"responseId":N,"playoutSequence":M}}
      down (server→client):  TEXT   = {"sessionAccepted":{...}} (first), {"realtimeFrame":{...}} (events)
@@ -911,9 +915,10 @@ async function ensureVoiceRoute(onStep){
    Audio path is fixed at 24kHz (server pcmSampleRateHz); a mismatch is surfaced, not resampled.
    =========================================================================== */
 const PCM_RATE = 24000;
+const VOICE_FIRST_CONNECT_RETRY_DELAY_MS = 1000;
 const voice = {
   ws:null, status:"idle",            // idle|connecting|listening|speaking|error|ended
-  provisioning:false,
+  provisioning:false, retryTimer:null,
   detail:"", transcript:"",
   micCtx:null, micStream:null, micNode:null, micSource:null, micGate:true,
   playCtx:null, playHead:0, responseId:0, playoutSeq:0,
@@ -954,29 +959,68 @@ async function startVoice(){
   voice.playCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE });
   voice.playHead = voice.playCtx.currentTime;
 
-  // 2) open WS — token carried in the Sec-WebSocket-Protocol header (NOT the URL), so it never
-  //    lands in request-URL access logs (stdout → Elasticsearch). Server reads "aevatar-bearer.<token>".
+  // A freshly-created agent may need one more projection turn after /ws/voice auto-enables its
+  // capability. The server answers that transient with 503 + Retry-After: 1, but browser WebSocket
+  // APIs hide failed-upgrade status and headers, so only this exact first-use path gets one retry.
+  dialVoice(token, routeTarget.provisioned ? 1 : 0);
+}
+
+function describeVoiceSocketClose(code, reason){
+  const typed = {
+    voice_provider_credential_unavailable:"NyxID 无法获取 OpenAI Realtime 临时凭据。请先连接 openai-realtime 服务后重试。",
+    voice_credential_unavailable:"本次 NyxID 会话凭据不可用，请重新登录后重试。",
+    remote_audio_transport_unavailable:"本部署的语音 provider 暂不可用，请联系管理员检查语音服务配置。",
+    "Voice transport attach timed out.":"语音传输连接超时，请重试。",
+    "Voice transport already attached.":"该语音 Agent 已有活动会话，请结束旧会话后重试。"
+  };
+  if(reason && typed[reason]) return {status:"error",detail:typed[reason]};
+  if(code===1000) return {status:"ended",detail:"会话已结束"};
+  if(reason) return {status:"error",detail:"连接已关闭："+reason};
+  if(code===1006) return {status:"error",detail:"连接被服务器拒绝或异常中断"};
+  return {status:"error",detail:"连接已关闭（code "+code+"）"};
+}
+
+function dialVoice(token, retriesRemaining){
+  if(voice.status==="ended") return;
+
+  // Token is carried in Sec-WebSocket-Protocol (NOT the URL), so it never lands in request-URL logs.
   vStatus("connecting","正在连接 /ws/voice…");
   const url = location.origin.replace(/^http/,"ws") + "/ws/voice?codec=pcm16&mode=half_duplex";
   let ws;
   try { ws = new WebSocket(url, ["aevatar-voice-v1", "aevatar-bearer." + token.access_token]); }
-  catch(e){ vStatus("error","无法建立 WebSocket：" + (e&&e.message||e)); stopVoice(true); return; }
+  catch(e){ vStatus("error","无法建立 WebSocket：" + (e&&e.message||e)); teardownAudio(); return; }
   ws.binaryType = "arraybuffer";
   voice.ws = ws;
+  let sessionAccepted = false;
 
   ws.onopen = () => { /* wait for sessionAccepted before streaming mic */ };
   ws.onmessage = (ev) => {
     if(ev.data instanceof ArrayBuffer){ playPcm(ev.data); return; }
     let f; try { f = JSON.parse(ev.data); } catch { return; }
-    if(f.sessionAccepted){ onSessionAccepted(f.sessionAccepted); return; }
+    if(f.sessionAccepted){ sessionAccepted=true; onSessionAccepted(f.sessionAccepted); return; }
     if(f.realtimeFrame){ onRealtimeFrame(f.realtimeFrame); return; }
   };
-  ws.onerror = () => { if(voice.status!=="ended") vStatus("error","连接出错（服务器拒绝或网络问题）"); };
+  // Browser error events expose neither the failed-upgrade HTTP status nor its response body. Wait for
+  // close so a post-upgrade typed reason can win instead of being overwritten by a generic message.
+  ws.onerror = () => { console.warn("voice websocket error; awaiting close reason"); };
   ws.onclose = (ev) => {
-    const why = ev.reason || (ev.code===1006?"连接异常中断":("code "+ev.code));
-    if(voice.status!=="ended" && voice.status!=="error") vStatus("ended","会话已结束 · " + why);
-    teardownAudio();
+    if(voice.ws!==ws) return; // stale close from a stopped or superseded socket
     voice.ws=null;
+    const shouldRetry = retriesRemaining>0 && !sessionAccepted && ev.code===1006 && !ev.reason && voice.status!=="ended";
+    if(shouldRetry){
+      vStatus("connecting","语音能力正在就绪，1 秒后自动重试…");
+      voice.retryTimer=setTimeout(()=>{
+        voice.retryTimer=null;
+        if(voice.status==="connecting" && !voice.ws) dialVoice(token,retriesRemaining-1);
+      },VOICE_FIRST_CONNECT_RETRY_DELAY_MS);
+      return;
+    }
+
+    teardownAudio();
+    const outcome=describeVoiceSocketClose(ev.code,ev.reason||"");
+    if(voice.status==="ended" && outcome.status!=="error") return;
+    if(voice.status==="error" && !ev.reason) return; // preserve a richer provider frame error
+    vStatus(outcome.status,outcome.detail);
   };
 }
 
@@ -1047,6 +1091,7 @@ function teardownAudio(){
 }
 
 function stopVoice(silent){
+  if(voice.retryTimer){ clearTimeout(voice.retryTimer); voice.retryTimer=null; }
   if(voice.ws){ try { voice.ws.close(1000,"client ended"); } catch(err) { console.warn("voice websocket close failed", err); } }
   voice.ws=null;
   teardownAudio();

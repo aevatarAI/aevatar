@@ -118,7 +118,6 @@ public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
             adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,
-            defaultServiceOptions: null,
             ct: default);
     }
 

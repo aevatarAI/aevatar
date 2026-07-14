@@ -101,7 +101,12 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
+        var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
+        codexExec.Name.Should().Be("codex_exec");
         sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
+            .Should()
+            .BeFalse();
+        codexExec.RequiresApproval("""{"service":"host","principal":"ubuntu","prompt":"check"}""")
             .Should()
             .BeFalse();
     }

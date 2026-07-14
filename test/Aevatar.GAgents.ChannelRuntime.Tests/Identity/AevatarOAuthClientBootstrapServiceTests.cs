@@ -26,7 +26,6 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
-        command.DefaultServiceSlugs.Should().Equal("aevatar");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
     }
@@ -60,23 +59,8 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
-        command.DefaultServiceSlugs.Should().Equal("aevatar");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task DispatchBootstrapIntentAsync_UsesConfiguredDefaultServiceSlugs()
-    {
-        using var environment = new OAuthBootstrapEnvironment(defaultServiceSlugs: "aevatar, custom-aevatar ");
-        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
-            static _ => OAuthClientReceipt());
-        var service = NewService(dispatch);
-
-        await service.DispatchBootstrapIntentAsync(CancellationToken.None);
-
-        dispatch.Commands.Should().ContainSingle();
-        dispatch.Commands[0].DefaultServiceSlugs.Should().Equal("aevatar", "custom-aevatar");
     }
 
     [Fact]
@@ -273,7 +257,6 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         private readonly string? _oldForceDcrOnStartup;
         private readonly string? _oldAspNetCoreEnvironment;
         private readonly string? _oldDotNetEnvironment;
-        private readonly string? _oldDefaultServiceSlugs;
 
         public string Authority { get; }
         public string RedirectBaseUrl { get; }
@@ -287,8 +270,7 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             bool configureRedirectBaseUrl = true,
             bool configureAdditionalRedirectUris = true,
             string authority = "https://nyxid.test",
-            string redirectBaseUrl = "https://aevatar.test",
-            string? defaultServiceSlugs = null)
+            string redirectBaseUrl = "https://aevatar.test")
         {
             Authority = authority;
             RedirectBaseUrl = redirectBaseUrl;
@@ -298,7 +280,6 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             _oldForceDcrOnStartup = Environment.GetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar);
             _oldAspNetCoreEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
             _oldDotNetEnvironment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
-            _oldDefaultServiceSlugs = Environment.GetEnvironmentVariable(AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar);
             Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", environmentName);
             Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
             Environment.SetEnvironmentVariable(
@@ -313,9 +294,6 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             Environment.SetEnvironmentVariable(
                 AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar,
                 forceDcrOnStartup ? "true" : null);
-            Environment.SetEnvironmentVariable(
-                AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar,
-                defaultServiceSlugs);
         }
 
         public void Dispose()
@@ -326,7 +304,6 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             Environment.SetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar, _oldForceDcrOnStartup);
             Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", _oldAspNetCoreEnvironment);
             Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", _oldDotNetEnvironment);
-            Environment.SetEnvironmentVariable(AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar, _oldDefaultServiceSlugs);
         }
     }
 

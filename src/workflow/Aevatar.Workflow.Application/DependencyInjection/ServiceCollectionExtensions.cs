@@ -158,11 +158,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorkflowExecutionQueryApplicationService, WorkflowExecutionQueryApplicationService>();
         // 06-19-workflow-run-observatory (C2): scope-enforcement seam for the read-only run viewer.
         // 06-20-observatory-admin-cross-scope (G3): one instance backs both the scope-bound reads and the
-        // separate cross-scope admin overview contract.
+        // separate cross-scope admin query contract.
         services.TryAddSingleton<WorkflowRunObservatoryQueryService>();
         services.TryAddSingleton<IWorkflowRunObservatoryQueryService>(sp =>
             sp.GetRequiredService<WorkflowRunObservatoryQueryService>());
-        services.TryAddSingleton<IWorkflowRunAdminOverviewQueryService>(sp =>
+        services.TryAddSingleton<IWorkflowRunAdminQueryService>(sp =>
             sp.GetRequiredService<WorkflowRunObservatoryQueryService>());
         services.TryAddSingleton<IWorkflowScheduleApplicationService, WorkflowScheduleApplicationService>();
         services.TryAddSingleton<IWorkflowScheduleCommandPort, WorkflowScheduleCommandPort>();

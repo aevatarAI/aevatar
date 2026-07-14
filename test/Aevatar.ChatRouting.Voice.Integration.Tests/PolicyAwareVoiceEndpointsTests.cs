@@ -295,7 +295,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
         var factory = new FakeWebRtcVoiceTransportFactory(
             new WebRtcVoiceTransportSession(transport, "answer", Task.CompletedTask));
         var mediaPort = new RecordingVolatileMediaStreamPort(
-            attachAsync: static _ => throw new InvalidOperationException("already attached"));
+            attachAsync: static _ => throw new VoiceTransportAlreadyAttachedException());
         using var app = CreatePolicyAwareApp(
             policyPort,
             new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
@@ -308,6 +308,33 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         (await ReadBodyAsync(context)).Should().Be("Voice transport already attached.");
+        transport.Disposed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PolicyAwareWhip_WhenProviderCredentialIsUnavailable_ShouldReturn503AndDisposeTransport()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-lark", "voice_presence_openai"),
+            []));
+        var transport = new StubVoiceTransport();
+        var factory = new FakeWebRtcVoiceTransportFactory(
+            new WebRtcVoiceTransportSession(transport, "answer", Task.CompletedTask));
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: static _ => throw new RealtimeProviderCredentialException("broker response omitted secret"));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-lark"]),
+            new RecordingVoiceRealtimeSession(),
+            mediaPort,
+            transportFactory: factory);
+        var context = CreateWhipContext(app, "/whip/offer?sessionId=app-session-1", "v=0\r\noffer");
+
+        await GetEndpoint(app, "/whip/offer").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        (await ReadBodyAsync(context)).Should().Be(
+            VoiceWebSocketAttachExecutor.VoiceProviderCredentialUnavailableReason);
         transport.Disposed.Should().BeTrue();
     }
 
@@ -913,6 +940,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
     [Theory]
     [InlineData("remote-audio-unavailable", "remote_audio_transport_unavailable")]
     [InlineData("credential-unavailable", "voice_credential_unavailable")]
+    [InlineData("provider-credential-unavailable", "voice_provider_credential_unavailable")]
     [InlineData("already-attached", "Voice transport already attached.")]
     public async Task PolicyAwareVoice_WhenAttachFailsAfterUpgrade_ShouldCloseWebSocketWithPolicyReason(
         string failureCase,
@@ -927,8 +955,10 @@ public sealed class PolicyAwareVoiceEndpointsTests
                 attachAsync: static _ => throw new VoiceVolatileMediaStreamUnavailableException()),
             "credential-unavailable" => new RecordingVolatileMediaStreamPort(
                 attachAsync: static _ => throw new VoiceVolatileToolCredentialUnavailableException()),
+            "provider-credential-unavailable" => new RecordingVolatileMediaStreamPort(
+                attachAsync: static _ => throw new RealtimeProviderCredentialException("broker response omitted secret")),
             "already-attached" => new RecordingVolatileMediaStreamPort(
-                attachAsync: static _ => throw new InvalidOperationException("already attached")),
+                attachAsync: static _ => throw new VoiceTransportAlreadyAttachedException()),
             _ => throw new ArgumentOutOfRangeException(nameof(failureCase), failureCase, null),
         };
         var socket = new FakeWebSocket(WebSocketState.Open);

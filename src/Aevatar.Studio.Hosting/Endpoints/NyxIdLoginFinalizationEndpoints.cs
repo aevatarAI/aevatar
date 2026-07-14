@@ -53,7 +53,8 @@ public static class NyxIdLoginFinalizationEndpoints
                 ClientId: snapshot.ClientId,
                 Scope: string.IsNullOrWhiteSpace(snapshot.OauthScope)
                     ? AevatarOAuthClientScopes.AuthorizationScope
-                    : snapshot.OauthScope.Trim()));
+                    : snapshot.OauthScope.Trim(),
+                Resources: AevatarOAuthClientResources.RequiredResourceUris(snapshot.NyxIdAuthority)));
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -91,6 +92,15 @@ public static class NyxIdLoginFinalizationEndpoints
             exchange = await brokerCallback
                 .ExchangeAuthorizationCodeAsync(request.Code.Trim(), request.CodeVerifier.Trim(), request.RedirectUri.Trim(), ct)
                 .ConfigureAwait(false);
+        }
+        catch (NyxIdRequiredServiceAccessException ex)
+        {
+            logger.LogInformation(ex, "NyxID login did not grant aevatar's required service resource.");
+            return Results.Json(new
+            {
+                error = "required_service_access_missing",
+                detail = "NyxID authorization must include the Aevatar service.",
+            }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception ex)
         {
@@ -235,6 +245,14 @@ public static class NyxIdLoginFinalizationEndpoints
         catch (BindingScopeMismatchException ex)
         {
             logger.LogInformation(ex, "NyxID owner binding lacks required scope for {Platform}:{Tenant}:{User}; refreshing local binding.",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return ExistingBindingProbeResult.Stale;
+        }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            logger.LogInformation(ex, "NyxID owner binding lacks required service access for {Platform}:{Tenant}:{User}; refreshing local binding.",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -429,7 +447,8 @@ public static class NyxIdLoginFinalizationEndpoints
 public sealed record NyxIdLoginConfigurationResponse(
     string BaseUrl,
     string ClientId,
-    string Scope);
+    string Scope,
+    IReadOnlyList<string> Resources);
 
 public sealed record NyxIdLoginFinalizationRequest
 {

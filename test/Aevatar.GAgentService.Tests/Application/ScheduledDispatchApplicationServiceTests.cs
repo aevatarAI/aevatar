@@ -97,6 +97,58 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldNormalizeOneShotScheduleAndDispatchCreate()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
+        var fireAt = DateTimeOffset.UtcNow.AddHours(1).ToOffset(TimeSpan.FromHours(8));
+
+        await service.CreateAsync(new ScheduledDispatchConfiguration(
+            "one-shot-1",
+            " Reminder ",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.Envelope,
+                ActorId: "actor-1",
+                Envelope: new EventEnvelope { Payload = Any.Pack(new Empty()) }),
+            "0 9 * * *",
+            " Asia/Shanghai ",
+            true,
+            new Dictionary<string, string>(),
+            ScheduleMode: ScheduledDispatchScheduleMode.OneShotAtUtc,
+            OneShotFireAt: fireAt));
+
+        var created = actorPort.Created.Should().ContainSingle().Which;
+        created.Configuration.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
+        created.Configuration.CronExpression.Should().BeEmpty();
+        created.Configuration.Timezone.Should().Be("Asia/Shanghai");
+        created.Configuration.OneShotFireAt.Should().Be(fireAt.ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectMissingOrPastOneShotFireTime()
+    {
+        var service = CreateService();
+        var missingFireAt = () => service.CreateAsync(CreateEnvelopeConfiguration("one-shot-missing") with
+        {
+            ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc,
+            OneShotFireAt = null,
+        });
+        var pastFireAt = () => service.CreateAsync(CreateEnvelopeConfiguration("one-shot-past") with
+        {
+            ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc,
+            OneShotFireAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        });
+
+        await missingFireAt.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*One-shot fire time is required*");
+        await pastFireAt.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*One-shot fire time must be in the future*");
+    }
+
+    [Fact]
     public async Task CreateAsync_ShouldPreserveServiceInvocationAuthInActorCommand()
     {
         var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
@@ -1136,6 +1188,29 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldMapOneShotScheduleMode()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var fireAt = new DateTimeOffset(2026, 7, 14, 1, 30, 0, TimeSpan.Zero);
+        var configuration = CreateEnvelopeConfiguration("one-shot-1") with
+        {
+            CronExpression = string.Empty,
+            ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc,
+            OneShotFireAt = fireAt,
+        };
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-1", "corr-1");
+
+        await port.DispatchEnsureAsync("scheduled-dispatch:one-shot-1", configuration, prepared);
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload.Unpack<ScheduledDispatchEnsureCommand>();
+        command.ScheduleMode.Should().Be(ScheduledDispatchScheduleModeState.OneShotAtUtc);
+        command.OneShotFireAt.ToDateTimeOffset().Should().Be(fireAt);
+        command.CronExpression.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldMapEnvelopeUpdateAndRejectUnsupportedTarget()
     {
         var dispatchPort = new RecordingActorDispatchPort();
@@ -1380,6 +1455,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
                         ServiceEndpointId = "chat",
                         ServiceId = "daily",
                         ScheduleKind = ScheduledDispatchScheduleKind.Workflow.ToString(),
+                        ScheduleMode = ScheduledDispatchScheduleMode.OneShotAtUtc.ToString(),
+                        OneShotFireAt = new DateTimeOffset(2026, 7, 14, 1, 30, 0, TimeSpan.Zero),
+                        Completed = true,
                     },
                 ],
                 NextCursor = "workflow-cursor",
@@ -1396,8 +1474,11 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "chat",
             ScheduledDispatchScheduleKind.Workflow));
 
-        result.Items.Should().ContainSingle()
-            .Which.ScheduleId.Should().Be("workflow-1");
+        var item = result.Items.Should().ContainSingle().Which;
+        item.ScheduleId.Should().Be("workflow-1");
+        item.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
+        item.OneShotFireAt.Should().Be(new DateTimeOffset(2026, 7, 14, 1, 30, 0, TimeSpan.Zero));
+        item.Completed.Should().BeTrue();
         result.NextCursor.Should().Be("workflow-cursor");
         result.TotalCount.Should().Be(1);
         reader.LastQuery.Should().NotBeNull();

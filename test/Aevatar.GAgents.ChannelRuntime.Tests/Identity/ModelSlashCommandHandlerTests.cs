@@ -223,6 +223,27 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
+    public async Task List_SelfHealsAndRebindsMessage_WhenBindingLacksAevatarService()
+    {
+        var context = Context();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingServiceAccessMismatchException(
+                context.Subject,
+                "https://nyxid.test/api/v1/proxy/s/aevatar")),
+            actorDispatchPort: dispatchPort);
+
+        var reply = await handler.HandleAsync(context, default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("未授权 Aevatar service");
+        reply.Text.Should().Contain("/init");
+        AssertRevokeBindingDispatched(
+            dispatchPort,
+            expectedReason: "auto_self_heal_service_access_mismatch");
+    }
+
+    [Fact]
     public async Task List_SelfHealsAndRebindsMessage_WhenBindingRevokedRemotely()
     {
         // NyxID itself returned binding_revoked (e.g. user revoked at NyxID admin

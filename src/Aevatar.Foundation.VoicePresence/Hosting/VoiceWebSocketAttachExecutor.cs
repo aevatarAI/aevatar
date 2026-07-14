@@ -11,8 +11,9 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 
 public sealed class VoiceWebSocketAttachExecutor
 {
-    public const string TransportAlreadyAttachedBody = "Voice transport already attached.";
+    public const string TransportAlreadyAttachedBody = VoiceTransportAlreadyAttachedException.Reason;
     public const string VoiceCredentialUnavailableReason = VoiceVolatileToolCredentialUnavailableException.Reason;
+    public const string VoiceProviderCredentialUnavailableReason = "voice_provider_credential_unavailable";
 
     private readonly IOptions<VoiceWebSocketAttachOptions> _options;
     private readonly ILogger<VoiceWebSocketAttachExecutor>? _logger;
@@ -87,11 +88,20 @@ public sealed class VoiceWebSocketAttachExecutor
         {
             await TryCloseAsync(ws, VoiceCredentialUnavailableReason, options.PolicyViolationCloseTimeout);
         }
+        catch (RealtimeProviderCredentialException ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "Voice realtime provider credential resolution failed for actor {ActorId}/{ModuleName}.",
+                accepted.ActorId,
+                accepted.ModuleName);
+            await TryCloseAsync(ws, VoiceProviderCredentialUnavailableReason, options.PolicyViolationCloseTimeout);
+        }
         catch (TimeoutException)
         {
             await TryCloseAsync(ws, "Voice transport attach timed out.", options.PolicyViolationCloseTimeout);
         }
-        catch (InvalidOperationException) when (!attached)
+        catch (VoiceTransportAlreadyAttachedException) when (!attached)
         {
             await TryCloseAsync(ws, TransportAlreadyAttachedBody, options.PolicyViolationCloseTimeout);
         }

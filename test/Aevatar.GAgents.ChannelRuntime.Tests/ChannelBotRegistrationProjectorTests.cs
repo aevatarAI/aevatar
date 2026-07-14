@@ -48,6 +48,7 @@ public sealed class ChannelBotRegistrationProjectorTests
                     NyxConversationRouteId = "route-1",
                     WorkflowResultDeliveryCredential = TestDeliverySecretReference("bot-reg-1"),
                     LastInboundAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)),
+                    DefaultSkillName = "whatsapp-reply-draft",
                 },
             },
         };
@@ -69,6 +70,7 @@ public sealed class ChannelBotRegistrationProjectorTests
         doc.LastEventId.Should().Be("evt-bot-1");
         doc.ActorId.Should().Be("bot-reg-actor-1");
         doc.LastInboundAtUtc.Should().Be(Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)));
+        doc.DefaultSkillName.Should().Be("whatsapp-reply-draft");
     }
 
     [Fact]

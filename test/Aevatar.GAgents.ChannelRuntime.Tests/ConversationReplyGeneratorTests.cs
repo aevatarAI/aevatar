@@ -8,6 +8,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Scheduled;
@@ -2238,6 +2239,8 @@ public sealed class ConversationReplyGeneratorTests
             Substitute.For<IUserAgentCatalogQueryPort>(),
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
             Substitute.For<ISkillRunnerCommandPort>(),
+            Substitute.For<IScheduledDispatchApplicationService>(),
+            Substitute.For<IScheduledWorkflowAgentCreationPort>(),
             catalogCommandPort,
             Substitute.For<ICallerScopeResolver>(),
             new ScheduledAgentCreateRequestMapper(),

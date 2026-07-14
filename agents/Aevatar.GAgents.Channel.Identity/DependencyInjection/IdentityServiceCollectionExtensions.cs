@@ -207,9 +207,6 @@ public static class IdentityServiceCollectionExtensions
         // AevatarOAuthClientGAgent resolves it per command via Services.GetService<>()
         // so the typed-client pattern's per-resolution handler rotation works
         // as designed.
-        var defaultServiceOptions = services.AddOptions<AevatarOAuthClientDefaultServiceOptions>();
-        if (configuration is not null)
-            defaultServiceOptions.Bind(configuration.GetSection(AevatarOAuthClientDefaultServiceOptions.SectionName));
         services.AddHttpClient<NyxIdDynamicClientRegistrationClient>();
         services.AddHostedService<AevatarOAuthClientBootstrapService>();
 

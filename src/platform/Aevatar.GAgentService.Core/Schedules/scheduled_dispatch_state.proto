@@ -45,6 +45,10 @@ message ScheduledDispatchState
   // when it reactivates against the earliest still-armed occurrence.
   int32 overdue_fire_detected_count = 29;
   google.protobuf.Timestamp last_overdue_fire_at_utc_value = 30;
+  ScheduledDispatchScheduleModeState schedule_mode = 31;
+  google.protobuf.Timestamp one_shot_fire_at_utc_value = 32;
+  bool completed = 33;
+  google.protobuf.Timestamp completed_at_utc_value = 34;
 }
 
 enum ScheduledDispatchScheduleKindState
@@ -52,6 +56,12 @@ enum ScheduledDispatchScheduleKindState
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_GENERIC = 0;
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_WORKFLOW = 1;
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_SKILL_RUNNER = 2;
+}
+
+enum ScheduledDispatchScheduleModeState
+{
+  SCHEDULED_DISPATCH_SCHEDULE_MODE_STATE_RECURRING_CRON = 0;
+  SCHEDULED_DISPATCH_SCHEDULE_MODE_STATE_ONE_SHOT_AT_UTC = 1;
 }
 
 enum ScheduledDispatchRuntimeCallbackBackendState
@@ -177,6 +187,8 @@ message ScheduledDispatchCreateCommand
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
   ScheduledDispatchScheduleKindState schedule_kind = 11;
+  ScheduledDispatchScheduleModeState schedule_mode = 12;
+  google.protobuf.Timestamp one_shot_fire_at = 13;
 }
 
 message ScheduledDispatchUpdateCommand
@@ -192,6 +204,8 @@ message ScheduledDispatchUpdateCommand
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
   ScheduledDispatchScheduleKindState schedule_kind = 11;
+  ScheduledDispatchScheduleModeState schedule_mode = 12;
+  google.protobuf.Timestamp one_shot_fire_at = 13;
 }
 
 message ScheduledDispatchEnsureCommand
@@ -207,6 +221,8 @@ message ScheduledDispatchEnsureCommand
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
   ScheduledDispatchScheduleKindState schedule_kind = 11;
+  ScheduledDispatchScheduleModeState schedule_mode = 12;
+  google.protobuf.Timestamp one_shot_fire_at = 13;
 }
 
 message ScheduledDispatchConfiguredEvent
@@ -224,6 +240,8 @@ message ScheduledDispatchConfiguredEvent
   ScheduledDispatchTargetState target = 11;
   reserved 12;
   ScheduledDispatchScheduleKindState schedule_kind = 13;
+  ScheduledDispatchScheduleModeState schedule_mode = 14;
+  google.protobuf.Timestamp one_shot_fire_at = 15;
 }
 
 message ScheduledDispatchEnableCommand
@@ -257,6 +275,12 @@ message ScheduledDispatchDeletedEvent
 {
   string reason = 1;
   google.protobuf.Timestamp deleted_at = 2;
+}
+
+message ScheduledDispatchCompletedEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp completed_at = 2;
 }
 
 message ScheduledDispatchNextFireIntentRecordedEvent

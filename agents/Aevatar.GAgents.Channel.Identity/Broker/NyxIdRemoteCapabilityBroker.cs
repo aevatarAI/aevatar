@@ -188,6 +188,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         };
         if (!string.IsNullOrWhiteSpace(scope.Value))
             form.Add(new KeyValuePair<string, string>("scope", scope.Value));
+        foreach (var resource in AevatarOAuthClientResources.RequiredResourceUris(snapshot.NyxIdAuthority))
+            form.Add(new KeyValuePair<string, string>("resource", resource));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -205,6 +207,13 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
                 throw new BindingRevokedException(externalSubject, "NyxID returned invalid_grant on token-exchange.");
             if ((int)response.StatusCode == 400 && IsInvalidScope(body))
                 throw new BindingScopeMismatchException(externalSubject, "NyxID returned invalid_scope on token-exchange.");
+            if ((int)response.StatusCode == 400 && IsInvalidTarget(body))
+            {
+                throw new BindingServiceAccessMismatchException(
+                    externalSubject,
+                    AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority),
+                    "NyxID returned invalid_target for aevatar's required service on token-exchange.");
+            }
             _logger.LogError(
                 "NyxID token-exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
@@ -216,6 +225,15 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             .ReadFromJsonAsync<TokenResponse>(JsonOptions, ct)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("NyxID returned an empty token-exchange response.");
+
+        if (!string.IsNullOrWhiteSpace(payload.AccessToken)
+            && !AccessTokenContainsRequiredResource(payload.AccessToken, snapshot.NyxIdAuthority))
+        {
+            throw new BindingServiceAccessMismatchException(
+                externalSubject,
+                AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority),
+                "NyxID binding token does not grant aevatar's required service resource.");
+        }
 
         return new CapabilityHandle
         {
@@ -293,6 +311,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             new("redirect_uri", redirectUri),
             new("client_id", snapshot.ClientId),
         };
+        foreach (var resource in AevatarOAuthClientResources.RequiredResourceUris(snapshot.NyxIdAuthority))
+            form.Add(new KeyValuePair<string, string>("resource", resource));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -306,6 +326,11 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if ((int)response.StatusCode == 400 && IsInvalidTarget(body))
+            {
+                throw new NyxIdRequiredServiceAccessException(
+                    AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority));
+            }
             _logger.LogError(
                 "NyxID authorization-code exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
@@ -343,6 +368,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             $"client_id={Uri.EscapeDataString(snapshot.ClientId)}",
             $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
             $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
+            $"resource={Uri.EscapeDataString(AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority))}",
             $"state={Uri.EscapeDataString(stateToken)}",
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
             "code_challenge_method=S256",
@@ -363,7 +389,13 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             "Aevatar OAuth client redirect_uri or oauth_scope is not current. Bootstrap must re-run DCR before issuing NyxID authorize URLs.");
     }
 
-    private static bool IsInvalidGrant(string body)
+    private static bool IsInvalidGrant(string body) => IsOAuthError(body, "invalid_grant");
+
+    private static bool IsInvalidScope(string body) => IsOAuthError(body, "invalid_scope");
+
+    private static bool IsInvalidTarget(string body) => IsOAuthError(body, "invalid_target");
+
+    private static bool IsOAuthError(string body, string expected)
     {
         if (string.IsNullOrWhiteSpace(body)) return false;
         try
@@ -371,7 +403,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             using var document = JsonDocument.Parse(body);
             return document.RootElement.TryGetProperty("error", out var element)
                 && element.ValueKind == JsonValueKind.String
-                && string.Equals(element.GetString(), "invalid_grant", StringComparison.Ordinal);
+                && string.Equals(element.GetString(), expected, StringComparison.Ordinal);
         }
         catch (JsonException)
         {
@@ -379,15 +411,34 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         }
     }
 
-    private static bool IsInvalidScope(string body)
+    private static bool AccessTokenContainsRequiredResource(string accessToken, string nyxIdAuthority)
     {
-        if (string.IsNullOrWhiteSpace(body)) return false;
+        var parts = accessToken.Split('.');
+        if (parts.Length != 3)
+            return false;
+
         try
         {
-            using var document = JsonDocument.Parse(body);
-            return document.RootElement.TryGetProperty("error", out var element)
-                && element.ValueKind == JsonValueKind.String
-                && string.Equals(element.GetString(), "invalid_scope", StringComparison.Ordinal);
+            var payload = parts[1]
+                .Replace('-', '+')
+                .Replace('_', '/');
+            payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
+            using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+            if (!document.RootElement.TryGetProperty("resources", out var resources)
+                || resources.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            return AevatarOAuthClientResources.ContainsRequiredResource(
+                resources.EnumerateArray()
+                    .Where(static item => item.ValueKind == JsonValueKind.String)
+                    .Select(static item => item.GetString()!),
+                nyxIdAuthority);
+        }
+        catch (FormatException)
+        {
+            return false;
         }
         catch (JsonException)
         {

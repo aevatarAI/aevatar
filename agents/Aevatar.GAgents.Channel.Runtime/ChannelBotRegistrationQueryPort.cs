@@ -125,5 +125,6 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
             WorkflowResultDeliveryCredential = document.WorkflowResultDeliveryCredential?.Clone(),
             LastInboundAtUtc = document.LastInboundAtUtc,
+            DefaultSkillName = document.DefaultSkillName ?? string.Empty,
         };
 }
