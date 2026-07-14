@@ -1,0 +1,103 @@
+name: mission_wall_15_node_probe
+description: Lightweight 15-node workflow for Mission Wall graph testing.
+when_to_use: Use this to verify Mission Wall long-chain layout, directional edges, current-step focus, and failure highlighting without invoking LLMs or external tools.
+steps:
+  - id: capture_request
+    type: assign
+    parameters:
+      target: mission_wall_original_request
+      value: "$input"
+    next: trim_request
+
+  - id: trim_request
+    type: transform
+    parameters:
+      op: trim
+    next: ensure_request_present
+
+  - id: ensure_request_present
+    type: guard
+    parameters:
+      check: not_empty
+      on_fail: fail
+    next: open_ticket
+
+  - id: open_ticket
+    type: assign
+    parameters:
+      target: mission_wall_ticket_state
+      value: accepted
+    next: classify_channel
+
+  - id: classify_channel
+    type: assign
+    parameters:
+      target: mission_wall_channel
+      value: runtime-display
+    next: normalize_summary
+
+  - id: normalize_summary
+    type: transform
+    parameters:
+      op: identity
+    next: attach_owner
+
+  - id: attach_owner
+    type: assign
+    parameters:
+      target: mission_wall_owner
+      value: mission-wall-probe
+    next: score_priority
+
+  - id: score_priority
+    type: assign
+    parameters:
+      target: mission_wall_priority
+      value: normal
+    next: build_plan
+
+  - id: build_plan
+    type: assign
+    parameters:
+      target: mission_wall_plan
+      value: "capture -> validate -> enrich -> checkpoint -> publish"
+    next: reserve_execution_slot
+
+  - id: reserve_execution_slot
+    type: delay
+    parameters:
+      duration_ms: "250"
+    next: checkpoint_ingest
+
+  - id: checkpoint_ingest
+    type: assign
+    parameters:
+      target: mission_wall_checkpoint_ingest
+      value: passed
+    next: checkpoint_enrich
+
+  - id: checkpoint_enrich
+    type: assign
+    parameters:
+      target: mission_wall_checkpoint_enrich
+      value: passed
+    next: checkpoint_route
+
+  - id: checkpoint_route
+    type: assign
+    parameters:
+      target: mission_wall_checkpoint_route
+      value: passed
+    next: prepare_final_payload
+
+  - id: prepare_final_payload
+    type: transform
+    parameters:
+      op: identity
+    next: publish_summary
+
+  - id: publish_summary
+    type: assign
+    parameters:
+      target: final_summary
+      value: "Mission Wall 15-node probe completed. Input: ${mission_wall_original_request}; owner: ${mission_wall_owner}; priority: ${mission_wall_priority}; checkpoints: ${mission_wall_checkpoint_ingest}/${mission_wall_checkpoint_enrich}/${mission_wall_checkpoint_route}."

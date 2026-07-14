@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { setLocale } from "@umijs/max";
-import { message } from "antd";
+import { message, Modal } from "antd";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
@@ -34,6 +34,9 @@ jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
   return {
     ...actual,
+    Modal: Object.assign(actual.Modal, {
+      confirm: jest.fn(),
+    }),
     message: {
       ...actual.message,
       success: jest.fn(),
@@ -324,6 +327,12 @@ function mockCreateScheduledDispatchSummary(overrides?: Record<string, any>) {
     deleted: false,
     ...overrides,
   };
+}
+
+function collectRenderedStyleText(): string {
+  return Array.from(document.querySelectorAll("style"))
+    .map((styleElement) => styleElement.textContent ?? "")
+    .join("\n");
 }
 
 function mockCreateRunAudit(scopeId: string, runId: string) {
@@ -890,6 +899,14 @@ jest.mock("@/shared/studio/api", () => ({
       ...mockCreateTeamSummary(),
       lifecycleStage: "archived",
     })),
+    deleteMember: jest.fn(async (_input: { scopeId: string; memberId: string }) => ({
+      ackedAt: "2026-05-01T08:08:00Z",
+      commandId: "cmd-delete-member",
+      correlationId: "corr-delete-member",
+      memberId: _input.memberId,
+      scopeId: _input.scopeId,
+      status: "delete_accepted",
+    })),
     listTeamMembers: jest.fn(async () => mockCreateTeamMembersCatalog()),
     parseYaml: jest.fn(async () => ({
       document: {
@@ -1038,12 +1055,26 @@ describe("TeamDetailPage", () => {
       correlationId: "corr-team-archive",
       ackedAt: "2026-05-01T08:07:00Z",
     }));
+    (studioApi.deleteMember as jest.Mock).mockReset();
+    (studioApi.deleteMember as jest.Mock).mockImplementation(
+      async (_input: { scopeId: string; memberId: string }) => ({
+        ackedAt: "2026-05-01T08:08:00Z",
+        commandId: "cmd-delete-member",
+        correlationId: "corr-delete-member",
+        memberId: _input.memberId,
+        scopeId: _input.scopeId,
+        status: "delete_accepted",
+      }),
+    );
     (studioApi.listTeamMembers as jest.Mock).mockReset();
     (studioApi.listTeamMembers as jest.Mock).mockImplementation(
       async () => mockCreateTeamMembersCatalog(),
     );
     (runtimeRunsApi.streamTeamChat as jest.Mock).mockClear();
+    (Modal.confirm as jest.Mock).mockClear();
     (message.success as jest.Mock).mockClear();
+    (message.info as jest.Mock).mockClear();
+    (message.warning as jest.Mock).mockClear();
     (message.error as jest.Mock).mockClear();
   });
 
@@ -1093,23 +1124,28 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("button", { name: "返回团队列表" })).toBeTruthy();
     expect(screen.queryByText("工作区 ID")).toBeNull();
     expect(screen.queryByText("scope-1")).toBeNull();
-    const currentPostureHeading = screen.getByText("启动状态");
+    const currentPostureHeading = screen.getByText("当前态势");
     const compositionHeading = screen.getByText("团队构成");
-    const configurationHeading = screen.getByText("配置明细");
+    const workflowConfigurationLabel = await screen.findByText("团队 Workflow");
     expect(screen.getByRole("button", { name: "测试团队" })).toBeTruthy();
     expect(currentPostureHeading).toBeTruthy();
+    expect(screen.queryByText("启动状态")).toBeNull();
     expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
     expect(await screen.findByText("运行 · 等待处理")).toBeTruthy();
     expect(compositionHeading).toBeTruthy();
-    expect(configurationHeading).toBeTruthy();
+    expect(workflowConfigurationLabel).toBeTruthy();
+    expect(screen.getByText("主服务入口")).toBeTruthy();
+    expect(screen.getByText("版本状态")).toBeTruthy();
+    expect(screen.getByText("负责处理升级工单")).toBeTruthy();
+    expect(screen.queryByText("已绑定，可接收流量。")).toBeNull();
     expect(screen.queryByLabelText("Team test prompt")).toBeNull();
     expect(
       currentPostureHeading.compareDocumentPosition(compositionHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      compositionHeading.compareDocumentPosition(configurationHeading) &
+      compositionHeading.compareDocumentPosition(workflowConfigurationLabel) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.queryByText("Team authority")).toBeNull();
@@ -1141,9 +1177,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
-    expect(screen.getByText("配置明细")).toBeTruthy();
+    expect(screen.getByText("团队 Workflow")).toBeTruthy();
     expect(screen.queryByText("信任态势")).toBeNull();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
     expect(screen.queryByText("等待基线")).toBeNull();
@@ -1161,7 +1197,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("当前态势")).toBeTruthy();
-    expect(await screen.findByText("已完成")).toBeTruthy();
+    expect((await screen.findAllByText("已完成")).length).toBeGreaterThan(0);
     expect(await screen.findByText("版本 · 运行中")).toBeTruthy();
     expect(await screen.findByText(/ReadModel ·/)).toBeTruthy();
     expect(screen.queryByText("No successful baseline is available yet.")).toBeNull();
@@ -1278,9 +1314,8 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("配置明细");
-
-    expect(await screen.findByText("服务路由已配置。")).toBeTruthy();
+    expect(await screen.findByText("版本状态")).toBeTruthy();
+    expect(screen.queryByText("服务路由已配置。")).toBeNull();
     expect(screen.queryByText("revisionId: rev-20260414…716964f3")).toBeNull();
     expect(screen.queryByText(`revisionId: ${longRevisionId}`)).toBeNull();
   });
@@ -1335,7 +1370,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(screen.queryByText("当前任务事件流")).toBeNull();
 
     await waitFor(() => {
@@ -1358,13 +1393,149 @@ describe("TeamDetailPage", () => {
   it("shows configuration details in the overview", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("配置明细")).toBeTruthy();
-    expect(screen.getAllByText("团队 Workflow").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("绑定方式").length).toBeGreaterThan(0);
+    expect(await screen.findByText("团队 Workflow")).toBeTruthy();
     expect(screen.getAllByText("主服务入口").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("版本标识").length).toBeGreaterThan(0);
+    expect(screen.getByText("版本状态")).toBeTruthy();
+    expect(screen.queryByText("绑定方式")).toBeNull();
+    expect(screen.queryByText("版本标识")).toBeNull();
     expect(screen.queryByText("连接器引用")).toBeNull();
     expect(screen.queryByText("服务能力")).toBeNull();
+  });
+
+  it("exposes run actions and recent execution history on the overview", async () => {
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
+      async () => ({
+        ...mockCreateRunsCatalog(),
+        serviceId: "alpha-service",
+        serviceKey: "scope-1:alpha-service",
+        runs: mockCreateRunsCatalog().runs.map((run) => ({
+          ...run,
+          serviceId: "alpha-service",
+        })),
+      }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "运行团队" })).toBeEnabled();
+    });
+    expect((await screen.findAllByText("Team Alpha Operator")).length)
+      .toBeGreaterThan(0);
+    expect(screen.getByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.getByText("Waiting on approval")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.getAllByText("服务 · alpha-service")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "运行" }))
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/invoke",
+        ),
+      );
+    const overviewWorkflowLink = await screen.findByRole("link", { name: "Workflow" });
+    expect(overviewWorkflowLink)
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/workflow",
+        ),
+      );
+    const overviewWorkflowUrl = new URL(
+      overviewWorkflowLink.getAttribute("href") || "",
+      "https://console.local",
+    );
+    expect(overviewWorkflowUrl.searchParams.get("workflowId")).toBe("workflow-1");
+    expect(overviewWorkflowUrl.searchParams.get("workflowSource")).toBe("published");
+    expect(screen.queryByRole("link", { name: "更换服务" })).toBeNull();
+    expect(screen.getAllByRole("link", { name: "查看详情" })[0])
+      .toHaveAttribute(
+        "href",
+        expect.stringContaining(
+          "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/runs?runId=run-current",
+        ),
+      );
+
+    fireEvent.click(screen.getByRole("button", { name: "运行团队" }));
+    expect(await screen.findByTestId("team-test-modal-body")).toBeTruthy();
+  });
+
+  it("omits overview run details links when a run service is not bound to a roster member", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    expect(await screen.findByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
+  });
+
+  it("omits overview run details links for non-workflow entry member runs", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: "member-agent-alpha",
+    });
+    (studioApi.listTeamMembers as jest.Mock).mockResolvedValueOnce({
+      scopeId: "scope-1",
+      members: [
+        {
+          memberId: "member-agent-alpha",
+          scopeId: "scope-1",
+          teamId: "t-alpha",
+          displayName: "Agent Alpha",
+          description: "Agent member",
+          implementationKind: "gagent",
+          lifecycleStage: "bind_ready",
+          publishedServiceId: "agent-service",
+          lastBoundRevisionId: "rev-agent",
+          createdAt: "2026-04-09T08:00:00Z",
+          updatedAt: "2026-04-09T09:00:00Z",
+        },
+      ],
+      nextPageToken: null,
+    });
+    (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValueOnce([
+      {
+        serviceKey: "scope-1:default:default:agent-service",
+        tenantId: "scope-1",
+        appId: "default",
+        namespace: "default",
+        serviceId: "agent-service",
+        displayName: "Agent Runtime",
+        defaultServingRevisionId: "rev-agent",
+        activeServingRevisionId: "rev-agent",
+        deploymentId: "dep-agent",
+        primaryActorId: "actor-agent",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+    ]);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateRunsCatalog(),
+      serviceId: "agent-service",
+      serviceKey: "scope-1:agent-service",
+      runs: mockCreateRunsCatalog().runs.map((run) => ({
+        ...run,
+        serviceId: "agent-service",
+      })),
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByRole("heading", { name: "最近运行" })).toBeTruthy();
+    expect((await screen.findAllByText("Agent Alpha")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Workflow · support-triage")).toBeTruthy();
+    expect(screen.queryByText("run-current")).toBeNull();
+    expect(screen.queryByRole("link", { name: "查看详情" })).toBeNull();
+    await waitFor(() => {
+      expect(scopeRuntimeApi.listServiceRuns).toHaveBeenCalledWith(
+        "scope-1",
+        "agent-service",
+        expect.objectContaining({ take: 12 }),
+      );
+    });
   });
 
   it("shows a readable team members view", async () => {
@@ -1448,7 +1619,7 @@ describe("TeamDetailPage", () => {
 
     expect(await screen.findByText("当前成员")).toBeTruthy();
     expect((await screen.findAllByText("Team Alpha Operator")).length).toBeGreaterThan(0);
-    expect(screen.getByText("当前从团队成员中选中。")).toBeTruthy();
+    expect(screen.queryByText("当前从团队成员中选中。")).toBeNull();
     expect(screen.queryByText("member-team-alpha")).toBeNull();
     expect(screen.queryByText("memberId · member-team-alpha")).toBeNull();
   });
@@ -1466,13 +1637,13 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(screen.getAllByText("等待首次测试").length).toBeGreaterThan(0);
     expect(screen.getByText("下一步 · 测试团队")).toBeTruthy();
     expect(
-      screen.getByText("团队入口已就绪，但还没有可见运行。点击“测试团队”生成第一条运行。"),
-    ).toBeTruthy();
-    expect(screen.getByText("测试团队后会在这里显示最新运行。")).toBeTruthy();
+      screen.queryByText("团队入口已就绪，但还没有可见运行。点击“测试团队”生成第一条运行。"),
+    ).toBeNull();
+    expect(screen.queryByText("测试团队后会在这里显示最新运行。")).toBeNull();
     expect(screen.queryByText("暂无可见运行")).toBeNull();
     expect(screen.queryByText("暂无近期可见运行")).toBeNull();
     expect(scopeRuntimeApi.listMemberRuns).not.toHaveBeenCalled();
@@ -1601,7 +1772,7 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText("调用这支团队时会先路由到这个成员。")).toBeTruthy();
+    expect(screen.queryByText("调用这支团队时会先路由到这个成员。")).toBeNull();
     expect(screen.getByRole("button", { name: "清除入口成员" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
@@ -1653,6 +1824,53 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(studioApi.getTeam).toHaveBeenCalledTimes(2);
       expect(studioApi.listTeamMembers).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("deletes a Studio member authority from the members tab", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=members",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "删除成员" }));
+
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cancelText: "保留成员",
+          okButtonProps: { danger: true },
+          okText: "删除成员",
+          title: "删除成员",
+        }),
+      );
+    });
+
+    const confirmCalls = (Modal.confirm as jest.Mock).mock.calls;
+    const confirmConfig = confirmCalls[confirmCalls.length - 1]?.[0] as {
+      onOk?: () => Promise<void>;
+    };
+
+    await act(async () => {
+      await confirmConfig.onOk?.();
+    });
+
+    await waitFor(() => {
+      expect(studioApi.deleteMember).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        memberId: "member-team-alpha",
+      });
+    });
+    expect(message.success).toHaveBeenCalledWith(
+      "已删除成员 Team Alpha Operator。",
+    );
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("memberId")).toBeNull();
+      expect(new URLSearchParams(window.location.search).get("tab")).toBe("members");
     });
   });
 
@@ -1805,10 +2023,17 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const dialog = await openTeamTestDialog();
+    expect(within(dialog).getByRole("button", { name: "开始测试" })).toBeDisabled();
+
     fireEvent.change(within(dialog).getByLabelText("测试 Prompt"), {
       target: { value: "Route this customer question" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "设为入口并测试" }));
+    const setAndTestButton = within(dialog).getByRole("button", {
+      name: "设为入口并测试",
+    });
+
+    expect(setAndTestButton).toBeEnabled();
+    fireEvent.click(setAndTestButton);
 
     await waitFor(() => {
       expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
@@ -1828,6 +2053,36 @@ describe("TeamDetailPage", () => {
         expect.any(AbortSignal),
       );
     });
+  });
+
+  it("sets a ready member as entry before prompt entry when the Team has no entry", async () => {
+    (studioApi.getTeam as jest.Mock).mockResolvedValueOnce({
+      ...mockCreateTeamSummary(),
+      entryMemberId: null,
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    const dialog = await openTeamTestDialog();
+    const startTestButton = within(dialog).getByRole("button", {
+      name: "开始测试",
+    });
+    const setEntryButton = within(dialog).getByRole("button", {
+      name: "设为入口成员",
+    });
+
+    expect(startTestButton).toBeDisabled();
+    expect(setEntryButton).toBeEnabled();
+    fireEvent.click(setEntryButton);
+
+    await waitFor(() => {
+      expect(studioApi.setTeamEntryMember).toHaveBeenCalledWith(
+        "scope-1",
+        "t-alpha",
+        "member-team-alpha",
+      );
+    });
+    expect(runtimeRunsApi.streamTeamChat).not.toHaveBeenCalled();
   });
 
   it("waits for the entry read model before invoking Team Test", async () => {
@@ -2122,6 +2377,47 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
   });
 
+  it("keeps Team member row actions reachable before the tablet layout clips them", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    await screen.findByLabelText("调用");
+
+    const memberTable = screen.getByTestId("team-members-table");
+    expect(memberTable).toHaveClass("team-members-table-container");
+    expect(memberTable).toHaveAttribute("data-responsive-layout", "container");
+
+    const memberRow = document.querySelector(".team-members-table-row");
+    expect(memberRow).toBeTruthy();
+    expect(memberRow).toHaveStyle({
+      gridTemplateColumns:
+        "minmax(260px, 1.4fr) minmax(140px, 0.45fr) minmax(180px, 0.7fr) 252px",
+    });
+
+    const memberActions = memberRow?.querySelector(
+      ".team-members-table-primary-actions",
+    ) as HTMLElement | null;
+    expect(memberActions).toBeTruthy();
+    expect(within(memberActions as HTMLElement).getByLabelText("调用")).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("发布运行记录"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("自动化"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("Workflow Studio"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("清除入口成员"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("删除成员"),
+    ).toBeTruthy();
+
+  });
+
   it("renders member-owned automations from the backend schedules API", async () => {
     window.history.replaceState(
       {},
@@ -2151,6 +2447,41 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    const automationRow = screen.getByLabelText("Daily escalation digest");
+    expect(automationRow).toHaveClass("team-automation-row");
+    expect(automationRow).toHaveStyle({
+      gridTemplateColumns:
+        "minmax(0, 1.16fr) minmax(0, 0.72fr) minmax(0, 0.48fr) max-content",
+      width: "100%",
+    });
+    expect(
+      automationRow.querySelector(".team-automation-row__automation"),
+    ).toBeTruthy();
+    expect(
+      automationRow.querySelector(".team-automation-row__member"),
+    ).toBeTruthy();
+    expect(
+      automationRow.querySelector(".team-automation-row__schedule"),
+    ).toBeTruthy();
+    const automationActions = automationRow.querySelector(
+      ".team-automation-actions",
+    ) as HTMLElement | null;
+    expect(automationActions).toBeTruthy();
+    expect(automationActions?.style.inlineSize).toBe("max-content");
+    expect(automationActions?.style.minWidth).toBe("max-content");
+    expect(within(automationActions as HTMLElement).getByLabelText("编辑")).toBeTruthy();
+    expect(
+      within(automationActions as HTMLElement).getByLabelText("立即运行"),
+    ).toBeTruthy();
+    expect(within(automationActions as HTMLElement).getByLabelText("暂停")).toBeTruthy();
+    expect(within(automationActions as HTMLElement).getByLabelText("删除")).toBeTruthy();
+    const responsiveRules = collectRenderedStyleText();
+    expect(responsiveRules).toContain("@media (max-width: 900px)");
+    expect(responsiveRules).toContain(
+      "grid-template-columns: minmax(0, 1fr) max-content !important;",
+    );
+    expect(responsiveRules).toContain("@media (max-width: 640px)");
+    expect(responsiveRules).toContain("grid-row: auto;");
     expect(screen.getByText("计划")).toBeTruthy();
     expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
     expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
@@ -2932,7 +3263,7 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
     expect(await screen.findByText("暂无团队构成")).toBeTruthy();
     expect(screen.getByText("服务待配置")).toBeTruthy();
-    expect(screen.getAllByText("当前还没有匹配到主服务入口").length).toBeGreaterThan(0);
+    expect(screen.queryByText("当前还没有匹配到主服务入口")).toBeNull();
     expect(screen.queryByText("gagent-1")).toBeNull();
     expect(scopeRuntimeApi.getServiceRevisions).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServiceRuns).not.toHaveBeenCalled();
@@ -2976,10 +3307,10 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("已启用")).toBeTruthy();
     expect((await screen.findAllByText("Team summary")).length).toBeGreaterThan(0);
     expect(screen.getAllByText("3 个成员").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("来自团队更新时间").length).toBeGreaterThan(0);
-    expect(screen.getByText("启动状态")).toBeTruthy();
+    expect(screen.queryByText("来自团队更新时间")).toBeNull();
+    expect(screen.getByText("当前态势")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
-    expect(screen.getByText("配置明细")).toBeTruthy();
+    expect(screen.getByText("团队 Workflow")).toBeTruthy();
     expect(screen.queryByText("团队更新时间")).toBeNull();
     expect(screen.queryByText("生命周期")).toBeNull();
 
@@ -3161,9 +3492,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("启动状态")).toBeTruthy();
+    expect(await screen.findByText("当前态势")).toBeTruthy();
     expect(await screen.findByText("团队构成")).toBeTruthy();
-    expect(await screen.findByText("配置明细")).toBeTruthy();
+    expect(await screen.findByText("团队 Workflow")).toBeTruthy();
     expect(screen.queryByText("Team summary 暂不可用")).toBeNull();
     expect(
       screen.queryByText("当前仍会显示运行时视图；Team summary 暂时无法读取。"),

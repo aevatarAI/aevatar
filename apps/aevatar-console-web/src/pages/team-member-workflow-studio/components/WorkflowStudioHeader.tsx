@@ -96,10 +96,12 @@ const workflowStudioHeaderCss = `
 .workflow-studio-header__identity {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
+  overflow: visible;
+  row-gap: 6px;
+  white-space: normal;
 }
 
 .workflow-studio-header__back-button {
@@ -121,8 +123,9 @@ const workflowStudioHeaderCss = `
 .workflow-studio-header__title-zone {
   align-items: center;
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 280px;
   gap: 8px;
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -135,6 +138,7 @@ const workflowStudioHeaderCss = `
   font-weight: 600;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .workflow-studio-header__breadcrumb-link {
@@ -169,10 +173,10 @@ const workflowStudioHeaderCss = `
   border: 1px solid transparent;
   border-radius: 6px;
   display: inline-flex;
-  flex: 1 1 220px;
+  flex: 1 1 180px;
   gap: 4px;
-  max-width: 360px;
-  min-width: 96px;
+  max-width: min(360px, 100%);
+  min-width: 0;
   padding: 0 2px 0 6px;
 }
 
@@ -183,7 +187,9 @@ const workflowStudioHeaderCss = `
 }
 
 .workflow-studio-header__title-input {
+  flex: 1 1 auto;
   min-width: 0;
+  width: 100%;
 }
 
 .workflow-studio-header__title-input.ant-input {
@@ -223,7 +229,8 @@ const workflowStudioHeaderCss = `
   align-items: center;
   border: 0;
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   gap: 6px;
   margin: 0;
   min-inline-size: 0;
@@ -248,10 +255,11 @@ const workflowStudioHeaderCss = `
 .workflow-studio-header__actions {
   align-items: center;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 4px;
   justify-content: flex-end;
-  min-width: max-content;
+  max-width: 100%;
+  min-width: 0;
   white-space: nowrap;
 }
 
@@ -289,7 +297,7 @@ const workflowStudioHeaderCss = `
   width: 30px;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 1320px) {
   .workflow-studio-header__breadcrumbs {
     display: none;
   }
@@ -312,6 +320,17 @@ const workflowStudioHeaderCss = `
   }
 }
 
+@media (max-width: 980px) {
+  .workflow-studio-header__row {
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workflow-studio-header__actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 760px) {
   .workflow-studio-header {
     padding-inline: 10px;
@@ -319,7 +338,6 @@ const workflowStudioHeaderCss = `
 
   .workflow-studio-header__row {
     gap: 10px;
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .workflow-studio-header__title-shell {
@@ -329,7 +347,6 @@ const workflowStudioHeaderCss = `
   .workflow-studio-header__actions {
     justify-content: flex-start;
     min-width: 0;
-    overflow-x: auto;
     padding-bottom: 2px;
   }
 
@@ -691,7 +708,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         'Workflow primary actions',
       )}
       className="workflow-studio-header__actions"
-      data-nowrap="true"
+      data-responsive-actions="true"
       data-testid="workflow-header-primary-actions"
     >
       <Button

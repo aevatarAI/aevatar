@@ -389,6 +389,12 @@ describe('StudioMemberInvokePanel', () => {
     expect(screen.getByRole('button', { name: 'Start run' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Run workflow' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Technical details' })).toBeTruthy();
+    expect(screen.getByTestId('studio-invoke-target-actions')).toHaveStyle({
+      flex: '0 1 auto',
+      flexWrap: 'wrap',
+      maxWidth: '100%',
+      minWidth: 0,
+    });
     expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
     expect(screen.getByText('Current run')).toBeTruthy();
     expect(screen.getByText('No run result yet')).toBeTruthy();
