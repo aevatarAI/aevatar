@@ -86,6 +86,25 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
+        if (dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential &&
+            TryResolveWorkflowCallerAuthority(dispatch.Auth, out var authority))
+        {
+            return new PreparedInvocationRequest(
+                EnrichChatPayload(
+                    dispatch.Request,
+                    dispatch.Headers,
+                    new ExchangedCredential(
+                        ResolveCredentialRole(dispatch.Auth),
+                        string.Empty,
+                        new DurableCallerCredentialRef
+                        {
+                            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                            ScheduledCallerNyxIdAuthority = authority,
+                        }),
+                    projectNyxIdAccessTokenToWorkflowCallerCredential: true),
+                DurableCallerCredential: null);
+        }
+
         var exchange = await ExchangeCredentialAsync(dispatch, ct);
         if (exchange == null)
         {
@@ -668,6 +687,24 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             Scope = scope,
         };
     }
+
+    private static bool TryResolveWorkflowCallerAuthority(
+        ScheduledServiceInvocationAuth? auth,
+        out ScheduledCallerNyxIdAuthority authority)
+    {
+        var role = ResolveCredentialRole(auth);
+        authority = ResolveScheduledCallerNyxIdAuthority(auth, role) ?? new ScheduledCallerNyxIdAuthority();
+        return role is CredentialRole.Sender or CredentialRole.ScopeOwner;
+    }
+
+    private static CredentialRole ResolveCredentialRole(ScheduledServiceInvocationAuth? auth) =>
+        auth?.Source switch
+        {
+            ScheduledServiceInvocationNyxIdCredentialSource nyxId => ToCredentialRole(nyxId.Role),
+            ScheduledServiceInvocationDurableCredentialReference => CredentialRole.DurableSender,
+            ScheduledInvocationAgentKeyCredentialReference => CredentialRole.ScheduledInvocationAgentKey,
+            _ => CredentialRole.Sender,
+        };
 
     private sealed record ExchangedCredential(
         CredentialRole Role,

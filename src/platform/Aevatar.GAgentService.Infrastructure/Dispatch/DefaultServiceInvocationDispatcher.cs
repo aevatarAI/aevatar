@@ -220,17 +220,20 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 throw new InvalidOperationException(
                     "caller_durable_credential must not be combined with raw workflow caller credentials.");
             }
-            if (!HasDurableCallerCredential(source.CallerDurableCredential))
+            var authority = ToWorkflowCallerNyxIdAuthority(
+                source.CallerDurableCredential.ScheduledCallerNyxIdAuthority);
+            if (!HasDurableCallerCredential(source.CallerDurableCredential) && authority == null)
             {
                 throw new InvalidOperationException(
-                    "caller_durable_credential must include a durable secret reference.");
+                    "caller_durable_credential must include a durable secret reference or scheduled NyxID authority.");
             }
 
             return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
             {
-                DurableCallerCredential = source.CallerDurableCredential.Clone(),
-                NyxIdAuthority = ToWorkflowCallerNyxIdAuthority(
-                    source.CallerDurableCredential.ScheduledCallerNyxIdAuthority),
+                DurableCallerCredential = HasDurableCallerCredential(source.CallerDurableCredential)
+                    ? source.CallerDurableCredential.Clone()
+                    : null,
+                NyxIdAuthority = authority,
             };
         }
 

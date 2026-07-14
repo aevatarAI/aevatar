@@ -43,9 +43,10 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         {
             if (authority != null)
             {
-                throw new ArgumentException(
-                    "Workflow caller NyxID authority requires a caller credential.",
-                    nameof(credential));
+                delta.CallerCredential = new WorkflowCallerCredential
+                {
+                    NyxIdAuthority = authority,
+                };
             }
 
             return delta;

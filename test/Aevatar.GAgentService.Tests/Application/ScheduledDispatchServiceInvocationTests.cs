@@ -411,13 +411,15 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowProjectionAndMissingVault_ShouldFailBeforeInvocation()
+    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowProjection_ShouldCarryAuthorityWithoutVaultOrExchange()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
         var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
         var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "owner-1")));
         var original = new ServiceInvocationRequest
         {
             CommandId = "cmd-invoke",
@@ -426,16 +428,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
             Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
         };
 
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
             auth,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
             ScheduleId: "schedule-owner"));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*caller credential vault is not configured*");
-        credentialExchange.Sources.Should().ContainSingle();
-        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        var chat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        chat.CallerDurableCredential.Ref.Should().BeEmpty();
+        chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.ExternalUserId.Should().Be("owner-1");
+        chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Scope.Should().Be("proxy");
     }
 
     [Fact]

@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Application.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -23,10 +24,14 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     private const string ModuleStateKey = "llm_call";
 
     private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
 
-    public LLMCallModule(WorkflowStepTargetAgentResolver? targetAgentResolver = null)
+    public LLMCallModule(
+        WorkflowStepTargetAgentResolver? targetAgentResolver = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         _targetAgentResolver = targetAgentResolver;
+        _callerAccessTokenProvider = callerAccessTokenProvider;
     }
 
     public string Name => "llm_call";
@@ -417,7 +422,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         }
         var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
         intent.CallerCredential = callerCredential.Found
-            ? callerCredential.Credential
+            ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                callerCredential.Credential,
+                _callerAccessTokenProvider,
+                ct)
             : new WorkflowCallerCredential();
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
