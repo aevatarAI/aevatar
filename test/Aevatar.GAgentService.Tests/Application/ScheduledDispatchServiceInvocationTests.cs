@@ -13,6 +13,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -505,6 +506,48 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WhenRollbackStalls_ShouldTimeOutWithOriginalFailure()
+    {
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 7, 14, 12, 0, 0, TimeSpan.Zero));
+        var invocationPort = new RecordingServiceInvocationPort(new InvalidOperationException("dispatch failed"));
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(
+            "owner-token",
+            expiresAt: clock.GetUtcNow().AddMinutes(5));
+        var secretVault = new CancellationAwareStalledSecretVault();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            credentialExchange,
+            secretVault,
+            timeProvider: clock);
+        var auth = new ScheduledServiceInvocationAuth(
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
+
+        var dispatchTask = port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-owner"));
+
+        await secretVault.RevokeStarted;
+        dispatchTask.IsCompleted.Should().BeFalse();
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        var act = async () => await dispatchTask;
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch failed");
+        await secretVault.CancellationObserved;
+    }
+
+    [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndWorkflowProjection_ShouldProjectSenderTokenToDurableCallerCredential()
     {
         var invocationPort = new RecordingServiceInvocationPort();
@@ -555,6 +598,14 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.Should().NotBeNull();
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-sender");
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("lark:tenant-1:ou-user-1");
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().BeEquivalentTo(
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-1",
+                ExternalUserId = "ou-user-1",
+                Scope = "proxy",
+            });
         invokedChat.Metadata.Should().Contain("trace", "kept");
         invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
         invokedChat.Metadata.Should().Contain("schedule", "scheduled");
@@ -1317,6 +1368,53 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ct.ThrowIfCancellationRequested();
             RevokeRequests.Add(request);
             return Task.FromResult(new RevokeSecretResult(true));
+        }
+    }
+
+    private sealed class CancellationAwareStalledSecretVault : ISecretVault
+    {
+        private readonly TaskCompletionSource _revokeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _cancellationObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task RevokeStarted => _revokeStarted.Task;
+
+        public Task CancellationObserved => _cancellationObserved.Task;
+
+        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new StoreSecretResult(new SecretReference
+            {
+                Ref = "sec-workflow-caller-stalled",
+                Purpose = request.Purpose,
+                OwnerScopeKey = request.OwnerScopeKey,
+                Version = 1,
+                ExpiresAtUnixMs = request.ExpiresAt?.ToUnixTimeMilliseconds() ?? 0,
+            }));
+        }
+
+        public Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async Task<RevokeSecretResult> RevokeAsync(
+            RevokeSecretRequest request,
+            CancellationToken ct = default)
+        {
+            _revokeStarted.TrySetResult();
+            var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(
+                static state => ((TaskCompletionSource)state!).TrySetResult(),
+                canceled);
+
+            await canceled.Task;
+            _cancellationObserved.TrySetResult();
+            ct.ThrowIfCancellationRequested();
+            return new RevokeSecretResult(false);
         }
     }
 
