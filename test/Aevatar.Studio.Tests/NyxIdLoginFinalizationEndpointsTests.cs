@@ -265,10 +265,12 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             new RecordingBindingRefreshDispatch(),
             NullLoggerFactory.Instance);
 
-        var context = NewHttpContext();
-        await result.ExecuteAsync(context);
+        var (statusCode, payload) = await ExecuteJsonAsync<LoginErrorResponse>(result);
 
-        context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        statusCode.Should().Be(StatusCodes.Status409Conflict);
+        payload.Should().Be(new LoginErrorResponse(
+            "required_service_access_missing",
+            "Return to login and allow access to the Aevatar service in NyxID."));
     }
 
     [Fact]
@@ -437,6 +439,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var text = await new StreamReader(context.Response.Body, Encoding.UTF8).ReadToEndAsync();
         return (context.Response.StatusCode, JsonSerializer.Deserialize<T>(text, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
+
+    private sealed record LoginErrorResponse(string Error, string Detail);
 
     private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
         new()

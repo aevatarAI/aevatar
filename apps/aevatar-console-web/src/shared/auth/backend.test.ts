@@ -149,6 +149,30 @@ describe("NyxID backend auth API", () => {
     });
   });
 
+  it("surfaces actionable login detail instead of the backend error code", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      text: async () =>
+        JSON.stringify({
+          error: "required_service_access_missing",
+          detail:
+            "Return to login and allow access to the Aevatar service in NyxID.",
+        }),
+    } as Response) as typeof global.fetch;
+
+    await expect(
+      finalizeBackendNyxIDLogin({
+        code: "auth-code",
+        codeVerifier: "pkce-verifier",
+        redirectUri: "http://localhost:8000/auth/callback",
+      }),
+    ).rejects.toThrow(
+      "Return to login and allow access to the Aevatar service in NyxID.",
+    );
+  });
+
   it("refreshes a NyxID token set through the OAuth refresh grant", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
