@@ -12,7 +12,6 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -28,20 +27,16 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 HmacKid: "kid",
                 HmacKey: [1, 2, 3],
                 HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
-                NyxIdAuthority: "https://nyx-ui.example/",
+                NyxIdAuthority: "https://nyx-api.example/",
                 BrokerCapabilityObserved: true,
                 BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
-                OauthScope: "openid broker proxy")),
-            Options.Create(new NyxIdBrokerOptions
-            {
-                ResourceServerBaseUrl = " https://nyx-api.example/// ",
-            }));
+                OauthScope: "openid broker proxy")));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         payload.Should().BeEquivalentTo(new NyxIdLoginConfigurationResponse(
-            "https://nyx-ui.example",
+            "https://nyx-api.example",
             "broker-client-1",
             "openid broker proxy",
             ["https://nyx-api.example/api/v1/proxy/s/aevatar"]));
@@ -59,11 +54,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
                 NyxIdAuthority: "https://nyx.example/",
                 BrokerCapabilityObserved: true,
-                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch)),
-            Options.Create(new NyxIdBrokerOptions
-            {
-                ResourceServerBaseUrl = "https://nyx-api.example",
-            }));
+                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch)));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
@@ -75,11 +66,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     public async Task Config_ShouldReturnUnavailable_WhenBrokerOAuthClientIsNotProvisioned()
     {
         var result = await NyxIdLoginFinalizationEndpoints.HandleConfigAsync(
-            new NotProvisionedAevatarOAuthClientProvider(),
-            Options.Create(new NyxIdBrokerOptions
-            {
-                ResourceServerBaseUrl = "https://nyx-api.example",
-            }));
+            new NotProvisionedAevatarOAuthClientProvider());
 
         var context = NewHttpContext();
         await result.ExecuteAsync(context);
