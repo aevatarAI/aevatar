@@ -5,14 +5,17 @@ namespace Aevatar.SecretStore.Tools;
 
 public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisposable
 {
+    // Single integer return matches Garnet's reliable EVAL surface (multi-bulk tables can
+    // collapse status/TTL differently across Redis-compatible engines).
+    // 1 = updated, -1 = conflict, -2 = missing.
     private const string CompareAndSetScript =
         """
         local current = redis.call('GET', KEYS[1])
-        if not current then
-          return {-2, -2}
+        if current == false then
+          return -2
         end
         if current ~= ARGV[1] then
-          return {-1, -1}
+          return -1
         end
         local ttl = redis.call('PTTL', KEYS[1])
         if ttl >= 0 then
@@ -20,7 +23,7 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         else
           redis.call('SET', KEYS[1], ARGV[2])
         end
-        return {1, ttl}
+        return 1
         """;
 
     private readonly ConnectionMultiplexer _connection;
@@ -37,6 +40,9 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         var options = ConfigurationOptions.Parse(connectionString);
         options.AbortOnConnectFail = false;
+        // Pin default database so raw server commands and EVAL share the same logical DB
+        // as StringGet/StringSet against the configured index.
+        options.DefaultDatabase = database;
         var connection = await ConnectionMultiplexer.ConnectAsync(options);
         return new RedisSecretStoreSweepTarget(connection, database);
     }
@@ -54,6 +60,8 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
             throw new ArgumentOutOfRangeException(nameof(count));
         ct.ThrowIfCancellationRequested();
 
+        // IDatabase.ExecuteAsync routes through the selected database; this is required so
+        // --database N scans the same logical DB as Get/CAS (raw IServer.Execute does not).
         var result = await _database.ExecuteAsync(
             "SCAN",
             cursor.ToString(CultureInfo.InvariantCulture),
@@ -99,18 +107,27 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         var result = await _database.ScriptEvaluateAsync(CompareAndSetScript, keys, values);
         ct.ThrowIfCancellationRequested();
 
-        var parts = ReadArray(result, "CAS result");
-        var status = (long)(RedisValue)parts[0];
-        var ttl = (long)(RedisValue)parts[1];
+        var status = (long)result;
         return status switch
         {
-            1 => SecretStoreCasResult.Updated(ttl),
+            1 => SecretStoreCasResult.Updated(await ReadPreservedTtlMsAsync(key, ct)),
             -2 => SecretStoreCasResult.Missing(),
             _ => SecretStoreCasResult.Conflict(),
         };
     }
 
     public void Dispose() => _connection.Dispose();
+
+    private async Task<long> ReadPreservedTtlMsAsync(string key, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var ttl = await _database.KeyTimeToLiveAsync(key);
+        ct.ThrowIfCancellationRequested();
+        if (!ttl.HasValue)
+            return -1;
+
+        return Math.Max(0, (long)Math.Ceiling(ttl.Value.TotalMilliseconds));
+    }
 
     private static RedisResult[] ReadArray(RedisResult result, string label) =>
         (RedisResult[]?)result ?? throw new InvalidOperationException($"Redis {label} was not an array.");

@@ -16,7 +16,6 @@ namespace Aevatar.Authentication.Hosting;
 /// </summary>
 internal sealed class PerIssuerSigningKeyResolver
 {
-    private readonly IReadOnlyList<string> _authorityIssuers;
     private readonly IReadOnlyList<string> _scopeIssuers;
     private readonly IReadOnlyList<SecurityKey> _scopeKeys;
 
@@ -29,12 +28,14 @@ internal sealed class PerIssuerSigningKeyResolver
         ArgumentNullException.ThrowIfNull(scopeIssuers);
         ArgumentNullException.ThrowIfNull(scopeKeys);
 
-        _authorityIssuers = NormalizeIssuers(authorityIssuers);
-        _scopeIssuers = scopeIssuers
-            .Where(issuer => !string.IsNullOrWhiteSpace(issuer))
-            .Select(issuer => issuer.Trim())
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        var configuredAuthorityIssuers = NormalizeIssuers(authorityIssuers);
+        _scopeIssuers = NormalizeIssuers(scopeIssuers);
+        if (configuredAuthorityIssuers.Intersect(_scopeIssuers, StringComparer.Ordinal).Any())
+        {
+            throw new InvalidOperationException(
+                "Scope service token issuer must be distinct from the configured OIDC authority issuer.");
+        }
+
         _scopeKeys = scopeKeys.ToArray();
     }
 
@@ -69,22 +70,46 @@ internal sealed class PerIssuerSigningKeyResolver
         if (string.IsNullOrWhiteSpace(tokenIssuer))
             return [];
 
-        var normalizedIssuer = tokenIssuer.Trim();
-        if (_scopeIssuers.Contains(normalizedIssuer, StringComparer.Ordinal))
-            return _scopeKeys;
+        return ClassifyIssuer(tokenIssuer, configuration) switch
+        {
+            IssuerKind.Scope => _scopeKeys,
+            IssuerKind.Authority => configuration?.SigningKeys ?? [],
+            _ => [],
+        };
+    }
+
+    /// <summary>
+    /// Accepts only the exact scope issuer or the exact issuer returned by OIDC discovery.
+    /// A token matching both is ambiguous and therefore rejected.
+    /// </summary>
+    public string ValidateIssuer(
+        string issuer,
+        SecurityToken securityToken,
+        TokenValidationParameters validationParameters,
+        BaseConfiguration configuration)
+    {
+        var normalizedIssuer = issuer?.Trim() ?? string.Empty;
+        if (ClassifyIssuer(normalizedIssuer, configuration) is IssuerKind.Scope or IssuerKind.Authority)
+            return normalizedIssuer;
+
+        throw new SecurityTokenInvalidIssuerException(
+            $"Issuer '{normalizedIssuer}' does not uniquely match the configured scope issuer or discovered OIDC issuer.");
+    }
+
+    private IssuerKind ClassifyIssuer(string? issuer, BaseConfiguration? configuration)
+    {
+        var normalizedIssuer = issuer?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedIssuer))
+            return IssuerKind.Invalid;
 
         var discoveredIssuer = configuration?.Issuer?.Trim();
-        if (_authorityIssuers.Contains(normalizedIssuer, StringComparer.Ordinal) ||
-            (!string.IsNullOrWhiteSpace(discoveredIssuer) &&
-             string.Equals(normalizedIssuer, discoveredIssuer, StringComparison.Ordinal)))
-        {
-            return configuration?.SigningKeys ?? [];
-        }
+        var matchesScope = _scopeIssuers.Contains(normalizedIssuer, StringComparer.Ordinal);
+        var matchesAuthority = !string.IsNullOrWhiteSpace(discoveredIssuer) &&
+                               string.Equals(normalizedIssuer, discoveredIssuer, StringComparison.Ordinal);
+        if (matchesScope == matchesAuthority)
+            return IssuerKind.Invalid;
 
-        // Never expose one issuer's keys to a token claiming another issuer. Issuer validation
-        // runs after signature resolution in some IdentityModel paths, so the resolver itself
-        // must fail closed rather than relying on ValidIssuers to repair a mixed key set.
-        return [];
+        return matchesScope ? IssuerKind.Scope : IssuerKind.Authority;
     }
 
     private static string[] NormalizeIssuers(IEnumerable<string> issuers) => issuers
@@ -92,4 +117,11 @@ internal sealed class PerIssuerSigningKeyResolver
         .Select(issuer => issuer.Trim())
         .Distinct(StringComparer.Ordinal)
         .ToArray();
+
+    private enum IssuerKind
+    {
+        Invalid,
+        Scope,
+        Authority,
+    }
 }

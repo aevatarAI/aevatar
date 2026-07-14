@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -558,6 +559,11 @@ public sealed class ChatEndpointsInternalTests
         };
         var http = CreateHttpContext();
         http.Request.Headers.Authorization = "Bearer trusted-token";
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("uid", "nyx-user-from-uid"),
+            new Claim("sub", "nyx-user-from-sub"),
+        ], "test"));
 
         await WorkflowCapabilityEndpoints.HandleChat(
             http,
@@ -574,6 +580,12 @@ public sealed class ChatEndpointsInternalTests
 
         capturedCommand.Should().NotBeNull();
         capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
+        capturedCommand.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                "nyxid",
+                string.Empty,
+                "nyx-user-from-uid",
+                "proxy"));
         capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
