@@ -18,6 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.Bootstrap.Tests;
 
@@ -276,29 +277,10 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     {
         var appender = new RecordingAuditTrailAppender();
         using var requestCancellation = new CancellationTokenSource();
-        var context = new DefaultHttpContext
-        {
-            TraceIdentifier = "request-cancelled",
-            RequestAborted = requestCancellation.Token,
-            User = new ClaimsPrincipal(new ClaimsIdentity(
-            [
-                new Claim("sub", "user-123"),
-                new Claim("scope_id", "scope-a"),
-            ], "Test")),
-        };
-        context.Request.Method = HttpMethods.Post;
-        context.Request.Path = "/audited/widgets/widget-1/cancel";
-        var metadata = new EndpointAuditMetadata(
+        var context = CreateAuditedContext(
+            "request-cancelled",
             "test.widget.cancel",
-            AuditSensitivityLevel.Confidential,
-            "widget",
-            _ => ValueTask.FromResult<EndpointAuditTarget?>(new EndpointAuditTarget("widget", "widget-1")),
-            _ => ValueTask.FromResult("request captured"),
-            _ => ValueTask.FromResult("result captured"));
-        context.SetEndpoint(new Endpoint(
-            _ => Task.CompletedTask,
-            new EndpointMetadataCollection(metadata),
-            "cancelled endpoint"));
+            requestCancellation.Token);
         RequestDelegate next = _ =>
         {
             requestCancellation.Cancel();
@@ -318,6 +300,74 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         appender.Records[1].OperationName.Should().Be("test.widget.cancel");
         appender.Records[1].Outcome.Should().Be(AuditOutcome.Cancelled);
         appender.CancellationStates.Should().Equal(false, false);
+    }
+
+    [Fact]
+    public async Task TerminalAppend_WhenAppenderIgnoresCancellation_ShouldRespectDeadlineAndObserveLateFault()
+    {
+        var appender = new NonCooperativeAuditTrailAppender();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-07-14T10:00:00Z"));
+        var loggerProvider = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
+        var middleware = new EndpointAuditCaptureMiddleware(
+            _ => Task.CompletedTask,
+            [appender],
+            [new FakeAuditActorIdentityHasher()],
+            loggerFactory.CreateLogger<EndpointAuditCaptureMiddleware>(),
+            timeProvider);
+        var context = CreateAuditedContext("request-timeout", "test.widget.timeout");
+
+        var invocation = middleware.InvokeAsync(context);
+        await appender.TerminalAppendStarted.Task;
+
+        invocation.IsCompleted.Should().BeFalse();
+        timeProvider.Advance(TimeSpan.FromSeconds(5));
+        await invocation;
+
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("test.widget.timeout.attempted");
+        appender.Records[1].OperationName.Should().Be("test.widget.timeout");
+        appender.TerminalCancellationToken.IsCancellationRequested.Should().BeTrue();
+        loggerProvider.Messages.Should().Contain(message =>
+            message.LogLevel == LogLevel.Error &&
+            message.Text.Contains("timed out after 5s", StringComparison.Ordinal));
+
+        appender.FailTerminal(new InvalidOperationException("late terminal failure"));
+
+        loggerProvider.Messages.Should().Contain(message =>
+            message.LogLevel == LogLevel.Error &&
+            message.Text.Contains("failed after its deadline", StringComparison.Ordinal));
+    }
+
+    private static DefaultHttpContext CreateAuditedContext(
+        string traceIdentifier,
+        string operationName,
+        CancellationToken requestAborted = default)
+    {
+        var context = new DefaultHttpContext
+        {
+            TraceIdentifier = traceIdentifier,
+            RequestAborted = requestAborted,
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", "user-123"),
+                new Claim("scope_id", "scope-a"),
+            ], "Test")),
+        };
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/audited/widgets/widget-1";
+        var metadata = new EndpointAuditMetadata(
+            operationName,
+            AuditSensitivityLevel.Confidential,
+            "widget",
+            _ => ValueTask.FromResult<EndpointAuditTarget?>(new EndpointAuditTarget("widget", "widget-1")),
+            _ => ValueTask.FromResult("request captured"),
+            _ => ValueTask.FromResult("result captured"));
+        context.SetEndpoint(new Endpoint(
+            _ => Task.CompletedTask,
+            new EndpointMetadataCollection(metadata),
+            "audited endpoint"));
+        return context;
     }
 
     private static async Task<WebApplication> CreateHostAsync(
@@ -538,6 +588,43 @@ public sealed class EndpointAuditCaptureMiddlewareTests
                 record.AuditId,
                 record.AuditActorId,
                 record.OccurredAt.ToDateTimeOffset()));
+        }
+    }
+
+    private sealed class NonCooperativeAuditTrailAppender : IAuditTrailAppender
+    {
+        private readonly TaskCompletionSource<AuditTrailAppendResult> _terminalCompletion = new();
+        private int _appendCount;
+
+        public List<AuditRecord> Records { get; } = [];
+
+        public TaskCompletionSource TerminalAppendStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public CancellationToken TerminalCancellationToken { get; private set; }
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            if (Interlocked.Increment(ref _appendCount) == 1)
+            {
+                return Task.FromResult(AuditTrailAppendResult.Appended(
+                    record.AuditId,
+                    record.AuditActorId,
+                    record.OccurredAt.ToDateTimeOffset()));
+            }
+
+            TerminalCancellationToken = cancellationToken;
+            TerminalAppendStarted.TrySetResult();
+            return _terminalCompletion.Task;
+        }
+
+        public void FailTerminal(Exception exception)
+        {
+            if (!_terminalCompletion.TrySetException(exception))
+                throw new InvalidOperationException("Terminal append was already completed.");
         }
     }
 

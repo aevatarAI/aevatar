@@ -192,6 +192,9 @@ public static class AevatarAuthenticationHostExtensions
             signingKeys);
         jwt.TokenValidationParameters.IssuerSigningKeyResolver = null;
         jwt.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration = resolver.Resolve;
+        jwt.TokenValidationParameters.IssuerValidator = null;
+        jwt.TokenValidationParameters.IssuerValidatorUsingConfiguration = resolver.ValidateIssuer;
+        jwt.TokenValidationParameters.ValidateIssuer = true;
 
         if (!string.IsNullOrWhiteSpace(keyProvider.Audience))
         {

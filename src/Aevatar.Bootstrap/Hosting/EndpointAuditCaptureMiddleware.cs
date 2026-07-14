@@ -90,11 +90,10 @@ public sealed class EndpointAuditCaptureMiddleware
             }
 
             var outcome = EndpointAuditOutcomeClassifier.Classify(context, capturedException);
-            using var terminalAppendTimeout = new CancellationTokenSource(TerminalAppendTimeout, _timeProvider);
-            await AppendBestEffortAsync(
+            await AppendTerminalBestEffortAsync(
                 _appender,
                 () => BuildRecord(context, metadata, _identityHasher, metadata.OperationName, outcome),
-                terminalAppendTimeout.Token);
+                metadata.OperationName);
         }
     }
 
@@ -159,6 +158,63 @@ public sealed class EndpointAuditCaptureMiddleware
                 ex,
                 "Endpoint audit append failed.");
         }
+    }
+
+    private async Task AppendTerminalBestEffortAsync(
+        IAuditTrailAppender appender,
+        Func<AuditRecord> recordFactory,
+        string operationName)
+    {
+        using var deadline = new CancellationTokenSource(TerminalAppendTimeout, _timeProvider);
+        Task<AuditTrailAppendResult> appendTask;
+        try
+        {
+            appendTask = appender.AppendAsync(recordFactory(), deadline.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogDebug(ex, "Endpoint audit append cancelled.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Endpoint audit append failed.");
+            return;
+        }
+
+        try
+        {
+            await appendTask.WaitAsync(TerminalAppendTimeout, _timeProvider);
+        }
+        catch (TimeoutException ex)
+        {
+            ObserveLateTerminalAppendFault(appendTask, operationName);
+            _logger.LogError(
+                ex,
+                "Endpoint terminal audit append timed out after {TimeoutSeconds}s. operation={OperationName}",
+                TerminalAppendTimeout.TotalSeconds,
+                operationName);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogDebug(ex, "Endpoint audit append cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Endpoint audit append failed.");
+        }
+    }
+
+    private void ObserveLateTerminalAppendFault(Task appendTask, string operationName)
+    {
+        _ = appendTask.ContinueWith(
+            task => _logger.LogError(
+                task.Exception,
+                "Endpoint terminal audit append failed after its deadline. operation={OperationName}",
+                operationName),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task EnsureRequestCapturedBestEffortAsync(

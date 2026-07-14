@@ -165,7 +165,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
     public void BuildCallerCredentialDelta_ShouldPromoteOnlyTypedCallerCredential()
     {
         var delta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
-            new WorkflowCallerCredential { BearerToken = " secret " });
+            new WorkflowCallerCredential
+            {
+                BearerToken = " secret ",
+                NyxIdAuthority = CreateCallerAuthority(),
+            });
 
         delta.ClearCallerCredential.Should().BeTrue();
         delta.CallerCredential!.BearerToken.Should().BeEmpty();
@@ -173,6 +177,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
         delta.CallerCredential.RuntimeSecretReference.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerBearerToken);
         delta.CallerCredential.RuntimeSecretReference.OwnerRunId.Should().Be("run-1");
         delta.CallerCredential.RuntimeSecretReference.OwnerStepId.Should().Be("workflow.caller");
+        delta.CallerCredential.NyxIdAuthority.ExternalUserId.Should().Be("external-user-42");
 
         var emptyDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
             new WorkflowCallerCredential { BearerToken = " " });
@@ -194,12 +199,17 @@ public sealed class WorkflowExecutionRuntimeContextTests
             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
         };
         var durableDelta = WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
-            new WorkflowCallerCredential { DurableCallerCredential = durableRef });
+            new WorkflowCallerCredential
+            {
+                DurableCallerCredential = durableRef,
+                NyxIdAuthority = CreateCallerAuthority(),
+            });
         durableDelta.ClearCallerCredential.Should().BeTrue();
         durableDelta.CallerCredential!.BearerToken.Should().BeEmpty();
         durableDelta.CallerCredential.RuntimeSecretReference.Should().BeNull();
         durableDelta.CallerCredential.DurableCallerCredential.Should().NotBeNull();
         durableDelta.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
+        durableDelta.CallerCredential.NyxIdAuthority.Scope.Should().Be("proxy");
 
         FluentActions.Invoking(() => WorkflowRunExecutionContextStateAccess.BuildCallerCredentialDelta(
                 new WorkflowCallerCredential
@@ -295,7 +305,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
             host,
-            new WorkflowCallerCredential { DurableCallerCredential = handle });
+            new WorkflowCallerCredential
+            {
+                DurableCallerCredential = handle,
+                NyxIdAuthority = CreateCallerAuthority(),
+            });
 
         host.ExecutionContextState.CallerCredential!.BearerToken.Should().BeEmpty();
         host.ExecutionContextState.CallerCredential.RuntimeSecretReference.Should().BeNull();
@@ -305,6 +319,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
 
         credential.Found.Should().BeTrue();
         credential.Credential.BearerToken.Should().Be("durable-token");
+        credential.Credential.NyxIdAuthority.Should().BeEquivalentTo(CreateCallerAuthority());
     }
 
     [Fact]
@@ -486,6 +501,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                         {
                             BearerToken = "secret",
                             DurableCallerCredential = durableRef.Clone(),
+                            NyxIdAuthority = CreateCallerAuthority(),
                         },
                     },
                 }),
@@ -499,6 +515,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                     {
                         BearerToken = "secret",
                         DurableCallerCredential = durableRef.Clone(),
+                        NyxIdAuthority = CreateCallerAuthority(),
                     },
                 },
             }),
@@ -515,9 +532,11 @@ public sealed class WorkflowExecutionRuntimeContextTests
         var updateEvent = published.StateEvent.EventData.Unpack<WorkflowRunExecutionContextUpdatedEvent>();
         updateEvent.ExecutionContextDelta.CallerCredential!.BearerToken.Should().BeEmpty();
         updateEvent.ExecutionContextDelta.CallerCredential.DurableCallerCredential.Should().BeNull();
+        updateEvent.ExecutionContextDelta.CallerCredential.NyxIdAuthority.Should().BeNull();
         var stateRoot = published.StateRoot.Unpack<WorkflowRunState>();
         stateRoot.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
         stateRoot.ExecutionContext.CallerCredential.DurableCallerCredential.Should().BeNull();
+        stateRoot.ExecutionContext.CallerCredential.NyxIdAuthority.Should().BeNull();
     }
 
     [Fact]
@@ -744,6 +763,15 @@ public sealed class WorkflowExecutionRuntimeContextTests
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(evt),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+        };
+
+    private static WorkflowCallerNyxIdAuthority CreateCallerAuthority() =>
+        new()
+        {
+            Platform = "lark",
+            Tenant = "tenant-a",
+            ExternalUserId = "external-user-42",
+            Scope = "proxy",
         };
 
     private static DurableCallerCredentialRef CreateDurableCallerCredentialRef(
@@ -1116,6 +1144,7 @@ public sealed class WorkflowExecutionRuntimeContextTests
                 BearerToken = delta.CallerCredential.BearerToken,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
+                NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
             };
         }
     }

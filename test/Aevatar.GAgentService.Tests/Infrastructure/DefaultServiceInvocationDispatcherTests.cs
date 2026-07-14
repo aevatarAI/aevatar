@@ -330,6 +330,13 @@ public sealed class DefaultServiceInvocationDispatcherTests
                     OwnerScopeKey = "schedule:schedule-1",
                     SubjectId = "lark:tenant:user",
                     SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                    ScheduledCallerNyxIdAuthority = new ScheduledCallerNyxIdAuthority
+                    {
+                        Platform = "lark",
+                        Tenant = "tenant-a",
+                        ExternalUserId = "external-user-42",
+                        Scope = "proxy",
+                    },
                 },
             }),
         });
@@ -340,6 +347,14 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
         workflowRequest.CallerCredential.DurableCallerCredential.SourceKind
             .Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        workflowRequest.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-a",
+                ExternalUserId = "external-user-42",
+                Scope = "proxy",
+            });
     }
 
     [Fact]

@@ -14,6 +14,7 @@ namespace Aevatar.GAgentService.Infrastructure.Schedules;
 public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceInvocationDispatchPort
 {
     private static readonly TimeSpan DurableCredentialProjectionTtl = TimeSpan.FromHours(24);
+    private static readonly TimeSpan ProjectedCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
     private const string LegacyConnectorHttpAuthorizationBlockedKey =
         ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey;
 
@@ -21,12 +22,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
     private readonly ISecretVault? _secretVault;
     private readonly ILogger<ScheduledServiceInvocationDispatchPort> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public ScheduledServiceInvocationDispatchPort(
         IServiceInvocationPort serviceInvocationPort,
         IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
         ILogger<ScheduledServiceInvocationDispatchPort>? logger = null)
-        : this(serviceInvocationPort, credentialExchangePort, secretVault: null, logger)
+        : this(serviceInvocationPort, credentialExchangePort, secretVault: null, logger, timeProvider: null)
     {
     }
 
@@ -34,13 +36,15 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         IServiceInvocationPort serviceInvocationPort,
         IScheduledServiceInvocationCredentialExchangePort credentialExchangePort,
         ISecretVault? secretVault,
-        ILogger<ScheduledServiceInvocationDispatchPort>? logger = null)
+        ILogger<ScheduledServiceInvocationDispatchPort>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         _serviceInvocationPort = serviceInvocationPort ?? throw new ArgumentNullException(nameof(serviceInvocationPort));
         _credentialExchangePort = credentialExchangePort
             ?? throw new ArgumentNullException(nameof(credentialExchangePort));
         _secretVault = secretVault;
         _logger = logger ?? NullLogger<ScheduledServiceInvocationDispatchPort>.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<ScheduledServiceInvocationDispatchReceipt> DispatchAsync(
@@ -222,14 +226,52 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (reference == null || _secretVault == null)
             return;
 
+        var cleanupCts = new CancellationTokenSource();
+        var revokeTask = RevokeProjectedCredentialAsync(
+            reference,
+            auditReason,
+            cleanupCts.Token);
         try
         {
-            await _secretVault.RevokeAsync(new RevokeSecretRequest(
+            await revokeTask.WaitAsync(ProjectedCredentialCleanupTimeout, _timeProvider);
+            cleanupCts.Dispose();
+        }
+        catch (TimeoutException ex)
+        {
+            RequestProjectedCredentialCleanupCancellation(cleanupCts, reference.Ref);
+            _logger.LogWarning(
+                ex,
+                "Scheduled workflow caller credential cleanup timed out after {TimeoutSeconds}s. credentialRef={CredentialRef}",
+                ProjectedCredentialCleanupTimeout.TotalSeconds,
+                reference.Ref);
+        }
+        catch (Exception ex)
+        {
+            RequestProjectedCredentialCleanupCancellation(cleanupCts, reference.Ref);
+            _logger.LogWarning(
+                ex,
+                "Scheduled workflow caller credential cleanup boundary failed. credentialRef={CredentialRef}",
+                reference.Ref);
+        }
+    }
+
+    private async Task RevokeProjectedCredentialAsync(
+        DurableCallerCredentialRef reference,
+        string auditReason,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _secretVault!.RevokeAsync(new RevokeSecretRequest(
                 reference.Ref,
                 CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
                 reference.OwnerScopeKey,
                 reference.SubjectId,
-                auditReason), CancellationToken.None);
+                auditReason), ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The short-lived credential's backend TTL remains the durable cleanup fallback.
         }
         catch (Exception ex)
         {
@@ -237,6 +279,49 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 ex,
                 "Scheduled workflow caller credential cleanup failed after dispatch failure. credentialRef={CredentialRef}",
                 reference.Ref);
+        }
+    }
+
+    private void RequestProjectedCredentialCleanupCancellation(
+        CancellationTokenSource cleanupCts,
+        string credentialRef)
+    {
+        try
+        {
+            _ = ObserveProjectedCredentialCleanupCancellationAsync(
+                cleanupCts.CancelAsync(),
+                cleanupCts,
+                credentialRef);
+        }
+        catch (Exception ex)
+        {
+            cleanupCts.Dispose();
+            _logger.LogWarning(
+                ex,
+                "Scheduled workflow caller credential cleanup cancellation failed. credentialRef={CredentialRef}",
+                credentialRef);
+        }
+    }
+
+    private async Task ObserveProjectedCredentialCleanupCancellationAsync(
+        Task cancellationTask,
+        CancellationTokenSource cleanupCts,
+        string credentialRef)
+    {
+        try
+        {
+            await cancellationTask;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Scheduled workflow caller credential cleanup cancellation failed. credentialRef={CredentialRef}",
+                credentialRef);
+        }
+        finally
+        {
+            cleanupCts.Dispose();
         }
     }
 
@@ -519,9 +604,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         return parsed.NormalizedBearerToken!;
     }
 
-    private static DateTimeOffset ResolveProjectedCredentialExpiry(CredentialExchange exchange)
+    private DateTimeOffset ResolveProjectedCredentialExpiry(CredentialExchange exchange)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         // Prefer exchange-provided expiry; fall back to a short host-owned TTL so projected
         // vault entries never become unbounded when the broker omits exp.
         var expiresAt = exchange.Result.ExpiresAt ?? now.Add(DurableCredentialProjectionTtl);
