@@ -239,12 +239,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
         services.TryAddSingleton<IStudioWorkspaceQueryPort, ProjectionStudioWorkspaceQueryPort>();
         services.TryAddSingleton<INyxIdCatalogSnapshotQueryPort, ProjectionNyxIdCatalogSnapshotQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationMemberQueryPort, ProjectionScheduledInvocationMemberQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationWorkflowQueryPort, ProjectionScheduledInvocationWorkflowQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationConnectorQueryPort, ProjectionScheduledInvocationConnectorQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationOwnerLLMQueryPort, ProjectionScheduledInvocationOwnerLLMQueryPort>();
 
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
+        services.TryAddSingleton<INyxIdCatalogSnapshotCommandPort, ActorDispatchNyxIdCatalogSnapshotCommandPort>();
 
         return services;
     }

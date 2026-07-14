@@ -21,18 +21,23 @@ public sealed class BindingRevocationReconciler : IBindingRevocationReconciler
 
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly ILogger<BindingRevocationReconciler> _logger;
+    private readonly INyxIdCatalogAccessLifecyclePort? _catalogLifecyclePort;
 
     public BindingRevocationReconciler(
         IActorDispatchPort actorDispatchPort,
-        ILogger<BindingRevocationReconciler> logger)
+        ILogger<BindingRevocationReconciler> logger,
+        INyxIdCatalogAccessLifecyclePort? catalogLifecyclePort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _catalogLifecyclePort = catalogLifecyclePort;
     }
 
     public async Task ReconcileRevokedAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(subject);
+        if (_catalogLifecyclePort != null)
+            await _catalogLifecyclePort.InvalidateAsync(subject, reason, ct).ConfigureAwait(false);
 
         // Event-source the local revoke so the projection flips to inactive
         // independently of any NyxID CAE webhook. Retry once on a transient

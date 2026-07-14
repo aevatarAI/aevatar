@@ -19,11 +19,9 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
 
     public ScheduledAgentApiKeyIssuer(
         INyxIdApiClientFactory nyxClientFactory,
-        ScheduledAgentCreatorOptions options,
         ILogger<ScheduledAgentApiKeyIssuer>? logger = null)
     {
         _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
-        ArgumentNullException.ThrowIfNull(options);
         _logger = logger;
     }
 

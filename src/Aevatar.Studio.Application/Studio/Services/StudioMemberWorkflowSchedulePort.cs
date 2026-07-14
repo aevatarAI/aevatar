@@ -112,6 +112,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var publishedServiceId = NormalizeRequired(member.Summary.PublishedServiceId, nameof(member.Summary.PublishedServiceId));
         EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
         var workflowRevision = member.LastBinding?.RevisionId ?? member.Summary.LastBoundRevisionId ?? string.Empty;
+        var workflowId = NormalizeRequired(member.ImplementationRef?.WorkflowId, "workflowId");
         var target = new ScheduledInvocationTarget
         {
             Studio = new StudioScheduledInvocationTarget
@@ -120,14 +121,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 TeamId = member.Summary.TeamId ?? string.Empty,
                 MemberId = memberId,
                 PublishedServiceId = publishedServiceId,
+                WorkflowId = workflowId,
                 WorkflowRevision = workflowRevision,
             },
         };
-        var authority = new ScheduledInvocationAuthorizationAuthority
-        {
-            MemberStateVersion = member.CurrentBindingRun?.StateVersion ?? 0,
-            WorkflowStateVersion = member.CurrentBindingRun?.StateVersion ?? 0,
-        };
+        var authority = new ScheduledInvocationAuthorizationAuthority();
         return new ResolvedStudioAuthorizationRequest(
             scopeId,
             memberId,
@@ -140,7 +138,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 request.CredentialExpiresAtUtc,
                 DateTimeOffset.UtcNow)
             {
-                ServiceGrantsNotRequired = true,
+                ServiceGrantsNotRequired = false,
             });
     }
 

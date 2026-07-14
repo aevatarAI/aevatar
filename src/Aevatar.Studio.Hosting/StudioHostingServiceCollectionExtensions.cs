@@ -16,6 +16,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -46,10 +47,15 @@ internal static class StudioHostingServiceCollectionExtensions
             configuration,
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<NyxIdLlmCatalogCacheOptions>>(),
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CachedNyxIdLlmCatalogPort>>()));
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CachedNyxIdLlmCatalogPort>>(),
+            sp.GetRequiredService<Aevatar.Studio.Application.Authorization.INyxIdCatalogSnapshotCommandPort>()));
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
+        services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(
+            sp.GetRequiredService<Aevatar.Studio.Application.Authorization.INyxIdCatalogSnapshotCommandPort>(),
+            configuration,
+            sp.GetService<TimeProvider>() ?? TimeProvider.System));
         services.AddWorkflowBoardExecutionProjectionAdapter();
         return services;
     }

@@ -286,7 +286,10 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 LastBoundRevisionId: hasBinding ? "rev-1" : null,
                 CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
                 UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
-            ImplementationRef: null,
+            ImplementationRef: new StudioMemberImplementationRefResponse(
+                MemberImplementationKindNames.Workflow,
+                WorkflowId: "workflow-1",
+                WorkflowRevision: "rev-1"),
             LastBinding: hasBinding
                 ? new StudioMemberBindingContractResponse(
                     PublishedServiceId: "published-member-1",

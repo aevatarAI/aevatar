@@ -1,6 +1,7 @@
 using Aevatar.Studio.Application.Authorization;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Studio.Tests;
 
@@ -14,7 +15,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         var snapshot = new NyxIdCatalogSnapshot(
             owner, 17, now.AddMinutes(-1), now.AddMinutes(14), "etag-1", "catalog-digest-1",
             [Service("us-connector", ("node-fallback", false), ("node-primary", true))]);
-        var planner = new ScheduledInvocationAuthorizationPlanner(new StubSnapshotQueryPort(snapshot));
+        var planner = CreatePlanner(new StubSnapshotQueryPort(snapshot));
 
         var result = await planner.PlanAsync(Request(owner, now));
 
@@ -36,7 +37,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         var snapshot = new NyxIdCatalogSnapshot(
             owner, 17, now.AddMinutes(-1), now.AddMinutes(14), "etag-1", "catalog-digest-1",
             [Service("us-connector", ("node-primary", true))]);
-        var result = await new ScheduledInvocationAuthorizationPlanner(new StubSnapshotQueryPort(snapshot))
+        var result = await CreatePlanner(new StubSnapshotQueryPort(snapshot))
             .PlanAsync(Request(owner, now));
         var plan = result.Plan!;
         var baseline = ScheduledInvocationAuthorizationPlanner.ComputeDigest(plan);
@@ -73,10 +74,50 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         var snapshot = new NyxIdCatalogSnapshot(
             owner, 17, now.AddMinutes(-20), now, "", "catalog-digest-1", [Service("us-connector", ("node-primary", true))]);
 
-        var result = await new ScheduledInvocationAuthorizationPlanner(new StubSnapshotQueryPort(snapshot))
+        var result = await CreatePlanner(new StubSnapshotQueryPort(snapshot))
             .PlanAsync(Request(owner, now));
 
         result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WhenServiceGrantsAreExplicitlyNotRequired_ReturnsStableEmptyGrantPlan()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00Z");
+        var owner = Owner("subject-personal");
+        var snapshot = new NyxIdCatalogSnapshot(
+            owner, 17, now.AddMinutes(-1), now.AddMinutes(14), "etag-1", "catalog-digest-1", []);
+        var request = Request(owner, now);
+        var planner = CreatePlanner(
+            new StubSnapshotQueryPort(snapshot),
+            Dependencies(WorkflowServiceGrantPolicy.NotRequiredNoExternalService));
+
+        var first = await planner.PlanAsync(request);
+        var second = await planner.PlanAsync(request);
+
+        first.Success.Should().BeTrue();
+        first.Plan!.NyxIdServiceGrants.Should().BeEmpty();
+        first.Plan.CredentialPolicy.ServiceGrantsNotRequired.Should().BeTrue();
+        first.Plan.PermissionDigest.Should().Be(second.Plan!.PermissionDigest);
+        first.Plan.PermissionDigest.Should().Be(ScheduledInvocationAuthorizationPlanner.ComputeDigest(first.Plan));
+    }
+
+    [Fact]
+    public async Task PlanAsync_WhenInvocationTargetIsMissing_FailsBeforeSnapshotQuery()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00Z");
+        var request = Request(Owner("subject-personal"), now) with
+        {
+            InvocationTarget = new ScheduledInvocationTarget(),
+        };
+        var snapshotQueryPort = new StubSnapshotQueryPort(null);
+
+        var result = await CreatePlanner(snapshotQueryPort).PlanAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.OwnerMismatch);
+        result.Detail.Should().Be("invocation_target_missing");
+        snapshotQueryPort.CallCount.Should().Be(0);
     }
 
     [Theory]
@@ -115,8 +156,6 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 snapshot = snapshot with { Services = [] };
                 break;
             case "ambiguous-slug":
-                request = request with { RequiredNyxIdServiceIds = [] };
-                request = request with { RequiredNyxIdServiceSlugs = ["connector"] };
                 snapshot = snapshot with
                 {
                     Services =
@@ -133,11 +172,17 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 snapshot = snapshot with { Services = [Service("us-connector")] };
                 break;
             case "empty-grants":
-                request = request with { RequiredNyxIdServiceIds = [] };
+                snapshot = snapshot with { Services = [] };
                 break;
         }
 
-        var result = await new ScheduledInvocationAuthorizationPlanner(new StubSnapshotQueryPort(snapshot))
+        var dependencies = scenario switch
+        {
+            "ambiguous-slug" => Dependencies(slugs: ["connector"]),
+            "empty-grants" => Dependencies(slugs: []),
+            _ => Dependencies(),
+        };
+        var result = await CreatePlanner(new StubSnapshotQueryPort(snapshot), dependencies)
             .PlanAsync(request);
 
         result.Success.Should().BeFalse();
@@ -184,8 +229,58 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
     private sealed class StubSnapshotQueryPort(NyxIdCatalogSnapshot? snapshot) : INyxIdCatalogSnapshotQueryPort
     {
-        public Task<NyxIdCatalogSnapshot?> GetAsync(NyxIdCatalogOwnerIdentity owner, CancellationToken ct = default) =>
-            Task.FromResult<NyxIdCatalogSnapshot?>(snapshot);
+        public int CallCount { get; private set; }
+
+        public Task<NyxIdCatalogSnapshot?> GetAsync(NyxIdCatalogOwnerIdentity owner, CancellationToken ct = default)
+        {
+            CallCount++;
+            return Task.FromResult<NyxIdCatalogSnapshot?>(snapshot);
+        }
+    }
+
+    private static ScheduledInvocationAuthorizationPlanner CreatePlanner(
+        INyxIdCatalogSnapshotQueryPort snapshotQueryPort,
+        WorkflowAuthorizationDependencies? dependencies = null) => new(
+        snapshotQueryPort,
+        new StubMemberQueryPort(),
+        new StubWorkflowQueryPort(dependencies ?? Dependencies()),
+        new StubConnectorQueryPort(),
+        new StubOwnerLLMQueryPort());
+
+    private static WorkflowAuthorizationDependencies Dependencies(
+        WorkflowServiceGrantPolicy policy = WorkflowServiceGrantPolicy.Required,
+        IReadOnlyList<string>? slugs = null)
+    {
+        var dependencies = new WorkflowAuthorizationDependencies { ServiceGrantPolicy = policy };
+        if (policy == WorkflowServiceGrantPolicy.Required && slugs == null)
+            dependencies.NyxIdServiceIds.Add("us-connector");
+        dependencies.NyxIdServiceSlugs.Add(slugs ?? []);
+        return dependencies;
+    }
+
+    private sealed class StubMemberQueryPort : IScheduledInvocationMemberQueryPort
+    {
+        public Task<ScheduledInvocationMemberFact?> GetAsync(string scopeId, string memberId, CancellationToken ct = default) =>
+            Task.FromResult<ScheduledInvocationMemberFact?>(new(3, "wf-alpha", "rev-1", "svc-alpha"));
+    }
+
+    private sealed class StubWorkflowQueryPort(WorkflowAuthorizationDependencies dependencies)
+        : IScheduledInvocationWorkflowQueryPort
+    {
+        public Task<ScheduledInvocationWorkflowFact?> GetAsync(string workflowId, CancellationToken ct = default) =>
+            Task.FromResult<ScheduledInvocationWorkflowFact?>(new(5, dependencies));
+    }
+
+    private sealed class StubConnectorQueryPort : IScheduledInvocationConnectorQueryPort
+    {
+        public Task<ScheduledInvocationVersionFact?> GetAsync(string scopeId, CancellationToken ct = default) =>
+            Task.FromResult<ScheduledInvocationVersionFact?>(new(7));
+    }
+
+    private sealed class StubOwnerLLMQueryPort : IScheduledInvocationOwnerLLMQueryPort
+    {
+        public Task<ScheduledInvocationVersionFact?> GetAsync(string scopeId, CancellationToken ct = default) =>
+            Task.FromResult<ScheduledInvocationVersionFact?>(new(11));
     }
 
 }

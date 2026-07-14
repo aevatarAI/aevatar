@@ -1594,9 +1594,7 @@ public sealed class AgentBuilderToolTests
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         var scheduledAgentMapper = new ScheduledAgentCreateRequestMapper();
-        var scheduledAgentApiKeyIssuer = new ScheduledAgentApiKeyIssuer(
-            nyxClientFactory,
-            new ScheduledAgentCreatorOptions());
+        var scheduledAgentApiKeyIssuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory);
         var credentialLifecycle = new ScheduledAgentCredentialLifecycle(
             new InMemorySecretVault(),
             catalogCommandPort,
@@ -1687,7 +1685,7 @@ public sealed class AgentBuilderToolTests
         queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
-        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions());
+        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory);
         var source = new AgentBuilderToolSource(
             queryPort,
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
@@ -1789,8 +1787,7 @@ public sealed class AgentBuilderToolTests
         var provider = services.BuildServiceProvider();
         var issuer = provider.GetService<IScheduledAgentApiKeyIssuer>() ??
                      new ScheduledAgentApiKeyIssuer(
-                         provider.GetRequiredService<INyxIdApiClientFactory>(),
-                         new ScheduledAgentCreatorOptions());
+                         provider.GetRequiredService<INyxIdApiClientFactory>());
         return new AgentBuilderTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
             provider.GetService<ISkillRunnerExecutionQueryPort>() ?? Substitute.For<ISkillRunnerExecutionQueryPort>(),

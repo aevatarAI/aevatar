@@ -34,6 +34,9 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             ScopeId = scopeId?.Trim() ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
         };
+        var compilation = EvaluateWorkflowCompilation(bindDefinitionEvent.WorkflowYaml);
+        if (compilation.Compiled)
+            bindDefinitionEvent.AuthorizationDependencies = BuildAuthorizationDependencies(compilation.Workflow!);
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
@@ -90,12 +93,51 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         next.SourceKind = string.IsNullOrWhiteSpace(evt.SourceKind)
             ? "builtin"
             : evt.SourceKind.Trim();
+        next.AuthorizationDependencies = evt.AuthorizationDependencies?.Clone();
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
         next.Version = current.Version + 1;
         return next;
+    }
+
+    private static WorkflowAuthorizationDependencies BuildAuthorizationDependencies(WorkflowDefinition workflow)
+    {
+        var connectorRefs = workflow.Roles
+            .SelectMany(static role => role.Connectors)
+            .Concat(EnumerateSteps(workflow.Steps)
+                .Where(static step => string.Equals(
+                    WorkflowPrimitiveCatalog.ToCanonicalType(step.Type),
+                    "connector_call",
+                    StringComparison.OrdinalIgnoreCase))
+                .SelectMany(static step => step.Parameters.TryGetValue("connector", out var connector)
+                    ? [connector]
+                    : Array.Empty<string>()))
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Select(static value => value.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            OwnerLlmRouteRequired = WorkflowLlmRuntimePolicy.RequiresLlmProvider(workflow),
+            ServiceGrantPolicy = connectorRefs.Length == 0
+                ? WorkflowServiceGrantPolicy.NotRequiredNoExternalService
+                : WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ConnectorCapabilityRefs.Add(connectorRefs);
+        return dependencies;
+    }
+
+    private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)
+    {
+        foreach (var step in steps)
+        {
+            yield return step;
+            foreach (var child in EnumerateSteps(step.Children ?? []))
+                yield return child;
+        }
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

@@ -16,4 +16,7 @@
   <ItemGroup>
     <Protobuf Include="Authorization/scheduled_invocation_authorization.proto" GrpcServices="None" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
+  </ItemGroup>
 </Project>

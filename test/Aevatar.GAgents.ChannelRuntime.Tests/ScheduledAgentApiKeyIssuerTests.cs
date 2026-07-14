@@ -125,9 +125,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
-        return new ScheduledAgentApiKeyIssuer(
-            new TestNyxIdApiClientFactory(client),
-            new ScheduledAgentCreatorOptions());
+        return new ScheduledAgentApiKeyIssuer(new TestNyxIdApiClientFactory(client));
     }
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory

@@ -55,7 +55,7 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
     {
         var agent = new NyxIdCatalogSnapshotGAgent();
         var owner = ActorOwner();
-        var observed = Observed(owner, "digest-1");
+        var observed = ObservedEvent(owner, "digest-1");
         var initial = Transition(agent, new NyxIdCatalogSnapshotState(), observed);
         var failed = Transition(agent, initial, new NyxIdCatalogSnapshotRefreshFailedEvent
         {
@@ -69,7 +69,7 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
             InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)),
             Reason = "credential_revoked",
         });
-        var refreshed = Transition(agent, invalidated, Observed(owner, "digest-2"));
+        var refreshed = Transition(agent, invalidated, ObservedEvent(owner, "digest-2"));
 
         failed.Should().BeEquivalentTo(initial);
         invalidated.Invalidated.Should().BeTrue();
@@ -187,13 +187,13 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
         differentOwner.OwnerSubject = "user-b";
 
         Func<Task> action = handler == "refresh"
-            ? () => agent.HandleRefreshFailed(new NyxIdCatalogSnapshotRefreshFailedEvent
+            ? () => agent.HandleRefreshFailed(new RecordNyxIdCatalogSnapshotRefreshFailureCommand
             {
                 Owner = differentOwner,
                 FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
                 FailureCode = "provider_unavailable",
             })
-            : () => agent.HandleInvalidated(new NyxIdCatalogSnapshotInvalidatedEvent
+            : () => agent.HandleInvalidated(new InvalidateNyxIdCatalogSnapshotCommand
             {
                 Owner = differentOwner,
                 InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
@@ -211,7 +211,7 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
         var (agent, eventSourcing) = NewAgent();
         var owner = ActorOwner();
         await agent.HandleObserved(Observed(owner, "digest-1"));
-        var invalidated = new NyxIdCatalogSnapshotInvalidatedEvent
+        var invalidated = new InvalidateNyxIdCatalogSnapshotCommand
         {
             Owner = owner,
             InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
@@ -348,7 +348,7 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
         OwnerSubject = "user-a",
     };
 
-    private static NyxIdCatalogSnapshotObservedEvent Observed(
+    private static ObserveNyxIdCatalogSnapshotCommand Observed(
         NyxIdCatalogSnapshotOwner owner,
         string digest) => new()
     {
@@ -368,6 +368,23 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
             },
         },
     };
+
+    private static NyxIdCatalogSnapshotObservedEvent ObservedEvent(
+        NyxIdCatalogSnapshotOwner owner,
+        string digest)
+    {
+        var command = Observed(owner, digest);
+        var evt = new NyxIdCatalogSnapshotObservedEvent
+        {
+            Owner = command.Owner.Clone(),
+            ObservedAt = command.ObservedAt,
+            FreshUntil = command.FreshUntil,
+            ContentDigest = command.ContentDigest,
+            ExternalRevision = command.ExternalRevision,
+        };
+        evt.Services.Add(command.Services.Select(static service => service.Clone()));
+        return evt;
+    }
 
     private static NyxIdCatalogSnapshotState Transition(
         NyxIdCatalogSnapshotGAgent agent,

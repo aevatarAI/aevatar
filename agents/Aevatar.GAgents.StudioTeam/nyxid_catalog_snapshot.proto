@@ -42,6 +42,27 @@ message NyxIdCatalogSnapshotState {
   string invalidation_reason = 8;
 }
 
+message ObserveNyxIdCatalogSnapshotCommand {
+  NyxIdCatalogSnapshotOwner owner = 1;
+  repeated NyxIdCatalogSnapshotService services = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp fresh_until = 4;
+  string external_revision = 5;
+  string content_digest = 6;
+}
+
+message RecordNyxIdCatalogSnapshotRefreshFailureCommand {
+  NyxIdCatalogSnapshotOwner owner = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string failure_code = 3;
+}
+
+message InvalidateNyxIdCatalogSnapshotCommand {
+  NyxIdCatalogSnapshotOwner owner = 1;
+  google.protobuf.Timestamp invalidated_at = 2;
+  string reason = 3;
+}
+
 message NyxIdCatalogSnapshotObservedEvent {
   NyxIdCatalogSnapshotOwner owner = 1;
   repeated NyxIdCatalogSnapshotService services = 2;

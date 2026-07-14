@@ -2234,7 +2234,7 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions());
+        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory);
         var agentBuilderSource = new AgentBuilderToolSource(
             Substitute.For<IUserAgentCatalogQueryPort>(),
             Substitute.For<ISkillRunnerExecutionQueryPort>(),

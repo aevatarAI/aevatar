@@ -14,39 +14,58 @@ public sealed class NyxIdCatalogSnapshotGAgent
     public static string ProjectionKind => "studio-nyxid-catalog-snapshot";
 
     [EventHandler(EndpointName = "observeCatalog")]
-    public async Task HandleObserved(NyxIdCatalogSnapshotObservedEvent evt)
+    public async Task HandleObserved(ObserveNyxIdCatalogSnapshotCommand command)
     {
-        ValidateOwner(evt.Owner);
-        if (evt.ObservedAt == null || evt.FreshUntil == null || evt.FreshUntil <= evt.ObservedAt)
+        ValidateOwner(command.Owner);
+        if (command.ObservedAt == null || command.FreshUntil == null || command.FreshUntil <= command.ObservedAt)
             throw new InvalidOperationException("catalog freshness interval is invalid.");
-        if (string.IsNullOrWhiteSpace(evt.ContentDigest))
+        if (string.IsNullOrWhiteSpace(command.ContentDigest))
             throw new InvalidOperationException("catalog content digest is required.");
-        if (State.Owner != null && !OwnerEquals(State.Owner, evt.Owner))
+        if (State.Owner != null && !OwnerEquals(State.Owner, command.Owner))
             throw new InvalidOperationException("catalog snapshot owner cannot change.");
-        if (evt.Services.Any(static service =>
+        if (command.Services.Any(static service =>
                 string.IsNullOrWhiteSpace(service.UserServiceId) ||
                 !service.NodeGrantsNotRequired && service.Nodes.Count == 0))
         {
             throw new InvalidOperationException("catalog services require exact service and node facts.");
         }
 
+        var evt = new NyxIdCatalogSnapshotObservedEvent
+        {
+            Owner = command.Owner.Clone(),
+            ObservedAt = command.ObservedAt,
+            FreshUntil = command.FreshUntil,
+            ExternalRevision = command.ExternalRevision,
+            ContentDigest = command.ContentDigest,
+        };
+        evt.Services.Add(command.Services.Select(static service => service.Clone()));
         await PersistDomainEventAsync(evt);
     }
 
     [EventHandler(EndpointName = "recordRefreshFailure")]
-    public async Task HandleRefreshFailed(NyxIdCatalogSnapshotRefreshFailedEvent evt)
+    public async Task HandleRefreshFailed(RecordNyxIdCatalogSnapshotRefreshFailureCommand command)
     {
-        RequireCurrentOwner(evt.Owner);
-        await PersistDomainEventAsync(evt);
+        RequireCurrentOwner(command.Owner);
+        await PersistDomainEventAsync(new NyxIdCatalogSnapshotRefreshFailedEvent
+        {
+            Owner = command.Owner.Clone(),
+            FailedAt = command.FailedAt,
+            FailureCode = command.FailureCode,
+        });
     }
 
     [EventHandler(EndpointName = "invalidateCatalog")]
-    public async Task HandleInvalidated(NyxIdCatalogSnapshotInvalidatedEvent evt)
+    public async Task HandleInvalidated(InvalidateNyxIdCatalogSnapshotCommand command)
     {
-        RequireCurrentOwner(evt.Owner);
-        if (State.Invalidated && string.Equals(State.InvalidationReason, evt.Reason, StringComparison.Ordinal))
+        RequireCurrentOwner(command.Owner);
+        if (State.Invalidated && string.Equals(State.InvalidationReason, command.Reason, StringComparison.Ordinal))
             return;
-        await PersistDomainEventAsync(evt);
+        await PersistDomainEventAsync(new NyxIdCatalogSnapshotInvalidatedEvent
+        {
+            Owner = command.Owner.Clone(),
+            InvalidatedAt = command.InvalidatedAt,
+            Reason = command.Reason,
+        });
     }
 
     protected override NyxIdCatalogSnapshotState TransitionState(
