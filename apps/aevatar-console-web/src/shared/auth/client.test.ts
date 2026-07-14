@@ -14,7 +14,7 @@ const runtimeConfig: NyxIDRuntimeConfig = {
   redirectUri: "http://localhost:8000/auth/callback",
   scope: "openid profile email",
 };
-const requiredResource = "https://nyx.example/api/v1/proxy/s/aevatar";
+const requiredResource = "https://nyx-api.example/api/v1/proxy/s/aevatar";
 
 function installLocationAssignSpy() {
   const assign = jest.fn();
@@ -259,7 +259,7 @@ describe("NyxIDAuthClient", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/nyxid/config");
     expect(fetchMock.mock.calls[1][0]).toBe("https://nyx.example/oauth/token");
     expect(String(fetchMock.mock.calls[1][1]?.body)).toBe(
-      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1&resource=https%3A%2F%2Fnyx.example%2Fapi%2Fv1%2Fproxy%2Fs%2Faevatar",
+      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1&resource=https%3A%2F%2Fnyx-api.example%2Fapi%2Fv1%2Fproxy%2Fs%2Faevatar",
     );
   });
 

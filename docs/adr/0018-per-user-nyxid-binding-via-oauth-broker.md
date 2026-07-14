@@ -15,7 +15,7 @@ NyxID 2026-07-06 至 2026-07-08 的 OAuth 更新把第三方应用 service acces
 
 `aevatar` service 是 Studio 登录、channel binding 和后续定时调用正常工作的必要资源,不是可选 UI 偏好. 因此最终 contract 为:
 
-- 控制台登录与 channel `/init` 的 `/oauth/authorize` 请求都显式携带 `resource={nyxid_authority}/api/v1/proxy/s/aevatar`.
+- 控制台登录与 channel `/init` 的 `/oauth/authorize` 请求都显式携带 `resource={nyxid_api_base_url}/api/v1/proxy/s/aevatar`. `nyxid_api_base_url` 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:ApiBaseUrl`,不得从浏览器 OAuth authority 或 JWT issuer 派生.
 - authorization-code exchange、控制台 refresh 和 broker token-exchange 同样携带该 resource. 即使用户在 consent 页取消 Aevatar service,token exchange 也会以 `invalid_target` 失败,不会生成一个表面登录成功但无法工作的 binding.
 - broker 每次拿到短期 access token 后校验 `resources` claim. 旧 binding、allow-all grandfather grant 或缺少 Aevatar service 的 grant 会被归类为 service-access mismatch,由调用侧清理本地 binding 并引导重新 `/init`.
 - `/api/auth/nyxid/config` 向前端返回 typed `resources` 列表;前端不得自行猜 service ID,也不得把 Developer App 默认项当作授权事实.

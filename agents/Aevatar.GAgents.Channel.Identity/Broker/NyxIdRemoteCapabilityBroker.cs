@@ -76,6 +76,12 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
     private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_logger);
 
+    private string RequiredServiceResourceUri() =>
+        AevatarOAuthClientResources.RequiredServiceResourceUri(_options.ResourceServerBaseUrl);
+
+    private string[] RequiredResourceUris() =>
+        AevatarOAuthClientResources.RequiredResourceUris(_options.ResourceServerBaseUrl);
+
     public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,
         CancellationToken ct = default)
@@ -188,7 +194,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         };
         if (!string.IsNullOrWhiteSpace(scope.Value))
             form.Add(new KeyValuePair<string, string>("scope", scope.Value));
-        foreach (var resource in AevatarOAuthClientResources.RequiredResourceUris(snapshot.NyxIdAuthority))
+        foreach (var resource in RequiredResourceUris())
             form.Add(new KeyValuePair<string, string>("resource", resource));
 
         using var request = new HttpRequestMessage(
@@ -211,7 +217,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             {
                 throw new BindingServiceAccessMismatchException(
                     externalSubject,
-                    AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority),
+                    RequiredServiceResourceUri(),
                     "NyxID returned invalid_target for aevatar's required service on token-exchange.");
             }
             _logger.LogError(
@@ -227,11 +233,11 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             ?? throw new InvalidOperationException("NyxID returned an empty token-exchange response.");
 
         if (!string.IsNullOrWhiteSpace(payload.AccessToken)
-            && !AccessTokenContainsRequiredResource(payload.AccessToken, snapshot.NyxIdAuthority))
+            && !AccessTokenContainsRequiredResource(payload.AccessToken, _options.ResourceServerBaseUrl))
         {
             throw new BindingServiceAccessMismatchException(
                 externalSubject,
-                AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority),
+                RequiredServiceResourceUri(),
                 "NyxID binding token does not grant aevatar's required service resource.");
         }
 
@@ -311,7 +317,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             new("redirect_uri", redirectUri),
             new("client_id", snapshot.ClientId),
         };
-        foreach (var resource in AevatarOAuthClientResources.RequiredResourceUris(snapshot.NyxIdAuthority))
+        foreach (var resource in RequiredResourceUris())
             form.Add(new KeyValuePair<string, string>("resource", resource));
 
         using var request = new HttpRequestMessage(
@@ -329,7 +335,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             if ((int)response.StatusCode == 400 && IsInvalidTarget(body))
             {
                 throw new NyxIdRequiredServiceAccessException(
-                    AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority));
+                    RequiredServiceResourceUri());
             }
             _logger.LogError(
                 "NyxID authorization-code exchange failed: status={StatusCode}, body={Body}",
@@ -368,7 +374,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             $"client_id={Uri.EscapeDataString(snapshot.ClientId)}",
             $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
             $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
-            $"resource={Uri.EscapeDataString(AevatarOAuthClientResources.RequiredServiceResourceUri(snapshot.NyxIdAuthority))}",
+            $"resource={Uri.EscapeDataString(RequiredServiceResourceUri())}",
             $"state={Uri.EscapeDataString(stateToken)}",
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
             "code_challenge_method=S256",
@@ -411,7 +417,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         }
     }
 
-    private static bool AccessTokenContainsRequiredResource(string accessToken, string nyxIdAuthority)
+    private static bool AccessTokenContainsRequiredResource(string accessToken, string nyxIdApiBaseUrl)
     {
         var parts = accessToken.Split('.');
         if (parts.Length != 3)
@@ -434,7 +440,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
                 resources.EnumerateArray()
                     .Where(static item => item.ValueKind == JsonValueKind.String)
                     .Select(static item => item.GetString()!),
-                nyxIdAuthority);
+                nyxIdApiBaseUrl);
         }
         catch (FormatException)
         {

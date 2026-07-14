@@ -9,6 +9,7 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
@@ -22,6 +23,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Xunit;
 
@@ -213,11 +215,21 @@ public sealed class ServiceCollectionExtensionsTests
     public void AddChannelIdentity_RegistersCommittedStateProjectionActivationProvider()
     {
         var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] =
+                    " https://nyx-api.example.test/// ",
+            })
+            .Build();
 
-        services.AddChannelIdentity(new ConfigurationBuilder().Build());
+        services.AddChannelIdentity(configuration);
+        using var provider = services.BuildServiceProvider();
 
         AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
             services);
+        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
+            .Value.ResourceServerBaseUrl.Should().Be("https://nyx-api.example.test");
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
