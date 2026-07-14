@@ -33,6 +33,7 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
 
         result.Should().NotBeNull();
         result!.Owner.OwnerKind.Should().Be(NyxIdCatalogOwnerKind.Personal);
+        result.UnreachableServiceIds.Should().BeEmpty();
         result.Services.Should().ContainSingle().Which.NodeGrants.Should().ContainSingle()
             .Which.NodeId.Should().Be("node-primary");
         reader.LastQuery!.Filters.Should().HaveCount(3);
@@ -91,7 +92,9 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
             .Which.Should().BeOfType<NyxIdCatalogSnapshotObservedEvent>();
         agent.State.Owner.Should().BeEquivalentTo(ActorOwner());
         agent.State.ContentDigest.Should().Be("digest-1");
-        agent.State.Services.Should().ContainSingle().Which.UserServiceId.Should().Be("svc-1");
+        var service = agent.State.Services.Should().ContainSingle().Subject;
+        service.UserServiceId.Should().Be("svc-1");
+        service.Reachable.Should().BeTrue();
     }
 
     [Theory]
@@ -273,7 +276,9 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
         document.LastEventId.Should().Be("evt-19");
         document.Invalidated.Should().BeTrue();
         document.InvalidationReason.Should().Be("credential_revoked");
-        document.Services.Should().ContainSingle().Which.Nodes.Should().ContainSingle()
+        var service = document.Services.Should().ContainSingle().Subject;
+        service.Reachable.Should().BeTrue();
+        service.Nodes.Should().ContainSingle()
             .Which.NodeId.Should().Be("node-primary");
     }
 

@@ -121,6 +121,71 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Theory]
+    [InlineData("missing-member", ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "member_current_state_not_found")]
+    [InlineData("stale-member", ScheduledInvocationAuthorizationFailureCode.SnapshotStale, "member_current_state_stale")]
+    [InlineData("missing-workflow", ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "workflow_current_state_not_found")]
+    [InlineData("missing-connector", ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "connector_current_state_not_found")]
+    [InlineData("missing-owner-llm", ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "owner_llm_current_state_not_found")]
+    public async Task PlanAsync_WhenAuthorityReadModelIsMissingOrStale_FailsBeforeCatalogQuery(
+        string scenario,
+        ScheduledInvocationAuthorizationFailureCode expectedCode,
+        string expectedDetail)
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00Z");
+        var snapshotQueryPort = new StubSnapshotQueryPort(null);
+        var memberQueryPort = new StubMemberQueryPort(scenario switch
+        {
+            "missing-member" => null,
+            "stale-member" => new ScheduledInvocationMemberFact(3, "wf-alpha", "rev-stale", "svc-alpha"),
+            _ => ValidMember(),
+        });
+        var workflowQueryPort = new StubWorkflowQueryPort(
+            scenario == "missing-workflow" ? null : ValidWorkflow());
+        var connectorQueryPort = new StubConnectorQueryPort(
+            scenario == "missing-connector" ? null : new ScheduledInvocationVersionFact(7));
+        var ownerLLMQueryPort = new StubOwnerLLMQueryPort(
+            scenario == "missing-owner-llm" ? null : new ScheduledInvocationVersionFact(11));
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            snapshotQueryPort,
+            memberQueryPort,
+            workflowQueryPort,
+            connectorQueryPort,
+            ownerLLMQueryPort);
+
+        var result = await planner.PlanAsync(Request(Owner("subject-personal"), now));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(expectedCode);
+        result.Detail.Should().Be(expectedDetail);
+        snapshotQueryPort.CallCount.Should().Be(0);
+        workflowQueryPort.CallCount.Should().Be(scenario is "missing-member" or "stale-member" ? 0 : 1);
+        connectorQueryPort.CallCount.Should().Be(
+            scenario is "missing-member" or "stale-member" or "missing-workflow" ? 0 : 1);
+        ownerLLMQueryPort.CallCount.Should().Be(
+            scenario is "missing-member" or "stale-member" or "missing-workflow" or "missing-connector" ? 0 : 1);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WhenWorkflowServiceGrantPolicyIsUnspecified_FailsClosed()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00Z");
+        var owner = Owner("subject-personal");
+        var snapshotQueryPort = new StubSnapshotQueryPort(new NyxIdCatalogSnapshot(
+            owner, 17, now.AddMinutes(-1), now.AddMinutes(14), "etag-1", "catalog-digest-1",
+            [Service("us-connector", ("node-primary", true))]));
+
+        var result = await CreatePlanner(
+                snapshotQueryPort,
+                Dependencies(WorkflowServiceGrantPolicy.Unspecified))
+            .PlanAsync(Request(owner, now));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.ServiceNotFound);
+        result.Detail.Should().Be("workflow_service_grant_policy_missing");
+        snapshotQueryPort.CallCount.Should().Be(1);
+    }
+
+    [Theory]
     [InlineData("incomplete-context", ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, "authenticated_owner_context_incomplete")]
     [InlineData("missing-snapshot", ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "nyxid_catalog_snapshot_not_found")]
     [InlineData("owner-mismatch", ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, "nyxid_catalog_owner_mismatch")]
@@ -242,10 +307,17 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         INyxIdCatalogSnapshotQueryPort snapshotQueryPort,
         WorkflowAuthorizationDependencies? dependencies = null) => new(
         snapshotQueryPort,
-        new StubMemberQueryPort(),
-        new StubWorkflowQueryPort(dependencies ?? Dependencies()),
-        new StubConnectorQueryPort(),
-        new StubOwnerLLMQueryPort());
+        new StubMemberQueryPort(ValidMember()),
+        new StubWorkflowQueryPort(ValidWorkflow(dependencies)),
+        new StubConnectorQueryPort(new ScheduledInvocationVersionFact(7)),
+        new StubOwnerLLMQueryPort(new ScheduledInvocationVersionFact(11)));
+
+    private static ScheduledInvocationMemberFact ValidMember() =>
+        new(3, "wf-alpha", "rev-1", "svc-alpha");
+
+    private static ScheduledInvocationWorkflowFact ValidWorkflow(
+        WorkflowAuthorizationDependencies? dependencies = null) =>
+        new(5, dependencies ?? Dependencies());
 
     private static WorkflowAuthorizationDependencies Dependencies(
         WorkflowServiceGrantPolicy policy = WorkflowServiceGrantPolicy.Required,
@@ -258,29 +330,53 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         return dependencies;
     }
 
-    private sealed class StubMemberQueryPort : IScheduledInvocationMemberQueryPort
+    private sealed class StubMemberQueryPort(ScheduledInvocationMemberFact? fact) : IScheduledInvocationMemberQueryPort
     {
         public Task<ScheduledInvocationMemberFact?> GetAsync(string scopeId, string memberId, CancellationToken ct = default) =>
-            Task.FromResult<ScheduledInvocationMemberFact?>(new(3, "wf-alpha", "rev-1", "svc-alpha"));
+            Task.FromResult(fact);
     }
 
-    private sealed class StubWorkflowQueryPort(WorkflowAuthorizationDependencies dependencies)
+    private sealed class StubWorkflowQueryPort(ScheduledInvocationWorkflowFact? fact)
         : IScheduledInvocationWorkflowQueryPort
     {
+        public int CallCount { get; private set; }
+
         public Task<ScheduledInvocationWorkflowFact?> GetAsync(string workflowId, CancellationToken ct = default) =>
-            Task.FromResult<ScheduledInvocationWorkflowFact?>(new(5, dependencies));
+            Task.FromResult(Get());
+
+        private ScheduledInvocationWorkflowFact? Get()
+        {
+            CallCount++;
+            return fact;
+        }
     }
 
-    private sealed class StubConnectorQueryPort : IScheduledInvocationConnectorQueryPort
+    private sealed class StubConnectorQueryPort(ScheduledInvocationVersionFact? fact) : IScheduledInvocationConnectorQueryPort
     {
+        public int CallCount { get; private set; }
+
         public Task<ScheduledInvocationVersionFact?> GetAsync(string scopeId, CancellationToken ct = default) =>
-            Task.FromResult<ScheduledInvocationVersionFact?>(new(7));
+            Task.FromResult(Get());
+
+        private ScheduledInvocationVersionFact? Get()
+        {
+            CallCount++;
+            return fact;
+        }
     }
 
-    private sealed class StubOwnerLLMQueryPort : IScheduledInvocationOwnerLLMQueryPort
+    private sealed class StubOwnerLLMQueryPort(ScheduledInvocationVersionFact? fact) : IScheduledInvocationOwnerLLMQueryPort
     {
+        public int CallCount { get; private set; }
+
         public Task<ScheduledInvocationVersionFact?> GetAsync(string scopeId, CancellationToken ct = default) =>
-            Task.FromResult<ScheduledInvocationVersionFact?>(new(11));
+            Task.FromResult(Get());
+
+        private ScheduledInvocationVersionFact? Get()
+        {
+            CallCount++;
+            return fact;
+        }
     }
 
 }

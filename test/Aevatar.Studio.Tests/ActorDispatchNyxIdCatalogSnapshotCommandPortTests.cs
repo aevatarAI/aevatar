@@ -47,6 +47,7 @@ public sealed class ActorDispatchNyxIdCatalogSnapshotCommandPortTests
         service.UserServiceId.Should().Be("user-service-alpha");
         service.ServiceSlug.Should().Be("calendar");
         service.DisplayName.Should().Be("Calendar");
+        service.Reachable.Should().BeTrue();
         var node = service.Nodes.Should().ContainSingle().Subject;
         node.NodeId.Should().Be("node-alpha");
         node.Primary.Should().BeTrue();
