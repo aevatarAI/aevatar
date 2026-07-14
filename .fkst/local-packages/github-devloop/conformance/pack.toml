@@ -1,0 +1,71 @@
+schema = 1
+runner_protocol = "fkst-declarative-rulepack@1"
+owner_package = "github-devloop"
+
+[[rules]]
+id = "no-local-parse-name-only-paths-helper"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["**/*.lua"]
+exclude = ["core.lua", "**/tests/**", "tests/**"]
+pattern = "\\blocal\\s+function\\s+parse_name_only_paths\\s*\\("
+message = "local parse_name_only_paths helper is forbidden; use require(\"devloop.base\").parse_name_only_paths"
+
+[[rules]]
+id = "tests.no-entity-read-count-assertions"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["tests/*.lua"]
+exclude = ["tests/*_helpers.lua", "tests/devloop_helpers.lua"]
+pattern = "count_calls\\s*\\([^\\)\\n]*(?:[\"']gh (?:issue|pr) view\\b|core\\.gh_(?:issue|pr)_view_|[\"']--json (?:headRefName|title|labels,comments|assignees,author))"
+message = "entity-read command count assertions are forbidden; assert observable outcomes instead"
+
+[[rules]]
+id = "convergence.requires-boundary-budget-round"
+severity = "error"
+kind = "text_require_regex"
+include = ["departments/loop/main.lua"]
+pattern = "conv_rounds\\.converge_boundary_budget_round\\s*\\("
+message = "convergence cap must use the boundary-preserving converge budget helper"
+
+[[rules]]
+id = "convergence.requires-stable-round-facts"
+severity = "error"
+kind = "text_require_regex"
+include = ["departments/loop/main.lua"]
+pattern = "conv_rounds\\.converge_round_facts_for_proposal_boundary\\s*\\("
+message = "convergence round counting must derive from stable boundary-preserving facts"
+
+[[rules]]
+id = "gate-dsl.literal-return"
+severity = "error"
+kind = "text_require_regex"
+include = ["core/gates/*.lua"]
+pattern = "(?s)\\A\\s*return\\s*(?:\\[=*\\[|[\"'])"
+message = "gate definitions must be literal DSL source modules"
+
+[[rules]]
+id = "gate-dsl.no-raw-authority"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["core/gates/*.lua"]
+pattern = "\\b(?:require|debug|getfenv|setfenv|load|loadstring|dofile|loadfile|_G|_ENV|rawget|rawset|rawequal|setmetatable|getmetatable|package|current_state|current_entity_state)\\b|fkst:github-devloop:(?:state|pr-origin):v1|devloop\\.(?:state|markers)"
+message = "gate DSL definitions must stay pure declarative milestone data"
+
+[[rules]]
+id = "gate-dsl.no-loader-bypass"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["**/*.lua"]
+exclude = ["core/gates/*.lua", "core/devloop_wiring.lua", "tests/**"]
+pattern = "core\\.gates\\.[A-Za-z_][A-Za-z0-9_]*|core[/\\\\]gates[/\\\\][A-Za-z_]"
+message = "gate definitions must be loaded only through devloop.gate.load_gate"
+
+[[rules]]
+id = "no-forward-direct-raise.marker-gated"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["**/*.lua"]
+exclude = ["tests/**", "core/replayer.lua", "core/ready_split.lua", "core/pr_review_replayer.lua", "departments/comment_handoff/main.lua", "departments/observe_issue/main.lua"]
+pattern = "(?s)(?:\\braise\\s*\\(\\s*[\"']|\\b(?:core|M)\\s*\\.\\s*log_raise\\s*\\([^\\n]*[\"'])(?:devloop_ready|devloop_reviewing|devloop_fixing|devloop_merge_ready|devloop_reconcile)[\"']|raise_effects\\s*\\([^)]*queue\\s*=\\s*[\"'](?:devloop_ready|devloop_reviewing|devloop_fixing|devloop_merge_ready|devloop_reconcile)[\"']"
+message = "marker-gated forward queues must be raised only via comment_handoff causal handoff or explicit redrive, not direct raise"

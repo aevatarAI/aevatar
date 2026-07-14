@@ -1,0 +1,24 @@
+kind = "library"
+name = "contract"
+
+[code]
+root = "."
+
+[lib_deps]
+libraries = []
+
+[dependency_constraints]
+allowed_lib_deps = []
+
+[library]
+name = "contract"
+publishable = true
+stable_id = "fkst.library.contract"
+version = "workspace"
+
+[exports]
+exact = true
+public = ["contract.error_facts", "contract.payload", "contract.source_ref", "contract.strings", "contract.time", "contract.transition_version"]
+
+[visibility]
+public = true

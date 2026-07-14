@@ -1,0 +1,26 @@
+# Declarative conformance pack OWNED BY the workflow library.
+# Interpreted by the engine's generic DeclarativeRulePack (no arbitrary code),
+# scope-fenced to this library's own tree. Promotes the std_dependency_model
+# workflow-policy guard: workflow stays a product/forge-policy-free saga/codex/env
+# authoring library.
+schema = 1
+runner_protocol = "fkst-declarative-rulepack@1"
+owner_package = "workflow"
+
+[[rules]]
+id = "no-product-or-forge-policy-strings"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["**/*.lua"]
+exclude = ["tests/**"]
+pattern = "state:v1|pr-delegation:v1|pr-comment-stream|implement-attempt|devloop_fixing|github-devloop|fkst-dev:|forge\\.github|forge\\.git|std\\.github|std\\.git"
+message = "workflow library must not embed product/forge policy strings (it is product- and forge-agnostic)"
+
+[[rules]]
+id = "no-raw-gh-git-command-text"
+severity = "error"
+kind = "text_forbid_regex"
+include = ["**/*.lua"]
+exclude = ["tests/**"]
+pattern = "(?m)(?:^|[^A-Za-z0-9_.\\-])(?:gh|git)(?:\\s|['\"]|$)"
+message = "workflow library must not embed raw gh/git command text (egress belongs to forge adapters)"

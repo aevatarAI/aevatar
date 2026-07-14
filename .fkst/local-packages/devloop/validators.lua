@@ -1,0 +1,16 @@
+return {
+  execution_request = require("devloop.validators.execution_request"),
+  fixing = require("devloop.validators.fixing"),
+  intake_candidate = require("devloop.validators.intake_candidate"),
+  issue = require("devloop.validators.issue"),
+  merge_ready = require("devloop.validators.merge_ready"),
+  pr = require("devloop.validators.pr"),
+  pr_review_unresolved = require("devloop.validators.pr_review_unresolved"),
+  ready = require("devloop.validators.ready"),
+  result = require("devloop.validators.result"),
+  review_meta = require("devloop.validators.review_meta"),
+  review_result = require("devloop.validators.review_result"),
+  reviewing = require("devloop.validators.reviewing"),
+  unresolved = require("devloop.validators.unresolved"),
+  validate_proposal = require("devloop.validators.validate_proposal"),
+}
