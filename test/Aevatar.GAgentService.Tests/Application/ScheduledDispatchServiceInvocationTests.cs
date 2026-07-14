@@ -731,6 +731,48 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithBorrowedAgentKey_WhenInvocationFails_ShouldNotRevokeHandle()
+    {
+        var invocationFailure = new InvalidOperationException("invocation failed");
+        var invocationPort = new RecordingServiceInvocationPort(invocationFailure);
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new RecordingSecretVault("must-not-resolve");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
+        var reference = new SecretReference
+        {
+            Ref = "sec-borrowed-agent-key",
+            Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            OwnerScopeKey = "scope-key",
+        };
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-failing-invoke",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
+                reference,
+                "key-borrowed",
+                DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds())),
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+
+        var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
+        thrown.Which.Should().BeSameAs(invocationFailure);
+        var attemptedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        attemptedChat.CallerDurableCredential.Ref.Should().Be(reference.Ref);
+        attemptedChat.CallerDurableCredential.Purpose.Should().Be(reference.Purpose);
+        attemptedChat.CallerDurableCredential.OwnerScopeKey.Should().Be(reference.OwnerScopeKey);
+        attemptedChat.CallerDurableCredential.SubjectId.Should().Be("key-borrowed");
+        attemptedChat.CallerDurableCredential.SourceKind.Should()
+            .Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
+        vault.RevokeRequests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("ref", "Scheduled invocation agent key secret reference is missing.")]
     [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is missing.")]
