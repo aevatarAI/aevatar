@@ -100,7 +100,7 @@ public static class NyxIdLoginFinalizationEndpoints
             return Results.Json(new
             {
                 error = "required_service_access_missing",
-                detail = "NyxID authorization must include the Aevatar service.",
+                detail = "Return to login and allow access to the Aevatar service in NyxID.",
             }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception ex)

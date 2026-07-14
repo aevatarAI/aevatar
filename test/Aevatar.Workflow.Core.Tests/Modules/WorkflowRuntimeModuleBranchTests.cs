@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
@@ -273,6 +274,62 @@ public sealed class WorkflowRuntimeModuleBranchTests
         intent.RoutePreference.Should().Be("route-a");
         intent.Headers.Should().Contain("trace-id", "trace-1");
         intent.Headers.Should().NotContainKey("connector.http.authorization");
+    }
+
+    [Fact]
+    public async Task LlmCallModule_ShouldIssueFreshCallerTokenForEveryDispatch()
+    {
+        var tokenProvider = new RotatingCallerAccessTokenProvider();
+        var module = new LLMCallModule(callerAccessTokenProvider: tokenProvider);
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = CreateCallerAuthority(),
+        };
+
+        await module.HandleAsync(Wrap(new StepRequestEvent
+        {
+            StepId = "reply-1",
+            StepType = "llm_call",
+            RunId = "run-llm-auth",
+            Input = "first",
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(Wrap(new StepRequestEvent
+        {
+            StepId = "reply-2",
+            StepType = "llm_call",
+            RunId = "run-llm-auth",
+            Input = "second",
+        }), ctx, CancellationToken.None);
+
+        ctx.Sent.Select(x => x.Event).OfType<WorkflowLlmExecutionIntent>()
+            .Select(intent => intent.CallerCredential.BearerToken)
+            .Should().Equal("token-1", "token-2");
+        tokenProvider.Authorities.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task LlmCallModule_WithAuthorityAndNoProvider_ShouldFailClosed()
+    {
+        var module = new LLMCallModule();
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = CreateCallerAuthority(),
+        };
+
+        await module.HandleAsync(Wrap(new StepRequestEvent
+        {
+            StepId = "reply",
+            StepType = "llm_call",
+            RunId = "run-llm-auth",
+            Input = "prompt",
+        }), ctx, CancellationToken.None);
+
+        ctx.Sent.Should().BeEmpty();
+        var failure = ctx.Published.Select(x => x.Event).OfType<StepCompletedEvent>().Single();
+        failure.Success.Should().BeFalse();
+        failure.Error.Should().Contain("access token provider is unavailable");
     }
 
     [Fact]
@@ -1199,6 +1256,15 @@ public sealed class WorkflowRuntimeModuleBranchTests
             ExpiresAtUnixMs = 1710003600000,
         };
 
+    private static WorkflowCallerNyxIdAuthority CreateCallerAuthority() =>
+        new()
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-1",
+            ExternalUserId = "m-alpha",
+            Scope = "invoke",
+        };
+
     private static EnvelopeCallbackContext MetadataFor(
         RecordedCallback callback,
         long? generation = null) =>
@@ -1473,6 +1539,18 @@ public sealed class WorkflowRuntimeModuleBranchTests
                 return _moduleFactory;
 
             return null;
+        }
+    }
+
+    private sealed class RotatingCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
+    {
+        public List<WorkflowCallerNyxIdAuthority> Authorities { get; } = [];
+
+        public Task<string> IssueAsync(WorkflowCallerNyxIdAuthority authority, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Authorities.Add(authority.Clone());
+            return Task.FromResult($"token-{Authorities.Count}");
         }
     }
 
