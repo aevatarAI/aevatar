@@ -2,12 +2,39 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Infrastructure.Credentials;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Credentials;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
 
 public sealed class NyxIdWorkflowCallerAccessTokenProviderTests
 {
+    [Fact]
+    public async Task IssueAsync_WithoutBroker_ShouldComposeAndFailClosedWhenTokenIsRequested()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IWorkflowCallerAccessTokenProvider, NyxIdWorkflowCallerAccessTokenProvider>();
+
+        using var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+        var provider = serviceProvider.GetRequiredService<IWorkflowCallerAccessTokenProvider>();
+
+        var act = () => provider.IssueAsync(new WorkflowCallerNyxIdAuthority
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-1",
+            ExternalUserId = "user-1",
+            Scope = "invoke",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*requires a configured NyxID capability broker*");
+    }
+
     [Fact]
     public async Task IssueAsync_ShouldRequestFreshTokenForEveryCall()
     {

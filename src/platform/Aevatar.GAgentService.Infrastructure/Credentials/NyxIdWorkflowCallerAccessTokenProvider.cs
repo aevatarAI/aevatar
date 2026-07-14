@@ -5,17 +5,19 @@ using Aevatar.Workflow.Application.Abstractions.Credentials;
 
 namespace Aevatar.GAgentService.Infrastructure.Credentials;
 
-public sealed class NyxIdWorkflowCallerAccessTokenProvider(INyxIdCapabilityBroker broker)
+public sealed class NyxIdWorkflowCallerAccessTokenProvider(INyxIdCapabilityBroker? broker = null)
     : IWorkflowCallerAccessTokenProvider
 {
-    private readonly INyxIdCapabilityBroker _broker = broker ?? throw new ArgumentNullException(nameof(broker));
+    private readonly INyxIdCapabilityBroker? _broker = broker;
 
     public async Task<string> IssueAsync(
         WorkflowCallerNyxIdAuthority authority,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(authority);
-        var handle = await _broker.IssueShortLivedAsync(
+        var broker = _broker ?? throw new InvalidOperationException(
+            "NyxID caller access token issuance requires a configured NyxID capability broker.");
+        var handle = await broker.IssueShortLivedAsync(
             new ExternalSubjectRef
             {
                 Platform = Require(authority.Platform, nameof(authority.Platform)),
