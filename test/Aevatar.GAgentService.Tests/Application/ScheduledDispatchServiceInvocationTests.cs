@@ -1235,6 +1235,40 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 }
             },
             {
+                "missing-policy-version",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with { PolicyVersion = " " },
+                }
+            },
+            {
+                "missing-owner-authority",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Owner = dispatch.AuthorizationFact.Owner with { Authority = " " },
+                    },
+                }
+            },
+            {
+                "missing-owner-subject",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Owner = dispatch.AuthorizationFact.Owner with { OwnerSubject = " " },
+                    },
+                }
+            },
+            {
+                "missing-scopes",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with { Scopes = " " },
+                }
+            },
+            {
                 "expired-fact",
                 dispatch => dispatch with
                 {
@@ -1267,6 +1301,56 @@ public sealed class ScheduledDispatchServiceInvocationTests
                         [
                             new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", [], false),
                         ],
+                    },
+                }
+            },
+            {
+                "missing-service-id",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ServiceGrants =
+                        [
+                            new ScheduledInvocationAuthorizationServiceGrant(" ", ["node-alpha"], false),
+                        ],
+                    },
+                }
+            },
+            {
+                "missing-required-service-grants",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with { ServiceGrants = [] },
+                }
+            },
+            {
+                "invalid-catalog-version",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogStateVersion = 0 },
+                    },
+                }
+            },
+            {
+                "not-dedicated-to-schedule",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Disclosure = dispatch.AuthorizationFact.Disclosure with { DedicatedToSchedule = false },
+                    },
+                }
+            },
+            {
+                "secret-not-managed-by-aevatar",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Disclosure = dispatch.AuthorizationFact.Disclosure with { SecretManagedByAevatar = false },
                     },
                 }
             },

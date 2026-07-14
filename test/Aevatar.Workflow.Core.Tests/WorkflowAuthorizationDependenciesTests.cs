@@ -6,6 +6,17 @@ namespace Aevatar.Workflow.Core.Tests;
 
 public sealed class WorkflowAuthorizationDependenciesTests
 {
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("name: [")]
+    public void EvaluateAuthorizationDependencies_ShouldFailClosedForInvalidDefinition(string yaml)
+    {
+        var result = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        result.Should().BeNull();
+    }
+
     [Fact]
     public void EvaluateAuthorizationDependencies_ShouldCollectRoleAndNestedConnectorDependencies()
     {
