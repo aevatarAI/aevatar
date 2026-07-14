@@ -726,6 +726,41 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleEventAsync_WhenOneShotCallbackDispatches_ShouldCompleteWithoutSchedulingAnotherFire()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, dispatch, scheduler);
+        await agent.ActivateAsync();
+        var fireAt = DateTimeOffset.UtcNow.AddHours(1);
+        await agent.HandleConfigureAsync(CreateConfigureCommand(
+            cronExpression: string.Empty,
+            enabled: true,
+            scheduleMode: ScheduledDispatchScheduleModeState.OneShotAtUtc,
+            oneShotFireAt: fireAt));
+        var request = scheduler.TimeoutRequests.Should().ContainSingle().Which;
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(request, generation: 1, fireIndex: 1, firedAt: fireAt.AddMilliseconds(1)));
+
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", fireAt);
+        dispatch.Dispatches.Should().ContainSingle();
+        agent.State.FireRecords.Should().ContainKey(idempotencyKey);
+        agent.State.Completed.Should().BeTrue();
+        agent.State.CompletedAt.Should().NotBeNull();
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        scheduler.Canceled.Should().ContainSingle()
+            .Which.Generation.Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(x.EventType, ScheduledDispatchCompletedEvent.Descriptor.FullName, StringComparison.Ordinal))
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task HandleFireAsync_WithServiceInvocationRequest_ShouldDispatchTypedAdapterEnvelope()
     {
         var eventStore = new TestEventStore();
@@ -2403,7 +2438,9 @@ public sealed class ScheduledDispatchGAgentTests
         bool enabled = false,
         EventEnvelope? triggerEnvelope = null,
         ScheduledDispatchTargetState? target = null,
-        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic)
+        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic,
+        ScheduledDispatchScheduleModeState scheduleMode = ScheduledDispatchScheduleModeState.RecurringCron,
+        DateTimeOffset? oneShotFireAt = null)
     {
         return new ScheduledDispatchCreateCommand
         {
@@ -2420,6 +2457,10 @@ public sealed class ScheduledDispatchGAgentTests
             Enabled = enabled,
             Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
             ScheduleKind = scheduleKind,
+            ScheduleMode = scheduleMode,
+            OneShotFireAt = oneShotFireAt.HasValue
+                ? Timestamp.FromDateTimeOffset(oneShotFireAt.Value.ToUniversalTime())
+                : null,
         };
     }
 
@@ -2430,7 +2471,10 @@ public sealed class ScheduledDispatchGAgentTests
         string cronExpression = "*/15 * * * *",
         bool enabled = false,
         EventEnvelope? triggerEnvelope = null,
-        ScheduledDispatchTargetState? target = null)
+        ScheduledDispatchTargetState? target = null,
+        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic,
+        ScheduledDispatchScheduleModeState scheduleMode = ScheduledDispatchScheduleModeState.RecurringCron,
+        DateTimeOffset? oneShotFireAt = null)
     {
         return new ScheduledDispatchUpdateCommand
         {
@@ -2446,6 +2490,11 @@ public sealed class ScheduledDispatchGAgentTests
             Timezone = "UTC",
             Enabled = enabled,
             Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
+            ScheduleKind = scheduleKind,
+            ScheduleMode = scheduleMode,
+            OneShotFireAt = oneShotFireAt.HasValue
+                ? Timestamp.FromDateTimeOffset(oneShotFireAt.Value.ToUniversalTime())
+                : null,
         };
     }
 
@@ -2457,7 +2506,9 @@ public sealed class ScheduledDispatchGAgentTests
         bool enabled = false,
         EventEnvelope? triggerEnvelope = null,
         ScheduledDispatchTargetState? target = null,
-        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic)
+        ScheduledDispatchScheduleKindState scheduleKind = ScheduledDispatchScheduleKindState.Generic,
+        ScheduledDispatchScheduleModeState scheduleMode = ScheduledDispatchScheduleModeState.RecurringCron,
+        DateTimeOffset? oneShotFireAt = null)
     {
         return new ScheduledDispatchEnsureCommand
         {
@@ -2474,6 +2525,10 @@ public sealed class ScheduledDispatchGAgentTests
             Enabled = enabled,
             Target = target ?? CreateTargetState(targetActorId, triggerEnvelope),
             ScheduleKind = scheduleKind,
+            ScheduleMode = scheduleMode,
+            OneShotFireAt = oneShotFireAt.HasValue
+                ? Timestamp.FromDateTimeOffset(oneShotFireAt.Value.ToUniversalTime())
+                : null,
         };
     }
 

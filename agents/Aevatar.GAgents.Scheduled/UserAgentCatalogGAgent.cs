@@ -67,12 +67,26 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             ApiKeyId = MergeNonEmpty(command.ApiKeyId, existing?.ApiKeyId),
             ScheduleCron = MergeNonEmpty(command.ScheduleCron, existing?.ScheduleCron),
             ScheduleTimezone = MergeNonEmpty(command.ScheduleTimezone, existing?.ScheduleTimezone),
-            LarkReceiveId = MergeNonEmpty(command.LarkReceiveId, existing?.LarkReceiveId),
-            LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
-            LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
-            LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
             SharingGrant = existing?.SharingGrant?.Clone(),
             TargetPlatform = MergeNonEmpty(command.TargetPlatform, existing?.TargetPlatform),
+            ChannelAddress = UserAgentCatalogChannelAddress.Merge(
+                command.ChannelAddress,
+                existing?.ChannelAddress,
+                command.TargetPlatform,
+                command.NyxProviderSlug,
+                command.ConversationId,
+#pragma warning disable CS0612 // deprecated command fields are read only as a channel_address compatibility bridge
+                command.LarkReceiveId,
+                command.LarkReceiveIdType,
+                command.LarkReceiveIdFallback,
+                command.LarkReceiveIdTypeFallback,
+#pragma warning restore CS0612
+#pragma warning disable CS0612 // deprecated state fields are read only as a channel_address compatibility bridge
+                existing?.LarkReceiveId,
+                existing?.LarkReceiveIdType,
+                existing?.LarkReceiveIdFallback,
+                existing?.LarkReceiveIdTypeFallback),
+#pragma warning restore CS0612
             OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
                 ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
                 : command.OutputFormat,

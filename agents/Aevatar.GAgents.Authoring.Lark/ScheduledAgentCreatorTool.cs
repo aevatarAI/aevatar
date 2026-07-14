@@ -9,20 +9,20 @@ namespace Aevatar.GAgents.Authoring.Lark;
 
 public sealed class ScheduledAgentCreatorTool : IAgentTool
 {
-    private readonly ISkillRunnerCommandPort _skillRunnerPort;
+    private readonly IScheduledWorkflowAgentCreationPort _scheduledWorkflowAgentCreationPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _mapper;
     private readonly ScheduledAgentApiKeyIssuer _apiKeyIssuer;
     private readonly ILogger<ScheduledAgentCreatorTool>? _logger;
 
     internal ScheduledAgentCreatorTool(
-        ISkillRunnerCommandPort skillRunnerPort,
+        IScheduledWorkflowAgentCreationPort scheduledWorkflowAgentCreationPort,
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper mapper,
         ScheduledAgentApiKeyIssuer apiKeyIssuer,
         ILogger<ScheduledAgentCreatorTool>? logger = null)
     {
-        _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
+        _scheduledWorkflowAgentCreationPort = scheduledWorkflowAgentCreationPort ?? throw new ArgumentNullException(nameof(scheduledWorkflowAgentCreationPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _apiKeyIssuer = apiKeyIssuer ?? throw new ArgumentNullException(nameof(apiKeyIssuer));
@@ -177,7 +177,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             });
         }
 
-        var agentId = SkillRunnerDefaults.GenerateActorId();
+        var agentId = ScheduledWorkflowAgentDefaults.GenerateActorId();
         var plan = _mapper.Plan(argumentsJson, caller, agentId);
         if (!plan.Success)
             return plan.ErrorJson ?? """{"error":"validation_error"}""";
@@ -193,9 +193,10 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             return mapped.ErrorJson ?? """{"error":"validation_error"}""";
         }
 
+        ScheduledWorkflowAgentCreationReceipt receipt;
         try
         {
-            await _skillRunnerPort.InitializeAsync(agentId, mapped.Command!, mapped.RunImmediately, ct);
+            receipt = await _scheduledWorkflowAgentCreationPort.CreateAsync(mapped.Request!, ct);
         }
         catch (Exception ex)
         {
@@ -206,8 +207,8 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
 
         return JsonSerializer.Serialize(new
         {
-            status = "accepted",
-            agent_id = agentId,
+            status = receipt.Accepted ? "accepted" : "rejected",
+            agent_id = receipt.AgentId,
             api_key_id = key.ApiKeyId,
             note = "Scheduled agent create accepted for dispatch. Use agent_builder agent_status to observe projection state.",
         });

@@ -149,7 +149,10 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
             ResolveScopeId(summary.ServiceKey),
             summary.ScheduleActorId,
             summary.TargetActorId,
-            summary.Prompt);
+            summary.Prompt,
+            ToWorkflowScheduleMode(summary.ScheduleMode),
+            summary.OneShotFireAt,
+            summary.Completed);
 
     private async Task EnsureWorkflowScheduleAsync(string scheduleId, CancellationToken ct)
     {
@@ -170,6 +173,11 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
 
     private static bool IsWorkflowCompatibilitySchedule(ScheduledDispatchSummary summary) =>
         summary.ScheduleKind == ScheduledDispatchScheduleKind.Workflow;
+
+    private static WorkflowScheduleMode ToWorkflowScheduleMode(ScheduledDispatchScheduleMode mode) =>
+        mode == ScheduledDispatchScheduleMode.OneShotAtUtc
+            ? WorkflowScheduleMode.OneShotAtUtc
+            : WorkflowScheduleMode.RecurringCron;
 
     private static string ResolveScopeId(string serviceKey)
     {

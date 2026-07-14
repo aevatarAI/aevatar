@@ -69,6 +69,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
                 target,
                 state.ScheduleKind).ToString(),
             CredentialSourceKind = ToApplicationCredentialSourceKind(target.ServiceInvocation?.Auth).ToString(),
+            ScheduleMode = ToApplicationScheduleMode(state.ScheduleMode).ToString(),
             PayloadTypeUrl = state.PayloadTypeUrl ?? string.Empty,
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
@@ -86,6 +87,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             Prompt = ExtractPrompt(target.ServiceInvocation?.Payload, state.TriggerEnvelope),
             TargetActorId = state.TargetActorId ?? string.Empty,
             Deleted = state.Deleted,
+            Completed = state.Completed,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -97,6 +99,8 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.LastFireAt = state.LastFireAt;
         document.LastOverdueFireAt = state.LastOverdueFireAt;
         document.DeletedAt = state.DeletedAt;
+        document.OneShotFireAt = state.OneShotFireAt;
+        document.CompletedAt = state.CompletedAt;
         document.Headers = state.Headers
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
@@ -262,6 +266,11 @@ public sealed class ScheduledDispatchCurrentStateProjector
         sourceCount++;
         sourceKind = candidate;
     }
+
+    private static ScheduledDispatchScheduleMode ToApplicationScheduleMode(ScheduledDispatchScheduleModeState stateMode) =>
+        stateMode == ScheduledDispatchScheduleModeState.OneShotAtUtc
+            ? ScheduledDispatchScheduleMode.OneShotAtUtc
+            : ScheduledDispatchScheduleMode.RecurringCron;
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
         timestamp?.Seconds ?? 0;

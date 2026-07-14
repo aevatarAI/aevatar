@@ -141,7 +141,10 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.OverdueFireDetectedCount,
             document.LastOverdueFireAt,
             credentialRequirementTargetKind,
-            ParseCredentialSourceKind(document.CredentialSourceKind));
+            ParseCredentialSourceKind(document.CredentialSourceKind),
+            ParseScheduleMode(document.ScheduleMode),
+            document.OneShotFireAt,
+            document.Completed);
     }
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
@@ -188,4 +191,9 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             ? ScheduledDispatchCredentialRequirementTargetKind.WorkflowService
             : ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
     }
+
+    private static ScheduledDispatchScheduleMode ParseScheduleMode(string? value) =>
+        Enum.TryParse<ScheduledDispatchScheduleMode>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : ScheduledDispatchScheduleMode.RecurringCron;
 }

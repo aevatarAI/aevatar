@@ -124,7 +124,7 @@ message SkillRunnerOutboundConfig {
   // when the primary chat_id-typed send is rejected with Lark `230002 bot not in
   // chat` — the failure mode for cross-app same-tenant deployments where the
   // outbound app is not a member of the inbound DM. See
-  // UserAgentCatalogEntry.lark_receive_id_fallback for the recommended pinning.
+  // UserAgentCatalogEntry.channel_address.fallback for the recommended pinning.
   string lark_receive_id_fallback = 9;
   string lark_receive_id_type_fallback = 10;
   // Caller scope captured at create time. Replaces owner_nyx_user_id+platform

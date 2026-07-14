@@ -123,24 +123,26 @@ public sealed class LarkChannelNativeMessageSender : IChannelNativeMessageSender
 
     private static NativeLarkReceiveTarget ResolvePrimaryTarget(ChannelNativeDeliveryTarget target)
     {
+        var address = (target as IChannelDeliveryAddressTarget)?.ChannelAddress;
         var route = target as ILarkChannelNativeDeliveryRoute;
-        var receiveId = FirstNonWhiteSpace(route?.LarkReceiveId, target.ConversationId);
+        var receiveId = FirstNonWhiteSpace(address?.Primary.AddressId, route?.LarkReceiveId, target.ConversationId);
         if (string.IsNullOrWhiteSpace(receiveId))
             throw new InvalidOperationException($"Lark delivery target receive_id is missing: {target.AgentId}");
 
-        var receiveIdType = string.IsNullOrWhiteSpace(route?.LarkReceiveIdType)
+        var explicitReceiveIdType = FirstNonWhiteSpace(address?.Primary.AddressType, route?.LarkReceiveIdType);
+        var receiveIdType = string.IsNullOrWhiteSpace(explicitReceiveIdType)
             ? InferReceiveIdType(receiveId)
-            : route.LarkReceiveIdType.Trim();
+            : explicitReceiveIdType.Trim();
         return new NativeLarkReceiveTarget(receiveId.Trim(), receiveIdType);
     }
 
     private static NativeLarkReceiveTarget? ResolveFallbackTarget(ChannelNativeDeliveryTarget target)
     {
-        if (target is not ILarkChannelNativeDeliveryRoute route)
-            return null;
+        var address = (target as IChannelDeliveryAddressTarget)?.ChannelAddress;
+        var route = target as ILarkChannelNativeDeliveryRoute;
 
-        var fallbackId = route.LarkReceiveIdFallback?.Trim();
-        var fallbackType = route.LarkReceiveIdTypeFallback?.Trim();
+        var fallbackId = FirstNonWhiteSpace(address?.Fallback?.AddressId, route?.LarkReceiveIdFallback).Trim();
+        var fallbackType = FirstNonWhiteSpace(address?.Fallback?.AddressType, route?.LarkReceiveIdTypeFallback).Trim();
         return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
             ? null
             : new NativeLarkReceiveTarget(fallbackId, fallbackType);

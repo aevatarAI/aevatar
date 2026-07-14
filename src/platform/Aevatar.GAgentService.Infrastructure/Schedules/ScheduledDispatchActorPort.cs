@@ -152,6 +152,11 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             _ => ScheduledDispatchScheduleKindState.Generic,
         };
 
+    private static ScheduledDispatchScheduleModeState ToStateScheduleMode(ScheduledDispatchScheduleMode mode) =>
+        mode == ScheduledDispatchScheduleMode.OneShotAtUtc
+            ? ScheduledDispatchScheduleModeState.OneShotAtUtc
+            : ScheduledDispatchScheduleModeState.RecurringCron;
+
     private static ScheduledDispatchCreateCommand CreateCreateCommand(
         ScheduledDispatchConfiguration configuration,
         PreparedScheduledDispatchTarget dispatch)
@@ -203,6 +208,10 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
         command.Target = CreateTargetState(dispatch.Descriptor, configuration.CredentialRequirementTargetKind);
         command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
+        command.ScheduleMode = ToStateScheduleMode(configuration.ScheduleMode);
+        command.OneShotFireAt = configuration.OneShotFireAt.HasValue
+            ? Timestamp.FromDateTimeOffset(configuration.OneShotFireAt.Value.ToUniversalTime())
+            : null;
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
     }
@@ -222,6 +231,10 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
         command.Target = CreateTargetState(dispatch.Descriptor, configuration.CredentialRequirementTargetKind);
         command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
+        command.ScheduleMode = ToStateScheduleMode(configuration.ScheduleMode);
+        command.OneShotFireAt = configuration.OneShotFireAt.HasValue
+            ? Timestamp.FromDateTimeOffset(configuration.OneShotFireAt.Value.ToUniversalTime())
+            : null;
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
     }
@@ -241,6 +254,10 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.PayloadTypeUrl = dispatch.PayloadTypeUrl;
         command.Target = CreateTargetState(dispatch.Descriptor, configuration.CredentialRequirementTargetKind);
         command.ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind);
+        command.ScheduleMode = ToStateScheduleMode(configuration.ScheduleMode);
+        command.OneShotFireAt = configuration.OneShotFireAt.HasValue
+            ? Timestamp.FromDateTimeOffset(configuration.OneShotFireAt.Value.ToUniversalTime())
+            : null;
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
     }
