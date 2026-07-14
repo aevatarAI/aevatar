@@ -808,10 +808,21 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.ApiKeyId.Should().Be("key-created");
             captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot");
             captured.CatalogEntry.ConversationId.Should().Be("oc_conversation");
-            captured.CatalogEntry.LarkReceiveId.Should().Be("oc_chat");
-            captured.CatalogEntry.LarkReceiveIdType.Should().Be("chat_id");
-            captured.CatalogEntry.LarkReceiveIdFallback.Should().Be("on_union");
-            captured.CatalogEntry.LarkReceiveIdTypeFallback.Should().Be("union_id");
+            captured.CatalogEntry.TargetPlatform.Should().Be("lark");
+            captured.CatalogEntry.ChannelAddress.Platform.Should().Be("lark");
+            captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot");
+            captured.CatalogEntry.ChannelAddress.ConversationId.Should().Be("oc_conversation");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("oc_chat");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+            captured.CatalogEntry.ChannelAddress.Fallback.Should().NotBeNull();
+            captured.CatalogEntry.ChannelAddress.Fallback!.AddressId.Should().Be("on_union");
+            captured.CatalogEntry.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
+#pragma warning disable CS0612 // verifies new writes leave deprecated command fields empty
+            captured.CatalogEntry.LarkReceiveId.Should().BeEmpty();
+            captured.CatalogEntry.LarkReceiveIdType.Should().BeEmpty();
+            captured.CatalogEntry.LarkReceiveIdFallback.Should().BeEmpty();
+            captured.CatalogEntry.LarkReceiveIdTypeFallback.Should().BeEmpty();
+#pragma warning restore CS0612
             captured.CatalogEntry.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
             captured.CatalogEntry.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
