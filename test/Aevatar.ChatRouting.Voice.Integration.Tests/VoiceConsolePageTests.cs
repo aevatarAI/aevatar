@@ -112,6 +112,46 @@ public sealed class VoiceConsolePageTests
         html.Should().Contain("provisioned:true");
     }
 
+    [Fact]
+    public void EmbeddedAsset_RetriesOnlyAJustProvisionedUnacceptedHandshakeOnce()
+    {
+        var html = ReadEmbeddedAsset();
+
+        html.Should().Contain("VOICE_FIRST_CONNECT_RETRY_DELAY_MS = 1000");
+        html.Should().Contain("dialVoice(token, routeTarget.provisioned ? 1 : 0)");
+        html.Should().Contain(
+            "retriesRemaining>0 && !sessionAccepted && ev.code===1006 && !ev.reason",
+            "only the browser-hidden retryable first-connect failure may be retried");
+        html.Should().Contain("dialVoice(token,retriesRemaining-1)");
+        html.Should().Contain("sessionAccepted=true; onSessionAccepted",
+            "an upgraded session must never be retried after its acceptance frame");
+
+        var retryBranch = html.IndexOf("if(shouldRetry){", StringComparison.Ordinal);
+        var retryReturn = html.IndexOf("return;", retryBranch, StringComparison.Ordinal);
+        var audioTeardown = html.IndexOf("teardownAudio();", retryBranch, StringComparison.Ordinal);
+        retryReturn.Should().BeLessThan(audioTeardown,
+            "the bounded redial must reuse the already-authorized microphone and audio contexts");
+    }
+
+    [Fact]
+    public void EmbeddedAsset_PrefersTypedCloseReason_AndStopCancelsPendingRetry()
+    {
+        var html = ReadEmbeddedAsset();
+        var onError = html.IndexOf("ws.onerror =", StringComparison.Ordinal);
+        var onClose = html.IndexOf("ws.onclose =", StringComparison.Ordinal);
+
+        onError.Should().BeGreaterThan(0);
+        onClose.Should().BeGreaterThan(onError);
+        html[onError..onClose].Should().NotContain("vStatus(",
+            "the opaque browser error event must not overwrite the typed close reason");
+        html.Should().Contain("voice_provider_credential_unavailable");
+        html.Should().Contain("describeVoiceSocketClose(ev.code,ev.reason||\"\")");
+        html.Should().Contain("if(voice.ws!==ws) return", "stale socket callbacks must not restart a stopped session");
+        html.Should().Contain("clearTimeout(voice.retryTimer)");
+        html.Should().NotContain("access_token=<NyxID JWT>",
+            "the bearer belongs in Sec-WebSocket-Protocol, never in a logged URL");
+    }
+
     private static string ReadEmbeddedAsset()
     {
         var assembly = typeof(PolicyAwareVoiceEndpoints).Assembly;

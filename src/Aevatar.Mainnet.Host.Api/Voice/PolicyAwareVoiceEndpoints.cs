@@ -169,6 +169,15 @@ public static class PolicyAwareVoiceEndpoints
             http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             await http.Response.WriteAsync(VoiceWebSocketAttachExecutor.VoiceCredentialUnavailableReason, http.RequestAborted);
         }
+        catch (RealtimeProviderCredentialException ex)
+        {
+            await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
+            GetLogger(http).LogWarning(ex, "Voice WHIP provider credential resolution failed.");
+            http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await http.Response.WriteAsync(
+                VoiceWebSocketAttachExecutor.VoiceProviderCredentialUnavailableReason,
+                http.RequestAborted);
+        }
         catch (VoiceWhipTransportAttachConflictException)
         {
             await ReleasePendingToolCredentialAsync(http, toolContextAdmission.ToolContext);
