@@ -3248,6 +3248,7 @@ const response = await fetch("{{invokePath}}", {
             scopeId,
             serviceId,
             binding.RunId,
+            string.Empty,
             binding.ActorId,
             binding.EffectiveDefinitionActorId,
             deployment?.RevisionId ?? string.Empty,
@@ -3297,6 +3298,7 @@ const response = await fetch("{{invokePath}}", {
             scopeId,
             serviceId,
             snapshot.RunId,
+            snapshot.ScheduleId,
             // ActorId stays the controllable target so existing resume/signal/stop
             // round-trips keep working; the registry actor is internal infra.
             snapshot.TargetActorId,
@@ -3374,6 +3376,7 @@ const response = await fetch("{{invokePath}}", {
             memberResolution.MemberId,
             memberResolution.PublishedServiceId,
             summary.RunId,
+            summary.ScheduleId,
             summary.ActorId,
             summary.DefinitionActorId,
             summary.RevisionId,
@@ -3392,7 +3395,14 @@ const response = await fetch("{{invokePath}}", {
             summary.LastOutput,
             summary.LastError,
             summary.SagaStatus,
-            summary.DeadLetter);
+            summary.DeadLetter,
+            summary.ImplementationKind,
+            summary.Status,
+            summary.CommandId,
+            summary.CorrelationId,
+            summary.EndpointId,
+            summary.TargetActorId,
+            summary.CreatedAt);
     }
 
     private static ScopeServiceRunDeadLetterHttpResponse? BuildScopeServiceRunDeadLetter(
@@ -4571,6 +4581,7 @@ const response = await fetch("{{invokePath}}", {
         string ScopeId,
         string ServiceId,
         string RunId,
+        string ScheduleId,
         string ActorId,
         string DefinitionActorId,
         string RevisionId,
@@ -4603,6 +4614,7 @@ const response = await fetch("{{invokePath}}", {
         string MemberId,
         string PublishedServiceId,
         string RunId,
+        string ScheduleId,
         string ActorId,
         string DefinitionActorId,
         string RevisionId,
@@ -4621,7 +4633,14 @@ const response = await fetch("{{invokePath}}", {
         string LastOutput,
         string LastError,
         WorkflowSagaStatus SagaStatus,
-        ScopeServiceRunDeadLetterHttpResponse? DeadLetter);
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter,
+        string ImplementationKind,
+        string Status,
+        string CommandId,
+        string CorrelationId,
+        string EndpointId,
+        string TargetActorId,
+        DateTimeOffset? CreatedAt = null);
 
     public sealed record ScopeServiceRunDeadLetterHttpResponse(
         string FailedCompensationStepId,
