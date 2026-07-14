@@ -10,6 +10,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -23,10 +24,14 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     private const string ModuleStateKey = "connector_call";
     private const string TimeoutCallbackPrefix = "workflow-connector-timeout";
     private readonly IWorkflowConnectorResolver _connectorResolver;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
 
-    public ConnectorCallModule(IWorkflowConnectorResolver connectorResolver)
+    public ConnectorCallModule(
+        IWorkflowConnectorResolver connectorResolver,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         _connectorResolver = connectorResolver ?? throw new ArgumentNullException(nameof(connectorResolver));
+        _callerAccessTokenProvider = callerAccessTokenProvider;
     }
 
     public string Name => "connector_call";
@@ -857,15 +862,18 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
 
-    private static async Task<string> ReconstructConnectorHttpAuthorizationAsync(
+    private async Task<string> ReconstructConnectorHttpAuthorizationAsync(
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        if (credential.Found &&
-            !string.IsNullOrWhiteSpace(credential.Credential.BearerToken))
+        if (credential.Found)
         {
-            var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential.Credential.BearerToken);
+            var resolved = await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                credential.Credential,
+                _callerAccessTokenProvider,
+                ct);
+            var parsed = WorkflowCallerCredentialTokens.ParseOptional(resolved.BearerToken);
             return parsed.IsValid ? $"Bearer {parsed.NormalizedBearerToken}" : string.Empty;
         }
 

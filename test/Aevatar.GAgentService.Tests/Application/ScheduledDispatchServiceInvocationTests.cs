@@ -13,7 +13,6 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -349,75 +348,15 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithScopeOwnerAuthAndWorkflowProjection_ShouldProjectOwnerTokenToDurableCallerCredential()
-    {
-        var invocationPort = new RecordingServiceInvocationPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
-        var vault = new InMemorySecretVault();
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
-        var original = new ServiceInvocationRequest
-        {
-            CommandId = "cmd-invoke",
-            CorrelationId = "corr-invoke",
-            Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
-            Payload = Any.Pack(new ChatRequestEvent
-            {
-                Prompt = "hello",
-                ConnectorHttpAuthorization = "Bearer stored-token",
-                LlmControl = new LLMControlContextPayload
-                {
-                    ModelOverride = "sonnet",
-                    SenderNyxIdAccessToken = "existing-sender-token",
-                },
-            }),
-        };
-        var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                "proxy",
-                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
-
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
-            original,
-            auth,
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
-            ScheduleId: "schedule-owner"));
-
-        var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        invokedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
-        invokedChat.CallerDurableCredential.Should().NotBeNull();
-        invokedChat.CallerDurableCredential.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerDurableBearerToken);
-        invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-owner");
-        invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
-        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().NotBeNull();
-        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Platform.Should().Be("lark");
-        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.ExternalUserId.Should().Be("ou-owner-1");
-        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Scope.Should().Be("proxy");
-        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
-            invokedChat.CallerDurableCredential.Ref,
-            invokedChat.CallerDurableCredential.Purpose,
-            invokedChat.CallerDurableCredential.OwnerScopeKey,
-            invokedChat.CallerDurableCredential.SubjectId,
-            "test"));
-        resolved.Secret.Should().Be("owner-token");
-        var originalChat = original.Payload.Unpack<ChatRequestEvent>();
-        originalChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        originalChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
-        originalChat.LlmControl.SenderNyxIdAccessToken.Should().Be("existing-sender-token");
-        originalChat.ConnectorHttpAuthorization.Should().Be("Bearer stored-token");
-    }
-
-    [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowProjectionAndMissingVault_ShouldFailBeforeInvocation()
+    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowProjection_ShouldCarryAuthorityWithoutVaultOrExchange()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
         var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange);
         var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "owner-1")));
         var original = new ServiceInvocationRequest
         {
             CommandId = "cmd-invoke",
@@ -426,133 +365,25 @@ public sealed class ScheduledDispatchServiceInvocationTests
             Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
         };
 
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
             auth,
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
             ScheduleId: "schedule-owner"));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*caller credential vault is not configured*");
-        credentialExchange.Sources.Should().ContainSingle();
-        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        var chat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
+        chat.CallerDurableCredential.Ref.Should().BeEmpty();
+        chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.ExternalUserId.Should().Be("owner-1");
+        chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Scope.Should().Be("proxy");
     }
 
     [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowProjection_ShouldBoundVaultSecretToExchangeExpiry()
-    {
-        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
-        var invocationPort = new RecordingServiceInvocationPort();
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(
-            "owner-token",
-            expiresAt: expiresAt);
-        var secretVault = new RecordingSecretVault(null);
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
-        var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                "proxy",
-                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
-
-        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
-            new ServiceInvocationRequest
-            {
-                CommandId = "cmd-invoke",
-                CorrelationId = "corr-invoke",
-                Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
-            },
-            auth,
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
-            ScheduleId: "schedule-owner"));
-
-        secretVault.StoreRequests.Should().ContainSingle()
-            .Which.ExpiresAt.Should().Be(expiresAt);
-        invocationPort.Requests.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WhenInvocationFails_ShouldRevokeProjectedCredential()
-    {
-        var invocationPort = new RecordingServiceInvocationPort(new InvalidOperationException("dispatch failed"));
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
-        var secretVault = new RecordingSecretVault(null);
-        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
-        var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                "proxy",
-                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
-
-        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
-            new ServiceInvocationRequest
-            {
-                CommandId = "cmd-invoke",
-                CorrelationId = "corr-invoke",
-                Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
-            },
-            auth,
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
-            ScheduleId: "schedule-owner"));
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("dispatch failed");
-        secretVault.RevokeRequests.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            new RevokeSecretRequest(
-                "sec-workflow-caller-1",
-                CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
-                "schedule:schedule-owner",
-                "lark:tenant-1:ou-owner-1",
-                "scheduled-workflow-dispatch-failed"));
-    }
-
-    [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WhenRollbackStalls_ShouldTimeOutWithOriginalFailure()
-    {
-        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 7, 14, 12, 0, 0, TimeSpan.Zero));
-        var invocationPort = new RecordingServiceInvocationPort(new InvalidOperationException("dispatch failed"));
-        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(
-            "owner-token",
-            expiresAt: clock.GetUtcNow().AddMinutes(5));
-        var secretVault = new CancellationAwareStalledSecretVault();
-        var port = new ScheduledServiceInvocationDispatchPort(
-            invocationPort,
-            credentialExchange,
-            secretVault,
-            timeProvider: clock);
-        var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
-                "proxy",
-                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
-
-        var dispatchTask = port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
-            new ServiceInvocationRequest
-            {
-                CommandId = "cmd-invoke",
-                CorrelationId = "corr-invoke",
-                Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
-                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
-            },
-            auth,
-            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
-            ScheduleId: "schedule-owner"));
-
-        await secretVault.RevokeStarted;
-        dispatchTask.IsCompleted.Should().BeFalse();
-
-        clock.Advance(TimeSpan.FromSeconds(5));
-
-        var act = async () => await dispatchTask;
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("dispatch failed");
-        await secretVault.CancellationObserved;
-    }
-
-    [Fact]
-    public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndWorkflowProjection_ShouldProjectSenderTokenToDurableCallerCredential()
+    public async Task ScheduledServiceInvocationDispatchPort_WithAuthAndWorkflowProjection_ShouldCarrySenderAuthority()
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("sender-token-1");
-        var vault = new InMemorySecretVault();
+        var vault = new RecordingSecretVault(null);
         var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
         var original = new ServiceInvocationRequest
         {
@@ -587,8 +418,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
             ScheduleId: "schedule-sender"));
 
-        credentialExchange.Sources.Should().ContainSingle()
-            .Which.Subject.ExternalUserId.Should().Be("ou-user-1");
+        credentialExchange.Sources.Should().BeEmpty();
         var invoked = invocationPort.Requests.Should().ContainSingle().Which;
         invoked.Should().NotBeSameAs(original);
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
@@ -596,8 +426,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
         invokedChat.CallerDurableCredential.Should().NotBeNull();
-        invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-sender");
-        invokedChat.CallerDurableCredential.SubjectId.Should().Be("lark:tenant-1:ou-user-1");
+        invokedChat.CallerDurableCredential.Ref.Should().BeEmpty();
         invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().BeEquivalentTo(
             new ScheduledCallerNyxIdAuthority
             {
@@ -611,13 +440,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.Metadata.Should().Contain("schedule", "scheduled");
         invokedChat.Metadata.Should().NotContainValue("sender-token-1");
         invokedChat.Metadata.Should().NotContainValue("Bearer sender-token-1");
-        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
-            invokedChat.CallerDurableCredential.Ref,
-            invokedChat.CallerDurableCredential.Purpose,
-            invokedChat.CallerDurableCredential.OwnerScopeKey,
-            invokedChat.CallerDurableCredential.SubjectId,
-            "test"));
-        resolved.Secret.Should().Be("sender-token-1");
+        vault.StoreRequests.Should().BeEmpty();
         var originalChat = original.Payload.Unpack<ChatRequestEvent>();
         originalChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         originalChat.LlmControl.ModelOverride.Should().Be("sonnet");
@@ -1489,53 +1312,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ct.ThrowIfCancellationRequested();
             RevokeRequests.Add(request);
             return Task.FromResult(new RevokeSecretResult(true));
-        }
-    }
-
-    private sealed class CancellationAwareStalledSecretVault : ISecretVault
-    {
-        private readonly TaskCompletionSource _revokeStarted =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _cancellationObserved =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task RevokeStarted => _revokeStarted.Task;
-
-        public Task CancellationObserved => _cancellationObserved.Task;
-
-        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new StoreSecretResult(new SecretReference
-            {
-                Ref = "sec-workflow-caller-stalled",
-                Purpose = request.Purpose,
-                OwnerScopeKey = request.OwnerScopeKey,
-                Version = 1,
-                ExpiresAtUnixMs = request.ExpiresAt?.ToUnixTimeMilliseconds() ?? 0,
-            }));
-        }
-
-        public Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-
-        public async Task<RevokeSecretResult> RevokeAsync(
-            RevokeSecretRequest request,
-            CancellationToken ct = default)
-        {
-            _revokeStarted.TrySetResult();
-            var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var registration = ct.Register(
-                static state => ((TaskCompletionSource)state!).TrySetResult(),
-                canceled);
-
-            await canceled.Task;
-            _cancellationObserved.TrySetResult();
-            ct.ThrowIfCancellationRequested();
-            return new RevokeSecretResult(false);
         }
     }
 

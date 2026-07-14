@@ -60,9 +60,10 @@ internal static class WorkflowRunExecutionContextStateAccess
         {
             if (authority != null)
             {
-                throw new ArgumentException(
-                    "Workflow caller NyxID authority requires a caller credential.",
-                    nameof(credential));
+                delta.CallerCredential = new WorkflowCallerCredential
+                {
+                    NyxIdAuthority = authority,
+                };
             }
 
             return delta;
@@ -188,6 +189,14 @@ internal static class WorkflowRunExecutionContextStateAccess
                     NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
                 })
                 : (false, new WorkflowCallerCredential());
+        }
+
+        if (TryNormalizeCallerNyxIdAuthority(callerCredential?.NyxIdAuthority, out var authority))
+        {
+            return (true, new WorkflowCallerCredential
+            {
+                NyxIdAuthority = authority,
+            });
         }
 
         return TryGetLegacyCallerCredential(callerCredential, out var credential)
