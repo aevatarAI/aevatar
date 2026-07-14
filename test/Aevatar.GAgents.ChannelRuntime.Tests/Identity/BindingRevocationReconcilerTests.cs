@@ -17,6 +17,26 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// </summary>
 public sealed class BindingRevocationReconcilerTests
 {
+    [Fact]
+    public async Task ReconcileRevokedAsync_ShouldInvalidateCatalogForNyxIdNativeOwner()
+    {
+        var lifecycle = new RecordingCatalogLifecycle();
+        var reconciler = new BindingRevocationReconciler(
+            new RecordingActorDispatchPort(),
+            NullLogger<BindingRevocationReconciler>.Instance,
+            lifecycle);
+        var owner = new ExternalSubjectRef
+        {
+            Platform = OwnerScope.NyxIdPlatform,
+            ExternalUserId = "nyx-owner-alpha",
+        };
+
+        await reconciler.ReconcileRevokedAsync(owner, "nyx_invalid_grant");
+
+        lifecycle.Subject!.ExternalUserId.Should().Be("nyx-owner-alpha");
+        lifecycle.Reason.Should().Be("nyx_invalid_grant");
+    }
+
     private static ExternalSubjectRef Subject() => new()
     {
         Platform = "lark",
@@ -46,6 +66,27 @@ public sealed class BindingRevocationReconcilerTests
         revoke.ExternalSubject.Platform.Should().Be("lark");
         revoke.ExternalSubject.Tenant.Should().Be("ou_tenant_x");
         revoke.ExternalSubject.ExternalUserId.Should().Be("ou_user_y");
+    }
+
+    [Fact]
+    public async Task ReconcileRevokedAsync_InvalidatesCatalogForNyxIdOwner()
+    {
+        var catalogLifecycle = new RecordingCatalogLifecycle();
+        var reconciler = new BindingRevocationReconciler(
+            new RecordingActorDispatchPort(),
+            NullLogger<BindingRevocationReconciler>.Instance,
+            catalogLifecycle);
+        var owner = new ExternalSubjectRef
+        {
+            Platform = OwnerScope.NyxIdPlatform,
+            Tenant = "tenant-alpha",
+            ExternalUserId = "nyx-owner-alpha",
+        };
+
+        await reconciler.ReconcileRevokedAsync(owner, "binding_revoked", CancellationToken.None);
+
+        catalogLifecycle.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            (owner, "binding_revoked"));
     }
 
     [Fact]
@@ -116,6 +157,29 @@ public sealed class BindingRevocationReconcilerTests
         {
             Dispatched.Add((actorId, envelope));
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class RecordingCatalogLifecycle : INyxIdCatalogAccessLifecyclePort
+    {
+        public ExternalSubjectRef? Subject { get; private set; }
+        public string? Reason { get; private set; }
+        public Task InvalidateAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
+        {
+            Subject = subject;
+            Reason = reason;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingCatalogLifecycle : INyxIdCatalogAccessLifecyclePort
+    {
+        public List<(ExternalSubjectRef Subject, string Reason)> Requests { get; } = [];
+
+        public Task InvalidateAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
+        {
+            Requests.Add((subject, reason));
+            return Task.CompletedTask;
         }
     }
 }

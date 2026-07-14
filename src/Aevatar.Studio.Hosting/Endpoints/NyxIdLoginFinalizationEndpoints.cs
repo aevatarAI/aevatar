@@ -8,6 +8,7 @@ using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.Studio.Application.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -75,6 +76,7 @@ public static class NyxIdLoginFinalizationEndpoints
         [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
         [FromServices] ICommandDispatchService<RefreshBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingRefreshDispatch,
         [FromServices] ILoggerFactory loggerFactory,
+        [FromServices] INyxIdCatalogRefreshLifecycle? catalogRefreshLifecycle = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -153,13 +155,13 @@ public static class NyxIdLoginFinalizationEndpoints
         if (existingBinding != null)
         {
             if (string.Equals(existingBinding.Value, exchange.BindingId, StringComparison.Ordinal))
-                return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
+                return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, ct);
 
             var probeResult = await ProbeExistingBindingAsync(capabilityBroker, subject, logger, ct).ConfigureAwait(false);
             if (probeResult == ExistingBindingProbeResult.Usable)
             {
                 await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
+                return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, ct);
             }
 
             if (probeResult == ExistingBindingProbeResult.Unavailable)
@@ -183,7 +185,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 }, statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
+            return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, ct);
         }
 
         var commitResult = await DispatchCommitBindingAsync(bindingDispatch, subject, exchange.BindingId, logger, ct).ConfigureAwait(false);
@@ -197,7 +199,19 @@ public static class NyxIdLoginFinalizationEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
+        return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, ct);
+    }
+
+    private static async Task<IResult> CompleteLoginAsync(
+        BrokerAuthorizationCodeResult exchange,
+        NyxIdFinalizedUserInfo user,
+        bool bindingDispatchAccepted,
+        INyxIdCatalogRefreshLifecycle? catalogRefreshLifecycle,
+        CancellationToken ct)
+    {
+        if (catalogRefreshLifecycle is not null)
+            await catalogRefreshLifecycle.RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct).ConfigureAwait(false);
+        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted));
     }
 
     private enum ExistingBindingProbeResult

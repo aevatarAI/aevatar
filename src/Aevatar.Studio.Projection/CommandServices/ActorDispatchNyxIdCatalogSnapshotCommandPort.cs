@@ -66,9 +66,9 @@ internal sealed class ActorDispatchNyxIdCatalogSnapshotCommandPort(
 
     private static NyxIdCatalogSnapshotOwner MapOwner(NyxIdCatalogOwnerIdentity owner) => new()
     {
-        Authority = owner.Authority,
+        Authority = owner.Authority.Trim(),
         OwnerKind = (NyxIdCatalogSnapshotOwnerKind)(int)owner.OwnerKind,
-        OwnerSubject = owner.OwnerSubject,
+        OwnerSubject = owner.OwnerSubject.Trim(),
     };
 
     private static NyxIdCatalogSnapshotService MapService(NyxIdServiceGrant service)

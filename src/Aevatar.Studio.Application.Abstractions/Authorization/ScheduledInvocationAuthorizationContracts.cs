@@ -104,6 +104,14 @@ public interface INyxIdCatalogSnapshotCommandPort
         CancellationToken ct = default);
 }
 
+public interface INyxIdCatalogRefreshLifecycle
+{
+    Task RefreshPersonalAsync(
+        string verifiedOwnerSubject,
+        string bearerToken,
+        CancellationToken ct = default);
+}
+
 public interface IScheduledInvocationAuthorizationPlanner
 {
     Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(

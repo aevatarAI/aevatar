@@ -7,6 +7,7 @@ using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.Studio.Application.Authorization;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -17,6 +18,34 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class NyxIdLoginFinalizationEndpointsTests
 {
+    [Fact]
+    public async Task Finalize_ShouldRefreshCatalogForVerifiedNyxIdOwner()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle();
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+            },
+            new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+                "binding-alpha",
+                CreateIdToken(new { uid = "nyx-owner-alpha" }),
+                "bearer-alpha")),
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
+            NullLoggerFactory.Instance,
+            catalogRefreshLifecycle: lifecycle);
+
+        var (statusCode, _) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        lifecycle.Requests.Should().ContainSingle().Which.Should().Be(("nyx-owner-alpha", "bearer-alpha"));
+    }
+
     [Fact]
     public async Task Config_ShouldReturnBrokerOAuthClientUsedByFinalizeExchange()
     {
@@ -441,6 +470,17 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     private sealed record LoginErrorResponse(string Error, string Detail);
+
+    private sealed class RecordingCatalogRefreshLifecycle : INyxIdCatalogRefreshLifecycle
+    {
+        public List<(string OwnerSubject, string BearerToken)> Requests { get; } = [];
+
+        public Task RefreshPersonalAsync(string verifiedOwnerSubject, string bearerToken, CancellationToken ct = default)
+        {
+            Requests.Add((verifiedOwnerSubject, bearerToken));
+            return Task.CompletedTask;
+        }
+    }
 
     private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
         new()

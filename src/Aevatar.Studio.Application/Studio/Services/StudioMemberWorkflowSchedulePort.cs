@@ -91,18 +91,18 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             EnsureCredentialMatchesPlan(credential, current.Plan);
             schedule = await EnsureScheduleAsync(
-            scheduleId,
-            request.DisplayName,
-            scopeId,
-            memberId,
-            publishedServiceId,
-            NormalizeOptional(request.Prompt) ?? string.Empty,
-            BuildScheduleAuth(credential),
-            ToScheduleAuthorizationFact(current.Plan),
-            new ScheduledDispatchMutationContext(scopeId, callerSubject),
-            scheduleCron,
-            scheduleTimezone,
-            ct);
+                scheduleId,
+                request.DisplayName,
+                scopeId,
+                memberId,
+                publishedServiceId,
+                NormalizeOptional(request.Prompt) ?? string.Empty,
+                BuildScheduleAuth(credential),
+                ToScheduleAuthorizationFact(current.Plan),
+                new ScheduledDispatchMutationContext(scopeId, callerSubject),
+                scheduleCron,
+                scheduleTimezone,
+                ct);
             if (!schedule.Accepted)
                 throw new InvalidOperationException("scheduled_dispatch_rejected");
         }

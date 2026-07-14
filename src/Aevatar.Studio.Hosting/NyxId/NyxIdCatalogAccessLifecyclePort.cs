@@ -13,7 +13,9 @@ internal sealed class NyxIdCatalogAccessLifecyclePort(
     public Task InvalidateAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
     {
         var authority = NyxIdAuthorityResolver.ResolveNyxIdAuthorityBase(configuration);
-        if (string.IsNullOrWhiteSpace(authority) || string.IsNullOrWhiteSpace(subject.ExternalUserId))
+        if (string.IsNullOrWhiteSpace(authority) ||
+            !string.Equals(subject.Platform, Aevatar.Foundation.Abstractions.OwnerScope.NyxIdPlatform, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(subject.ExternalUserId))
             return Task.CompletedTask;
         return commandPort.InvalidateAsync(new NyxIdCatalogOwnerIdentity
         {

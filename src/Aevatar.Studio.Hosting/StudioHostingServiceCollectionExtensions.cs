@@ -55,6 +55,8 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetRequiredService<Aevatar.Studio.Application.Authorization.INyxIdCatalogSnapshotCommandPort>(),
             configuration,
             sp.GetService<TimeProvider>() ?? TimeProvider.System));
+        services.TryAddSingleton<Aevatar.Studio.Application.Authorization.INyxIdCatalogRefreshLifecycle,
+            NyxIdCatalogRefreshLifecycle>();
         services.AddWorkflowBoardExecutionProjectionAdapter();
         return services;
     }
