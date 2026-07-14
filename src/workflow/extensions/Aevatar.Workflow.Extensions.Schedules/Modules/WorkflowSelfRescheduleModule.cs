@@ -31,7 +31,7 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
         if (!IsScheduleStep(request.StepType))
             return;
 
-        var parseResult = TryBuildConfiguration(request, out var configuration, out var error);
+        var parseResult = TryBuildConfiguration(request, ctx, out var configuration, out var error);
         if (!parseResult)
         {
             await PublishFailureAsync(ctx, request, error, ct);
@@ -77,6 +77,7 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
 
     private static bool TryBuildConfiguration(
         StepRequestEvent request,
+        IWorkflowExecutionContext ctx,
         out WorkflowScheduleConfiguration? configuration,
         out string error)
     {
@@ -93,6 +94,18 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
         if (scopeId == null)
             return false;
 
+        var runScopeId = ctx.ScopeId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(runScopeId))
+        {
+            error = "workflow run scope is required for self_reschedule.";
+            return false;
+        }
+        if (!string.Equals(scopeId, runScopeId, StringComparison.Ordinal))
+        {
+            error = "scope_id must match the workflow run scope.";
+            return false;
+        }
+
         var workflowName = GetOptional(request.Parameters, "workflow_name");
         var serviceId = GetOptional(request.Parameters, "service_id");
         if (string.IsNullOrWhiteSpace(workflowName) && string.IsNullOrWhiteSpace(serviceId))
@@ -104,6 +117,30 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
         var prompt = GetOptional(request.Parameters, "prompt");
         if (string.IsNullOrWhiteSpace(prompt))
             prompt = request.Input ?? string.Empty;
+
+        WorkflowScheduleAuth? auth = null;
+        if (!string.Equals(scheduleId, ctx.ScheduleId?.Trim(), StringComparison.Ordinal))
+        {
+            var authority = ctx.CallerNyxIdAuthority;
+            var platform = authority?.Platform?.Trim() ?? string.Empty;
+            var externalUserId = authority?.ExternalUserId?.Trim() ?? string.Empty;
+            var capabilityScope = authority?.Scope?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(platform) ||
+                string.IsNullOrWhiteSpace(externalUserId) ||
+                string.IsNullOrWhiteSpace(capabilityScope))
+            {
+                error = "workflow caller NyxID authority is required to create a different schedule.";
+                return false;
+            }
+
+            auth = new WorkflowScheduleAuth(
+                SenderNyxId: new WorkflowScheduleNyxIdCredentialSource(
+                    new WorkflowScheduleNyxIdSubjectRef(
+                        platform,
+                        authority?.Tenant?.Trim() ?? string.Empty,
+                        externalUserId),
+                    capabilityScope));
+        }
 
         configuration = new WorkflowScheduleConfiguration(
             scheduleId,
@@ -118,7 +155,9 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
             AppId: GetOptional(request.Parameters, "app_id"),
             Namespace: GetOptional(request.Parameters, "namespace"),
             ServiceId: serviceId,
-            RevisionId: GetOptional(request.Parameters, "revision_id"));
+            RevisionId: GetOptional(request.Parameters, "revision_id"),
+            Auth: auth,
+            MutationContext: null);
         error = string.Empty;
         return true;
     }

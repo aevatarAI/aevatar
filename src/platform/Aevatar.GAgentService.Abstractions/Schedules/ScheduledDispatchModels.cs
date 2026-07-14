@@ -185,13 +185,16 @@ public interface IScheduledDispatchCredentialAdmissionPort
 public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,
     string? AccessToken = null,
-    string? Error = null)
+    string? Error = null,
+    DateTimeOffset? ExpiresAt = null)
 {
-    public static ScheduledServiceInvocationCredentialExchangeResult Success(string accessToken) =>
-        new(true, accessToken, null);
+    public static ScheduledServiceInvocationCredentialExchangeResult Success(
+        string accessToken,
+        DateTimeOffset? expiresAt = null) =>
+        new(true, accessToken, null, expiresAt);
 
     public static ScheduledServiceInvocationCredentialExchangeResult Failure(string error) =>
-        new(false, null, error);
+        new(false, null, error, null);
 }
 
 public sealed record ScheduledDispatchConfiguration(

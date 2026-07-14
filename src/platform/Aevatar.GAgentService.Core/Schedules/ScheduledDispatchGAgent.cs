@@ -1339,6 +1339,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 Version = reference.Version,
                 OwnerScopeKey = NormalizeOptional(reference.OwnerScopeKey),
                 CreatedAtUnixMs = reference.CreatedAtUnixMs,
+                ExpiresAtUnixMs = reference.ExpiresAtUnixMs,
             };
 
     private static ScheduledServiceInvocationNyxIdCredentialSourceState NormalizeNyxIdSource(

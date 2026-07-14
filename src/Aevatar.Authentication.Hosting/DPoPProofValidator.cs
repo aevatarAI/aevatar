@@ -36,6 +36,7 @@ public sealed record DPoPValidationResult(bool Succeeded, string? ErrorCode = nu
 /// <item><c>htm</c> equals the request method and <c>htu</c> equals the request URI;</item>
 /// <item><c>iat</c> is within the configured freshness window;</item>
 /// <item>the proof <c>jwk</c> thumbprint (RFC 7638) equals the access token <c>cnf.jkt</c>;</item>
+/// <item><c>ath</c> equals the SHA-256 hash of the presented access token;</item>
 /// <item><c>jti</c> is present and (via <see cref="IDPoPReplayGuard"/>) not a replay.</item>
 /// </list>
 /// </para>
@@ -79,6 +80,7 @@ public sealed class DPoPProofValidator
     /// <param name="iatSkewSeconds">Freshness window for the proof <c>iat</c>, in seconds.</param>
     public async Task<DPoPValidationResult> ValidateAsync(
         string? proofToken,
+        string? accessToken,
         string? confirmationThumbprint,
         string httpMethod,
         string httpUri,
@@ -87,6 +89,9 @@ public sealed class DPoPProofValidator
     {
         if (string.IsNullOrWhiteSpace(proofToken))
             return DPoPValidationResult.Fail("dpop_proof_missing", "DPoP proof header is missing.");
+
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return DPoPValidationResult.Fail("dpop_access_token_missing", "Presented access token is missing.");
 
         if (string.IsNullOrWhiteSpace(confirmationThumbprint))
             return DPoPValidationResult.Fail("dpop_cnf_missing", "Access token has no cnf.jkt confirmation.");
@@ -144,6 +149,12 @@ public sealed class DPoPProofValidator
         var htu = proof.Payload.TryGetValue("htu", out var htuValue) ? htuValue?.ToString() : null;
         if (!HtuMatches(htu, httpUri))
             return DPoPValidationResult.Fail("dpop_htu_mismatch", "DPoP proof htu does not match the request URI.");
+
+        // RFC 9449 section 7: a protected-resource proof is bound to the exact serialized
+        // access token, not merely to the same proof key.
+        var accessTokenBinding = ValidateAccessTokenBinding(proof, accessToken);
+        if (!accessTokenBinding.Succeeded)
+            return accessTokenBinding;
 
         // (c) iat freshness window.
         if (!TryGetIat(proof, out var iat))
@@ -333,6 +344,23 @@ public sealed class DPoPProofValidator
 
         iat = DateTimeOffset.FromUnixTimeSeconds(seconds);
         return true;
+    }
+
+    private static DPoPValidationResult ValidateAccessTokenBinding(
+        JwtSecurityToken proof,
+        string accessToken)
+    {
+        var ath = proof.Payload.TryGetValue("ath", out var athValue) ? athValue?.ToString() : null;
+        if (string.IsNullOrWhiteSpace(ath))
+            return DPoPValidationResult.Fail("dpop_ath_missing", "DPoP proof is missing ath.");
+
+        var expectedAth = Base64UrlEncoder.Encode(
+            SHA256.HashData(Encoding.UTF8.GetBytes(accessToken)));
+        return FixedTimeEquals(ath, expectedAth)
+            ? DPoPValidationResult.Success
+            : DPoPValidationResult.Fail(
+                "dpop_ath_mismatch",
+                "DPoP proof ath does not match the access token.");
     }
 
     private static bool FixedTimeEquals(string left, string right)

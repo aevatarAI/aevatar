@@ -64,7 +64,13 @@ public static class ServiceCollectionExtensions
         services.AddMemoryCache();
         var optionsBuilder = services.AddOptions<ObservatoryAdminAuthorizationOptions>();
         if (configuration is not null)
+        {
+            // Bind the retired section first so an existing CrossScopeEnabled=false kill switch
+            // remains fail-safe during deployment migration. The canonical section is applied
+            // second and therefore wins when operators have explicitly moved the setting.
+            optionsBuilder.Bind(configuration.GetSection(ObservatoryAdminAuthorizationOptions.LegacyConfigSection));
             optionsBuilder.Bind(configuration.GetSection(ObservatoryAdminAuthorizationOptions.ConfigSection));
+        }
         if (configure is not null)
             optionsBuilder.Configure(configure);
 

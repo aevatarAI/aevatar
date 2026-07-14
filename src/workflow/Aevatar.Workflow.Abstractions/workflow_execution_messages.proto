@@ -76,6 +76,14 @@ message WorkflowCallerCredential {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
   aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
+  WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
+}
+
+message WorkflowCallerNyxIdAuthority {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
+  string scope = 4;
 }
 
 message WorkflowExternalIngressContext {

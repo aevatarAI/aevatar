@@ -34,6 +34,7 @@ public sealed class GarnetBackedSecretVault : ISecretVault
         ct.ThrowIfCancellationRequested();
 
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var expiresAtUnixMs = request.ExpiresAt?.ToUniversalTime().ToUnixTimeMilliseconds() ?? 0;
         var record = new GarnetSecretVaultRecord
         {
             Ref = GarnetSecretRecordIds.NewSecretReference("sec_"),
@@ -44,14 +45,18 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             Status = GarnetSecretRecordStatus.Active,
             Fingerprint = GarnetSecretRecordCrypto.Fingerprint(request.Secret, _keyring),
             CreatedAtUnixMs = now,
-            ExpiresAtUnixMs = request.ExpiresAt?.ToUniversalTime().ToUnixTimeMilliseconds() ?? 0,
+            ExpiresAtUnixMs = expiresAtUnixMs,
         };
         record.EncryptedSecret = GarnetSecretRecordCrypto.Encrypt(
             request.Secret,
             _keyring,
             GarnetSecretRecordIds.VaultAssociatedData(record));
 
-        await _store.SetAsync(BuildKey(record.Ref), record.ToByteArray(), expiry: null, ct);
+        await _store.SetAsync(
+            BuildKey(record.Ref),
+            record.ToByteArray(),
+            StorageTtl(expiresAtUnixMs, now),
+            ct);
         return new StoreSecretResult(ToReference(record));
     }
 
@@ -100,6 +105,7 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             request.OwnerScopeKey,
             request.SubjectId,
             "rotate");
+        var remainingTtl = RemainingTtlForRotation(record);
 
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         var updated = record.Clone();
@@ -115,6 +121,7 @@ public sealed class GarnetBackedSecretVault : ISecretVault
             BuildKey(record.Ref),
             read.Bytes!,
             updated.ToByteArray(),
+            remainingTtl,
             ct);
         if (!replaced)
             throw new InvalidOperationException("Secret reference changed before rotate could be committed.");
@@ -240,6 +247,24 @@ public sealed class GarnetBackedSecretVault : ISecretVault
     private bool IsExpired(GarnetSecretVaultRecord record) =>
         record.ExpiresAtUnixMs > 0 &&
         record.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+    private static TimeSpan? StorageTtl(long expiresAtUnixMs, long nowUnixMs) =>
+        expiresAtUnixMs == 0
+            ? null
+            : TimeSpan.FromMilliseconds(Math.Max(1, expiresAtUnixMs - nowUnixMs));
+
+    private TimeSpan? RemainingTtlForRotation(GarnetSecretVaultRecord record)
+    {
+        if (record.ExpiresAtUnixMs == 0)
+            return null;
+
+        var remainingMilliseconds =
+            record.ExpiresAtUnixMs - _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        if (remainingMilliseconds <= 0)
+            throw new InvalidOperationException("Expired secret references cannot be rotated.");
+
+        return TimeSpan.FromMilliseconds(remainingMilliseconds);
+    }
 
     private static void ValidateStoreRequest(StoreSecretRequest request)
     {

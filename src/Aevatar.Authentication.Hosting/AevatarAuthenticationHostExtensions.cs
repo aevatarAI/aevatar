@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Authentication.ScopeServiceTokens;
@@ -20,6 +21,7 @@ namespace Aevatar.Authentication.Hosting;
 public static class AevatarAuthenticationHostExtensions
 {
     internal const string DisabledAuthenticationScheme = "AevatarDisabled";
+    private static readonly object RawAccessTokenItemKey = new();
 
     /// <summary>
     /// Registers JWT Bearer authentication by default.
@@ -79,6 +81,20 @@ public static class AevatarAuthenticationHostExtensions
                     OnTokenValidated = OnTokenValidatedValidateDPoP,
                     OnMessageReceived = context =>
                     {
+                        var authorization = context.Request.Headers.Authorization.FirstOrDefault();
+                        if (AuthenticationHeaderValue.TryParse(authorization, out var header) &&
+                            !string.IsNullOrWhiteSpace(header.Parameter))
+                        {
+                            if (string.Equals(header.Scheme, "DPoP", StringComparison.OrdinalIgnoreCase))
+                                context.Token = header.Parameter.Trim();
+
+                            if (string.Equals(header.Scheme, "DPoP", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(header.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase))
+                            {
+                                context.HttpContext.Items[RawAccessTokenItemKey] = header.Parameter.Trim();
+                            }
+                        }
+
                         if (context.Request.Path.StartsWithSegments("/ws/voice") ||
                             context.Request.Path.StartsWithSegments("/whip/offer"))
                         {
@@ -90,6 +106,7 @@ public static class AevatarAuthenticationHostExtensions
                             if (!string.IsNullOrWhiteSpace(subprotocolToken))
                             {
                                 context.Token = subprotocolToken;
+                                context.HttpContext.Items[RawAccessTokenItemKey] = subprotocolToken;
                             }
                             // Fallback: legacy ?access_token= query param (older clients). The
                             // request-log redactor scrubs it from logs; new clients should use
@@ -98,7 +115,10 @@ public static class AevatarAuthenticationHostExtensions
                             {
                                 var accessToken = accessTokenValues.FirstOrDefault();
                                 if (!string.IsNullOrWhiteSpace(accessToken))
+                                {
                                     context.Token = accessToken.Trim();
+                                    context.HttpContext.Items[RawAccessTokenItemKey] = context.Token;
+                                }
                             }
                         }
 
@@ -113,12 +133,12 @@ public static class AevatarAuthenticationHostExtensions
                     ConfigureScopeServiceTokenValidation(jwt, options, keyProvider));
         }
 
-        // DPoP (RFC 9449) sender-constraint validation. The validator and a no-op replay
-        // guard are always registered so hosts can enable the check via configuration alone;
-        // the OnTokenValidated hook is a no-op unless Aevatar:Authentication:DPoP:Enabled=true,
-        // so default bearer behavior is unchanged.
+        // DPoP (RFC 9449) sender-constraint validation. Hosts enabling it must replace the
+        // no-op replay guard with a shared atomic implementation; the startup validator below
+        // fails closed if that production requirement is missed.
         builder.Services.TryAddSingleton<IDPoPReplayGuard, NoOpDPoPReplayGuard>();
         builder.Services.TryAddSingleton<DPoPProofValidator>();
+        builder.Services.AddHostedService<DPoPReplayGuardStartupValidator>();
 
         // Audience defense: warn (never fail closed) when audience validation is silently off
         // outside Development. Emitted once at startup via a hosted service so a real logger is
@@ -151,19 +171,27 @@ public static class AevatarAuthenticationHostExtensions
             issuers.Add(authority);
             issuers.Add(authority.TrimEnd('/'));
         }
+        if (issuers.Contains(keyProvider.Issuer, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Scope service token issuer must be distinct from the OIDC authority issuer.");
+        }
+
+        var authorityIssuers = issuers.Distinct(StringComparer.Ordinal).ToArray();
         issuers.Add(keyProvider.Issuer);
 
         jwt.TokenValidationParameters.ValidIssuers = issuers.Distinct(StringComparer.Ordinal).ToArray();
         var signingKeys = keyProvider.ValidationKeys.Select(key => key.ValidationKey).ToArray();
         jwt.TokenValidationParameters.IssuerSigningKeys = signingKeys;
 
-        // Defense-in-depth: bind the scope-token issuer to the scope-token keys only. Tokens
-        // from an unknown/OIDC issuer fall back to all configured keys, so nothing that
-        // validates today stops validating (see PerIssuerSigningKeyResolver).
+        // Bind scope tokens to local scope keys and authority tokens to discovery keys. Unknown
+        // issuers receive no keys, so signature resolution itself preserves the issuer boundary.
         var resolver = new PerIssuerSigningKeyResolver(
+            authorityIssuers,
             [keyProvider.Issuer],
             signingKeys);
-        jwt.TokenValidationParameters.IssuerSigningKeyResolver = resolver.Resolve;
+        jwt.TokenValidationParameters.IssuerSigningKeyResolver = null;
+        jwt.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration = resolver.Resolve;
 
         if (!string.IsNullOrWhiteSpace(keyProvider.Audience))
         {
@@ -219,12 +247,16 @@ public static class AevatarAuthenticationHostExtensions
             return; // Not a sender-constrained token; nothing to enforce.
 
         var proofToken = context.Request.Headers["DPoP"].FirstOrDefault();
+        var accessToken = context.HttpContext.Items.TryGetValue(RawAccessTokenItemKey, out var rawToken)
+            ? rawToken as string
+            : null;
         var validator = context.HttpContext.RequestServices.GetRequiredService<DPoPProofValidator>();
         var request = context.Request;
         var requestUri = $"{request.Scheme}://{request.Host}{request.PathBase}{request.Path}";
 
         var result = await validator.ValidateAsync(
             proofToken,
+            accessToken,
             confirmationThumbprint,
             request.Method,
             requestUri,
@@ -278,6 +310,34 @@ public static class AevatarAuthenticationHostExtensions
 
         return enabled;
     }
+}
+
+internal sealed class DPoPReplayGuardStartupValidator : IHostedService
+{
+    private readonly IOptions<AevatarAuthenticationOptions> _options;
+    private readonly IDPoPReplayGuard _replayGuard;
+
+    public DPoPReplayGuardStartupValidator(
+        IOptions<AevatarAuthenticationOptions> options,
+        IDPoPReplayGuard replayGuard)
+    {
+        _options = options;
+        _replayGuard = replayGuard;
+    }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (_options.Value.DPoP.Enabled && _replayGuard is NoOpDPoPReplayGuard)
+        {
+            throw new InvalidOperationException(
+                "DPoP is enabled but no shared IDPoPReplayGuard is registered. " +
+                "Configure an atomic TTL-backed replay guard before starting the host.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>

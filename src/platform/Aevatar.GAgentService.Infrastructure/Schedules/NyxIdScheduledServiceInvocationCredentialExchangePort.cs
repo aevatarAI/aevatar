@@ -48,7 +48,11 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
                     "NyxID credential exchange returned an empty access token.");
             }
 
-            return ScheduledServiceInvocationCredentialExchangeResult.Success(handle.AccessToken);
+            return ScheduledServiceInvocationCredentialExchangeResult.Success(
+                handle.AccessToken,
+                handle.ExpiresAtUnix > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(handle.ExpiresAtUnix)
+                    : null);
         }
         catch (BindingNotFoundException)
         {

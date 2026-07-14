@@ -5,6 +5,8 @@ using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Hooks;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Workflow.Abstractions;
@@ -16,6 +18,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.Workflow.Core.Tests;
 
@@ -28,6 +31,108 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
 {
     private const string ChildActorId = "scope-workflow:wf:run:child-executor";
+
+    [Fact]
+    public async Task CompletedScheduledRun_ShouldRevokeDurableCallerCredential()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            "schedule:schedule-1",
+            "nyxid::scope-1",
+            "caller-token",
+            "test",
+            DateTimeOffset.UtcNow.AddMinutes(5)));
+        var runId = "run-scheduled-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, secretVault: vault);
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            CallerCredential = new WorkflowCallerCredential
+            {
+                DurableCallerCredential = new DurableCallerCredentialRef
+                {
+                    Ref = stored.Reference.Ref,
+                    Purpose = stored.Reference.Purpose,
+                    OwnerScopeKey = stored.Reference.OwnerScopeKey,
+                    SubjectId = "nyxid::scope-1",
+                    SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                },
+            },
+        }));
+
+        await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            RunId = runId,
+            WorkflowName = "wf_relayed",
+            Success = true,
+            Output = "done",
+        });
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            stored.Reference.Purpose,
+            stored.Reference.OwnerScopeKey,
+            "nyxid::scope-1",
+            "verify-terminal-cleanup"));
+        resolved.Resolved.Should().BeFalse();
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.Revoked);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TerminalScheduledRun_WhenVaultRevokeStalls_ShouldTimeOutAndContinue(bool completed)
+    {
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 7, 14, 12, 0, 0, TimeSpan.Zero));
+        var vault = new CancellationAwareStalledSecretVault();
+        var runId = "run-scheduled-stalled-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, secretVault: vault, timeProvider: clock);
+        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            CallerCredential = new WorkflowCallerCredential
+            {
+                DurableCallerCredential = new DurableCallerCredentialRef
+                {
+                    Ref = "sec-stalled",
+                    Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                    OwnerScopeKey = "schedule:schedule-1",
+                    SubjectId = "nyxid::scope-1",
+                    SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                },
+            },
+        }));
+        harness.Publisher.Published.Clear();
+
+        var terminalTask = completed
+            ? harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+            {
+                RunId = runId,
+                WorkflowName = "wf_relayed",
+                Success = true,
+                Output = "done",
+            })
+            : harness.Agent.HandleWorkflowStopped(new WorkflowStoppedEvent
+            {
+                RunId = runId,
+                WorkflowName = "wf_relayed",
+                Reason = "operator stop",
+            });
+
+        await vault.RevokeStarted;
+        harness.Agent.State.Status.Should().Be(completed ? "completed" : "stopped");
+        terminalTask.IsCompleted.Should().BeFalse();
+        harness.Publisher.Published.Should().NotContain(x => x.Audience == TopologyAudience.Parent);
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        await terminalTask;
+        await vault.CancellationObserved;
+        harness.Publisher.Published.Should().Contain(x => x.Audience == TopologyAudience.Parent);
+    }
 
     [Fact]
     public async Task RelayedOwnRunCompletedFailure_FromSubActor_ShouldAdoptTerminalFailedStatus()
@@ -275,7 +380,11 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         return harness;
     }
 
-    private static async Task<RunHarness> CreateRunAsync(string runId, RecordingEventStore? eventStore = null)
+    private static async Task<RunHarness> CreateRunAsync(
+        string runId,
+        RecordingEventStore? eventStore = null,
+        ISecretVault? secretVault = null,
+        TimeProvider? timeProvider = null)
     {
         eventStore ??= new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
@@ -284,7 +393,9 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             new UnsupportedActorRuntime(),
             new UnsupportedActorRuntime(),
             new EmptyEventModuleFactory(),
-            [new EmptyWorkflowModulePack()])
+            [new EmptyWorkflowModulePack()],
+            secretVault: secretVault,
+            timeProvider: timeProvider)
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(eventStore),
             EventPublisher = topologyPublisher,
@@ -309,6 +420,43 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         }
 
         return new RunHarness(agent, runId, eventStore, committedHook, topologyPublisher);
+    }
+
+    private sealed class CancellationAwareStalledSecretVault : ISecretVault
+    {
+        private readonly TaskCompletionSource _revokeStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _cancellationObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task RevokeStarted => _revokeStarted.Task;
+
+        public Task CancellationObserved => _cancellationObserved.Task;
+
+        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ResolveSecretResult> ResolveAsync(ResolveSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async Task<RevokeSecretResult> RevokeAsync(
+            RevokeSecretRequest request,
+            CancellationToken ct = default)
+        {
+            _revokeStarted.TrySetResult();
+            var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(
+                static state => ((TaskCompletionSource)state!).TrySetResult(),
+                canceled);
+
+            await canceled.Task;
+            _cancellationObserved.TrySetResult();
+            ct.ThrowIfCancellationRequested();
+            return new RevokeSecretResult(false);
+        }
     }
 
     // Seed a recoverable pending sub-workflow invocation directly into the run's committed event stream.

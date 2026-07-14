@@ -13,6 +13,7 @@ public sealed class DPoPProofValidatorTests
 {
     private const string Method = "POST";
     private const string Uri = "https://api.example.com/resource";
+    private const string AccessToken = "access-token-A";
 
     [Fact]
     public async Task ValidateAsync_WhenProofIsCorrectlyBound_ShouldSucceed()
@@ -21,7 +22,7 @@ public sealed class DPoPProofValidatorTests
         var jkt = ComputeEcThumbprint(key);
         var proof = CreateProof(key, Method, Uri, DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"));
 
-        var result = await CreateValidator().ValidateAsync(proof, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(proof, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeTrue(result.ErrorCode);
     }
@@ -33,7 +34,7 @@ public sealed class DPoPProofValidatorTests
         var jkt = ComputeEcThumbprint(key);
         var proof = CreateProof(key, Method, "https://api.example.com/OTHER", DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"));
 
-        var result = await CreateValidator().ValidateAsync(proof, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(proof, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_htu_mismatch");
@@ -46,7 +47,7 @@ public sealed class DPoPProofValidatorTests
         var jkt = ComputeEcThumbprint(key);
         var proof = CreateProof(key, "GET", Uri, DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"));
 
-        var result = await CreateValidator().ValidateAsync(proof, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(proof, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_htm_mismatch");
@@ -61,7 +62,7 @@ public sealed class DPoPProofValidatorTests
         var proof = CreateProof(proofKey, Method, Uri, DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"));
 
         // The proof is signed by proofKey but the access token was bound to otherKey.
-        var result = await CreateValidator().ValidateAsync(proof, foreignThumbprint, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(proof, AccessToken, foreignThumbprint, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_thumbprint_mismatch");
@@ -74,7 +75,7 @@ public sealed class DPoPProofValidatorTests
         var jkt = ComputeEcThumbprint(key);
         var proof = CreateProof(key, Method, Uri, DateTimeOffset.UtcNow.AddMinutes(-10), Guid.NewGuid().ToString("N"));
 
-        var result = await CreateValidator().ValidateAsync(proof, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(proof, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_iat_stale");
@@ -87,7 +88,7 @@ public sealed class DPoPProofValidatorTests
         var jkt = ComputeEcThumbprint(key);
         var proof = CreateProof(key, Method, Uri, DateTimeOffset.UtcNow, jti: null);
 
-        var result = await CreateValidator().ValidateAsync(proof, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(proof, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_jti_missing");
@@ -103,7 +104,7 @@ public sealed class DPoPProofValidatorTests
         // Advertise proofKey's public jwk in the header, but sign with a different key.
         var proof = CreateProof(proofKey, Method, Uri, DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"), signWith: signingKey);
 
-        var result = await CreateValidator().ValidateAsync(proof, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(proof, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_signature_invalid");
@@ -117,10 +118,60 @@ public sealed class DPoPProofValidatorTests
         var proof = CreateProof(key, Method, Uri, DateTimeOffset.UtcNow, "repeated-jti");
         var validator = new DPoPProofValidator(new RejectingReplayGuard());
 
-        var result = await validator.ValidateAsync(proof, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await validator.ValidateAsync(proof, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_jti_replayed");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenAthTargetsAnotherAccessToken_ShouldFail()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var jkt = ComputeEcThumbprint(key);
+        var proof = CreateProof(
+            key,
+            Method,
+            Uri,
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid().ToString("N"),
+            athAccessToken: "access-token-B");
+
+        var result = await CreateValidator().ValidateAsync(
+            proof,
+            AccessToken,
+            jkt,
+            Method,
+            Uri,
+            iatSkewSeconds: 60);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("dpop_ath_mismatch");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenAthIsMissing_ShouldFail()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var jkt = ComputeEcThumbprint(key);
+        var proof = CreateProof(
+            key,
+            Method,
+            Uri,
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid().ToString("N"),
+            athAccessToken: null);
+
+        var result = await CreateValidator().ValidateAsync(
+            proof,
+            AccessToken,
+            jkt,
+            Method,
+            Uri,
+            iatSkewSeconds: 60);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("dpop_ath_missing");
     }
 
     [Fact]
@@ -129,18 +180,18 @@ public sealed class DPoPProofValidatorTests
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         var jkt = ComputeEcThumbprint(key);
 
-        var result = await CreateValidator().ValidateAsync(null, jkt, Method, Uri, iatSkewSeconds: 60);
+        var result = await CreateValidator().ValidateAsync(null, AccessToken, jkt, Method, Uri, iatSkewSeconds: 60);
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_proof_missing");
     }
 
     [Fact]
-    public void NoOpDPoPReplayGuard_ShouldAlwaysTreatJtiAsFresh()
+    public async Task NoOpDPoPReplayGuard_ShouldAlwaysTreatJtiAsFresh()
     {
         var guard = new NoOpDPoPReplayGuard();
 
-        guard.TryRegisterAsync("any-jti").AsTask().GetAwaiter().GetResult().Should().BeTrue();
+        (await guard.TryRegisterAsync("any-jti")).Should().BeTrue();
     }
 
     [Fact]
@@ -240,7 +291,7 @@ public sealed class DPoPProofValidatorTests
 
     /// <summary>
     /// Builds a DPoP proof JWT: header carries typ=dpop+jwt and the public jwk, payload carries
-    /// htm/htu/iat/jti, and the whole thing is ES256-signed with <paramref name="signWith"/>
+    /// htm/htu/iat/jti/ath, and the whole thing is ES256-signed with <paramref name="signWith"/>
     /// (defaults to <paramref name="key"/>).
     /// </summary>
     private static string CreateProof(
@@ -249,7 +300,8 @@ public sealed class DPoPProofValidatorTests
         string htu,
         DateTimeOffset iat,
         string? jti,
-        ECDsa? signWith = null)
+        ECDsa? signWith = null,
+        string? athAccessToken = AccessToken)
     {
         var publicJwk = JsonWebKeyConverter.ConvertFromECDsaSecurityKey(new ECDsaSecurityKey(key));
         var jwkJson =
@@ -265,6 +317,12 @@ public sealed class DPoPProofValidatorTests
         };
         if (jti is not null)
             payloadMembers.Add($"\"jti\":\"{jti}\"");
+        if (athAccessToken is not null)
+        {
+            var ath = Base64UrlEncoder.Encode(
+                SHA256.HashData(Encoding.UTF8.GetBytes(athAccessToken)));
+            payloadMembers.Add($"\"ath\":\"{ath}\"");
+        }
         var payload = "{" + string.Join(",", payloadMembers) + "}";
 
         var signingInput =

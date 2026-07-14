@@ -2,6 +2,7 @@ using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
 
 namespace Aevatar.Workflow.Application.Observatory;
 
@@ -373,7 +374,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 StepId = snapshot.DeadLetterFailedCompensationStepId,
                 Message = string.IsNullOrWhiteSpace(snapshot.DeadLetterError)
                     ? "Workflow compensation entered dead-letter state."
-                    : snapshot.DeadLetterError,
+                    : WorkflowAuditTextSanitizer.Sanitize(snapshot.DeadLetterError),
                 Hint = snapshot.DeadLetterRemainingUncompensated > 0
                     ? $"Compensation stopped with {snapshot.DeadLetterRemainingUncompensated} uncompensated step(s)."
                     : "Compensation stopped in a terminal dead-letter state.",
@@ -388,7 +389,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 Severity = "error",
                 Code = "current_state_last_error",
                 Source = "current-state",
-                Message = snapshot.LastError,
+                Message = WorkflowAuditTextSanitizer.Sanitize(snapshot.LastError),
                 Hint = "This is the latest committed error on the workflow current-state read model.",
             });
         }

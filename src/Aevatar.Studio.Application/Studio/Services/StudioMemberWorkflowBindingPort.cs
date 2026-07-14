@@ -11,37 +11,22 @@ namespace Aevatar.Studio.Application.Studio.Services;
 
 public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindingPort
 {
-    private static readonly TimeSpan BindingRunPollInterval = TimeSpan.FromSeconds(5);
-    private const int MaxBindingRunPollAttempts = 36;
-
     private readonly IStudioMemberService _memberService;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly IScopeWorkflowSaveAndBindPort _saveAndBindPort;
     private readonly IStudioMemberCommandPort _memberCommandPort;
-    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
     public StudioMemberWorkflowBindingPort(
         IStudioMemberService memberService,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IScopeWorkflowSaveAndBindPort saveAndBindPort,
         IStudioMemberCommandPort memberCommandPort)
-        : this(memberService, workflowDefinitionParser, saveAndBindPort, memberCommandPort, Task.Delay)
-    {
-    }
-
-    internal StudioMemberWorkflowBindingPort(
-        IStudioMemberService memberService,
-        IWorkflowDefinitionParser workflowDefinitionParser,
-        IScopeWorkflowSaveAndBindPort saveAndBindPort,
-        IStudioMemberCommandPort memberCommandPort,
-        Func<TimeSpan, CancellationToken, Task> delayAsync)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _workflowDefinitionParser = workflowDefinitionParser
             ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         _saveAndBindPort = saveAndBindPort ?? throw new ArgumentNullException(nameof(saveAndBindPort));
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
-        _delayAsync = delayAsync ?? throw new ArgumentNullException(nameof(delayAsync));
     }
 
     public async Task<StudioMemberWorkflowBindingResult> BindAsync(
@@ -84,18 +69,16 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                     [request.WorkflowYaml])),
             ct);
 
-        var terminalRun = await WaitForTerminalBindingRunAsync(receipt, ct);
         return new StudioMemberWorkflowBindingResult(
             Success: true,
             ScopeId: receipt.ScopeId,
             MemberId: receipt.MemberId,
             Operation: StudioMemberWorkflowBindingOperationNames.Bind,
-            Status: terminalRun.Status,
+            Status: receipt.Status,
             BindingRunId: receipt.BindingRunId,
             AckStage: receipt.AckStage,
             BindingRunRole: receipt.BindingRunRole,
-            WorkflowId: workflowId,
-            RevisionId: terminalRun.Result?.RevisionId);
+            WorkflowId: workflowId);
     }
 
     private async Task<StudioMemberWorkflowBindingResult> SaveAndBindPublishedMemberAsync(
@@ -156,58 +139,6 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
 
     private static bool IsPublished(StudioMemberDetailResponse member) =>
         member.LastBinding is not null || !string.IsNullOrWhiteSpace(member.Summary.LastBoundRevisionId);
-
-    private async Task<StudioMemberBindingRunStatusResponse> WaitForTerminalBindingRunAsync(
-        StudioMemberBindingAcceptedResponse receipt,
-        CancellationToken ct)
-    {
-        for (var attempt = 1; attempt <= MaxBindingRunPollAttempts; attempt++)
-        {
-            var run = await TryGetBindingRunAsync(receipt, ct);
-            if (run is null)
-            {
-                if (attempt < MaxBindingRunPollAttempts)
-                    await _delayAsync(BindingRunPollInterval, ct);
-                continue;
-            }
-
-            if (string.Equals(run.Status, StudioMemberBindingRunStatusNames.Succeeded, StringComparison.Ordinal))
-                return run;
-
-            if (string.Equals(run.Status, StudioMemberBindingRunStatusNames.Failed, StringComparison.Ordinal) ||
-                string.Equals(run.Status, StudioMemberBindingRunStatusNames.Rejected, StringComparison.Ordinal))
-            {
-                var message = run.Failure?.Message;
-                throw new InvalidOperationException(string.IsNullOrWhiteSpace(message)
-                    ? $"Studio member workflow binding ended with status '{run.Status}'."
-                    : $"Studio member workflow binding ended with status '{run.Status}': {message}");
-            }
-
-            if (attempt < MaxBindingRunPollAttempts)
-                await _delayAsync(BindingRunPollInterval, ct);
-        }
-
-        throw new InvalidOperationException(
-            $"Studio member workflow binding did not reach a terminal status after {MaxBindingRunPollAttempts} checks.");
-    }
-
-    private async Task<StudioMemberBindingRunStatusResponse?> TryGetBindingRunAsync(
-        StudioMemberBindingAcceptedResponse receipt,
-        CancellationToken ct)
-    {
-        try
-        {
-            return await _memberService.GetBindingRunAsync(
-                receipt.ScopeId,
-                receipt.MemberId,
-                receipt.BindingRunId,
-                ct);
-        }
-        catch (StudioMemberBindingRunNotFoundException)
-        {
-            return null;
-        }
-    }
 
     private static string ResolveWorkflowId(StudioMemberWorkflowBindingRequest request) =>
         string.IsNullOrWhiteSpace(request.WorkflowId)

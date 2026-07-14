@@ -353,8 +353,48 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.Created.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    [InlineData(nameof(ScheduleMutationKind.Update))]
+    public async Task ExistingWorkflowServiceMutation_WhenAuthIsOmitted_ShouldAdmitPersistedCredentialSource(
+        string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = CreateSummaryDetail(
+                "schedule-workflow-existing-auth",
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+                ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId),
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateServiceInvocationConfiguration(
+            "schedule-workflow-existing-auth",
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+
+        if (mutation == ScheduleMutationKind.Ensure)
+            await service.EnsureAsync(configuration);
+        else
+            await service.UpdateAsync(configuration.ScheduleId, configuration);
+
+        var dispatched = mutation == ScheduleMutationKind.Ensure
+            ? actorPort.Ensured.Should().ContainSingle().Which.Configuration
+            : actorPort.Updated.Should().ContainSingle().Which.Configuration;
+        dispatched.Target.ServiceInvocation!.Auth.Should().BeNull();
+        dispatched.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+    }
+
     [Fact]
-    public async Task UpdateAsync_ShouldRejectWorkflowServiceInvocationWithoutCredentialSource()
+    public async Task EnsureAsync_ForNewWorkflowServiceWithoutCredentialSource_ShouldRejectBeforeDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
         var service = new ScheduledDispatchApplicationService(
@@ -363,16 +403,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetPreparationService(),
             new NoopScheduledDispatchCredentialAdmissionPort());
 
-        var act = () => service.UpdateAsync(
-            "schedule-workflow-no-auth",
-            CreateServiceInvocationConfiguration(
-                "schedule-workflow-no-auth",
-                ScheduledDispatchScheduleKind.Workflow,
-                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService));
+        var act = () => service.EnsureAsync(CreateServiceInvocationConfiguration(
+            "schedule-workflow-new-no-auth",
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService));
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*requires a typed service invocation credential source*");
-        actorPort.Updated.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
     }
 
     [Fact]

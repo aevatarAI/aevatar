@@ -29,6 +29,47 @@ public sealed class LarkNotificationRenderingTests
     }
 
     [Fact]
+    public void RemoteApprovalMessageMapper_ShouldRenderOnlyRedactedArgumentShape()
+    {
+        const string path = "/prod/private";
+        const string password = "password-secret";
+        const string authorization = "Bearer authorization-secret";
+        const string command = "rm -rf /private/data";
+        const string secretPropertyName = "sk_live_property_name_secret";
+        var baseNotification = BuildRemoteApprovalNotification("agent-1");
+        var notification = baseNotification with
+        {
+            Request = baseNotification.Request with
+            {
+                ArgumentsJson = $$"""
+                    {
+                      "path": "{{path}}",
+                      "credentials": { "password": "{{password}}", "authorization": "{{authorization}}" },
+                      "command": "{{command}}",
+                      "force": true,
+                      "retries": 3,
+                      "{{secretPropertyName}}": "value"
+                    }
+                    """,
+            },
+        };
+
+        var content = RemoteToolApprovalMessageMapper.ToMessageContent(notification);
+
+        var text = content.Cards.Should().ContainSingle().Subject.Text;
+        text.Should().Contain("Arguments (values redacted):");
+        text.Should().Contain("\"field_1\":\"[string redacted]\"");
+        text.Should().Contain("\"field_2\":{");
+        text.Should().Contain("\"field_4\":\"[boolean redacted]\"");
+        text.Should().Contain("\"field_5\":\"[number redacted]\"");
+        text.Should().NotContain(path);
+        text.Should().NotContain(password);
+        text.Should().NotContain(authorization);
+        text.Should().NotContain(command);
+        text.Should().NotContain(secretPropertyName);
+    }
+
+    [Fact]
     public void RemoteApprovalMessageMapper_ShouldRenderInteractiveLarkCardThroughNativeProducer()
     {
         var producer = new LarkChannelNativeMessageProducer(new LarkMessageComposer());
