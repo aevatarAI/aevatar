@@ -308,6 +308,89 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldLateResolveBorrowedScheduledAgentKeyOnEveryCall()
+    {
+        var vault = new DeterministicBorrowedCredentialVault("agent-key-token", "rotated-agent-key-token");
+        var host = new RecordingStateHost(secretVault: vault);
+        var handle = new DurableCallerCredentialRef
+        {
+            Ref = "sec-agent-key",
+            Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            OwnerScopeKey = "scope-key",
+            SubjectId = "key-schedule",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { DurableCallerCredential = handle });
+
+        var first = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+        vault.AdvanceBy(TimeSpan.FromMinutes(6));
+        var second = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        first.Found.Should().BeTrue();
+        first.Credential.BearerToken.Should().Be("agent-key-token");
+        second.Found.Should().BeTrue();
+        second.Credential.BearerToken.Should().Be("rotated-agent-key-token");
+        vault.ResolveRequests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldFailClosedForRevokedOrMismatchedBorrowedHandle()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-key",
+            "key-schedule",
+            "agent-key-token",
+            "test"));
+        var handle = new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "wrong-key",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
+        var host = new RecordingStateHost(secretVault: vault);
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { DurableCallerCredential = handle });
+
+        var mismatched = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+        handle.SubjectId = "key-schedule";
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { DurableCallerCredential = handle });
+        await vault.RevokeAsync(new RevokeSecretRequest(
+            handle.Ref,
+            handle.Purpose,
+            handle.OwnerScopeKey,
+            handle.SubjectId,
+            "test revoke"));
+        var revoked = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        var expiredSecret = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-key",
+            "expired-key",
+            "expired-agent-key-token",
+            "test",
+            DateTimeOffset.UtcNow.AddMinutes(-1)));
+        handle.Ref = expiredSecret.Reference.Ref;
+        handle.SubjectId = "expired-key";
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { DurableCallerCredential = handle });
+        var expired = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        mismatched.Found.Should().BeFalse();
+        revoked.Found.Should().BeFalse();
+        expired.Found.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task WorkflowCallerCredentialRuntimeAccess_ShouldFailClosed_WhenDurableHandleCannotResolve()
     {
         var noVaultHost = new RecordingStateHost();
@@ -969,6 +1052,41 @@ public sealed class WorkflowExecutionRuntimeContextTests
             _ = request;
             return Task.FromResult(new RevokeRuntimeSecretResult(false));
         }
+    }
+
+    private sealed class DeterministicBorrowedCredentialVault(
+        string initialSecret,
+        string rotatedSecret) : ISecretVault
+    {
+        private TimeSpan _elapsed;
+
+        public List<ResolveSecretRequest> ResolveRequests { get; } = [];
+
+        public void AdvanceBy(TimeSpan elapsed) => _elapsed += elapsed;
+
+        public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ResolveSecretResult> ResolveAsync(
+            ResolveSecretRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ResolveRequests.Add(request);
+            var secret = _elapsed > TimeSpan.FromMinutes(5) ? rotatedSecret : initialSecret;
+            return Task.FromResult(new ResolveSecretResult(new SecretReference
+            {
+                Ref = request.Ref,
+                Purpose = request.Purpose,
+                OwnerScopeKey = request.OwnerScopeKey,
+            }, secret));
+        }
+
+        public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private static void ApplyDelta(

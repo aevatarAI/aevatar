@@ -72,6 +72,19 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationDispatchRequest dispatch,
         CancellationToken ct)
     {
+        if (dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential &&
+            dispatch.Auth?.Source is ScheduledInvocationAgentKeyCredentialReference agentKey)
+        {
+            return EnrichChatPayload(
+                dispatch.Request,
+                dispatch.Headers,
+                new ExchangedCredential(
+                    CredentialRole.ScheduledInvocationAgentKey,
+                    string.Empty,
+                    CreateBorrowedDurableCallerCredential(agentKey)),
+                projectNyxIdAccessTokenToWorkflowCallerCredential: true);
+        }
+
         var exchange = await ExchangeCredentialAsync(dispatch, ct);
         if (exchange == null)
         {
@@ -113,6 +126,29 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 token,
                 durableCallerCredential),
             dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
+    }
+
+    private static DurableCallerCredentialRef CreateBorrowedDurableCallerCredential(
+        ScheduledInvocationAgentKeyCredentialReference source)
+    {
+        var reference = source.SecretReference;
+        if (string.IsNullOrWhiteSpace(reference.Ref))
+            throw new InvalidOperationException("Scheduled invocation agent key secret reference is missing.");
+        if (string.IsNullOrWhiteSpace(reference.Purpose))
+            throw new InvalidOperationException("Scheduled invocation agent key secret reference purpose is missing.");
+        if (string.IsNullOrWhiteSpace(reference.OwnerScopeKey))
+            throw new InvalidOperationException("Scheduled invocation agent key owner scope is missing.");
+        if (string.IsNullOrWhiteSpace(source.ApiKeyId))
+            throw new InvalidOperationException("Scheduled invocation agent key id is missing.");
+
+        return new DurableCallerCredentialRef
+        {
+            Ref = reference.Ref,
+            Purpose = reference.Purpose,
+            OwnerScopeKey = reference.OwnerScopeKey,
+            SubjectId = source.ApiKeyId,
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
     }
 
     private async Task<DurableCallerCredentialRef> StoreDurableCallerCredentialAsync(
@@ -344,8 +380,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             var existingControl = LLMControlContextMapper.FromPayload(chatRequest.LlmControl);
             var ownerCredential = credential.Role is CredentialRole.ScopeOwner or CredentialRole.ScheduledInvocationAgentKey;
             var projectWorkflowCallerCredential =
-                projectNyxIdAccessTokenToWorkflowCallerCredential &&
-                credential.Role != CredentialRole.ScheduledInvocationAgentKey;
+                projectNyxIdAccessTokenToWorkflowCallerCredential;
             var control = projectWorkflowCallerCredential
                 ? existingControl with
                 {
