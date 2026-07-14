@@ -85,14 +85,16 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential &&
             dispatch.Auth?.Source is ScheduledInvocationAgentKeyCredentialReference agentKey)
         {
-            return EnrichChatPayload(
-                dispatch.Request,
-                dispatch.Headers,
-                new ExchangedCredential(
-                    CredentialRole.ScheduledInvocationAgentKey,
-                    string.Empty,
-                    CreateBorrowedDurableCallerCredential(agentKey)),
-                projectNyxIdAccessTokenToWorkflowCallerCredential: true);
+            return new PreparedInvocationRequest(
+                EnrichChatPayload(
+                    dispatch.Request,
+                    dispatch.Headers,
+                    new ExchangedCredential(
+                        CredentialRole.ScheduledInvocationAgentKey,
+                        string.Empty,
+                        CreateBorrowedDurableCallerCredential(agentKey)),
+                    projectNyxIdAccessTokenToWorkflowCallerCredential: true),
+                DurableCallerCredential: null);
         }
 
         var exchange = await ExchangeCredentialAsync(dispatch, ct);
