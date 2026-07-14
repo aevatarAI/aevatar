@@ -215,6 +215,9 @@ public static class IdentityServiceCollectionExtensions
         // so the typed-client pattern's per-resolution handler rotation works
         // as designed.
         services.AddHttpClient<NyxIdDynamicClientRegistrationClient>();
+        var bootstrapOptions = services.AddOptions<AevatarOAuthClientBootstrapOptions>();
+        if (configuration is not null)
+            bootstrapOptions.Bind(configuration.GetSection(AevatarOAuthClientBootstrapOptions.SectionName));
         services.AddHostedService<AevatarOAuthClientBootstrapService>();
 
         // ─── Webhook validators ───

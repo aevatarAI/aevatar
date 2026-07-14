@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity;
 
@@ -21,18 +22,31 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     public const string ForceDcrOnStartupEnvVar = "AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP";
 
     private readonly ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _provisioningDispatch;
+    private readonly AevatarOAuthClientBootstrapOptions _options;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
 
     public AevatarOAuthClientBootstrapService(
         ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> provisioningDispatch,
+        IOptions<AevatarOAuthClientBootstrapOptions> options,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         _provisioningDispatch = provisioningDispatch ?? throw new ArgumentNullException(nameof(provisioningDispatch));
+        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public Task StartAsync(CancellationToken cancellationToken) =>
-        DispatchBootstrapIntentAsync(cancellationToken);
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled)
+        {
+            _logger.LogInformation(
+                "Aevatar OAuth client bootstrap disabled by {SectionName}:Enabled=false.",
+                AevatarOAuthClientBootstrapOptions.SectionName);
+            return Task.CompletedTask;
+        }
+
+        return DispatchBootstrapIntentAsync(cancellationToken);
+    }
 
     public Task StopAsync(CancellationToken cancellationToken) =>
         Task.CompletedTask;
