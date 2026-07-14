@@ -7,20 +7,20 @@ public static class AevatarOAuthClientResources
 {
     public const string RequiredServiceSlug = "aevatar";
 
-    public static string RequiredServiceResourceUri(string nyxIdAuthority)
+    public static string RequiredServiceResourceUri(string nyxIdApiBaseUrl)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(nyxIdAuthority);
-        return $"{nyxIdAuthority.TrimEnd('/')}/api/v1/proxy/s/{RequiredServiceSlug}";
+        ArgumentException.ThrowIfNullOrWhiteSpace(nyxIdApiBaseUrl);
+        return $"{nyxIdApiBaseUrl.Trim().TrimEnd('/')}/api/v1/proxy/s/{RequiredServiceSlug}";
     }
 
-    public static string[] RequiredResourceUris(string nyxIdAuthority) =>
-        [RequiredServiceResourceUri(nyxIdAuthority)];
+    public static string[] RequiredResourceUris(string nyxIdApiBaseUrl) =>
+        [RequiredServiceResourceUri(nyxIdApiBaseUrl)];
 
     public static bool ContainsRequiredResource(
         IEnumerable<string>? resources,
-        string nyxIdAuthority)
+        string nyxIdApiBaseUrl)
     {
-        var required = RequiredServiceResourceUri(nyxIdAuthority);
+        var required = RequiredServiceResourceUri(nyxIdApiBaseUrl);
         return resources?.Any(resource => string.Equals(
             resource?.Trim(),
             required,
