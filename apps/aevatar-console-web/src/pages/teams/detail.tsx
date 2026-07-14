@@ -49,7 +49,7 @@ import {
   isAbortLikeError,
   type TeamTestErrorDescription,
 } from "./components/teamTestErrors";
-import TeamMembersTab from "./tabs/TeamMembersTab";
+import TeamMembersTab, { type TeamMembersDeleteTarget } from "./tabs/TeamMembersTab";
 import TeamAutomationsTab from "./tabs/TeamAutomationsTab";
 import TeamOverviewTab from "./tabs/TeamOverviewTab";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
@@ -493,6 +493,7 @@ const TeamDetailPage: React.FC = () => {
     React.useState<TeamTestLastResult | null>(null);
   const [teamTestModalOpen, setTeamTestModalOpen] = React.useState(false);
   const [entryActionBusyMemberId, setEntryActionBusyMemberId] = React.useState("");
+  const [deletingMemberId, setDeletingMemberId] = React.useState("");
   const teamTestAbortRef = React.useRef<AbortController | null>(null);
   const { token } = theme.useToken();
 
@@ -533,6 +534,7 @@ const TeamDetailPage: React.FC = () => {
     setTeamTestStatus("idle");
     setTeamTestModalOpen(routeState.testTeam);
     setEntryActionBusyMemberId("");
+    setDeletingMemberId("");
   }, [routeState.testTeam, scopeId, selectedTeamId]);
 
   React.useEffect(
@@ -625,12 +627,13 @@ const TeamDetailPage: React.FC = () => {
   });
   const hasBoundWorkflowMembersForStudioLinks = React.useMemo(
     () =>
-      activeTab === "members" &&
       (teamMembersQuery.data?.members ?? []).some(isBoundWorkflowRosterMember),
-    [activeTab, teamMembersQuery.data?.members],
+    [teamMembersQuery.data?.members],
   );
   const shouldLoadMemberStudioLinkCatalog =
-    hasTeamIdentity && hasBoundWorkflowMembersForStudioLinks;
+    hasTeamIdentity &&
+    activeTab === "members" &&
+    hasBoundWorkflowMembersForStudioLinks;
   const memberStudioLinkWorkflowsQuery = useQuery({
     enabled: shouldLoadMemberStudioLinkCatalog,
     queryFn: () => scopesApi.listWorkflows(scopeId),
@@ -653,9 +656,14 @@ const TeamDetailPage: React.FC = () => {
         emptyWorkflowSummaries
       : workflowsQuery.data ?? emptyWorkflowSummaries;
   const isResolvingMemberStudioLinks =
-    shouldLoadMemberStudioLinkCatalog &&
-    (memberStudioLinkWorkflowsQuery.isLoading ||
-      memberStudioLinkServicesQuery.isLoading);
+    hasBoundWorkflowMembersForStudioLinks &&
+    ((activeTab === "members" &&
+      shouldLoadMemberStudioLinkCatalog &&
+      (memberStudioLinkWorkflowsQuery.isLoading ||
+        memberStudioLinkServicesQuery.isLoading)) ||
+      (activeTab === "overview" &&
+        shouldLoadTeamRuntimeLens &&
+        (workflowsQuery.isLoading || servicesQuery.isLoading)));
   const automationServiceRuntimeByServiceId = React.useMemo(() => {
     const services =
       activeTab === "automations"
@@ -906,6 +914,9 @@ const TeamDetailPage: React.FC = () => {
           member,
           workflows: workflowSummariesForMemberLinks,
         });
+        const canOpenWorkflowStudio =
+          isWorkflowMember &&
+          (!isBoundMember || memberDraftWorkflowId.length > 0);
         const workflowStudioHref = buildTeamMemberWorkflowStudioHref({
           memberId: member.memberId,
           mode: "edit-member",
@@ -934,15 +945,16 @@ const TeamDetailPage: React.FC = () => {
         });
 
         return {
-          buildStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          buildStudioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
           description: trimText(member.description),
           canInvokeAsEntry: isBoundMember,
           canInvokeMember: isWorkflowMember && isBoundMember,
           canOpenPublishedRuns: isWorkflowMember && isBoundMember,
           canSetAsEntry: Boolean(trimText(member.memberId)),
-          editStudioHref: isWorkflowMember ? workflowStudioHref : "",
+          editStudioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
           automationsHref: memberAutomationsHref,
           implementationKind: formatCompositionKind(member.implementationKind),
+          implementationKindRaw: trimText(member.implementationKind),
           invokeHref: isWorkflowMember ? memberInvokeHref : "",
           isServiceBound: isBoundMember,
           key: member.memberId,
@@ -960,12 +972,17 @@ const TeamDetailPage: React.FC = () => {
               ? t("teams.members.actions.publishedRuns.publishFirst", "Publish this member before viewing published runs.")
               : "",
           publishedRunsHref: memberPublishedRunsHref,
+          publishedServiceId,
           serviceId: publishedServiceId || "--",
           serviceIdentity: automationServiceRuntime?.identity,
           serviceRevisionId:
             trimText(automationServiceRuntime?.activeServingRevisionId) ||
             trimText(automationServiceRuntime?.defaultServingRevisionId),
-          studioHref: isWorkflowMember ? workflowStudioHref : "",
+          studioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
+          studioHrefDisabledReason:
+            isWorkflowMember && isBoundMember && !memberDraftWorkflowId
+              ? t("teams.detail.overview.composition.actions.workflowResolving", "Resolving the published workflow link.")
+              : "",
           canAutomateMember: isWorkflowMember && isBoundMember,
           automationDisabledReason: !isWorkflowMember
             ? t("teams.automations.member.workflowOnly", "Only workflow members can have recurring work.")
@@ -1047,11 +1064,8 @@ const TeamDetailPage: React.FC = () => {
     trimText(preferredMemberSummary?.displayName) ||
     teamRosterRows.find((row) => row.memberId === currentMemberId)?.name ||
     "--";
-  const currentMemberCardCaption = currentMemberId
-    ? t("teams.detail.overview.member.selectedCaption", "Selected from this team's members.")
-    : t("pages.teams.detail.copy.18", "No member selected yet");
   const currentMemberCardTooltip = currentMemberId
-    ? currentMemberCardCaption
+    ? t("teams.detail.overview.member.selectedCaption", "Selected from this team's members.")
     : t("pages.teams.detail.copy.19", "No member selected yet");
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
@@ -1090,27 +1104,14 @@ const TeamDetailPage: React.FC = () => {
   const currentRunPillText = hasVisibleRun
     ? t("pages.teams.detail.copy.25", "Run ·{value1}", { value1: currentRunFriendly })
     : t("pages.teams.detail.copy.26", "Next steps · Test team");
-  const currentServiceCardCaption = runtimeServiceId
+  const currentServiceCardTooltip = runtimeServiceId
     ? t("teams.detail.overview.service.boundCaption", "Traffic is routed through the bound service.")
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
       : t("pages.teams.detail.copy.27", "No service is visible yet.");
-  const currentServiceCardTooltip = runtimeServiceId
-    ? currentServiceCardCaption
-    : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
-      ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
-      : t("pages.teams.detail.copy.28", "No service is visible yet.");
-  const currentRunCardCaption = hasVisibleRun
+  const currentRunCardTooltip = hasVisibleRun
     ? t("teams.detail.overview.run.visibleCaption", "Latest run is available.")
     : t("pages.teams.detail.copy.29", "The latest runs will be displayed here after the testing team.");
-  const currentRunCardTooltip = hasVisibleRun
-    ? currentRunCardCaption
-    : t("pages.teams.detail.copy.30", "The latest runs will be displayed here after the testing team.");
-  const teamStartupGuidance = hasVisibleRun
-    ? t("pages.teams.detail.copy.31", "The recent runs are visible and you can continue to test the team or adjust the member configuration.")
-    : hasRunnableTeamEntry
-      ? t("pages.teams.detail.copy.32", "The team portal is ready, but not yet visibly running. Click \"Test Team\" to generate the first run.")
-      : t("pages.teams.detail.copy.33", "No entrance available yet. Configure entry members and services first, and then test the team.");
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
@@ -1118,29 +1119,21 @@ const TeamDetailPage: React.FC = () => {
   const configurationDetailRows = React.useMemo(
     () => [
       {
-        label: t("pages.teams.detail.copy.34", "team process"),
+        label: t("teams.detail.overview.configuration.workflow", "Team workflow"),
         note: activeWorkflowId
           ? t("teams.detail.overview.configuration.workflowLinked", "Workflow draft is linked.")
           : t("teams.detail.overview.configuration.workflowPending", "Workflow draft is not linked yet."),
         value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
       },
       {
-        label: t("pages.teams.detail.copy.35", "Binding method"),
-        note:
-          currentServiceFriendly !== "--"
-            ? t("pages.teams.detail.copy.36", "Currently routes to {value1}", { value1: currentServiceFriendly })
-            : t("pages.teams.detail.copy.37", "Currently, the main service entrance has not been matched."),
-        value: formatCompositionKind(lens.activeRevision?.implementationKind),
-      },
-      {
-        label: t("pages.teams.detail.copy.38", "Main service entrance"),
+        label: t("teams.detail.overview.configuration.primaryService", "Primary service entry"),
         note: runtimeServiceId || currentServiceKey !== "--"
           ? t("teams.detail.overview.service.configuredCaption", "Service routing is configured.")
           : t("pages.teams.detail.copy.37", "Currently, the main service entrance has not been matched."),
         value: currentServiceFriendly,
       },
       {
-        label: t("pages.teams.detail.copy.39", "Version ID"),
+        label: t("teams.detail.overview.configuration.versionStatus", "Version status"),
         note:
           currentRevisionId !== "--"
             ? t("teams.detail.overview.configuration.versionAvailable", "Current serving version is available.")
@@ -1154,7 +1147,6 @@ const TeamDetailPage: React.FC = () => {
       currentServiceFriendly,
       currentServiceKey,
       currentVersionFriendly,
-      lens.activeRevision?.implementationKind,
       runtimeServiceId,
       teamTitle,
       workflowNameValue,
@@ -1208,20 +1200,160 @@ const TeamDetailPage: React.FC = () => {
     workflowNameValue,
   ]);
   const overviewCompositionRows = React.useMemo(
-    () =>
-      compositionDisplayRows.map((row) => ({
+    () => {
+      if (teamRosterRows.length > 0) {
+        return teamRosterRows.map((row) => {
+          const serviceLabel = row.isServiceBound
+            ? t("teams.detail.overview.composition.serviceBound", "Service · {serviceId}", {
+                serviceId: row.serviceId,
+              })
+            : t("teams.detail.overview.composition.serviceUnbound", "Service not bound");
+          const runDisabledReason = !row.workflowSupported
+            ? t("teams.members.actions.workflowOnlyTitle", "Only workflow members can use this action.")
+            : !row.isServiceBound
+              ? t("teams.members.actions.invokeRequiresBinding", "Bind this member to a published service before invoking it.")
+              : "";
+          const configureLabel = row.isServiceBound
+            ? t("teams.detail.overview.composition.actions.workflow", "Workflow")
+            : t("teams.detail.overview.composition.actions.bindService", "Bind service");
+
+          return {
+            canRun: row.canInvokeMember,
+            canConfigure: row.workflowSupported && Boolean(row.studioHref),
+            configureDisabledReason: row.studioHrefDisabledReason,
+            configureHref: row.workflowSupported ? row.studioHref : "",
+            configureLabel,
+            entryLabel: row.isEntryMember
+              ? intl.formatMessage({ id: "teams.members.entry" })
+              : "",
+            key: row.key,
+            kindLabel: row.implementationKind,
+            kindStyle: resolveCompositionKindPillStyle(
+              token,
+              row.implementationKindRaw,
+            ),
+            name: row.name,
+            runDisabledReason,
+            runHref: row.canInvokeMember ? row.invokeHref : "",
+            selectedLabel:
+              row.isSelectedMember && !row.isEntryMember
+                ? intl.formatMessage({ id: "teams.members.selected" })
+                : "",
+            serviceLabel,
+            statusLabel: row.lifecycleLabel,
+            statusStyle: row.lifecycleStyle,
+            summary: row.description,
+          };
+        });
+      }
+
+      return compositionDisplayRows.map((row) => ({
         key: row.key,
         kindLabel: formatCompositionKind(row.kind),
         kindStyle: resolveCompositionKindPillStyle(token, row.kind),
         name: row.name,
         summary: row.summary,
-      })),
-    [compositionDisplayRows, token],
+      }));
+    },
+    [compositionDisplayRows, intl, teamRosterRows, token],
+  );
+  const entryRosterRow = React.useMemo(
+    () =>
+      entryMemberId
+        ? teamRosterRows.find((row) => row.memberId === entryMemberId) ?? null
+        : null,
+    [entryMemberId, teamRosterRows],
+  );
+  const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
+  const canRunTeamFromOverview = Boolean(
+    !isTeamArchived && entryRosterRow?.canInvokeAsEntry,
+  );
+  const teamRunDisabledReason = isTeamArchived
+    ? intl.formatMessage({ id: "teams.detail.test.archivedHint" })
+    : !entryMemberId
+      ? intl.formatMessage({ id: "teams.detail.test.entry.noneSelected" })
+      : !entryRosterRow?.canInvokeAsEntry
+        ? intl.formatMessage({ id: "teams.detail.test.entry.configuredNeedsBinding" })
+        : "";
+  const overviewLatestRuns = React.useMemo(
+    () =>
+      (runsQuery.data?.runs ?? []).slice(0, 5).map((run) => {
+        const runServiceId = trimText(run.serviceId);
+        const matchedMember = teamRosterRows.find(
+          (row) => trimText(row.publishedServiceId) === runServiceId,
+        );
+        const detailsHref = matchedMember?.canOpenPublishedRuns
+          ? buildTeamMemberPublishedRunsHref({
+              actorId: trimText(run.actorId) || undefined,
+              memberId: matchedMember.memberId,
+              runId: run.runId,
+              scopeId,
+              teamId: selectedTeamId,
+            })
+          : "";
+
+        return {
+          detailsHref,
+          detailItems: [
+            {
+              label: t("teams.detail.overview.history.details.run", "Run"),
+              value: run.runId,
+            },
+            {
+              label: t("teams.detail.overview.history.details.service", "Service"),
+              value:
+                runServiceId ||
+                t("teams.detail.overview.history.serviceUnknown", "Service unknown"),
+            },
+            {
+              label: t("teams.detail.overview.history.details.revision", "Revision"),
+              value:
+                trimText(run.revisionId) ||
+                t("teams.detail.overview.history.revisionUnknown", "Revision unknown"),
+            },
+          ],
+          detailTooltipLabel: t(
+            "teams.detail.overview.history.details.tooltip",
+            "Run technical details",
+          ),
+          memberLabel:
+            matchedMember?.name ||
+            t("teams.detail.overview.history.memberUnknown", "Unknown member"),
+          outputPreview:
+            trimText(run.lastError) ||
+            trimText(run.lastOutput) ||
+            t("teams.detail.overview.history.noOutput", "No output snapshot captured yet."),
+          runId: run.runId,
+          statusLabel: formatFriendlyStatus(run.completionStatus, intl),
+          statusStyle: resolveStatusPillStyle(token, run.completionStatus),
+          updatedLabel: formatCompactTimestamp(run.lastUpdatedAt),
+          workflowLabel:
+            trimText(run.workflowName) ||
+            t("teams.detail.overview.history.workflowUnknown", "Workflow unknown"),
+          workflowMetaLabel: t(
+            "teams.detail.overview.history.workflowMeta",
+            "Workflow · {workflowLabel}",
+            {
+              workflowLabel:
+                trimText(run.workflowName) ||
+                t("teams.detail.overview.history.workflowUnknown", "Workflow unknown"),
+            },
+          ),
+        };
+      }),
+    [
+      intl,
+      runsQuery.data?.runs,
+      scopeId,
+      selectedTeamId,
+      teamRosterRows,
+      token,
+    ],
   );
   const tabOptions: TeamTabOption[] = [
     { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
     { label: t("teams.detail.tabs.automations", "Automations"), value: "automations" },
-    { label: t("pages.teams.detail.copy.46", "team member"), value: "members" },
+    { label: t("pages.teams.detail.copy.46", "Team members"), value: "members" },
   ];
 
   const initialLoading =
@@ -1321,7 +1453,6 @@ const TeamDetailPage: React.FC = () => {
     teamSummaryQuery.data,
     intl,
   ]);
-  const isTeamArchived = normalizeStatus(teamSummaryQuery.data?.lifecycleStage) === "archived";
   const archiveTeamActionLabel =
     teamSummaryQuery.data && !isTeamArchived
       ? intl.formatMessage({ id: "teams.detail.actions.archive" })
@@ -1640,6 +1771,108 @@ const TeamDetailPage: React.FC = () => {
     teamSummaryQueryKey,
   ]);
 
+  const handleDeleteMember = React.useCallback(
+    (target: TeamMembersDeleteTarget) => {
+      const normalizedMemberId = trimText(target.memberId);
+      if (!scopeId || !selectedTeamId || !normalizedMemberId) {
+        return;
+      }
+
+      const memberLabel = trimText(target.name) || normalizedMemberId;
+
+      Modal.confirm({
+        autoFocusButton: "cancel",
+        cancelText: t("teams.members.delete.keep", "Keep member"),
+        centered: true,
+        content: (
+          <div style={{ display: "grid", gap: 12 }}>
+            <Typography.Text>
+              {t("teams.members.delete.confirm.body", "Delete")}{" "}
+              <Typography.Text strong>{memberLabel}</Typography.Text>{" "}
+              {t("teams.members.delete.confirm.body.suffix", "from this Team?")}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              {target.isEntryMember
+                ? t("teams.members.delete.entry.warning", "This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.")
+                : t("teams.members.delete.warning", "This removes the Studio member authority and Team roster entry. Published service artifacts, revisions, and historical runs stay intact.")}
+            </Typography.Text>
+          </div>
+        ),
+        okButtonProps: { danger: true },
+        okText: t("teams.members.actions.delete", "Delete member"),
+        title: t("teams.members.delete.title", "Delete member"),
+        onOk: async () => {
+          setDeletingMemberId(normalizedMemberId);
+          try {
+            try {
+              await studioApi.deleteMember({
+                scopeId,
+                memberId: normalizedMemberId,
+              });
+            } catch (error) {
+              if (!isStudioApiStatus(error, 404)) {
+                throw error;
+              }
+            }
+
+            queryClient.setQueryData<StudioMemberRoster | undefined>(
+              teamMembersQueryKey,
+              (current) =>
+                current
+                  ? {
+                      ...current,
+                      members: current.members.filter(
+                        (member) =>
+                          trimText(member.memberId) !== normalizedMemberId,
+                      ),
+                    }
+                  : current,
+            );
+            await refreshTeamAuthority();
+            if (
+              trimText(routeState.memberId) === normalizedMemberId ||
+              trimText(preferredMemberId) === normalizedMemberId
+            ) {
+              setPreferredMemberId("");
+              setPreferredServiceId("");
+              setPreferredRunId("");
+              history.replace(
+                buildTeamDetailHref({
+                  scopeId,
+                  teamId: selectedTeamId,
+                  tab: "members",
+                }),
+              );
+            }
+            void message.success(
+              t("teams.members.delete.success", "Deleted member {member}.", {
+                member: memberLabel,
+              }),
+            );
+          } catch (error) {
+            void message.error(
+              describeError(
+                error,
+                t("teams.members.delete.failed", "Failed to delete member."),
+              ),
+            );
+          } finally {
+            setDeletingMemberId("");
+          }
+        },
+      });
+    },
+    [
+      preferredMemberId,
+      queryClient,
+      refreshTeamAuthority,
+      routeState.memberId,
+      scopeId,
+      selectedTeamId,
+      teamMembersQueryKey,
+    ],
+  );
+
   const teamTestPanel = (
     <TeamTestPanel
       createMemberHref={createMemberHref}
@@ -1653,7 +1886,7 @@ const TeamDetailPage: React.FC = () => {
       onClearEntry={handleClearEntry}
       onNavigate={(href) => history.push(href)}
       onPromptChange={setTeamTestPrompt}
-      onSetEntryAndTest={(memberId) => void handleSetEntry(memberId, { test: true })}
+      onSetEntry={(memberId, options) => void handleSetEntry(memberId, options)}
       onStop={handleStopTeamTest}
       onTest={() => void streamTeamTest()}
       prompt={teamTestPrompt}
@@ -1678,15 +1911,12 @@ const TeamDetailPage: React.FC = () => {
           background: token.colorFillQuaternary,
           color: token.colorTextSecondary,
         }}
-        currentMemberCardCaption={currentMemberCardCaption}
         currentMemberCardTooltip={currentMemberCardTooltip}
         currentMemberLabel={currentMemberLabel}
-        currentRunCardCaption={currentRunCardCaption}
         currentRunCardTooltip={currentRunCardTooltip}
         currentRunFriendly={currentRunFriendly}
         currentRunPillStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
         currentRunPillText={currentRunPillText}
-        currentServiceCardCaption={currentServiceCardCaption}
         currentServiceCardTooltip={currentServiceCardTooltip}
         currentServiceFriendly={currentServiceFriendly}
         currentServicePillStyle={{
@@ -1698,6 +1928,7 @@ const TeamDetailPage: React.FC = () => {
         entryMemberId={entryMemberId || null}
         entryMemberLabel={entryMemberLabel}
         entryMemberUpdating={entryActionBusyMemberId === entryMemberClearingId}
+        latestRuns={overviewLatestRuns}
         latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
         latestVisibleUpdateNote={latestVisibleUpdateNote}
         onClearEntryMember={
@@ -1705,7 +1936,10 @@ const TeamDetailPage: React.FC = () => {
             ? () => void handleClearEntry()
             : undefined
         }
-        startupGuidance={teamStartupGuidance}
+        onNavigate={(href) => history.push(href)}
+        onOpenTeamTest={openTeamTestModal}
+        teamRunDisabled={!canRunTeamFromOverview}
+        teamRunDisabledReason={teamRunDisabledReason}
       />
     );
   };
@@ -1714,10 +1948,16 @@ const TeamDetailPage: React.FC = () => {
     return (
       <TeamMembersTab
         createMemberHref={createMemberHref}
+        deletingMemberId={deletingMemberId}
         entryActionBusyMemberId={entryActionBusyMemberId}
         onClearEntry={
           teamSummaryQuery.data && !isTeamArchived && entryMemberId
             ? () => void handleClearEntry()
+            : undefined
+        }
+        onDeleteMember={
+          teamSummaryQuery.data && !isTeamArchived
+            ? (memberId) => handleDeleteMember(memberId)
             : undefined
         }
         onNavigate={(href) => history.push(href)}

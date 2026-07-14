@@ -15,6 +15,11 @@ import { Empty } from "antd";
 import { RuntimeEventPreviewPanel } from "@/shared/agui/runtimeConversationPresentation";
 import { AevatarHeaderSelect } from "@/shared/ui/AevatarHeaderSelect";
 import {
+  AevatarLoadingDots,
+  AevatarLoadingPulseDot,
+  AevatarStreamingCursor,
+} from "@/shared/ui/AevatarLoading";
+import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
   AEVATAR_INTERACTIVE_CHIP_CLASS,
   joinInteractiveClassNames,
@@ -313,16 +318,7 @@ function StepIndicator({ step }: { step: StepInfo }): React.ReactElement {
         }}
       >
         {isRunning ? (
-          <span
-            style={{
-              animation: "pulse 1.5s ease-in-out infinite",
-              background: "#f59e0b",
-              borderRadius: 999,
-              display: "block",
-              height: 8,
-              width: 8,
-            }}
-          />
+          <AevatarLoadingPulseDot color="#f59e0b" size={8} />
         ) : isError ? (
           <span
             style={{
@@ -421,16 +417,7 @@ function ToolCallIndicator({ tool }: { tool: ToolCallInfo }): React.ReactElement
           }}
         >
           {tool.status === "running" ? (
-            <span
-              style={{
-                animation: "pulse 1.5s ease-in-out infinite",
-                background: "#60a5fa",
-                borderRadius: 999,
-                display: "block",
-                height: 6,
-                width: 6,
-              }}
-            />
+            <AevatarLoadingPulseDot color="#60a5fa" size={6} />
           ) : (
             <svg
               fill="none"
@@ -529,16 +516,7 @@ function ThinkingBlock({
         </svg>
         <span>{t("pages.chat.chatpresentation.thinking", "Thinking")}</span>
         {isStreaming ? (
-          <span
-            style={{
-              animation: "pulse 1.5s ease-in-out infinite",
-              background: "#a855f7",
-              borderRadius: 999,
-              display: "block",
-              height: 6,
-              width: 6,
-            }}
-          />
+          <AevatarLoadingPulseDot color="#a855f7" size={6} />
         ) : null}
       </button>
       {open ? (
@@ -1254,13 +1232,13 @@ export function ChatMessageBubble({
         <div
           style={{
             background: "#2563eb",
-            borderRadius: 18,
-            borderBottomRightRadius: 8,
+            borderRadius: 10,
+            borderBottomRightRadius: 4,
             color: "#ffffff",
             fontSize: 14,
-            lineHeight: 1.7,
-            maxWidth: "80%",
-            padding: "12px 16px",
+            lineHeight: 1.6,
+            maxWidth: "72%",
+            padding: "9px 12px",
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
           }}
@@ -1272,27 +1250,27 @@ export function ChatMessageBubble({
   }
 
   return (
-    <div style={{ display: "flex", gap: 12 }}>
+    <div style={{ display: "flex", gap: 10 }}>
       <div
         style={{
           alignItems: "center",
-          background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
+          background: "#eef2ff",
+          border: "1px solid #dbe4ff",
           borderRadius: 999,
-          boxShadow: "0 10px 25px rgba(99, 102, 241, 0.18)",
-          color: "#ffffff",
+          color: "#2563eb",
           display: "flex",
           flexShrink: 0,
-          height: 28,
+          height: 24,
           justifyContent: "center",
-          marginTop: 4,
-          width: 28,
+          marginTop: 3,
+          width: 24,
         }}
       >
         <svg
           fill="none"
           stroke="currentColor"
           strokeWidth={2}
-          style={{ height: 14, width: 14 }}
+          style={{ height: 12, width: 12 }}
           viewBox="0 0 24 24"
         >
           <path
@@ -1303,7 +1281,7 @@ export function ChatMessageBubble({
         </svg>
       </div>
 
-      <div style={{ flex: 1, maxWidth: "85%", minWidth: 0 }}>
+      <div style={{ flex: 1, maxWidth: "82%", minWidth: 0 }}>
         {message.thinking ? (
           <ThinkingBlock
             isStreaming={message.status === "streaming"}
@@ -1377,16 +1355,7 @@ export function ChatMessageBubble({
               </span>
               {message.steps?.some((step) => step.status === "running") ||
               message.toolCalls?.some((tool) => tool.status === "running") ? (
-                <span
-                  style={{
-                    animation: "pulse 1.5s ease-in-out infinite",
-                    background: "#f59e0b",
-                    borderRadius: 999,
-                    display: "block",
-                    height: 6,
-                    width: 6,
-                  }}
-                />
+                <AevatarLoadingPulseDot color="#f59e0b" size={6} />
               ) : null}
             </button>
             {actionsOpen ? (
@@ -1419,23 +1388,13 @@ export function ChatMessageBubble({
           style={{
             color: "#1f2937",
             fontSize: 14,
-            lineHeight: 1.75,
+            lineHeight: 1.65,
           }}
         >
           <div style={{ wordBreak: "break-word" }}>
             {renderContent(message.content)}
             {message.status === "streaming" && message.content ? (
-              <span
-                style={{
-                  animation: "blink 1s step-end infinite",
-                  background: "#9ca3af",
-                  display: "inline-block",
-                  height: 18,
-                  marginLeft: 4,
-                  verticalAlign: "text-bottom",
-                  width: 2,
-                }}
-              />
+              <AevatarStreamingCursor color="#9ca3af" />
             ) : null}
           </div>
           {!message.content && message.status === "streaming" ? (
@@ -1447,20 +1406,11 @@ export function ChatMessageBubble({
                 padding: "10px 0",
               }}
             >
-              {[0, 1, 2].map((index) => (
-                <span
-                  key={index}
-                  style={{
-                    animation: "bounce 1s ease-in-out infinite",
-                    animationDelay: `${index * 160}ms`,
-                    background: "#d1d5db",
-                    borderRadius: 999,
-                    display: "block",
-                    height: 6,
-                    width: 6,
-                  }}
-                />
-              ))}
+              <AevatarLoadingDots
+                ariaLabel="Assistant is responding"
+                color="#d1d5db"
+                size={6}
+              />
             </div>
           ) : null}
         </div>
@@ -2166,9 +2116,9 @@ export function ChatInput({
       <div
         style={{
           background: "#ffffff",
-          border: "1px solid #e7e5e4",
-          borderRadius: 18,
-          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.06)",
+          border: "1px solid #d8dee8",
+          borderRadius: 10,
+          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -2201,9 +2151,9 @@ export function ChatInput({
               color: "#111827",
               flex: 1,
               fontSize: 14,
-              minHeight: 62,
+              minHeight: 48,
               outline: "none",
-              padding: "12px 16px 8px",
+              padding: "11px 14px 8px",
               resize: "none",
             }}
             value={value}
@@ -2218,13 +2168,13 @@ export function ChatInput({
                   alignItems: "center",
                   background: "#ef4444",
                   border: "none",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   color: "#ffffff",
                   cursor: "pointer",
                   display: "flex",
-                  height: 34,
+                  height: 32,
                   justifyContent: "center",
-                  width: 34,
+                  width: 32,
                 }}
                 type="button"
               >
@@ -2242,15 +2192,15 @@ export function ChatInput({
                   alignItems: "center",
                   background: "#18181b",
                   border: "none",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   color: "#ffffff",
                   cursor:
                     !value.trim() || disabled ? "not-allowed" : "pointer",
                   display: "flex",
-                  height: 34,
+                  height: 32,
                   justifyContent: "center",
                   opacity: !value.trim() || disabled ? 0.28 : 1,
-                  width: 34,
+                  width: 32,
                 }}
                 type="button"
               >

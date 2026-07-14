@@ -1,6 +1,7 @@
 import {
   buildRuntimeExplorerHref,
   buildRuntimeMissionControlHref,
+  buildRuntimeMissionWallHref,
   buildRuntimeWorkflowRunHref,
   buildRuntimeRunsHref,
 } from './runtimeRoutes';
@@ -76,5 +77,15 @@ describe('runtimeRoutes', () => {
         scopeId: 'scope-a',
       }),
     ).toBe('/runtime/mission-control?runId=run-1&scopeId=scope-a');
+  });
+
+  it('builds Mission Wall links with wall-level focus context', () => {
+    expect(
+      buildRuntimeMissionWallHref({
+        focusRunId: 'run-1',
+        scopeId: 'scope-a',
+        teamId: 'team-a',
+      }),
+    ).toBe('/runtime/mission-wall?focusRunId=run-1&scopeId=scope-a&teamId=team-a');
   });
 });

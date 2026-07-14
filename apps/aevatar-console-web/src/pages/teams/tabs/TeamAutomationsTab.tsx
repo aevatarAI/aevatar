@@ -131,9 +131,37 @@ const responsiveStyle = `
   transform: translateY(-1px);
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1320px) {
   .team-automations-layout {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+.team-automation-row > * {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .team-automation-list-header {
+    display: none !important;
+  }
+
+  .team-automation-row {
+    align-items: start !important;
+    grid-template-columns: minmax(0, 1fr) max-content !important;
+    gap: 12px !important;
+  }
+
+  .team-automation-row__automation,
+  .team-automation-row__member,
+  .team-automation-row__schedule {
+    grid-column: 1;
+  }
+
+  .team-automation-actions {
+    align-self: start;
+    grid-column: 2;
+    grid-row: 1 / span 3;
   }
 }
 
@@ -146,6 +174,16 @@ const responsiveStyle = `
     width: 100%;
   }
 
+  .team-automation-summary {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .team-automation-form-schedule-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
+@media (max-width: 640px) {
   .team-automation-row {
     grid-template-columns: minmax(0, 1fr) !important;
     gap: 12px !important;
@@ -153,20 +191,10 @@ const responsiveStyle = `
   }
 
   .team-automation-actions {
+    grid-column: 1;
+    grid-row: auto;
     justify-content: flex-start !important;
     width: 100%;
-  }
-
-  .team-automation-list-header {
-    display: none !important;
-  }
-
-  .team-automation-summary {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-
-  .team-automation-form-schedule-grid {
-    grid-template-columns: minmax(0, 1fr) !important;
   }
 }
 
@@ -229,9 +257,10 @@ const commitmentRowStyle: React.CSSProperties = {
   display: "grid",
   gap: 14,
   gridTemplateColumns:
-    "minmax(180px, 1.16fr) minmax(132px, 0.72fr) minmax(112px, 0.48fr) minmax(142px, max-content)",
+    "minmax(0, 1.16fr) minmax(0, 0.72fr) minmax(0, 0.48fr) max-content",
   minWidth: 0,
   padding: 14,
+  width: "100%",
 };
 
 const automationSummaryGridStyle: React.CSSProperties = {
@@ -289,10 +318,13 @@ const automationActionGroupBaseStyle: React.CSSProperties = {
   alignItems: "center",
   borderRadius: 12,
   display: "flex",
+  flexWrap: "nowrap",
   gap: 4,
+  inlineSize: "max-content",
   justifyContent: "flex-end",
   justifySelf: "end",
-  minWidth: 0,
+  maxWidth: "100%",
+  minWidth: "max-content",
   padding: 4,
 };
 
@@ -1874,7 +1906,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   : undefined,
               }}
             >
-              <div style={{ display: "grid", gap: 7, minWidth: 0 }}>
+              <div
+                className="team-automation-row__automation"
+                style={{ display: "grid", gap: 7, minWidth: 0 }}
+              >
                 <div style={automationNameLineStyle}>
                   {renderStatusPill(schedule, manualRunFeedback)}
                   <Typography.Text ellipsis strong>
@@ -1904,7 +1939,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   </Typography.Text>
                 ) : null}
               </div>
-              <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
+              <div
+                className="team-automation-row__member"
+                style={{ display: "grid", gap: 5, minWidth: 0 }}
+              >
                 <Typography.Text ellipsis strong>
                   {member?.name ||
                     intl.formatMessage({
@@ -1921,7 +1959,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   })}
                 />
               </div>
-              <div style={{ display: "grid", gap: 5, minWidth: 0 }}>
+              <div
+                className="team-automation-row__schedule"
+                style={{ display: "grid", gap: 5, minWidth: 0 }}
+              >
                 <FactLine
                   monospace={false}
                   text={scheduleCadence.summary}

@@ -616,6 +616,7 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
 
         response.Should().NotBeNull();
         response!.Runs.Select(x => x.RunId).Should().Equal("run-match");
+        response.Runs[0].ScheduleId.Should().Be("schedule-a");
     }
 
     [Fact]
@@ -670,6 +671,70 @@ public sealed class ScopeServiceRunQueryEndpointTests : ScopeServiceEndpointTest
         response!.Runs.Select(x => x.RunId).Should().Equal("run-member-match");
         response.Runs[0].ActorId.Should().Be("run-actor-member-registry");
         response.Runs[0].DefinitionActorId.Should().Be("def-member-registry");
+        response.Runs[0].ScheduleId.Should().Be("schedule-member");
+        response.Runs[0].CommandId.Should().Be("cmd-run-member-match");
+        response.Runs[0].CorrelationId.Should().Be("corr-run-member-match");
+        response.Runs[0].EndpointId.Should().Be("run");
+        response.Runs[0].ImplementationKind.Should().Be(ServiceImplementationKind.Workflow.ToString());
+        response.Runs[0].Status.Should().Be(ServiceRunStatus.Completed.ToString());
+        response.Runs[0].CreatedAt.Should().Be(baseTime.AddMinutes(55));
+    }
+
+    [Fact]
+    public async Task ListMemberRunsEndpoint_ShouldResolvePublishedServiceBeforeApplyingScheduleFilter()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.MemberPublishedServiceResolver.Result = new MemberPublishedServiceResolution(
+            "scope-a",
+            "m-alpha",
+            "svc-alpha");
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "svc-alpha", "svc-alpha-actor");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:svc-alpha", "dep-1", "rev-1", "svc-alpha-actor");
+        var baseTime = DateTimeOffset.Parse("2026-04-27T00:00:00+00:00");
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "svc-alpha",
+            "run-schedule-a",
+            "schedule-a",
+            ServiceRunStatus.Completed,
+            baseTime.AddHours(1)));
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "svc-alpha",
+            "run-schedule-b",
+            "schedule-b",
+            ServiceRunStatus.Completed,
+            baseTime.AddHours(2)));
+        host.ServiceRunQueryPort.Upsert(BuildRunSnapshot(
+            "scope-a",
+            "m-alpha",
+            "run-wrong-identity",
+            "schedule-a",
+            ServiceRunStatus.Completed,
+            baseTime.AddHours(3)));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/scopes/scope-a/members/m-alpha/runs?take=10&scheduleId=schedule-a");
+        request.Headers.Add("X-Test-Scope-Id", "scope-a");
+        request.Headers.Add("X-Test-Member-Id", "m-alpha");
+
+        var httpResponse = await host.Client.SendAsync(request);
+        var response = await httpResponse.Content.ReadFromJsonAsync<ScopeServiceEndpoints.MemberScopeServiceRunCatalogHttpResponse>();
+
+        httpResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.MemberPublishedServiceResolver.Calls.Should().ContainSingle()
+            .Which.Should().Be(new MemberPublishedServiceResolveRequest("scope-a", "m-alpha"));
+        host.ServiceRunQueryPort.Queries.Should().ContainSingle()
+            .Which.Should().Be(new ServiceRunQuery("scope-a", "svc-alpha", 10, "schedule-a"));
+        response.Should().NotBeNull();
+        response!.MemberId.Should().Be("m-alpha");
+        response.PublishedServiceId.Should().Be("svc-alpha");
+        response.Runs.Should().ContainSingle();
+        response.Runs[0].RunId.Should().Be("run-schedule-a");
+        response.Runs[0].MemberId.Should().Be("m-alpha");
+        response.Runs[0].PublishedServiceId.Should().Be("svc-alpha");
+        response.Runs[0].ScheduleId.Should().Be("schedule-a");
     }
 
     [Fact]
