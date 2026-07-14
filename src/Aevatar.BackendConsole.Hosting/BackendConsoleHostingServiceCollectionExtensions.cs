@@ -61,8 +61,6 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         {
             options.NyxApiBaseUrl =
                 configuration["Aevatar:NyxId:ApiBaseUrl"]
-                ?? configuration["Aevatar:NyxId:Authority"]
-                ?? configuration["Aevatar:Authentication:Authority"]
                 ?? string.Empty;
         }
     }
@@ -79,20 +77,31 @@ public static class BackendConsoleHostingServiceCollectionExtensions
 
     private static void NormalizeOidcResources(BackendConsoleOptions options)
     {
+        options.NyxApiBaseUrl = options.NyxApiBaseUrl.Trim().TrimEnd('/');
         var resources = options.OidcResources
             .Select(resource => resource.Trim())
             .Where(resource => resource.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-        if (string.IsNullOrWhiteSpace(options.OidcAuthority))
+        if (string.IsNullOrWhiteSpace(options.NyxApiBaseUrl))
         {
             options.OidcResources = resources;
             return;
         }
 
         var requiredResource =
-            $"{options.OidcAuthority.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
+            $"{options.NyxApiBaseUrl.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
+        var legacyAuthorityResource = string.IsNullOrWhiteSpace(options.OidcAuthority)
+            ? null
+            : $"{options.OidcAuthority.Trim().TrimEnd('/')}/api/v1/proxy/s/aevatar";
+        if (!string.Equals(legacyAuthorityResource, requiredResource, StringComparison.Ordinal))
+        {
+            resources = resources
+                .Where(resource => !string.Equals(resource, legacyAuthorityResource, StringComparison.Ordinal))
+                .ToArray();
+        }
+
         options.OidcResources = resources.Contains(requiredResource, StringComparer.Ordinal)
             ? resources
             : [requiredResource, .. resources];

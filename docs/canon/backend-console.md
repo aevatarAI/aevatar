@@ -41,14 +41,14 @@ Nyx/OIDC deployment facts are host configuration, not page source:
 | `Aevatar:BackendConsole:OidcAuthority` | Browser OIDC authority; falls back to existing Nyx/Auth authority config when empty. |
 | `Aevatar:BackendConsole:OidcClientId` | Public OIDC client id used by browser PKCE. |
 | `Aevatar:BackendConsole:OidcScope` | Browser OIDC scope. |
-| `Aevatar:BackendConsole:OidcResources` | Additional RFC 8707 resource indicators. The host always includes `{OidcAuthority}/api/v1/proxy/s/aevatar`. |
-| `Aevatar:BackendConsole:NyxApiBaseUrl` | Nyx REST API base used by admin-only owner resolution. |
+| `Aevatar:BackendConsole:OidcResources` | Additional RFC 8707 resource indicators. The host always includes `{NyxApiBaseUrl}/api/v1/proxy/s/aevatar`. |
+| `Aevatar:BackendConsole:NyxApiBaseUrl` | Canonical NyxID API/resource-server base. It falls back only to `Aevatar:NyxId:ApiBaseUrl`, never to the browser OIDC authority. |
 | `Aevatar:BackendConsole:StorageKey` | Shared browser localStorage/sessionStorage prefix. |
 | `Aevatar:BackendConsole:DefaultReturnPath` | Safe default redirect path after `/auto/callback`. |
 
 Each configurable HTML asset contains `__BACKEND_CONSOLE_CONFIG__`. The serving helper replaces that placeholder with JSON rendered from `BackendConsoleOptions`. The six `HOST_BACKEND_CONSOLE_*` environment variables are optional overrides for host deployment, but `.refactor-loop/host.env` is not a production configuration source.
 
-The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
 
 ## 3. Endpoint Boundary
 

@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -43,6 +44,7 @@ public static class NyxIdLoginFinalizationEndpoints
 
     internal static async Task<IResult> HandleConfigAsync(
         [FromServices] IAevatarOAuthClientProvider oauthClientProvider,
+        [FromServices] IOptions<NyxIdBrokerOptions> brokerOptions,
         CancellationToken ct = default)
     {
         try
@@ -54,7 +56,8 @@ public static class NyxIdLoginFinalizationEndpoints
                 Scope: string.IsNullOrWhiteSpace(snapshot.OauthScope)
                     ? AevatarOAuthClientScopes.AuthorizationScope
                     : snapshot.OauthScope.Trim(),
-                Resources: AevatarOAuthClientResources.RequiredResourceUris(snapshot.NyxIdAuthority)));
+                Resources: AevatarOAuthClientResources.RequiredResourceUris(
+                    brokerOptions.Value.ResourceServerBaseUrl)));
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {

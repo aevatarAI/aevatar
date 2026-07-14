@@ -19,7 +19,9 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 {
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    private const string RequiredResource = "https://nyxid.test/api/v1/proxy/s/aevatar";
+    private const string OAuthAuthority = "https://nyx-ui.test";
+    private const string ResourceServerBaseUrl = "https://nyx-api.test";
+    private const string RequiredResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/aevatar";
 
     private readonly string? _savedOverride;
 
@@ -118,6 +120,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         result.TokenType.Should().Be("Bearer");
         result.ExpiresIn.Should().Be(1800);
         result.Scope.Should().Be("openid profile proxy");
+        handler.LastRequestUri.Should().Be($"{OAuthAuthority}/oauth/token");
         QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")["resource"]
             .Should().ContainSingle().Which.Should().Be(RequiredResource);
     }
@@ -131,7 +134,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var challenge = await broker.StartExternalBindingAsync(SampleSubject());
 
         var uri = new Uri(challenge.AuthorizeUrl);
-        uri.GetLeftPart(UriPartial.Path).Should().Be("https://nyxid.test/oauth/authorize");
+        uri.GetLeftPart(UriPartial.Path).Should().Be($"{OAuthAuthority}/oauth/authorize");
         var query = QueryHelpers.ParseQuery(uri.Query);
         query["client_id"].Should().ContainSingle().Which.Should().Be("client-1");
         query["redirect_uri"].Should().ContainSingle().Which.Should().Be(expectedRedirectUri);
@@ -260,10 +263,13 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         HttpMessageHandler? httpHandler = null)
     {
         var provider = new FakeOAuthClientProvider(snapshot);
+        options ??= new NyxIdBrokerOptions();
+        if (string.IsNullOrWhiteSpace(options.ResourceServerBaseUrl))
+            options.ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ";
         return new NyxIdRemoteCapabilityBroker(
             new FakeHttpClientFactory(httpHandler),
             provider,
-            Options.Create(options ?? new NyxIdBrokerOptions()),
+            Options.Create(options),
             new StateTokenCodec(provider),
             new EmptyBindingQueryPort(),
             new FakeTimeProvider(DateTimeOffset.Parse("2026-04-30T10:00:00Z")),
@@ -276,7 +282,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         HmacKid: "v1",
         HmacKey: HmacKey,
         HmacKeyRotatedAt: DateTimeOffset.Parse("2026-04-30T09:00:00Z"),
-        NyxIdAuthority: "https://nyxid.test",
+        NyxIdAuthority: OAuthAuthority,
         BrokerCapabilityObserved: true,
         BrokerCapabilityObservedAt: DateTimeOffset.Parse("2026-04-30T09:00:00Z"),
         RedirectUri: redirectUri,
@@ -333,6 +339,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         private readonly string _body;
 
         public string? LastRequestBody { get; private set; }
+        public string? LastRequestUri { get; private set; }
 
         private StubHandler(HttpStatusCode statusCode, string body)
         {
@@ -346,6 +353,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            LastRequestUri = request.RequestUri?.ToString();
             LastRequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);

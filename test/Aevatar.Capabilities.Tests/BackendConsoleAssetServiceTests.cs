@@ -20,7 +20,9 @@ public sealed class BackendConsoleAssetServiceTests
                 ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
                 ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
                 ["Aevatar:BackendConsole:OidcResources:0"] = "https://resource.example.test/custom",
-                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
+                ["Aevatar:BackendConsole:OidcResources:1"] =
+                    "https://id.example.test/api/v1/proxy/s/aevatar",
+                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = " https://api.example.test/// ",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
                 ["Aevatar:BackendConsole:DefaultReturnPath"] = "/admin",
             })
@@ -40,7 +42,7 @@ public sealed class BackendConsoleAssetServiceTests
         html.Should().Contain("\"authority\":\"https://id.example.test\"");
         html.Should().Contain("\"clientId\":\"client-example\"");
         html.Should().Contain(
-            "\"resources\":[\"https://id.example.test/api/v1/proxy/s/aevatar\",\"https://resource.example.test/custom\"]");
+            "\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\",\"https://resource.example.test/custom\"]");
         html.Should().Contain("\"nyxidApi\":\"https://api.example.test\"");
         html.Should().Contain("\"storageKey\":\"console:test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
@@ -71,7 +73,7 @@ public sealed class BackendConsoleAssetServiceTests
         html.Should().Contain("\"authority\":\"https://env-id.example.test\"");
         html.Should().Contain("\"clientId\":\"env-client\"");
         html.Should().Contain("\"scope\":\"env-scope\"");
-        html.Should().Contain("\"resources\":[\"https://env-id.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain("\"resources\":[\"https://env-api.example.test/api/v1/proxy/s/aevatar\"]");
         html.Should().Contain("\"nyxidApi\":\"https://env-api.example.test\"");
         html.Should().Contain("\"storageKey\":\"env-storage\"");
         html.Should().Contain("\"defaultReturnPath\":\"/voice\"");
@@ -108,7 +110,7 @@ public sealed class BackendConsoleAssetServiceTests
         html.Should().Contain("\"authority\":\"https://auth.example.test\"");
         html.Should().Contain("\"clientId\":\"client-example\"");
         html.Should().Contain("\"scope\":\"openid profile\"");
-        html.Should().Contain("\"resources\":[\"https://auth.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain("\"resources\":[\"https://nyx-api.example.test/api/v1/proxy/s/aevatar\"]");
         html.Should().Contain("\"nyxidApi\":\"https://nyx-api.example.test\"");
         html.Should().Contain("\"storageKey\":\"console:test\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
