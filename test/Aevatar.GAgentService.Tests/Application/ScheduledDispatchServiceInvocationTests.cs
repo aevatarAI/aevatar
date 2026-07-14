@@ -731,6 +731,46 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("ref", "Scheduled invocation agent key secret reference is missing.")]
+    [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is missing.")]
+    [InlineData("ownerScopeKey", "Scheduled invocation agent key owner scope is missing.")]
+    [InlineData("apiKeyId", "Scheduled invocation agent key id is missing.")]
+    public async Task ScheduledServiceInvocationDispatchPort_WithIncompleteWorkflowScheduledInvocationAgentKey_ShouldFailBeforeDispatch(
+        string missingField,
+        string expectedMessage)
+    {
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new RecordingSecretVault("must-not-resolve");
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, vault);
+        var reference = new SecretReference
+        {
+            Ref = missingField == "ref" ? " " : "sec-agent-key",
+            Purpose = missingField == "purpose" ? " " : CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            OwnerScopeKey = missingField == "ownerScopeKey" ? " " : "scope-key",
+        };
+        var apiKeyId = missingField == "apiKeyId" ? " " : "key-schedule";
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
+                reference,
+                apiKeyId,
+                DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds())),
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(expectedMessage);
+        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_WithNonWorkflowScheduledInvocationAgentKey_ShouldResolveAndInjectOwnerTokens()
     {
