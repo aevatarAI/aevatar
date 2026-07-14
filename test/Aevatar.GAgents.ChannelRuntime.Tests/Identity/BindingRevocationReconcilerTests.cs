@@ -164,20 +164,12 @@ public sealed class BindingRevocationReconcilerTests
     {
         public ExternalSubjectRef? Subject { get; private set; }
         public string? Reason { get; private set; }
-        public Task InvalidateAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
-        {
-            Subject = subject;
-            Reason = reason;
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingCatalogLifecycle : INyxIdCatalogAccessLifecyclePort
-    {
         public List<(ExternalSubjectRef Subject, string Reason)> Requests { get; } = [];
 
         public Task InvalidateAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
         {
+            Subject = subject;
+            Reason = reason;
             Requests.Add((subject, reason));
             return Task.CompletedTask;
         }

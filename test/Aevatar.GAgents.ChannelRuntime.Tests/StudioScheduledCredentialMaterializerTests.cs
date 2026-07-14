@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Authorization;
+using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -80,13 +81,8 @@ public sealed class StudioScheduledCredentialMaterializerTests
         return plan;
     }
 
-    private static OwnerScope OwnerScope() => new()
-    {
-        Platform = OwnerScope.NyxIdPlatform,
-        Tenant = "tenant-alpha",
-        ExternalUserId = "nyx-owner-alpha",
-        NyxUserId = "nyx-owner-alpha",
-    };
+    private static OwnerScope OwnerScope() =>
+        Aevatar.Foundation.Abstractions.OwnerScope.ForNyxIdNative("nyx-owner-alpha");
 
     private static SecretReference Secret(string reference, string ownerScopeKey) => new()
     {

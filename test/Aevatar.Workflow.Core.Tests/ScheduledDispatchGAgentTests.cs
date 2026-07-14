@@ -1586,6 +1586,103 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleFireAsync_WithAuthorizationFact_ShouldPreserveEveryPermissionField()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch, serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        var observedAt = new DateTimeOffset(2026, 7, 15, 7, 0, 0, TimeSpan.Zero);
+        var freshUntil = observedAt.AddHours(2);
+        var expiresAt = observedAt.AddHours(1);
+        var authorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            PermissionDigest = "digest-alpha",
+            PolicyVersion = "policy-v1",
+            Owner = new ScheduledInvocationAuthorizationOwnerState
+            {
+                Authority = "nyxid",
+                OwnerKind = "personal",
+                OwnerSubject = "owner-alpha",
+            },
+            Scopes = "proxy chat",
+            ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
+            ServiceGrantsNotRequired = false,
+            Disclosure = new ScheduledInvocationAuthorizationDisclosureState
+            {
+                DedicatedToSchedule = true,
+                SecretManagedByAevatar = true,
+                BrowserReceivesRawKey = false,
+                DeleteRevokesCredential = true,
+                PauseResumeRevokesCredential = true,
+            },
+            Authority = new ScheduledInvocationAuthorizationAuthorityState
+            {
+                MemberStateVersion = 11,
+                WorkflowStateVersion = 12,
+                ConnectorStateVersion = 13,
+                OwnerLlmStateVersion = 14,
+                CatalogStateVersion = 15,
+                CatalogObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                CatalogFreshUntil = Timestamp.FromDateTimeOffset(freshUntil),
+                CatalogExternalRevision = "catalog-rev-alpha",
+                CatalogContentDigest = "catalog-digest-alpha",
+            },
+        };
+        authorizationFact.ServiceGrants.Add(new ScheduledInvocationAuthorizationServiceGrantState
+        {
+            ServiceId = "svc-alpha",
+            NodeIds = { "node-alpha", "node-beta" },
+            NodeGrantsNotRequired = false,
+        });
+        var target = new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+            ServiceInvocation = new ScheduledServiceInvocationTargetState
+            {
+                Identity = new ServiceIdentity { ServiceId = "svc-alpha" },
+                EndpointId = "chat",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                AuthorizationFact = authorizationFact,
+            },
+        };
+
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false, target: target));
+
+        agent.State.Target!.ServiceInvocation!.AuthorizationFact.Should().BeEquivalentTo(authorizationFact);
+
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+            Manual = true,
+        });
+
+        var dispatchedFact = serviceInvocationDispatch.AuthorizationFacts.Should().ContainSingle().Which;
+        dispatchedFact.Should().NotBeNull();
+        dispatchedFact!.PermissionDigest.Should().Be("digest-alpha");
+        dispatchedFact.PolicyVersion.Should().Be("policy-v1");
+        dispatchedFact.Owner.Should().Be(new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "owner-alpha"));
+        dispatchedFact.ServiceGrants.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha", "node-beta"], false));
+        dispatchedFact.Scopes.Should().Be("proxy chat");
+        dispatchedFact.ExpiresAt.Should().Be(expiresAt);
+        dispatchedFact.ServiceGrantsNotRequired.Should().BeFalse();
+        dispatchedFact.Disclosure.Should().Be(
+            new ScheduledInvocationAuthorizationDisclosure(true, true, false, true, true));
+        dispatchedFact.Authority.Should().Be(new ScheduledInvocationAuthorizationAuthority(
+            11,
+            12,
+            13,
+            14,
+            15,
+            observedAt,
+            freshUntil,
+            "catalog-rev-alpha",
+            "catalog-digest-alpha"));
+    }
+
+    [Fact]
     public async Task HandleFireAsync_ForLegacyDurableBearerTokenAuth_ShouldFailClosed()
     {
         var eventStore = new TestEventStore();
@@ -2674,6 +2771,7 @@ public sealed class ScheduledDispatchGAgentTests
         public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
         public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
         public List<bool> ProjectNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
+        public List<ScheduledInvocationAuthorizationFact?> AuthorizationFacts { get; } = [];
 
         public Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
             dispatch => new ScheduledServiceInvocationDispatchReceipt(
@@ -2693,6 +2791,7 @@ public sealed class ScheduledDispatchGAgentTests
             Auths.Add(dispatch.Auth);
             ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Add(
                 dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
+            AuthorizationFacts.Add(dispatch.AuthorizationFact);
             Headers.Add(dispatch.Headers == null
                 ? null
                 : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));

@@ -284,6 +284,44 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithValidAuthorizationFact_ShouldInvokeService()
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort(),
+            secretVault: null,
+            timeProvider: new FixedTimeProvider(now));
+
+        await port.DispatchAsync(CreateAuthorizationFactDispatch(now));
+
+        invocationPort.Requests.Should().ContainSingle()
+            .Which.ScheduleId.Should().Be("schedule-authorized");
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidAuthorizationFactCases))]
+    public async Task ScheduledServiceInvocationDispatchPort_WithInvalidAuthorizationFact_ShouldRejectBeforeInvocation(
+        string _,
+        Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchRequest> invalidate)
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            new RecordingScheduledServiceInvocationCredentialExchangePort(),
+            secretVault: null,
+            timeProvider: new FixedTimeProvider(now));
+        var dispatch = invalidate(CreateAuthorizationFactDispatch(now));
+
+        var act = () => port.DispatchAsync(dispatch);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        invocationPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ScheduledServiceInvocationDispatchPort_WithoutAuth_ShouldClearStoredConnectorAuthorization()
     {
         var invocationPort = new RecordingServiceInvocationPort();
@@ -1183,6 +1221,130 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 1
             },
         };
+
+    public static TheoryData<
+        string,
+        Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchRequest>>
+        InvalidAuthorizationFactCases() => new()
+        {
+            {
+                "missing-required-field",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with { PermissionDigest = " " },
+                }
+            },
+            {
+                "expired-fact",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ExpiresAt = DateTimeOffset.FromUnixTimeSeconds(1),
+                    },
+                }
+            },
+            {
+                "stale-catalog",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with
+                        {
+                            CatalogFreshUntil = DateTimeOffset.FromUnixTimeSeconds(1),
+                        },
+                    },
+                }
+            },
+            {
+                "invalid-service-node-grant",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ServiceGrants =
+                        [
+                            new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", [], false),
+                        ],
+                    },
+                }
+            },
+            {
+                "unsafe-disclosure",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Disclosure = dispatch.AuthorizationFact.Disclosure with { BrowserReceivesRawKey = true },
+                    },
+                }
+            },
+            {
+                "missing-scheduled-agent-key",
+                dispatch => dispatch with { Auth = null }
+            },
+            {
+                "key-outlives-fact",
+                dispatch => dispatch with
+                {
+                    Auth = CreateScheduledAgentKeyAuth(dispatch.AuthorizationFact!.ExpiresAt.AddMinutes(1)),
+                }
+            },
+        };
+
+    private static ScheduledServiceInvocationDispatchRequest CreateAuthorizationFactDispatch(DateTimeOffset now)
+    {
+        var factExpiresAt = now.AddHours(1);
+        return new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-authorized",
+                CorrelationId = "corr-authorized",
+                Identity = new ServiceIdentity { ServiceId = "svc-alpha" },
+                EndpointId = "chat",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "run" }),
+            },
+            CreateScheduledAgentKeyAuth(factExpiresAt),
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-authorized",
+            AuthorizationFact: new ScheduledInvocationAuthorizationFact(
+                "digest-alpha",
+                "policy-v1",
+                new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "owner-alpha"),
+                [new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha"], false)],
+                "proxy",
+                factExpiresAt,
+                ServiceGrantsNotRequired: false,
+                new ScheduledInvocationAuthorizationDisclosure(true, true, false, true, true),
+                new ScheduledInvocationAuthorizationAuthority(
+                    11,
+                    12,
+                    13,
+                    14,
+                    15,
+                    now.AddMinutes(-1),
+                    now.AddMinutes(30),
+                    "catalog-rev-alpha",
+                    "catalog-digest-alpha")));
+    }
+
+    private static ScheduledServiceInvocationAuth CreateScheduledAgentKeyAuth(DateTimeOffset expiresAt) =>
+        new(new ScheduledInvocationAgentKeyCredentialReference(
+            new SecretReference
+            {
+                Ref = "secret-alpha",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = "owner-alpha",
+                ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+            },
+            "key-alpha",
+            expiresAt.ToUnixTimeMilliseconds()));
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
 
     private static ScheduledServiceInvocationNyxIdCredentialSource CreateCredentialSource() =>
         new(
