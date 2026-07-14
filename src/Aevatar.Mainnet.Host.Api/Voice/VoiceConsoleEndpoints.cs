@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -10,6 +11,8 @@ internal static class VoiceConsoleEndpoints
 {
     private const string PageRoute = "/voice";
     private const string CallbackRoute = "/voice/callback";
+    private const string RealtimeServiceSlugPlaceholder = "__VOICE_REALTIME_SERVICE_SLUG__";
+    private const string DefaultRealtimeServiceSlug = "openai-realtime";
 
     private static readonly BackendConsoleAsset PageAsset = new(
         LogicalName: "voice-console",
@@ -41,10 +44,21 @@ internal static class VoiceConsoleEndpoints
 
     internal static IResult GetVoiceConsolePage(
         HttpContext http,
-        [FromServices] IBackendConsoleAssetService assets)
+        [FromServices] IBackendConsoleAssetService assets,
+        [FromServices] IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(assets);
-        return assets.Serve(PageAsset);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var configuredSlug = configuration["Aevatar:VoicePresence:OpenAI:Nyxid:ServiceSlug"]?.Trim();
+        var serviceSlug = string.IsNullOrWhiteSpace(configuredSlug)
+            ? DefaultRealtimeServiceSlug
+            : configuredSlug;
+        var content = assets.Render(PageAsset).Replace(
+            RealtimeServiceSlugPlaceholder,
+            JsonSerializer.Serialize(serviceSlug),
+            StringComparison.Ordinal);
+        return Results.Text(content, PageAsset.ContentType);
     }
 }
