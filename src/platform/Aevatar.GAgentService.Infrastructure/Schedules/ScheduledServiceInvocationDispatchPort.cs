@@ -87,18 +87,28 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         CancellationToken ct)
     {
         if (dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential &&
-<<<<<<< HEAD
-            TryResolveWorkflowCallerAuthority(dispatch.Auth, out var authority))
-=======
             dispatch.Auth?.Source is ScheduledInvocationAgentKeyCredentialReference agentKey)
->>>>>>> origin/feature/integrate
         {
             return new PreparedInvocationRequest(
                 EnrichChatPayload(
                     dispatch.Request,
                     dispatch.Headers,
                     new ExchangedCredential(
-<<<<<<< HEAD
+                        CredentialRole.ScheduledInvocationAgentKey,
+                        string.Empty,
+                        CreateBorrowedDurableCallerCredential(agentKey)),
+                    projectNyxIdAccessTokenToWorkflowCallerCredential: true),
+                DurableCallerCredential: null);
+        }
+
+        if (dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential &&
+            TryResolveWorkflowCallerAuthority(dispatch.Auth, out var authority))
+        {
+            return new PreparedInvocationRequest(
+                EnrichChatPayload(
+                    dispatch.Request,
+                    dispatch.Headers,
+                    new ExchangedCredential(
                         ResolveCredentialRole(dispatch.Auth),
                         string.Empty,
                         new DurableCallerCredentialRef
@@ -106,11 +116,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
                             ScheduledCallerNyxIdAuthority = authority,
                         }),
-=======
-                        CredentialRole.ScheduledInvocationAgentKey,
-                        string.Empty,
-                        CreateBorrowedDurableCallerCredential(agentKey)),
->>>>>>> origin/feature/integrate
                     projectNyxIdAccessTokenToWorkflowCallerCredential: true),
                 DurableCallerCredential: null);
         }
