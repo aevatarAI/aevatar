@@ -495,6 +495,31 @@ public sealed class ScheduledAgentCreatorToolTests
         });
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenOwnerLlmConfigQueryFails_ShouldFailBeforeKeyCreation()
+    {
+        var handler = CreateSuccessHandler();
+        var ownerLlmConfigSource = Substitute.For<IOwnerLlmConfigSource>();
+        ownerLlmConfigSource.GetForScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task<OwnerLlmConfig>>(_ => throw new InvalidOperationException("owner config unavailable"));
+        var harness = CreateHarness(handler: handler, ownerLlmConfigSource: ownerLlmConfigSource);
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("owner_llm_config_unavailable");
+            document.RootElement.GetProperty("detail").GetString().Should().Be("owner config unavailable");
+            handler.Requests.Should().BeEmpty();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
     [Theory]
     [InlineData("/api/v1/proxy/s/chrono-llm", "chrono-llm")]
     [InlineData("/api/v1/proxy/s/chrono-llm/v1", "chrono-llm")]
@@ -1008,7 +1033,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenMintedKeyPreflightForbidden_ShouldReturnActionableErrorAndRevokeKey()
+    public async Task ExecuteAsync_WhenMintedKeyPreflightForbidden_ShouldReturnActionableErrorAndSubmitRevocationIntent()
     {
         var handler = CreateSuccessHandler();
         handler.Add(
@@ -1030,9 +1055,16 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("detail").GetString().Should().Contain("missing proxy scope or service authorization");
             document.RootElement.GetProperty("hint").GetString().Should().Contain("recreate the scheduled agent");
 
-            handler.Requests.Should().Contain(request =>
-                request.Method == HttpMethod.Delete &&
-                request.Path == "/api/v1/api-keys/key-created");
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
+            await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
+                    intent.ApiKeyId == "key-created" &&
+                    intent.OwnerScope.MatchesStrictly(
+                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.NotApplicable),
+                Arg.Any<CancellationToken>(),
+                "session-token");
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
                 Arg.Any<InitializeSkillRunnerCommand>(),
@@ -1042,7 +1074,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenMintedKeyPreflightNotFound_ShouldReturnNotFoundAndRevokeKey()
+    public async Task ExecuteAsync_WhenMintedKeyPreflightNotFound_ShouldReturnNotFoundAndSubmitRevocationIntent()
     {
         var handler = CreateSuccessHandler();
         handler.Add(
@@ -1060,9 +1092,16 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("scheduled_skill_preflight_skill_not_found");
             document.RootElement.GetProperty("http_status").GetInt32().Should().Be(404);
             document.RootElement.GetProperty("hint").GetString().Should().Contain("Check skill_ref");
-            handler.Requests.Should().Contain(request =>
-                request.Method == HttpMethod.Delete &&
-                request.Path == "/api/v1/api-keys/key-created");
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
+            await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
+                    intent.ApiKeyId == "key-created" &&
+                    intent.OwnerScope.MatchesStrictly(
+                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.NotApplicable),
+                Arg.Any<CancellationToken>(),
+                "session-token");
             await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
                 Arg.Any<string>(),
                 Arg.Any<InitializeSkillRunnerCommand>(),
@@ -1072,7 +1111,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenInitializeFails_ShouldBestEffortDeleteIssuedKey()
+    public async Task ExecuteAsync_WhenInitializeFails_ShouldReturnInitializeFailure()
     {
         var harness = CreateHarness();
         harness.CreationPort.CreateAsync(
@@ -1087,9 +1126,16 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("initialize_failed");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("dispatch failed");
-            harness.Handler.Requests.Should().Contain(request =>
-                request.Method == HttpMethod.Delete &&
-                request.Path == "/api/v1/api-keys/key-created");
+            await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
+                    intent.ApiKeyId == "key-created" &&
+                    intent.OwnerScope.MatchesStrictly(
+                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
+                    intent.NyxApiKeyReference != null &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.Confirmed),
+                Arg.Any<CancellationToken>(),
+                "session-token");
         });
     }
 
@@ -1170,6 +1216,7 @@ public sealed class ScheduledAgentCreatorToolTests
             .Returns(Task.FromResult<OwnerScope?>(resolvedScope));
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton<INyxIdApiClientFactory>(nyxClientFactory);
@@ -1177,21 +1224,24 @@ public sealed class ScheduledAgentCreatorToolTests
         services.AddSingleton(creationPort);
         services.AddSingleton(resolver);
         services.AddSingleton(queryPort);
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(options ?? new ScheduledAgentCreatorOptions());
         services.AddSingleton<ScheduledAgentCreateRequestMapper>();
         services.AddSingleton(secretVault ?? new InMemorySecretVault());
         if (ownerLlmConfigSource is not null)
             services.AddSingleton(ownerLlmConfigSource);
         services.AddSingleton<ScheduledAgentApiKeyIssuer>();
+        services.AddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
+        services.AddSingleton<ScheduledAgentCredentialLifecycle>();
 
         var provider = services.BuildServiceProvider();
         var tool = new ScheduledAgentCreatorTool(
             provider.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            provider.GetRequiredService<ScheduledAgentApiKeyIssuer>());
+            provider.GetRequiredService<ScheduledAgentCredentialLifecycle>());
 
-        return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort);
+        return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort, catalogCommandPort);
     }
 
     private const string DefaultServiceListJson = """
@@ -1293,7 +1343,8 @@ public sealed class ScheduledAgentCreatorToolTests
         RoutingJsonHandler Handler,
         ISkillRunnerCommandPort SkillRunnerPort,
         IScheduledWorkflowAgentCreationPort CreationPort,
-        IUserAgentCatalogQueryPort CatalogQueryPort);
+        IUserAgentCatalogQueryPort CatalogQueryPort,
+        IUserAgentCatalogCommandPort CatalogCommandPort);
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
     {

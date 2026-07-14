@@ -7,6 +7,9 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Aevatar.GAgents.Scheduled;
 
@@ -449,6 +452,8 @@ public sealed class UserAgentCatalogProjectorTests
         var dispatcher = new RecordingRevocationWriteDispatcher();
         var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
         var owner = OwnerScope.ForNyxIdNative("user-1");
+        var nyxAttemptedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 1, 0, TimeSpan.Zero));
+        var vaultAttemptedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 2, 0, TimeSpan.Zero));
         var state = new UserAgentCatalogState
         {
             PendingApiKeyRevocations =
@@ -462,12 +467,44 @@ public sealed class UserAgentCatalogProjectorTests
                     {
                         Ref = "sec-1",
                         Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                        OwnerScopeKey = "owner-1",
+                        Version = 1,
+                        Fingerprint = "sha256:test",
                     },
                     RequestedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 0, 0, TimeSpan.Zero)),
                     AttemptCount = 1,
                     LastHttpStatus = 503,
                     LastError = "upstream unavailable",
                     FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                        AttemptCount = 2,
+                        LastAttemptAt = nyxAttemptedAt,
+                        LastHttpStatus = 503,
+                        LastError = "nyx unavailable",
+                        FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                        AttemptCount = 1,
+                        LastAttemptAt = vaultAttemptedAt,
+                        LastError = "vault unavailable",
+                        FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                    },
+                    VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+                    {
+                        Ref = "sec-1",
+                        Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                        OwnerScopeKey = "owner-1",
+                        SubjectId = "key-1",
+                        ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+                    },
+                    SecretSubjectId = "key-1",
+                    RepairReason = "restore exact reference",
+                    RequestedBySubjectId = "admin-1",
+                    RepairRequestedAtUnixMs = 1_750_412_800_000,
                 },
             },
         };
@@ -475,16 +512,142 @@ public sealed class UserAgentCatalogProjectorTests
         await projector.ProjectAsync(_context, BuildCommittedEnvelope("evt-revoke-pending", 7, state), CancellationToken.None);
 
         var document = dispatcher.Upserts.Should().ContainSingle().Subject;
-        document.Id.Should().Be("agent-1");
+        document.Id.Should().Be(ScheduledAgentCredentialRevocationDocumentIds.Build("agent-1", "key-1", "sec-1"));
         document.AgentId.Should().Be("agent-1");
         document.ApiKeyId.Should().Be("key-1");
         document.NyxApiKeyReference.Ref.Should().Be("sec-1");
+        document.NyxApiKeyReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        document.NyxApiKeyReference.OwnerScopeKey.Should().Be("owner-1");
+        document.NyxApiKeyReference.Version.Should().Be(1);
+        document.NyxApiKeyReference.Fingerprint.Should().Be("sha256:test");
         document.OwnerScope!.MatchesStrictly(owner).Should().BeTrue();
         document.AttemptCount.Should().Be(1);
         document.LastHttpStatus.Should().Be(503);
+        document.LastError.Should().Be("upstream unavailable");
         document.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        document.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        document.NyxIdTrack.AttemptCount.Should().Be(2);
+        document.NyxIdTrack.LastAttemptAt.Should().BeEquivalentTo(nyxAttemptedAt);
+        document.NyxIdTrack.LastHttpStatus.Should().Be(503);
+        document.NyxIdTrack.LastError.Should().Be("nyx unavailable");
+        document.NyxIdTrack.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        document.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        document.VaultTrack.AttemptCount.Should().Be(1);
+        document.VaultTrack.LastAttemptAt.Should().BeEquivalentTo(vaultAttemptedAt);
+        document.VaultTrack.LastHttpStatus.Should().Be(0);
+        document.VaultTrack.LastError.Should().Be("vault unavailable");
+        document.VaultTrack.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        document.VaultRevocationDescriptor.Ref.Should().Be("sec-1");
+        document.VaultRevocationDescriptor.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        document.VaultRevocationDescriptor.OwnerScopeKey.Should().Be("owner-1");
+        document.VaultRevocationDescriptor.SubjectId.Should().Be("key-1");
+        document.VaultRevocationDescriptor.ReferenceAvailability.Should()
+            .Be(ScheduledCredentialVaultReferenceAvailability.Confirmed);
+        document.SecretSubjectId.Should().Be("key-1");
+        document.RepairReason.Should().Be("restore exact reference");
+        document.RequestedBySubjectId.Should().Be("admin-1");
+        document.RepairRequestedAtUnixMs.Should().Be(1_750_412_800_000);
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-revoke-pending");
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-1");
+    }
+
+    [Fact]
+    public async Task ApiKeyRevocationProjector_WithBlockedReference_UsesStableBlockedDocumentId()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var state = new UserAgentCatalogState
+        {
+            PendingApiKeyRevocations =
+            {
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-blocked",
+                    ApiKeyId = "key-blocked",
+                    SecretSubjectId = "key-blocked",
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
+                    },
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-revoke-blocked", 8, state),
+            CancellationToken.None);
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Id.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked("agent-blocked", "key-blocked"));
+        document.NyxApiKeyReference.Should().BeNull();
+        document.VaultTrack.Status.Should().Be(
+            ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef);
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-blocked");
+    }
+
+    [Fact]
+    public async Task ApiKeyRevocationProjector_WithRepair_DeletesBlockedKeyAndUpsertsExactKey()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var repairedReference = new SecretReference
+        {
+            Ref = "sec-repaired",
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = "owner-repaired",
+            Version = 1,
+            Fingerprint = "sha256:repaired",
+        };
+        var state = new UserAgentCatalogState
+        {
+            PendingApiKeyRevocations =
+            {
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-repaired",
+                    ApiKeyId = "key-repaired",
+                    SecretSubjectId = "key-repaired",
+                    NyxApiKeyReference = repairedReference,
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                    },
+                },
+            },
+        };
+        var repaired = new UserAgentCatalogCredentialRevocationRepairedEvent
+        {
+            AgentId = "agent-repaired",
+            ApiKeyId = "key-repaired",
+            SecretReference = repairedReference,
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-revoke-repaired", 9, state, Any.Pack(repaired)),
+            CancellationToken.None);
+
+        dispatcher.Deletes.Should().BeEquivalentTo(
+        [
+            "agent-repaired",
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked("agent-repaired", "key-repaired"),
+        ]);
+        dispatcher.Upserts.Should().ContainSingle().Which.Id.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.Build(
+                "agent-repaired",
+                "key-repaired",
+                "sec-repaired"));
     }
 
     [Fact]
@@ -501,6 +664,7 @@ public sealed class UserAgentCatalogProjectorTests
             HttpStatus = 404,
             FailureKind = UserAgentApiKeyRevocationFailureKind.None,
             AttemptedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 6, 20, 10, 0, 0, TimeSpan.Zero)),
+            SecretReferenceRef = "sec-1",
         };
 
         await projector.ProjectAsync(
@@ -508,8 +672,286 @@ public sealed class UserAgentCatalogProjectorTests
             BuildCommittedEnvelope("evt-revoke-complete", 8, state, Any.Pack(completed)),
             CancellationToken.None);
 
-        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-1");
+        dispatcher.Deletes.Should().BeEquivalentTo(
+        [
+            "agent-1",
+            ScheduledAgentCredentialRevocationDocumentIds.Build("agent-1", "key-1", "sec-1"),
+        ]);
         dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ApiKeyRevocationProjector_WithOneTrackStillPending_KeepsCanonicalDocument()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var reference = new SecretReference
+        {
+            Ref = "sec-partial",
+            Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+            OwnerScopeKey = "owner-partial",
+        };
+        var state = new UserAgentCatalogState
+        {
+            PendingApiKeyRevocations =
+            {
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-partial",
+                    ApiKeyId = "key-partial",
+                    NyxApiKeyReference = reference,
+                    NyxIdTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                    },
+                    VaultTrack = new ScheduledCredentialRevocationTrack
+                    {
+                        Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                    },
+                },
+            },
+        };
+        var completedNyxTrack = new UserAgentCatalogApiKeyRevocationAttemptRecordedEvent
+        {
+            AgentId = "agent-partial",
+            ApiKeyId = "key-partial",
+            Completed = true,
+            Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+            SecretReferenceRef = "sec-partial",
+        };
+        var canonicalId = ScheduledAgentCredentialRevocationDocumentIds.Build(
+            "agent-partial",
+            "key-partial",
+            "sec-partial");
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-revoke-partial", 10, state, Any.Pack(completedNyxTrack)),
+            CancellationToken.None);
+
+        dispatcher.Upserts.Should().ContainSingle().Which.Id.Should().Be(canonicalId);
+        dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-partial");
+        dispatcher.Deletes.Should().NotContain(canonicalId);
+    }
+
+    [Fact]
+    public async Task ApiKeyRevocationProjector_WithCompletedNyxOnlyFact_DeletesBlockedDocument()
+    {
+        var dispatcher = new RecordingRevocationWriteDispatcher();
+        var projector = new UserAgentApiKeyRevocationProjector(dispatcher, _clock);
+        var completed = new UserAgentCatalogApiKeyRevocationAttemptRecordedEvent
+        {
+            AgentId = "agent-nyx-only",
+            ApiKeyId = "key-nyx-only",
+            Completed = true,
+            FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+            Track = UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId,
+            SecretReferenceRef = string.Empty,
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope(
+                "evt-revoke-nyx-only-complete",
+                9,
+                new UserAgentCatalogState(),
+                Any.Pack(completed)),
+            CancellationToken.None);
+
+        dispatcher.Deletes.Should().BeEquivalentTo(
+        [
+            "agent-nyx-only",
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
+                "agent-nyx-only",
+                "key-nyx-only"),
+        ]);
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_StartAsyncRekeysLegacyDocumentIdempotently()
+    {
+        var legacyDocument = new UserAgentApiKeyRevocationDocument
+        {
+            Id = "agent-legacy",
+            AgentId = "agent-legacy",
+            ApiKeyId = "key-legacy",
+            NyxApiKeyReference = new SecretReference { Ref = "sec-legacy" },
+            ActorId = UserAgentCatalogGAgent.WellKnownId,
+            StateVersion = 7,
+            LastEventId = "evt-legacy",
+        };
+        var store = new InMemoryRevocationDocumentStore(legacyDocument);
+        var service = new UserAgentApiKeyRevocationReadModelKeyMigrationService(
+            store,
+            store,
+            NullLogger<UserAgentApiKeyRevocationReadModelKeyMigrationService>.Instance);
+        var canonicalId = ScheduledAgentCredentialRevocationDocumentIds.Build(
+            "agent-legacy",
+            "key-legacy",
+            "sec-legacy");
+
+        await service.StartAsync(CancellationToken.None);
+        var rerun = await service.MigrateAsync(CancellationToken.None);
+
+        rerun.MigratedCount.Should().Be(0);
+        rerun.MaxStateVersion.Should().BeNull();
+        store.Documents.Should().ContainSingle();
+        store.Documents.Should().ContainKey(canonicalId);
+        store.Documents.Should().NotContainKey("agent-legacy");
+        store.Documents[canonicalId].StateVersion.Should().Be(7);
+        store.Documents[canonicalId].LastEventId.Should().Be("evt-legacy");
+    }
+
+    [Fact]
+    public void AddScheduledAgents_RegistersRevocationReadModelKeyMigrationHostedService()
+    {
+        var services = new ServiceCollection();
+
+        services.AddScheduledAgents();
+
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(UserAgentApiKeyRevocationReadModelKeyMigrationService));
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_ReadsEveryCursorPage()
+    {
+        var first = BuildLegacyRevocationDocument("agent-page-1", "key-page-1", "sec-page-1");
+        var second = BuildLegacyRevocationDocument("agent-page-2", "key-page-2", "sec-page-2");
+        var store = new MigrationDocumentStore(
+            new Dictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>>
+            {
+                [string.Empty] = new()
+                {
+                    Items = [first],
+                    NextCursor = "page-2",
+                },
+                ["page-2"] = new()
+                {
+                    Items = [second],
+                },
+            });
+        var service = CreateMigrationService(store);
+
+        var result = await service.MigrateAsync(CancellationToken.None);
+
+        result.MigratedCount.Should().Be(2);
+        result.MaxStateVersion.Should().Be(7);
+        store.QueryCursors.Should().Equal(null, "page-2");
+        store.Upserts.Select(static document => document.Id).Should().BeEquivalentTo(
+        [
+            ScheduledAgentCredentialRevocationDocumentIds.Build(
+                "agent-page-1",
+                "key-page-1",
+                "sec-page-1"),
+            ScheduledAgentCredentialRevocationDocumentIds.Build(
+                "agent-page-2",
+                "key-page-2",
+                "sec-page-2"),
+        ]);
+        store.Deletes.Should().BeEquivalentTo(["agent-page-1", "agent-page-2"]);
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WithoutSecretReference_UsesBlockedDocumentId()
+    {
+        var legacy = BuildLegacyRevocationDocument("agent-blocked-migration", "key-blocked-migration");
+        var store = MigrationDocumentStore.SinglePage(legacy);
+        var service = CreateMigrationService(store);
+
+        await service.MigrateAsync(CancellationToken.None);
+
+        store.Upserts.Should().ContainSingle().Which.Id.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
+                "agent-blocked-migration",
+                "key-blocked-migration"));
+        store.Deletes.Should().ContainSingle().Which.Should().Be("agent-blocked-migration");
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WithIncompleteNaturalIdentity_FailsBeforeWrites()
+    {
+        var incomplete = BuildLegacyRevocationDocument("agent-incomplete", string.Empty);
+        var store = MigrationDocumentStore.SinglePage(incomplete);
+        var service = CreateMigrationService(store);
+
+        var migrate = () => service.MigrateAsync(CancellationToken.None);
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*incomplete natural identity*");
+        store.Upserts.Should().BeEmpty();
+        store.Deletes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WhenCanonicalUpsertIsRejected_DoesNotDeleteLegacyDocument()
+    {
+        var legacy = BuildLegacyRevocationDocument("agent-upsert-rejected", "key-upsert-rejected");
+        var store = MigrationDocumentStore.SinglePage(legacy);
+        store.UpsertResult = ProjectionWriteResult.Conflict();
+        var service = CreateMigrationService(store);
+
+        var migrate = () => service.MigrateAsync(CancellationToken.None);
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*migration was rejected*");
+        store.Upserts.Should().ContainSingle();
+        store.Deletes.Should().BeEmpty("the legacy copy is recovery authority until canonical upsert succeeds");
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WhenLegacyDeleteIsRejected_FailsForRestartRecovery()
+    {
+        var legacy = BuildLegacyRevocationDocument("agent-delete-rejected", "key-delete-rejected");
+        var store = MigrationDocumentStore.SinglePage(legacy);
+        store.DeleteResult = ProjectionWriteResult.Gap();
+        var service = CreateMigrationService(store);
+
+        var migrate = () => service.MigrateAsync(CancellationToken.None);
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*migration was rejected*");
+        store.Upserts.Should().ContainSingle();
+        store.Deletes.Should().ContainSingle().Which.Should().Be("agent-delete-rejected");
+    }
+
+    [Fact]
+    public void CredentialRevocationDocumentId_UsesUtf8LengthPrefixedNaturalKey()
+    {
+        var first = ScheduledAgentCredentialRevocationDocumentIds.Build("a", "bc", "d");
+        var second = ScheduledAgentCredentialRevocationDocumentIds.Build("ab", "c", "d");
+
+        first.Should().StartWith("scr1_");
+        string.Concat("a", "bc", "d").Should().Be(string.Concat("ab", "c", "d"));
+        first.Should().NotBe(second);
+        first.Should().NotContain("=");
+    }
+
+    [Fact]
+    public void CredentialRevocationIdentity_PrefersConfirmedReferenceBeforeDescriptorFallback()
+    {
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            NyxApiKeyReference = new SecretReference { Ref = " confirmed-ref " },
+            VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = "descriptor-ref",
+            },
+        };
+        var document = new UserAgentApiKeyRevocationDocument
+        {
+            VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = " descriptor-only-ref ",
+            },
+        };
+
+        ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation)
+            .Should().Be("confirmed-ref");
+        ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(document)
+            .Should().Be("descriptor-only-ref");
     }
 
     [Fact]
@@ -597,6 +1039,32 @@ public sealed class UserAgentCatalogProjectorTests
                 StateRoot = Any.Pack(state),
             }),
         };
+    }
+
+    private static UserAgentApiKeyRevocationReadModelKeyMigrationService CreateMigrationService(
+        MigrationDocumentStore store) =>
+        new(
+            store,
+            store,
+            NullLogger<UserAgentApiKeyRevocationReadModelKeyMigrationService>.Instance);
+
+    private static UserAgentApiKeyRevocationDocument BuildLegacyRevocationDocument(
+        string agentId,
+        string apiKeyId,
+        string? secretReference = null)
+    {
+        var document = new UserAgentApiKeyRevocationDocument
+        {
+            Id = agentId,
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            ActorId = UserAgentCatalogGAgent.WellKnownId,
+            StateVersion = 7,
+            LastEventId = "evt-legacy",
+        };
+        if (!string.IsNullOrWhiteSpace(secretReference))
+            document.NyxApiKeyReference = new SecretReference { Ref = secretReference };
+        return document;
     }
 
     private static EventEnvelope BuildSkillRunnerCommittedEnvelope(string eventId, long version, SkillRunnerState state)
@@ -687,6 +1155,127 @@ public sealed class UserAgentCatalogProjectorTests
             ct.ThrowIfCancellationRequested();
             Deletes.Add(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class InMemoryRevocationDocumentStore
+        : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>,
+          IProjectionWriteDispatcher<UserAgentApiKeyRevocationDocument>
+    {
+        private readonly Dictionary<string, UserAgentApiKeyRevocationDocument> _documents;
+
+        public InMemoryRevocationDocumentStore(params UserAgentApiKeyRevocationDocument[] documents)
+        {
+            _documents = documents.ToDictionary(
+                static document => document.Id,
+                static document => document.Clone(),
+                StringComparer.Ordinal);
+        }
+
+        public IReadOnlyDictionary<string, UserAgentApiKeyRevocationDocument> Documents => _documents;
+
+        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(
+                _documents.TryGetValue(key, out var document) ? document.Clone() : null);
+        }
+
+        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>
+            {
+                Items = _documents.Values.Take(query.Take).Select(static document => document.Clone()).ToArray(),
+            });
+        }
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            UserAgentApiKeyRevocationDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _documents.TryGetValue(readModel.Id, out var existing);
+            var result = ProjectionWriteResultEvaluator.Evaluate(existing, readModel);
+            if (result.IsApplied)
+                _documents[readModel.Id] = readModel.Clone();
+            return Task.FromResult(result);
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _documents.Remove(id);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class MigrationDocumentStore
+        : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>,
+          IProjectionWriteDispatcher<UserAgentApiKeyRevocationDocument>
+    {
+        private readonly IReadOnlyDictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> _pages;
+
+        public MigrationDocumentStore(
+            IReadOnlyDictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> pages)
+        {
+            _pages = pages;
+        }
+
+        public ProjectionWriteResult UpsertResult { get; set; } = ProjectionWriteResult.Applied();
+
+        public ProjectionWriteResult DeleteResult { get; set; } = ProjectionWriteResult.Applied();
+
+        public List<string?> QueryCursors { get; } = [];
+
+        public List<UserAgentApiKeyRevocationDocument> Upserts { get; } = [];
+
+        public List<string> Deletes { get; } = [];
+
+        public static MigrationDocumentStore SinglePage(
+            params UserAgentApiKeyRevocationDocument[] documents) =>
+            new(new Dictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>>
+            {
+                [string.Empty] = new()
+                {
+                    Items = documents.Select(static document => document.Clone()).ToArray(),
+                },
+            });
+
+        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default) =>
+            Task.FromResult<UserAgentApiKeyRevocationDocument?>(null);
+
+        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            QueryCursors.Add(query.Cursor);
+            return Task.FromResult(_pages[query.Cursor ?? string.Empty]);
+        }
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            UserAgentApiKeyRevocationDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.Add(readModel.Clone());
+            return Task.FromResult(UpsertResult);
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            string id,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
+            return Task.FromResult(DeleteResult);
         }
     }
 

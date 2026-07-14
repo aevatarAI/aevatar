@@ -19,7 +19,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _scheduledAgentMapper;
-    private readonly ScheduledAgentApiKeyIssuer _scheduledAgentApiKeyIssuer;
+    private readonly IScheduledAgentCredentialLifecycle _scheduledAgentCredentialLifecycle;
     private readonly ILogger<AgentBuilderTool>? _toolLogger;
     private readonly ILogger<ScheduledAgentCreatorTool>? _creatorToolLogger;
 
@@ -32,7 +32,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper scheduledAgentMapper,
-        ScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
+        IScheduledAgentCredentialLifecycle scheduledAgentCredentialLifecycle,
         ILogger<AgentBuilderTool>? toolLogger = null,
         ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null)
     {
@@ -44,7 +44,8 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _scheduledAgentMapper = scheduledAgentMapper ?? throw new ArgumentNullException(nameof(scheduledAgentMapper));
-        _scheduledAgentApiKeyIssuer = scheduledAgentApiKeyIssuer ?? throw new ArgumentNullException(nameof(scheduledAgentApiKeyIssuer));
+        _scheduledAgentCredentialLifecycle = scheduledAgentCredentialLifecycle ??
+            throw new ArgumentNullException(nameof(scheduledAgentCredentialLifecycle));
         _toolLogger = toolLogger;
         _creatorToolLogger = creatorToolLogger;
     }
@@ -61,13 +62,12 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _scheduledDispatchService,
                 _catalogCommandPort,
                 _callerScopeResolver,
-                _scheduledAgentApiKeyIssuer,
                 _toolLogger),
             new ScheduledAgentCreatorTool(
                 _scheduledWorkflowAgentCreationPort,
                 _callerScopeResolver,
                 _scheduledAgentMapper,
-                _scheduledAgentApiKeyIssuer,
+                _scheduledAgentCredentialLifecycle,
                 _creatorToolLogger),
         ];
         return Task.FromResult(tools);

@@ -34,8 +34,7 @@ public sealed class AgentBuilderToolTests
             Substitute.For<ISkillRunnerCommandPort>(),
             Substitute.For<IScheduledDispatchApplicationService>(),
             Substitute.For<IUserAgentCatalogCommandPort>(),
-            Substitute.For<ICallerScopeResolver>(),
-            Substitute.For<IScheduledAgentApiKeyIssuer>());
+            Substitute.For<ICallerScopeResolver>());
 
         using var document = JsonDocument.Parse(tool.ParametersSchema);
         var actions = document.RootElement
@@ -76,7 +75,7 @@ public sealed class AgentBuilderToolTests
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; test asserts dispatch happened at the tool boundary.
-        catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>())
+        catalogCommandPort.TombstoneAsync("skill-runner-1", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -118,7 +117,7 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-1");
-            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
             doc.RootElement.GetProperty("agents").GetArrayLength().Should().Be(0);
             doc.RootElement.GetProperty("delete_notice").GetString().Should().Contain("Delete submitted");
             doc.RootElement.GetProperty("note").GetString()
@@ -132,16 +131,12 @@ public sealed class AgentBuilderToolTests
 
             await catalogCommandPort.Received(1).TombstoneAsync(
                 "skill-runner-1",
-                Arg.Any<CancellationToken>());
+                Arg.Any<CancellationToken>(),
+                "session-token");
 
-            handler.Requests.Should().ContainSingle(x =>
-                x.Method == HttpMethod.Delete &&
-                x.Path == "/api/v1/api-keys/key-1");
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-1" &&
-                    command.ApiKeyId == "key-1" &&
-                    command.Completed),
+            handler.Requests.Should().NotContain(x => x.Method == HttpMethod.Delete);
+            await catalogCommandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command => command.ApiKeyId == "key-1"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -151,7 +146,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DeleteAgent_WithNyxIdFailure_RecordsPendingRevocationDetails()
+    public async Task ExecuteAsync_DeleteAgent_DoesNotRecordRevocationAttemptInToolLayer()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-fail", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -170,7 +165,7 @@ public sealed class AgentBuilderToolTests
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        catalogCommandPort.TombstoneAsync("skill-runner-fail", Arg.Any<CancellationToken>())
+        catalogCommandPort.TombstoneAsync("skill-runner-fail", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -211,14 +206,8 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
 
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-fail" &&
-                    command.ApiKeyId == "key-fail" &&
-                    !command.Completed &&
-                    command.HttpStatus == 503 &&
-                    command.Error == "upstream unavailable" &&
-                    command.FailureKind == UserAgentApiKeyRevocationFailureKind.Transient),
+            await catalogCommandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command => command.ApiKeyId == "key-fail"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -228,7 +217,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DeleteAgent_RetriesPendingRevocationsForCaller()
+    public async Task ExecuteAsync_DeleteAgent_SubmitsBearerBoundRetryCommandWithoutReadingRevocationProjection()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-current", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -243,22 +232,17 @@ public sealed class AgentBuilderToolTests
         queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
         queryPort.QueryPendingApiKeyRevocationsByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>>(
-            [
-                new UserAgentApiKeyRevocationReadModelEntry
-                {
-                    AgentId = "skill-runner-old",
-                    ApiKeyId = "key-old",
-                    OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
-                    AttemptCount = 1,
-                    LastHttpStatus = 503,
-                    FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
-                },
-            ]));
+            .Returns(Task.FromException<IReadOnlyList<UserAgentApiKeyRevocationReadModelEntry>>(
+                new InvalidOperationException("read model must not drive retry")));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        catalogCommandPort.TombstoneAsync("skill-runner-current", Arg.Any<CancellationToken>())
+        catalogCommandPort.RetryCredentialRevocationsAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        catalogCommandPort.TombstoneAsync("skill-runner-current", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -267,7 +251,6 @@ public sealed class AgentBuilderToolTests
 
         var handler = new RoutingJsonHandler();
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-current", """{"ok":true}""");
-        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-old", """{"error":true,"status":404,"body":"already deleted"}""");
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
@@ -298,21 +281,22 @@ public sealed class AgentBuilderToolTests
                 """);
 
             using var doc = JsonDocument.Parse(result);
-            doc.RootElement.GetProperty("api_key_revocation_retry_count").GetInt32().Should().Be(1);
-
-            handler.Requests.Select(static request => request.Path)
-                .Should().BeEquivalentTo("/api/v1/api-keys/key-current", "/api/v1/api-keys/key-old");
-            await queryPort.Received(1).QueryPendingApiKeyRevocationsByCallerAsync(
+            doc.RootElement.GetProperty("api_key_revocation_retry_status").GetString().Should().Be("accepted");
+            handler.Requests.Should().BeEmpty();
+            await queryPort.DidNotReceive().QueryPendingApiKeyRevocationsByCallerAsync(
                 Arg.Any<OwnerScope>(),
                 Arg.Any<CancellationToken>());
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-old" &&
-                    command.ApiKeyId == "key-old" &&
-                    command.Completed &&
-                    command.HttpStatus == 404 &&
-                    command.FailureKind == UserAgentApiKeyRevocationFailureKind.None),
-                Arg.Any<CancellationToken>());
+            Received.InOrder(() =>
+            {
+                catalogCommandPort.RetryCredentialRevocationsAsync(
+                    Arg.Is<OwnerScope>(scope => scope.MatchesStrictly(OwnerScope.ForNyxIdNative("user-1"))),
+                    "session-token",
+                    Arg.Any<CancellationToken>());
+                catalogCommandPort.TombstoneAsync(
+                    "skill-runner-current",
+                    Arg.Any<CancellationToken>(),
+                    "session-token");
+            });
         }
         finally
         {
@@ -321,7 +305,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_DeleteAgent_StillRecordsCurrentRevocation_WhenPendingRevocationProjectionHasSchemaDrift()
+    public async Task ExecuteAsync_DeleteAgent_DoesNotDependOnPendingRevocationProjection()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetForCallerAsync("skill-runner-drift-revoke", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
@@ -341,7 +325,7 @@ public sealed class AgentBuilderToolTests
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        catalogCommandPort.TombstoneAsync("skill-runner-drift-revoke", Arg.Any<CancellationToken>())
+        catalogCommandPort.TombstoneAsync("skill-runner-drift-revoke", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -381,13 +365,21 @@ public sealed class AgentBuilderToolTests
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
-            doc.RootElement.GetProperty("api_key_revocation_retry_count").GetInt32().Should().Be(0);
-            await catalogCommandPort.Received(1).RecordApiKeyRevocationAttemptAsync(
-                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command =>
-                    command.AgentId == "skill-runner-drift-revoke" &&
-                    command.ApiKeyId == "key-current" &&
-                    command.Completed),
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
+            doc.RootElement.GetProperty("api_key_revocation_retry_status").GetString().Should().Be("accepted");
+            await queryPort.DidNotReceive().QueryPendingApiKeyRevocationsByCallerAsync(
+                Arg.Any<OwnerScope>(),
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).RetryCredentialRevocationsAsync(
+                Arg.Any<OwnerScope>(),
+                "session-token",
+                Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).TombstoneAsync(
+                "skill-runner-drift-revoke",
+                Arg.Any<CancellationToken>(),
+                "session-token");
+            await catalogCommandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Is<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(command => command.ApiKeyId == "key-current"),
                 Arg.Any<CancellationToken>());
         }
         finally
@@ -423,7 +415,7 @@ public sealed class AgentBuilderToolTests
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; test asserts accepted copy plus source/query guard behavior.
-        catalogCommandPort.TombstoneAsync("skill-runner-stuck", Arg.Any<CancellationToken>())
+        catalogCommandPort.TombstoneAsync("skill-runner-stuck", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
         catalogCommandPort.RecordApiKeyRevocationAttemptAsync(
                 Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
@@ -464,7 +456,7 @@ public sealed class AgentBuilderToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("revoked_api_key_id").GetString().Should().Be("key-stuck");
-            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("completed");
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
             doc.RootElement.GetProperty("delete_notice").GetString()
                 .Should().Contain("Delete submitted for");
             // The new copy must point users at /agents to verify rather than
@@ -475,7 +467,8 @@ public sealed class AgentBuilderToolTests
 
             await catalogCommandPort.Received(1).TombstoneAsync(
                 "skill-runner-stuck",
-                Arg.Any<CancellationToken>());
+                Arg.Any<CancellationToken>(),
+                "session-token");
 
             await queryPort.DidNotReceive().GetStateVersionForCallerAsync(
                 Arg.Any<string>(),
@@ -526,7 +519,7 @@ public sealed class AgentBuilderToolTests
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        catalogCommandPort.TombstoneAsync("skill-runner-drift", Arg.Any<CancellationToken>())
+        catalogCommandPort.TombstoneAsync("skill-runner-drift", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
 
         var services = new ServiceCollection();
@@ -567,7 +560,8 @@ public sealed class AgentBuilderToolTests
                 Arg.Any<CancellationToken>());
             await catalogCommandPort.Received(1).TombstoneAsync(
                 "skill-runner-drift",
-                Arg.Any<CancellationToken>());
+                Arg.Any<CancellationToken>(),
+                "session-token");
         }
         finally
         {
@@ -1513,7 +1507,10 @@ public sealed class AgentBuilderToolTests
             await scheduledDispatchService.Received(1).DisableAsync("scheduled-workflow-1", "disable_agent", Arg.Any<CancellationToken>());
             await scheduledDispatchService.Received(1).EnableAsync("scheduled-workflow-1", "enable_agent", Arg.Any<CancellationToken>());
             await scheduledDispatchService.Received(1).DeleteAsync("scheduled-workflow-1", "delete_agent", Arg.Any<CancellationToken>());
-            await catalogCommandPort.Received(1).TombstoneAsync("scheduled-workflow-1", Arg.Any<CancellationToken>());
+            await catalogCommandPort.Received(1).TombstoneAsync(
+                "scheduled-workflow-1",
+                Arg.Any<CancellationToken>(),
+                "session-token");
             await skillRunnerPort.DidNotReceive().TriggerAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
             await skillRunnerPort.DidNotReceive().DisableAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
             await skillRunnerPort.DidNotReceive().EnableAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
@@ -1594,27 +1591,30 @@ public sealed class AgentBuilderToolTests
         var scheduledWorkflowAgentCreationPort = Substitute.For<IScheduledWorkflowAgentCreationPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
-        var scheduledAgentMapper = new ScheduledAgentCreateRequestMapper(new InMemorySecretVault());
+        var scheduledAgentMapper = new ScheduledAgentCreateRequestMapper();
         var scheduledAgentApiKeyIssuer = new ScheduledAgentApiKeyIssuer(
             nyxClientFactory,
             new ScheduledAgentCreatorOptions());
+        var credentialLifecycle = new ScheduledAgentCredentialLifecycle(
+            new InMemorySecretVault(),
+            catalogCommandPort,
+            scheduledAgentApiKeyIssuer);
 
-        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, skillRunnerPort, scheduledDispatchService, catalogCommandPort, callerScopeResolver, scheduledAgentApiKeyIssuer);
-        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, scheduledDispatchService, catalogCommandPort, callerScopeResolver, scheduledAgentApiKeyIssuer);
-        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, scheduledDispatchService, catalogCommandPort, callerScopeResolver, scheduledAgentApiKeyIssuer);
-        var missingScheduledDispatch = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, null!, catalogCommandPort, callerScopeResolver, scheduledAgentApiKeyIssuer);
-        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, null!, callerScopeResolver, scheduledAgentApiKeyIssuer);
-        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, catalogCommandPort, null!, scheduledAgentApiKeyIssuer);
-        var missingIssuer = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, catalogCommandPort, callerScopeResolver, null!);
-        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
-        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
-        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
-        var missingSourceScheduledDispatch = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, null!, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
-        var missingSourceCreationPort = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, null!, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
-        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, null!, callerScopeResolver, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
-        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, null!, scheduledAgentMapper, scheduledAgentApiKeyIssuer);
-        var missingSourceMapper = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, null!, scheduledAgentApiKeyIssuer);
-        var missingSourceIssuer = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, null!);
+        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, skillRunnerPort, scheduledDispatchService, catalogCommandPort, callerScopeResolver);
+        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, scheduledDispatchService, catalogCommandPort, callerScopeResolver);
+        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, scheduledDispatchService, catalogCommandPort, callerScopeResolver);
+        var missingScheduledDispatch = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, null!, catalogCommandPort, callerScopeResolver);
+        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, null!, callerScopeResolver);
+        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceScheduledDispatch = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, null!, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceCreationPort = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, null!, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, null!, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, null!, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceMapper = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, null!, credentialLifecycle);
+        var missingSourceLifecycle = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
@@ -1622,7 +1622,6 @@ public sealed class AgentBuilderToolTests
         missingScheduledDispatch.Should().Throw<ArgumentNullException>().WithParameterName("scheduledDispatchService");
         missingCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
-        missingIssuer.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentApiKeyIssuer");
         missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingSourceExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
         missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
@@ -1631,7 +1630,7 @@ public sealed class AgentBuilderToolTests
         missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingSourceCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
         missingSourceMapper.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentMapper");
-        missingSourceIssuer.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentApiKeyIssuer");
+        missingSourceLifecycle.Should().Throw<ArgumentNullException>().WithParameterName("scheduledAgentCredentialLifecycle");
     }
 
     [Fact]
@@ -1686,6 +1685,7 @@ public sealed class AgentBuilderToolTests
         queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
+        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions());
         var source = new AgentBuilderToolSource(
             queryPort,
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
@@ -1694,8 +1694,8 @@ public sealed class AgentBuilderToolTests
             scheduledWorkflowAgentCreationPort,
             catalogCommandPort,
             callerScopeResolver,
-            new ScheduledAgentCreateRequestMapper(new InMemorySecretVault()),
-            new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions()));
+            new ScheduledAgentCreateRequestMapper(),
+            new ScheduledAgentCredentialLifecycle(new InMemorySecretVault(), catalogCommandPort, issuer));
         var tools = await source.DiscoverToolsAsync();
 
         tools.Select(tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
@@ -1784,6 +1784,10 @@ public sealed class AgentBuilderToolTests
     private static AgentBuilderTool CreateTool(IServiceCollection services)
     {
         var provider = services.BuildServiceProvider();
+        var issuer = provider.GetService<IScheduledAgentApiKeyIssuer>() ??
+                     new ScheduledAgentApiKeyIssuer(
+                         provider.GetRequiredService<INyxIdApiClientFactory>(),
+                         new ScheduledAgentCreatorOptions());
         return new AgentBuilderTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
             provider.GetService<ISkillRunnerExecutionQueryPort>() ?? Substitute.For<ISkillRunnerExecutionQueryPort>(),
@@ -1791,10 +1795,6 @@ public sealed class AgentBuilderToolTests
             provider.GetService<IScheduledDispatchApplicationService>() ?? Substitute.For<IScheduledDispatchApplicationService>(),
             provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
-            provider.GetService<IScheduledAgentApiKeyIssuer>() ??
-            new ScheduledAgentApiKeyIssuer(
-                provider.GetRequiredService<INyxIdApiClientFactory>(),
-                new ScheduledAgentCreatorOptions()),
             provider.GetService<ILogger<AgentBuilderTool>>());
     }
 

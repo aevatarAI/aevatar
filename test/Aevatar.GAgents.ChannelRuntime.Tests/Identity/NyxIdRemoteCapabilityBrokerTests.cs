@@ -20,8 +20,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     private const string OAuthAuthority = "https://nyx-ui.test";
-    private const string ResourceServerBaseUrl = "https://nyx-api.test";
-    private const string RequiredResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/aevatar";
+    private const string RequiredResource = $"{OAuthAuthority}/api/v1/proxy/s/aevatar";
 
     private readonly string? _savedOverride;
 
@@ -264,8 +263,6 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     {
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions();
-        if (string.IsNullOrWhiteSpace(options.ResourceServerBaseUrl))
-            options.ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ";
         return new NyxIdRemoteCapabilityBroker(
             new FakeHttpClientFactory(httpHandler),
             provider,

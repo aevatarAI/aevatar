@@ -57,3 +57,9 @@ dotnet run --project tools/secret-store -- reencrypt-sweep --keyring ~/.aevatar/
 - Lua 写回时读取 `PTTL` 并保留 TTL：有 TTL 用 `PSETEX`，无 TTL 用 `SET`；
 - 支持 `--dry-run`、`--checkpoint`、`--resume`、`--verify`；
 - sweep 失败、CAS 冲突、verify 失败都必须显式暴露，不能静默当成功。
+
+## Caller-allocated references
+
+Callers that coordinate external provisioning may allocate a secret reference before the vault write. `RequestedRef` writes are create-only and idempotent for the exact same secret descriptor. Alias conflicts fail closed; the vault never overwrites a different record under a requested reference.
+
+Raw scheduled keys remain inside an opaque redacted holder until the vault consumer executes. Public DTOs, actor state, projections, command results, exception text, and logging must carry only `SecretReference` and stable external key identifiers.

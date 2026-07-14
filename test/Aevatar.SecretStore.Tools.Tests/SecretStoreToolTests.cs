@@ -795,6 +795,21 @@ public sealed class SecretStoreToolTests
             return Task.CompletedTask;
         }
 
+        public Task<bool> SetIfAbsentAsync(
+            string key,
+            ReadOnlyMemory<byte> value,
+            TimeSpan? expiry,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Values.ContainsKey(key))
+                return Task.FromResult(false);
+
+            Values[key] = value.ToArray();
+            Expirations[key] = expiry;
+            return Task.FromResult(true);
+        }
+
         public Task<bool> CompareSetAsync(
             string key,
             ReadOnlyMemory<byte> expectedValue,

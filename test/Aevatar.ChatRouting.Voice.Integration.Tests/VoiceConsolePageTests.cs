@@ -52,7 +52,42 @@ public sealed class VoiceConsolePageTests
         // arrive via host-injected configuration, never baked into the raw asset.
         html.Should().Contain("/auto/callback");
         html.Should().Contain("__BACKEND_CONSOLE_CONFIG__");
+        html.Should().Contain("__VOICE_REALTIME_SERVICE_SLUG__");
         html.Should().Contain("Aevatar Backend Console");
+    }
+
+    [Fact]
+    public void EmbeddedAsset_AuthorizesRealtimeResourceBeforeRouteOrMicrophoneWork()
+    {
+        var html = ReadEmbeddedAsset();
+
+        html.Should().Contain(":voice-realtime:token");
+        html.Should().Contain("requiredVoiceResources()");
+        html.Should().Contain("beginLogin(requiredVoiceResources(),VOICE_TOKEN_PURPOSE)");
+        html.Should().Contain("token.oauth_resources = requestedResources");
+        html.Should().NotContain("请先连接 openai-realtime 服务",
+            "service ownership and OAuth resource authorization are separate facts");
+
+        var authorization = html.IndexOf("await resolveVoiceRealtimeToken(baselineToken)", StringComparison.Ordinal);
+        var routePreflight = html.IndexOf("await ensureVoiceRoute(", StringComparison.Ordinal);
+        var microphone = html.IndexOf("navigator.mediaDevices.getUserMedia", StringComparison.Ordinal);
+        authorization.Should().BeGreaterThan(0);
+        authorization.Should().BeLessThan(routePreflight,
+            "feature authorization must complete before any route provisioning writes");
+        authorization.Should().BeLessThan(microphone,
+            "feature authorization must complete before the browser requests microphone access");
+    }
+
+    [Fact]
+    public void EmbeddedAsset_RefreshesVoiceTokenWithItsStoredResourceGrant()
+    {
+        var html = ReadEmbeddedAsset();
+
+        html.Should().Contain("const grantedResources=storedTokenResources(token)");
+        html.Should().Contain("grantedResources.forEach(resource=>form.append(\"resource\",resource))");
+        html.Should().Contain("setToken(refreshed,VOICE_TOKEN_PURPOSE)");
+        html.Should().Contain("featureSubject!==baselineSubject",
+            "a feature token from another signed-in account must never be reused");
     }
 
     // The zero-config first connect calls ONLY pre-existing audited endpoints:

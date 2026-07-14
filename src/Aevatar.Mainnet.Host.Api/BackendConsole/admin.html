@@ -1390,10 +1390,16 @@ function statsForEmployee(eid){ return null; }
    ============================================================ */
 var OIDC={ authority:BACKEND_CONSOLE_CONFIG.authority||'', clientId:BACKEND_CONSOLE_CONFIG.clientId||'',
   scope:BACKEND_CONSOLE_CONFIG.scope||'', resources:Array.isArray(BACKEND_CONSOLE_CONFIG.resources)?BACKEND_CONSOLE_CONFIG.resources:[], redirectUri:location.origin+'/auto/callback', storageKey:BACKEND_CONSOLE_CONFIG.storageKey||'' };
-var TOKEN_KEY=OIDC.storageKey+':token', PKCE_KEY=OIDC.storageKey+':pkce';
+var VOICE_TOKEN_PURPOSE='voice-realtime';
+var TOKEN_KEY=OIDC.storageKey+':token', VOICE_TOKEN_KEY=OIDC.storageKey+':voice-realtime:token', PKCE_KEY=OIDC.storageKey+':pkce';
 function getToken(){ try{ var t=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null'); return (t&&t.access_token)?t:null; }catch(e){ return null; } }
 function accessToken(){ var t=getToken(); return t?t.access_token:null; }
-function clearToken(){ try{ localStorage.removeItem(TOKEN_KEY); }catch(e){} }
+function clearToken(){ try{ localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(VOICE_TOKEN_KEY); }catch(e){} }
+function loginResources(requested){
+  var merged=[];
+  [OIDC.resources,Array.isArray(requested)?requested:[]].forEach(function(group){ group.forEach(function(value){ var resource=typeof value==='string'?value.trim():''; if(resource&&merged.indexOf(resource)<0) merged.push(resource); }); });
+  return merged;
+}
 function loginReturnTo(){
   var h=(location.hash&&location.hash.indexOf('#/')===0&&/^#[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*$/.test(location.hash))?location.hash:'';
   return location.pathname + h;
@@ -1405,14 +1411,16 @@ function logout(){ showLoginGate('已登出 NyxID，请重新登录。'); }
 function _b64url(buf){ var s=btoa(String.fromCharCode.apply(null,new Uint8Array(buf))); return s.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 function _rand(n){ var a=new Uint8Array(n); crypto.getRandomValues(a); var s=''; for(var i=0;i<a.length;i++){ s+=('0'+(a[i]&0xff).toString(16)).slice(-2); } return s.slice(0,n); }
 async function _sha256(s){ return _b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); }
-async function beginLogin(){
+async function beginLogin(requestedResources,tokenPurpose){
   if(!OIDC.authority||!OIDC.clientId){ alert('BackendConsole OIDC 配置缺失。'); return; }
+  var resources=loginResources(requestedResources);
+  var purpose=tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:'';
   var verifier=_rand(64), state=_rand(32), challenge=await _sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo()}));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({verifier:verifier,state:state,returnTo:loginReturnTo(),resources:resources,tokenPurpose:purpose}));
   var u=new URL(OIDC.authority.replace(/\/+$/,'')+'/oauth/authorize');
   u.searchParams.set('response_type','code'); u.searchParams.set('client_id',OIDC.clientId);
   u.searchParams.set('redirect_uri',OIDC.redirectUri); u.searchParams.set('scope',OIDC.scope);
-  OIDC.resources.forEach(function(resource){ u.searchParams.append('resource',resource); });
+  resources.forEach(function(resource){ u.searchParams.append('resource',resource); });
   u.searchParams.set('state',state); u.searchParams.set('code_challenge',challenge); u.searchParams.set('code_challenge_method','S256');
   location.assign(u.toString());
 }
@@ -4482,7 +4490,7 @@ function bindEvents(){
     var msg=ev.data||{};
     if(!msg || msg.source!=='aevatar-backend-console-suite') return;
     if(msg.type==='auth-required'){ showLoginGate(msg.reason||'登录已过期，请重新使用 NyxID 登录。'); return; }
-    if(msg.type==='login-request'){ beginLogin(); }
+    if(msg.type==='login-request'){ beginLogin(msg.resources,msg.tokenPurpose); }
   });
   document.addEventListener('click',function(ev){
     var t=ev.target;

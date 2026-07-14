@@ -9,6 +9,12 @@ public interface IGarnetSecretKeyValueStore
 
     Task SetAsync(string key, ReadOnlyMemory<byte> value, TimeSpan? expiry, CancellationToken ct = default);
 
+    Task<bool> SetIfAbsentAsync(
+        string key,
+        ReadOnlyMemory<byte> value,
+        TimeSpan? expiry,
+        CancellationToken ct = default);
+
     Task<bool> CompareSetAsync(
         string key,
         ReadOnlyMemory<byte> expectedValue,

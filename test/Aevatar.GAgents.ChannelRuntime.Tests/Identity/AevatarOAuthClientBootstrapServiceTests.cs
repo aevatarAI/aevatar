@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
@@ -11,6 +12,18 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 [Collection(NyxIdRedirectUriEnvCollection.Name)]
 public sealed class AevatarOAuthClientBootstrapServiceTests
 {
+    [Fact]
+    public async Task StartAsync_WhenDisabled_ShouldNotDispatchBootstrapIntent()
+    {
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch, enabled: false);
+
+        await service.StartAsync(CancellationToken.None);
+
+        dispatch.Commands.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task StartAsync_DispatchesOneBootstrapIntent()
     {
@@ -207,8 +220,12 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     }
 
     private static AevatarOAuthClientBootstrapService NewService(
-        ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch) =>
-        new(dispatch, NullLogger<AevatarOAuthClientBootstrapService>.Instance);
+        ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch,
+        bool enabled = true) =>
+        new(
+            dispatch,
+            Options.Create(new AevatarOAuthClientBootstrapOptions { Enabled = enabled }),
+            NullLogger<AevatarOAuthClientBootstrapService>.Instance);
 
     private static ChannelIdentityOAuthAcceptedReceipt OAuthClientReceipt() =>
         new(

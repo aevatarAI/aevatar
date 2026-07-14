@@ -5,6 +5,8 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.GAgents.Scheduled.Audit;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
+using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -90,6 +92,32 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<ISkillRunnerOutboundDeliveryPort, ChannelNativeSkillRunnerOutboundDeliveryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionBootstrapActivator>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
+        services.AddEventSinkProjectionRuntimeCore<
+            UserAgentCatalogCredentialRepairProjectionContext,
+            UserAgentCatalogCredentialRepairRuntimeLease,
+            UserAgentCatalogCredentialRepairOutcome,
+            ProjectionSessionScopeGAgent<UserAgentCatalogCredentialRepairProjectionContext>>(
+            static scopeKey => new UserAgentCatalogCredentialRepairProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new UserAgentCatalogCredentialRepairRuntimeLease(context));
+        services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<UserAgentCatalogCredentialRepairOutcome>,
+            UserAgentCatalogCredentialRepairOutcomeCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>,
+            ProjectionSessionEventHub<UserAgentCatalogCredentialRepairOutcome>>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<UserAgentCatalogCredentialRepairProjectionContext>,
+            UserAgentCatalogCredentialRepairOutcomeProjector>());
+        services.TryAddSingleton<
+            IUserAgentCatalogCredentialRepairObservationPort,
+            UserAgentCatalogCredentialRepairObservationPort>();
+        services.TryAddSingleton<IUserAgentCatalogCredentialRepairPort, UserAgentCatalogCredentialRepairPort>();
         services.TryAddSingleton<IScheduledWorkflowAgentCreationPort, ScheduledWorkflowAgentCreationPort>();
         services.TryAddSingleton<ISkillRunnerCronSchedulePort, SkillRunnerCronSchedulePort>();
         services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
@@ -97,6 +125,11 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
         services.TryAddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
+        services.TryAddSingleton<ScheduledAgentCredentialLifecycle>();
+        services.TryAddSingleton<IScheduledAgentCredentialLifecycle>(
+            sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>());
+        services.TryAddSingleton<IScheduledAgentCredentialRevocationExecutor>(
+            sp => sp.GetRequiredService<ScheduledAgentCredentialLifecycle>());
         if (!services.Any(IsAgentBuilderToolSourceRegistration))
             services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), AgentToolSourceFactory));
         // Caller-scope resolver chain (issue #466 §B). Channel resolver runs first so
@@ -112,6 +145,7 @@ public static class ScheduledServiceCollectionExtensions
                 sp.GetRequiredService<NyxIdNativeCallerScopeResolver>(),
             },
             sp.GetService<Microsoft.Extensions.Logging.ILogger<CompositeCallerScopeResolver>>()));
+        services.AddHostedService<UserAgentApiKeyRevocationReadModelKeyMigrationService>();
         services.AddHostedService<UserAgentCatalogStartupService>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ITombstoneCompactionTarget, UserAgentCatalogTombstoneCompactionTarget>());
@@ -166,7 +200,7 @@ public static class ScheduledServiceCollectionExtensions
             sp.GetRequiredService<IUserAgentCatalogCommandPort>(),
             sp.GetRequiredService<ICallerScopeResolver>(),
             sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            sp.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
+            sp.GetRequiredService<IScheduledAgentCredentialLifecycle>(),
             sp.GetService<ILogger<AgentBuilderTool>>(),
             sp.GetService<ILogger<ScheduledAgentCreatorTool>>());
 }

@@ -189,14 +189,7 @@ public static class IdentityServiceCollectionExtensions
         // resolved HttpClient + HttpMessageHandler inside the singleton and
         // silently defeated the 2-min handler rotation, so long-running
         // silos would never pick up DNS / TLS-cert changes.
-        var brokerOptions = services.AddOptions<NyxIdBrokerOptions>();
-        if (configuration is not null)
-        {
-            brokerOptions.Configure(options =>
-                options.ResourceServerBaseUrl =
-                    configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey]?.Trim().TrimEnd('/')
-                    ?? string.Empty);
-        }
+        services.AddOptions<NyxIdBrokerOptions>();
         services.TryAddSingleton<StateTokenCodec>();
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
@@ -215,6 +208,9 @@ public static class IdentityServiceCollectionExtensions
         // so the typed-client pattern's per-resolution handler rotation works
         // as designed.
         services.AddHttpClient<NyxIdDynamicClientRegistrationClient>();
+        var bootstrapOptions = services.AddOptions<AevatarOAuthClientBootstrapOptions>();
+        if (configuration is not null)
+            bootstrapOptions.Bind(configuration.GetSection(AevatarOAuthClientBootstrapOptions.SectionName));
         services.AddHostedService<AevatarOAuthClientBootstrapService>();
 
         // ─── Webhook validators ───
