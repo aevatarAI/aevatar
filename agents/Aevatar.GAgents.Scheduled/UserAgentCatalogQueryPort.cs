@@ -464,7 +464,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             SecretSubjectId = document.SecretSubjectId ?? string.Empty,
             RepairReason = document.RepairReason ?? string.Empty,
             RequestedBySubjectId = document.RequestedBySubjectId ?? string.Empty,
-            RequestedAtUnixMs = document.RequestedAtUnixMs,
+            RepairRequestedAtUnixMs = document.RepairRequestedAtUnixMs,
             CatalogAuthorityStateVersion = document.StateVersion,
             CatalogLastEventId = document.LastEventId ?? string.Empty,
         };
@@ -491,9 +491,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             new(
                 document.AgentId.Trim(),
                 document.ApiKeyId.Trim(),
-                document.NyxApiKeyReference?.Ref?.Trim() ??
-                document.VaultRevocationDescriptor?.Ref?.Trim() ??
-                string.Empty);
+                ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(document));
     }
 
 }

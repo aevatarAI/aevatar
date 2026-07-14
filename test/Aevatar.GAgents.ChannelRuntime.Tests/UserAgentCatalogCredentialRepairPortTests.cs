@@ -40,6 +40,7 @@ public sealed class UserAgentCatalogCredentialRepairPortTests
         fixture.DispatchedCommand.SecretSubjectId.Should().Be("key-1");
         fixture.DispatchedCommand.RepairReason.Should().Be("restore exact durable reference");
         fixture.DispatchedCommand.RequestedBySubjectId.Should().Be("admin-1");
+        fixture.DispatchedCommand.RepairRequestedAtUnixMs.Should().Be(1234);
         fixture.DispatchedCommand.SecretReference.Should().BeEquivalentTo(CompleteReference());
         fixture.ObservationLease.WaitCalls.Should().Be(1);
     }

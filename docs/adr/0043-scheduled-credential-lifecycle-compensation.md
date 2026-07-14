@@ -39,6 +39,10 @@ executor. Bearer tokens are transient command input and are never copied to an e
 state. Failed attempts remain in actor state for idempotent retry; the fact is removed only
 after both tracks become terminal.
 
+`requested_at` always records the original revocation intent time. A successful administrator
+repair records its separate request time in `repair_requested_at_unix_ms` and never overwrites
+the revocation timestamp.
+
 Bearer-bound retries re-enter the catalog actor through a typed owner-scoped command. The
 actor selects pending facts from its authoritative state and invokes the executor in its own
 turn; tools never use the eventually consistent revocation read model to drive write-side

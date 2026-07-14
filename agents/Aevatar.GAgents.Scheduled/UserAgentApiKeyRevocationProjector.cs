@@ -119,7 +119,7 @@ public sealed class UserAgentApiKeyRevocationProjector
 
     private static string BuildDocumentId(UserAgentApiKeyRevocation revocation)
     {
-        var secretReference = ResolveSecretReferenceRef(revocation);
+        var secretReference = ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation);
         return string.IsNullOrEmpty(secretReference)
             ? ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
                 revocation.AgentId.Trim(),
@@ -135,14 +135,9 @@ public sealed class UserAgentApiKeyRevocationProjector
         string.Equals(revocation.AgentId, agentId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(revocation.ApiKeyId, apiKeyId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(
-            ResolveSecretReferenceRef(revocation),
+            ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation),
             secretReference?.Trim() ?? string.Empty,
             StringComparison.Ordinal);
-
-    private static string ResolveSecretReferenceRef(UserAgentApiKeyRevocation revocation) =>
-        revocation.NyxApiKeyReference?.Ref?.Trim() ??
-        revocation.VaultRevocationDescriptor?.Ref?.Trim() ??
-        string.Empty;
 
     private static UserAgentApiKeyRevocationDocument Materialize(
         UserAgentCatalogMaterializationContext context,
@@ -180,7 +175,7 @@ public sealed class UserAgentApiKeyRevocationProjector
         document.SecretSubjectId = revocation.SecretSubjectId ?? string.Empty;
         document.RepairReason = revocation.RepairReason ?? string.Empty;
         document.RequestedBySubjectId = revocation.RequestedBySubjectId ?? string.Empty;
-        document.RequestedAtUnixMs = revocation.RequestedAtUnixMs;
+        document.RepairRequestedAtUnixMs = revocation.RepairRequestedAtUnixMs;
 
         return document;
     }

@@ -12,7 +12,7 @@ public interface IUserAgentCatalogCredentialRepairPort
         string secretSubjectId,
         string repairReason,
         string requestedBySubjectId,
-        long requestedAtUnixMs,
+        long repairRequestedAtUnixMs,
         CancellationToken ct = default);
 }
 

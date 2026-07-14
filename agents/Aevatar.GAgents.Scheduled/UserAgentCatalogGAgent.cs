@@ -180,7 +180,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                     "Cannot replace pending credential revocation with an alias: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
                     requestedRevocation.AgentId,
                     requestedRevocation.ApiKeyId,
-                    GetSecretReferenceRef(requestedRevocation));
+                    ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(requestedRevocation));
             }
             else
             {
@@ -283,7 +283,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                 "Cannot request credential revocation with an aliased identity: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
                 revocation.AgentId,
                 revocation.ApiKeyId,
-                GetSecretReferenceRef(revocation));
+                ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation));
             return;
         }
 
@@ -351,7 +351,10 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         var aliasConflict = State.PendingApiKeyRevocations.Any(revocation =>
             !ReferenceEquals(revocation, pending) &&
             (string.Equals(revocation.ApiKeyId, apiKeyId, StringComparison.Ordinal) ||
-             string.Equals(GetSecretReferenceRef(revocation), reference.Ref.Trim(), StringComparison.Ordinal)));
+             string.Equals(
+                 ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation),
+                 reference.Ref.Trim(),
+                 StringComparison.Ordinal)));
         if (aliasConflict)
         {
             await PersistRepairRejectedAsync(
@@ -371,7 +374,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             SecretSubjectId = secretSubjectId,
             RepairReason = repairReason,
             RequestedBySubjectId = requestedBySubjectId,
-            RequestedAtUnixMs = command.RequestedAtUnixMs,
+            RepairRequestedAtUnixMs = command.RepairRequestedAtUnixMs,
         });
 
         var repaired = State.PendingApiKeyRevocations.First(revocation =>
@@ -542,7 +545,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                     existing,
                     candidate.AgentId,
                     candidate.ApiKeyId,
-                    GetSecretReferenceRef(candidate)));
+                    ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(candidate)));
             if (migrated is not null)
                 next.PendingApiKeyRevocations[index] = NormalizeRevocation(migrated);
         }
@@ -604,7 +607,7 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         existing.SecretSubjectId = evt.SecretSubjectId ?? string.Empty;
         existing.RepairReason = evt.RepairReason ?? string.Empty;
         existing.RequestedBySubjectId = evt.RequestedBySubjectId ?? string.Empty;
-        existing.RequestedAtUnixMs = evt.RequestedAtUnixMs;
+        existing.RepairRequestedAtUnixMs = evt.RepairRequestedAtUnixMs;
         existing.VaultTrack = new ScheduledCredentialRevocationTrack
         {
             Status = ScheduledCredentialRevocationTrackStatus.Pending,
@@ -680,7 +683,6 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             FailureKind = UserAgentApiKeyRevocationFailureKind.Unspecified,
             SecretSubjectId = entry.ApiKeyId.Trim(),
-            RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             NyxIdTrack = new ScheduledCredentialRevocationTrack
             {
                 Status = ScheduledCredentialRevocationTrackStatus.Pending,
@@ -725,7 +727,6 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             ApiKeyId = apiKeyId,
             OwnerScope = intent.OwnerScope.Clone(),
             RequestedAt = Timestamp.FromDateTimeOffset(now),
-            RequestedAtUnixMs = now.ToUnixTimeMilliseconds(),
             SecretSubjectId = apiKeyId,
             NyxIdTrack = new ScheduledCredentialRevocationTrack
             {
@@ -833,17 +834,20 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                 revocation,
                 candidate.AgentId,
                 candidate.ApiKeyId,
-                GetSecretReferenceRef(candidate)));
+                ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(candidate)));
 
     private static bool HasRevocationAliasConflict(
         IEnumerable<UserAgentApiKeyRevocation> revocations,
         UserAgentApiKeyRevocation candidate)
     {
-        var candidateReference = GetSecretReferenceRef(candidate);
+        var candidateReference = ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(candidate);
         return revocations.Any(revocation =>
             string.Equals(revocation.ApiKeyId, candidate.ApiKeyId, StringComparison.Ordinal) ||
             (!string.IsNullOrEmpty(candidateReference) &&
-             string.Equals(GetSecretReferenceRef(revocation), candidateReference, StringComparison.Ordinal)));
+             string.Equals(
+                 ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation),
+                 candidateReference,
+                 StringComparison.Ordinal)));
     }
 
     private static bool MatchesRevocationIdentity(
@@ -854,14 +858,9 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         string.Equals(revocation.AgentId, agentId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(revocation.ApiKeyId, apiKeyId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(
-            GetSecretReferenceRef(revocation),
+            ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation),
             secretReferenceRef?.Trim() ?? string.Empty,
             StringComparison.Ordinal);
-
-    private static string GetSecretReferenceRef(UserAgentApiKeyRevocation revocation) =>
-        revocation.NyxApiKeyReference?.Ref?.Trim() ??
-        revocation.VaultRevocationDescriptor?.Ref?.Trim() ??
-        string.Empty;
 
     private static ScheduledCredentialRevocationTrack? ResolveTrack(
         UserAgentApiKeyRevocation revocation,

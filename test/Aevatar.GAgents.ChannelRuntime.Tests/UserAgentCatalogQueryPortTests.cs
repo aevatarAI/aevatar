@@ -156,7 +156,7 @@ public sealed class UserAgentCatalogQueryPortTests
         pending[0].SecretSubjectId.Should().Be("key-alice");
         pending[0].RepairReason.Should().Be("restore exact reference");
         pending[0].RequestedBySubjectId.Should().Be("admin-1");
-        pending[0].RequestedAtUnixMs.Should().Be(1_750_412_800_000);
+        pending[0].RepairRequestedAtUnixMs.Should().Be(1_750_412_800_000);
         revocationReader.Queries.Should().ContainSingle();
         revocationReader.Queries[0].Filters.Select(static filter => filter.FieldPath)
             .Should().Contain($"{nameof(UserAgentApiKeyRevocationDocument.OwnerScope)}.{nameof(OwnerScope.SenderId)}");
@@ -303,7 +303,7 @@ public sealed class UserAgentCatalogQueryPortTests
             SecretSubjectId = apiKeyId,
             RepairReason = "restore exact reference",
             RequestedBySubjectId = "admin-1",
-            RequestedAtUnixMs = 1_750_412_800_000,
+            RepairRequestedAtUnixMs = 1_750_412_800_000,
             StateVersion = 3,
             LastEventId = "evt-3",
         };

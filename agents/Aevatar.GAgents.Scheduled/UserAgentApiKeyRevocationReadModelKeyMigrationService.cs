@@ -100,9 +100,7 @@ internal sealed class UserAgentApiKeyRevocationReadModelKeyMigrationService : IH
 
     private static string BuildCanonicalDocumentId(UserAgentApiKeyRevocationDocument document)
     {
-        var secretReference = document.NyxApiKeyReference?.Ref?.Trim() ??
-                              document.VaultRevocationDescriptor?.Ref?.Trim() ??
-                              string.Empty;
+        var secretReference = ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(document);
         return string.IsNullOrEmpty(secretReference)
             ? ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
                 document.AgentId.Trim(),

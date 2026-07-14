@@ -43,7 +43,7 @@ internal sealed class UserAgentCatalogCredentialRepairPort : IUserAgentCatalogCr
         string secretSubjectId,
         string repairReason,
         string requestedBySubjectId,
-        long requestedAtUnixMs,
+        long repairRequestedAtUnixMs,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(secretReference);
@@ -68,7 +68,7 @@ internal sealed class UserAgentCatalogCredentialRepairPort : IUserAgentCatalogCr
                     SecretSubjectId = secretSubjectId?.Trim() ?? string.Empty,
                     RepairReason = repairReason?.Trim() ?? string.Empty,
                     RequestedBySubjectId = requestedBySubjectId?.Trim() ?? string.Empty,
-                    RequestedAtUnixMs = requestedAtUnixMs,
+                    RepairRequestedAtUnixMs = repairRequestedAtUnixMs,
                 }),
                 Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
             },

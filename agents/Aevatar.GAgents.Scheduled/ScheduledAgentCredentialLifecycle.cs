@@ -276,7 +276,7 @@ public sealed class ScheduledAgentCredentialLifecycle
                 Error = error ?? string.Empty,
                 FailureKind = failureKind,
                 Track = track,
-                SecretReferenceRef = ResolveSecretReferenceRef(pending),
+                SecretReferenceRef = ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(pending),
             },
             ct);
 
@@ -310,11 +310,6 @@ public sealed class ScheduledAgentCredentialLifecycle
         !string.IsNullOrWhiteSpace(descriptor.Purpose) &&
         !string.IsNullOrWhiteSpace(descriptor.OwnerScopeKey) &&
         !string.IsNullOrWhiteSpace(descriptor.SubjectId);
-
-    private static string ResolveSecretReferenceRef(UserAgentApiKeyRevocation pending) =>
-        pending.NyxApiKeyReference?.Ref?.Trim() ??
-        pending.VaultRevocationDescriptor?.Ref?.Trim() ??
-        string.Empty;
 
 }
 

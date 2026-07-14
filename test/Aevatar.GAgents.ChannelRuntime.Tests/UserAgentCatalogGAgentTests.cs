@@ -339,7 +339,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
                 revocation.AgentId == originalFact.AgentId &&
                 revocation.ApiKeyId == originalFact.ApiKeyId &&
                 revocation.NyxApiKeyReference.Ref == originalFact.NyxApiKeyReference.Ref &&
-                revocation.RequestedAtUnixMs == originalFact.RequestedAtUnixMs),
+                revocation.RepairRequestedAtUnixMs == originalFact.RepairRequestedAtUnixMs),
             Arg.Any<CancellationToken>());
     }
 
@@ -477,7 +477,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         pending.NyxIdTrack.AttemptCount.Should().Be(0);
         pending.VaultTrack.AttemptCount.Should().Be(0);
         pending.RequestedAt.Should().NotBeNull();
-        pending.RequestedAtUnixMs.Should().BeGreaterThan(0);
+        pending.RepairRequestedAtUnixMs.Should().Be(0);
         pending.RepairReason.Should().BeEmpty();
         pending.RequestedBySubjectId.Should().BeEmpty();
         var persisted = await _store.GetEventsAsync(_agent.Id);
@@ -689,6 +689,9 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
         });
         await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand { AgentId = "agent-repair" });
+        var revocationRequestedAt = _agent.State.PendingApiKeyRevocations
+            .Should().ContainSingle().Subject.RequestedAt.Clone();
+        _agent.State.PendingApiKeyRevocations[0].RepairRequestedAtUnixMs.Should().Be(0);
         _credentialRevocationExecutor.ClearReceivedCalls();
         var committedBeforeExecution = false;
         _credentialRevocationExecutor.ExecutePendingAsync(
@@ -717,7 +720,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             SecretSubjectId = "key-repair",
             RepairReason = "restore exact durable reference",
             RequestedBySubjectId = "admin-1",
-            RequestedAtUnixMs = 1234,
+            RepairRequestedAtUnixMs = 1234,
         });
 
         var pending = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject;
@@ -725,11 +728,13 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         pending.NyxApiKeyReference.Ref.Should().Be("secret-repair");
         pending.RepairReason.Should().Be("restore exact durable reference");
         pending.RequestedBySubjectId.Should().Be("admin-1");
-        pending.RequestedAtUnixMs.Should().Be(1234);
+        pending.RequestedAt.Should().BeEquivalentTo(revocationRequestedAt);
+        pending.RepairRequestedAtUnixMs.Should().Be(1234);
 
         var persisted = await _store.GetEventsAsync(_agent.Id);
         var repaired = persisted.Last().EventData.Unpack<UserAgentCatalogCredentialRevocationRepairedEvent>();
         repaired.RequestId.Should().Be("repair-request-1");
+        repaired.RepairRequestedAtUnixMs.Should().Be(1234);
         committedBeforeExecution.Should().BeTrue();
         await _credentialRevocationExecutor.Received(1).ExecutePendingAsync(
             string.Empty,
@@ -751,7 +756,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             SecretSubjectId = "missing-key",
             RepairReason = "restore exact durable reference",
             RequestedBySubjectId = "admin-1",
-            RequestedAtUnixMs = 1234,
+            RepairRequestedAtUnixMs = 1234,
         });
 
         var persisted = await _store.GetEventsAsync(_agent.Id);
@@ -773,7 +778,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             SecretSubjectId = "different-subject",
             RepairReason = "restore exact durable reference",
             RequestedBySubjectId = "admin-1",
-            RequestedAtUnixMs = 1234,
+            RepairRequestedAtUnixMs = 1234,
         });
 
         var persisted = await _store.GetEventsAsync(_agent.Id);
@@ -816,7 +821,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
             SecretSubjectId = "key-target",
             RepairReason = "restore exact durable reference",
             RequestedBySubjectId = "admin-1",
-            RequestedAtUnixMs = 1234,
+            RepairRequestedAtUnixMs = 1234,
         });
 
         var persisted = await _store.GetEventsAsync(_agent.Id);

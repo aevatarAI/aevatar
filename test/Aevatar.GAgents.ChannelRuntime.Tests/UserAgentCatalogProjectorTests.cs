@@ -460,7 +460,7 @@ public sealed class UserAgentCatalogProjectorTests
                     SecretSubjectId = "key-1",
                     RepairReason = "restore exact reference",
                     RequestedBySubjectId = "admin-1",
-                    RequestedAtUnixMs = 1_750_412_800_000,
+                    RepairRequestedAtUnixMs = 1_750_412_800_000,
                 },
             },
         };
@@ -502,7 +502,7 @@ public sealed class UserAgentCatalogProjectorTests
         document.SecretSubjectId.Should().Be("key-1");
         document.RepairReason.Should().Be("restore exact reference");
         document.RequestedBySubjectId.Should().Be("admin-1");
-        document.RequestedAtUnixMs.Should().Be(1_750_412_800_000);
+        document.RepairRequestedAtUnixMs.Should().Be(1_750_412_800_000);
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("evt-revoke-pending");
         dispatcher.Deletes.Should().ContainSingle().Which.Should().Be("agent-1");
@@ -883,6 +883,31 @@ public sealed class UserAgentCatalogProjectorTests
         string.Concat("a", "bc", "d").Should().Be(string.Concat("ab", "c", "d"));
         first.Should().NotBe(second);
         first.Should().NotContain("=");
+    }
+
+    [Fact]
+    public void CredentialRevocationIdentity_PrefersConfirmedReferenceBeforeDescriptorFallback()
+    {
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            NyxApiKeyReference = new SecretReference { Ref = " confirmed-ref " },
+            VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = "descriptor-ref",
+            },
+        };
+        var document = new UserAgentApiKeyRevocationDocument
+        {
+            VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = " descriptor-only-ref ",
+            },
+        };
+
+        ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation)
+            .Should().Be("confirmed-ref");
+        ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(document)
+            .Should().Be("descriptor-only-ref");
     }
 
     [Fact]

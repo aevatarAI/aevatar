@@ -139,7 +139,7 @@ message UserAgentApiKeyRevocation {
   string secret_subject_id = 13;
   string repair_reason = 14;
   string requested_by_subject_id = 15;
-  int64 requested_at_unix_ms = 16;
+  int64 repair_requested_at_unix_ms = 16;
   ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 17;
 }
 
@@ -233,7 +233,7 @@ message UserAgentCatalogRepairCredentialRevocationCommand {
   string secret_subject_id = 4;
   string repair_reason = 5;
   string requested_by_subject_id = 6;
-  int64 requested_at_unix_ms = 7;
+  int64 repair_requested_at_unix_ms = 7;
   string request_id = 8;
 }
 
@@ -287,7 +287,7 @@ message UserAgentCatalogCredentialRevocationRepairedEvent {
   string secret_subject_id = 4;
   string repair_reason = 5;
   string requested_by_subject_id = 6;
-  int64 requested_at_unix_ms = 7;
+  int64 repair_requested_at_unix_ms = 7;
   string request_id = 8;
 }
 
@@ -409,6 +409,6 @@ message UserAgentApiKeyRevocationDocument {
   string secret_subject_id = 18;
   string repair_reason = 19;
   string requested_by_subject_id = 20;
-  int64 requested_at_unix_ms = 21;
+  int64 repair_requested_at_unix_ms = 21;
   ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 22;
 }

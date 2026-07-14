@@ -47,3 +47,27 @@ public static class ScheduledAgentCredentialRevocationDocumentIds
             .Replace('/', '_');
     }
 }
+
+internal static class ScheduledAgentCredentialRevocationIdentity
+{
+    public static string ResolveSecretReferenceRef(UserAgentApiKeyRevocation revocation)
+    {
+        ArgumentNullException.ThrowIfNull(revocation);
+        return ResolveSecretReferenceRef(
+            revocation.NyxApiKeyReference?.Ref,
+            revocation.VaultRevocationDescriptor?.Ref);
+    }
+
+    public static string ResolveSecretReferenceRef(UserAgentApiKeyRevocationDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return ResolveSecretReferenceRef(
+            document.NyxApiKeyReference?.Ref,
+            document.VaultRevocationDescriptor?.Ref);
+    }
+
+    private static string ResolveSecretReferenceRef(
+        string? confirmedReference,
+        string? descriptorReference) =>
+        confirmedReference?.Trim() ?? descriptorReference?.Trim() ?? string.Empty;
+}
