@@ -419,7 +419,16 @@ public sealed class AgentDeliveryTargetToolTests
                 """);
 
             await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("dispatch failed");
-            issuer.RevokedApiKeyIds.Should().ContainSingle().Which.Should().Be("key-aelf-twitter-approval");
+            issuer.RevokedApiKeyIds.Should().BeEmpty();
+            await commandPort.Received(1).RequestCredentialRevocationAsync(
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
+                    intent.AgentId == "aelf-twitter-approval" &&
+                    intent.ApiKeyId == "key-aelf-twitter-approval" &&
+                    intent.NyxApiKeyReference != null &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.Confirmed),
+                Arg.Any<CancellationToken>(),
+                "session-token");
         }
         finally
         {
@@ -1331,11 +1340,6 @@ public sealed class AgentDeliveryTargetToolTests
             return Task.FromResult(RevokeResult);
         }
 
-        public Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
-        {
-            RevokedApiKeyIds.Add(apiKeyId);
-            return Task.CompletedTask;
-        }
     }
 
     private sealed record IssueCall(

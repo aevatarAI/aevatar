@@ -248,21 +248,20 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         if (!authorization.Success)
             return JsonSerializer.Serialize(new { error = authorization.FailureCode.ToString(), detail = authorization.Detail });
 
-        var key = await apiKeyIssuer.IssueAsync(
+        var credentialLifecycle = new ScheduledAgentCredentialLifecycle(secretVault, commandPort, apiKeyIssuer);
+        var provisioned = await credentialLifecycle.ProvisionAsync(
             token,
             authorization.Plan!,
             $"aevatar-delivery-target-{deliveryTargetId.value}",
-            ct);
-        if (!key.Success)
-            return key.ToErrorJson();
-
-        var storedKey = await secretVault.PutAsync(new StoreSecretRequest(
+            deliveryTargetId.value!,
+            caller,
             CredentialSecretPurposes.ScheduledNyxApiKey,
             BuildScheduledNyxApiKeyOwnerScopeKey(caller, keyScopeId, conversationId.value!, deliveryTargetId.value!),
-            key.ApiKeyId ?? string.Empty,
-            key.FullKey ?? string.Empty,
-            "delivery-target-create"),
+            "delivery-target-create",
             ct);
+        if (!provisioned.Success)
+            return provisioned.IssuedKey.ToErrorJson();
+        var key = provisioned.IssuedKey;
 
         try
         {
@@ -273,7 +272,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                     ConversationId = conversationId.value!,
                     NyxProviderSlug = nyxProviderSlug.value!,
                     NyxApiKey = string.Empty,
-                    NyxApiKeyReference = storedKey.Reference,
+                    NyxApiKeyReference = provisioned.SecretReference,
                     ApiKeyId = key.ApiKeyId ?? string.Empty,
                     AgentType = "delivery_target",
                     TemplateName = "explicit_delivery_target",
@@ -293,7 +292,8 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         }
         catch
         {
-            await apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, CancellationToken.None);
+            await credentialLifecycle.RequestRevocationAsync(
+                token, deliveryTargetId.value!, key.ApiKeyId!, caller, provisioned.SecretReference!, CancellationToken.None);
             throw;
         }
 

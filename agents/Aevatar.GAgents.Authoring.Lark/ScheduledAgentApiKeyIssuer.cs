@@ -105,30 +105,6 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             ClassifyRevocationFailure(status));
     }
 
-    public async Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(apiKeyId))
-            return;
-
-        try
-        {
-            var result = await RevokeAsync(token, apiKeyId, ct);
-            if (!result.Completed)
-            {
-                _logger?.LogWarning(
-                    "Scheduled agent API key rollback remains pending: apiKeyId={ApiKeyId} status={Status} failureKind={FailureKind} error={Error}",
-                    apiKeyId,
-                    result.HttpStatus,
-                    result.FailureKind,
-                    result.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Scheduled agent API key rollback failed: apiKeyId={ApiKeyId}", apiKeyId);
-        }
-    }
-
     private static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(string response, long keyExpiresAtUnixMs)
     {
         if (TryReadErrorEnvelope(response, out var status, out var body, out var message))

@@ -805,7 +805,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenInitializeFails_ShouldBestEffortDeleteIssuedKey()
+    public async Task ExecuteAsync_WhenInitializeFails_ShouldRequestDurableCredentialRevocation()
     {
         var harness = CreateHarness();
         harness.CreationPort.CreateAsync(
@@ -820,9 +820,17 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("initialize_failed");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("dispatch failed");
-            harness.Handler.Requests.Should().Contain(request =>
+            harness.Handler.Requests.Should().NotContain(request =>
                 request.Method == HttpMethod.Delete &&
                 request.Path == "/api/v1/api-keys/key-created");
+            await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
+                    intent.ApiKeyId == "key-created" &&
+                    intent.NyxApiKeyReference != null &&
+                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
+                        ScheduledCredentialVaultReferenceAvailability.Confirmed),
+                Arg.Any<CancellationToken>(),
+                "session-token");
         });
     }
 
@@ -912,24 +920,28 @@ public sealed class ScheduledAgentCreatorToolTests
         services.AddSingleton(creationPort);
         services.AddSingleton(resolver);
         services.AddSingleton(queryPort);
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        services.AddSingleton(catalogCommandPort);
         services.AddSingleton(options ?? new ScheduledAgentCreatorOptions());
         services.AddSingleton<ScheduledAgentCreateRequestMapper>();
-        services.AddSingleton(secretVault ?? new InMemorySecretVault());
+        services.AddSingleton<ISecretVault>(secretVault ?? new InMemorySecretVault());
         if (ownerLlmConfigSource is not null)
             services.AddSingleton(ownerLlmConfigSource);
         services.AddSingleton<ScheduledAgentApiKeyIssuer>();
+        services.AddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
+        services.AddSingleton<IScheduledAgentCredentialLifecycle, ScheduledAgentCredentialLifecycle>();
 
         var provider = services.BuildServiceProvider();
         var tool = new ScheduledAgentCreatorTool(
             provider.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            provider.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
+            provider.GetRequiredService<IScheduledAgentCredentialLifecycle>(),
             new ScheduledInvocationAuthorizationPlanner(new FixedSnapshotQueryPort(
                 snapshotUnavailable ? null : snapshot ?? CreateSnapshot(DefaultGrants))),
             provider.GetRequiredService<ScheduledAgentCreatorOptions>());
 
-        return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort);
+        return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort, catalogCommandPort);
     }
 
     private static readonly NyxIdServiceGrant[] DefaultGrants =
@@ -1043,7 +1055,8 @@ public sealed class ScheduledAgentCreatorToolTests
         RoutingJsonHandler Handler,
         ISkillRunnerCommandPort SkillRunnerPort,
         IScheduledWorkflowAgentCreationPort CreationPort,
-        IUserAgentCatalogQueryPort CatalogQueryPort);
+        IUserAgentCatalogQueryPort CatalogQueryPort,
+        IUserAgentCatalogCommandPort CatalogCommandPort);
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory
     {

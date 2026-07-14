@@ -13,7 +13,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
     private readonly IScheduledWorkflowAgentCreationPort _scheduledWorkflowAgentCreationPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _mapper;
-    private readonly ScheduledAgentApiKeyIssuer _apiKeyIssuer;
+    private readonly IScheduledAgentCredentialLifecycle _credentialLifecycle;
     private readonly IScheduledInvocationAuthorizationPlanner _authorizationPlanner;
     private readonly ScheduledAgentCreatorOptions _options;
     private readonly ILogger<ScheduledAgentCreatorTool>? _logger;
@@ -22,7 +22,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         IScheduledWorkflowAgentCreationPort scheduledWorkflowAgentCreationPort,
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper mapper,
-        ScheduledAgentApiKeyIssuer apiKeyIssuer,
+        IScheduledAgentCredentialLifecycle credentialLifecycle,
         IScheduledInvocationAuthorizationPlanner? authorizationPlanner = null,
         ScheduledAgentCreatorOptions? options = null,
         ILogger<ScheduledAgentCreatorTool>? logger = null)
@@ -30,7 +30,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         _scheduledWorkflowAgentCreationPort = scheduledWorkflowAgentCreationPort ?? throw new ArgumentNullException(nameof(scheduledWorkflowAgentCreationPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
-        _apiKeyIssuer = apiKeyIssuer ?? throw new ArgumentNullException(nameof(apiKeyIssuer));
+        _credentialLifecycle = credentialLifecycle ?? throw new ArgumentNullException(nameof(credentialLifecycle));
         _authorizationPlanner = authorizationPlanner ?? UnavailableAuthorizationPlanner.Instance;
         _options = options ?? new ScheduledAgentCreatorOptions();
         _logger = logger;
@@ -203,18 +203,29 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             });
         }
 
-        var key = await _apiKeyIssuer.IssueAsync(
+        var provisioned = await _credentialLifecycle.ProvisionAsync(
             token,
             authorization.Plan!,
             $"aevatar-scheduled-agent-{agentId}",
+            agentId,
+            caller,
+            Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            ScheduledAgentCreateRequestMapper.BuildScheduledNyxApiKeyOwnerScopeKey(
+                caller,
+                plan.Request!.ScopeId,
+                plan.Request.ConversationId,
+                plan.Request.ReceiveTarget.Primary.ReceiveId),
+            "scheduled-agent-create",
             ct);
-        if (!key.Success)
-            return key.ToErrorJson();
+        if (!provisioned.Success)
+            return provisioned.IssuedKey.ToErrorJson();
 
-        var mapped = await _mapper.MapAsync(plan.Request!, key, ct);
+        var key = provisioned.IssuedKey;
+        var mapped = _mapper.Map(plan.Request!, key, provisioned.SecretReference!);
         if (!mapped.Success)
         {
-            await _apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, ct);
+            await _credentialLifecycle.RequestRevocationAsync(
+                token, agentId, key.ApiKeyId!, caller, provisioned.SecretReference!, ct);
             return mapped.ErrorJson ?? """{"error":"validation_error"}""";
         }
 
@@ -225,7 +236,8 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         }
         catch (Exception ex)
         {
-            await _apiKeyIssuer.TryRevokeAsync(token, key.ApiKeyId ?? string.Empty, CancellationToken.None);
+            await _credentialLifecycle.RequestRevocationAsync(
+                token, agentId, key.ApiKeyId!, caller, provisioned.SecretReference!, CancellationToken.None);
             _logger?.LogWarning(ex, "Scheduled agent create dispatch failed after key issue: agentId={AgentId}", agentId);
             return JsonSerializer.Serialize(new { error = "initialize_failed", detail = ex.Message });
         }

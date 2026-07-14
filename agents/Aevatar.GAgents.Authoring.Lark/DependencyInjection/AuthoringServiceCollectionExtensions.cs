@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Studio.Application.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -33,6 +34,7 @@ public static class AuthoringServiceCollectionExtensions
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
         services.TryAddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
+        services.TryAddSingleton<IScheduledAgentCredentialLifecycle, ScheduledAgentCredentialLifecycle>();
         if (!services.Any(IsAgentBuilderToolSourceRegistration))
             services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), AgentToolSourceFactory));
 
@@ -54,7 +56,7 @@ public static class AuthoringServiceCollectionExtensions
             sp.GetRequiredService<IUserAgentCatalogCommandPort>(),
             sp.GetRequiredService<ICallerScopeResolver>(),
             sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            sp.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
+            sp.GetRequiredService<IScheduledAgentCredentialLifecycle>(),
             sp.GetRequiredService<IScheduledInvocationAuthorizationPlanner>(),
             sp.GetRequiredService<ScheduledAgentCreatorOptions>(),
             sp.GetService<ILogger<AgentBuilderTool>>(),

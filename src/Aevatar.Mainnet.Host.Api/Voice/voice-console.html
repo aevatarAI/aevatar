@@ -354,38 +354,105 @@ const CFG = {
   clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
   scope: BACKEND_CONSOLE_CONFIG.scope || "",
   resources: Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [],
+  nyxidApi: BACKEND_CONSOLE_CONFIG.nyxidApi || "",
   redirectUri: location.origin + "/auto/callback",
   storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
 };
+const VOICE_REALTIME_SERVICE_SLUG = __VOICE_REALTIME_SERVICE_SLUG__;
+const VOICE_TOKEN_PURPOSE = "voice-realtime";
 const TOKEN_KEY = CFG.storageKey + ":token";
+const VOICE_TOKEN_KEY = CFG.storageKey + ":voice-realtime:token";
 const PKCE_KEY  = CFG.storageKey + ":pkce";
 
 function b64url(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
 async function sha256(text){ return b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))); }
 function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(a); return b64url(a.buffer).slice(0, len); }
 
-function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("voice: token parse failed", e); } return null; }
-function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
-function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function readStoredToken(key){ const raw=localStorage.getItem(key); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("voice: token parse failed", e); } return null; }
+function getToken(){ return readStoredToken(TOKEN_KEY); }
+function getVoiceRealtimeToken(){ return readStoredToken(VOICE_TOKEN_KEY); }
+function tokenStorageKey(purpose){ return purpose===VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY; }
+function setToken(t,purpose){ localStorage.setItem(tokenStorageKey(purpose), JSON.stringify(t)); }
+function clearToken(){ localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(VOICE_TOKEN_KEY); }
+function normalizeResources(){
+  const result=[];
+  for(const group of arguments){
+    if(!Array.isArray(group)) continue;
+    for(const value of group){
+      const resource=typeof value==="string" ? value.trim() : "";
+      if(resource && !result.includes(resource)) result.push(resource);
+    }
+  }
+  return result;
+}
+function voiceRealtimeResource(){
+  const slug=String(VOICE_REALTIME_SERVICE_SLUG||"").trim();
+  const baselineSuffix="/api/v1/proxy/s/aevatar";
+  const baseline=CFG.resources.find(resource=>typeof resource==="string"&&resource.endsWith(baselineSuffix));
+  if(baseline && slug) return baseline.slice(0,-"aevatar".length)+encodeURIComponent(slug);
+  const base=String(CFG.nyxidApi||"").trim().replace(/\/+$/g,"");
+  return base && slug ? base+"/api/v1/proxy/s/"+encodeURIComponent(slug) : "";
+}
+function requiredVoiceResources(){ return normalizeResources(CFG.resources,[voiceRealtimeResource()]); }
+function decodeJwtPayload(value){
+  try {
+    const encoded=String(value||"").split(".")[1];
+    if(!encoded) return null;
+    const base64=encoded.replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-encoded.length%4)%4);
+    const bytes=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch(e){ return null; }
+}
+function tokenResponseResources(token){
+  if(!token) return null;
+  let explicit=false;
+  const groups=[];
+  if(Array.isArray(token.resource)){ explicit=true; groups.push(token.resource); }
+  else if(typeof token.resource==="string"){ explicit=true; groups.push([token.resource]); }
+  const claims=decodeJwtPayload(token.access_token);
+  if(claims && Array.isArray(claims.resources)){ explicit=true; groups.push(claims.resources); }
+  return explicit ? normalizeResources.apply(null,groups) : null;
+}
+function storedTokenResources(token){
+  return token && Array.isArray(token.oauth_resources)
+    ? normalizeResources(token.oauth_resources)
+    : tokenResponseResources(token);
+}
+function resourcesCover(granted,required){
+  return Array.isArray(granted) && required.every(resource=>granted.includes(resource));
+}
+function tokenSubject(token){
+  const claims=decodeJwtPayload(token&&token.access_token);
+  return claims && typeof claims.sub==="string" ? claims.sub : "";
+}
+function tokenExpiresAt(token){
+  const obtained=Number(token&&token.obtained_at), expiresIn=Number(token&&token.expires_in);
+  if(Number.isFinite(obtained) && Number.isFinite(expiresIn) && expiresIn>0) return obtained+expiresIn*1000;
+  const claims=decodeJwtPayload(token&&token.access_token);
+  return claims && Number.isFinite(Number(claims.exp)) ? Number(claims.exp)*1000 : null;
+}
+function tokenIsFresh(token){ const expiresAt=tokenExpiresAt(token); return !!(token&&token.access_token) && (expiresAt===null || expiresAt>Date.now()+30000); }
 function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
-function notifyAdminShellAuth(type, reason){
+function notifyAdminShellAuth(type, reason, resources, tokenPurpose){
   if(!isEmbeddedInAdmin()) return false;
-  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "", resources:normalizeResources(resources), tokenPurpose:tokenPurpose===VOICE_TOKEN_PURPOSE?VOICE_TOKEN_PURPOSE:"" }, location.origin);
   return true;
 }
 
-async function beginLogin(){
-  if(notifyAdminShellAuth("login-request")) return;
+async function beginLogin(requestedResources, tokenPurpose){
+  const resources=normalizeResources(CFG.resources,requestedResources);
+  const purpose=tokenPurpose===VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";
+  if(notifyAdminShellAuth("login-request","",resources,purpose)) return;
   const verifier = randomString(64);
   const st = randomString(32);
   const challenge = await sha256(verifier);
-  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname }));
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname, resources, tokenPurpose:purpose }));
   const u = new URL(CFG.authority + "/oauth/authorize");
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", CFG.clientId);
   u.searchParams.set("redirect_uri", CFG.redirectUri);
   u.searchParams.set("scope", CFG.scope);
-  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
+  resources.forEach(resource => u.searchParams.append("resource", resource));
   u.searchParams.set("state", st);
   u.searchParams.set("code_challenge", challenge);
   u.searchParams.set("code_challenge_method", "S256");
@@ -406,14 +473,53 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
-  CFG.resources.forEach(resource => form.append("resource", resource));
+  const requestedResources=Array.isArray(pending.resources) ? normalizeResources(pending.resources) : normalizeResources(CFG.resources);
+  requestedResources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
   if(!res.ok){ console.warn("voice: token exchange failed", res.status); return false; }
   const token = await res.json();
+  const returnedResources=tokenResponseResources(token);
+  if(requestedResources.length && !resourcesCover(returnedResources,requestedResources)){
+    console.warn("voice: token exchange omitted requested resources");
+    return false;
+  }
   token.obtained_at = Date.now();
-  setToken(token);
+  token.oauth_resources = requestedResources;
+  setToken(token,pending.tokenPurpose);
   return true;
+}
+
+async function refreshVoiceRealtimeToken(token, requiredResources){
+  const grantedResources=storedTokenResources(token);
+  if(!token || !token.refresh_token || !resourcesCover(grantedResources,requiredResources)) return null;
+  const form=new URLSearchParams();
+  form.set("grant_type","refresh_token");
+  form.set("refresh_token",token.refresh_token);
+  form.set("client_id",CFG.clientId);
+  grantedResources.forEach(resource=>form.append("resource",resource));
+  try {
+    const res=await fetch(CFG.authority+"/oauth/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:form.toString()});
+    if(!res.ok) return null;
+    const refreshed=await res.json();
+    if(!resourcesCover(tokenResponseResources(refreshed),requiredResources)) return null;
+    refreshed.refresh_token=refreshed.refresh_token||token.refresh_token;
+    refreshed.obtained_at=Date.now();
+    refreshed.oauth_resources=grantedResources;
+    setToken(refreshed,VOICE_TOKEN_PURPOSE);
+    return refreshed;
+  } catch(e){ console.warn("voice: feature token refresh failed",e); return null; }
+}
+
+async function resolveVoiceRealtimeToken(baselineToken){
+  const targetResource=voiceRealtimeResource();
+  if(!targetResource) throw new Error("语音授权资源配置缺失，请联系管理员");
+  const requiredResources=requiredVoiceResources();
+  const token=getVoiceRealtimeToken();
+  const baselineSubject=tokenSubject(baselineToken), featureSubject=tokenSubject(token);
+  if(!token || !baselineSubject || featureSubject!==baselineSubject || !resourcesCover(storedTokenResources(token),requiredResources)) return null;
+  if(tokenIsFresh(token)) return token;
+  return await refreshVoiceRealtimeToken(token,requiredResources);
 }
 
 async function fetchUserInfo(){
@@ -648,7 +754,7 @@ function renderAgents(){
   pm.innerHTML=
     '<div class="field"><label>provider / module</label>'+
       '<input class="input" value="'+esc(DEFAULT_MODULE)+'（OpenAI Realtime）" disabled aria-label="provider module" />'+
-      '<div class="help">凭据为每会话经 NyxID slug <span class="mono">openai-realtime</span> mint 的 ephemeral。</div></div>'+
+      '<div class="help">凭据为每会话经 NyxID slug <span class="mono">'+esc(VOICE_REALTIME_SERVICE_SLUG)+'</span> mint 的 ephemeral。</div></div>'+
     '<div class="field"><label>model</label>'+
       '<input class="input" value="由 provider 决定（如 gpt-realtime）" disabled aria-label="model" /></div>';
   grid.appendChild(panel(ICON.agent,"Provider & Model",null,badge("ok","可达"),pm));
@@ -936,8 +1042,26 @@ function floatTo16(float32){
 async function startVoice(){
   if(voice.ws || voice.provisioning) return;
   const startGeneration=++voice.startGeneration;
-  const token=getToken(); if(!token){ signOutSilent(); return; }
+  const baselineToken=getToken(); if(!baselineToken){ signOutSilent(); return; }
   voice.transcript=""; voice.responseId=0; voice.playoutSeq=0;
+
+  // Voice uses a separate OAuth session scoped to both the baseline Aevatar service and the
+  // configured realtime provider. Service ownership alone is not enough: the bearer token must
+  // carry the provider's RFC 8707 resource indicator. Refresh that feature token in place, or
+  // start incremental authorization before route writes or microphone access.
+  voice.provisioning=true;
+  vStatus("connecting","正在确认 OpenAI Realtime 授权…");
+  let token;
+  try { token=await resolveVoiceRealtimeToken(baselineToken); }
+  catch(e){ if(startGeneration===voice.startGeneration) vStatus("error",String(e&&e.message||e)); return; }
+  finally { voice.provisioning=false; }
+  if(startGeneration!==voice.startGeneration) return;
+  if(!token){
+    vStatus("connecting","正在请求 OpenAI Realtime 访问授权…");
+    try { await beginLogin(requiredVoiceResources(),VOICE_TOKEN_PURPOSE); }
+    catch(e){ if(startGeneration===voice.startGeneration) vStatus("error","无法发起语音授权："+String(e&&e.message||e)); }
+    return;
+  }
 
   // Zero-config pre-flight: /ws/voice fails closed (501) when the caller's chat
   // route policy resolves no voice attach target, so resolve — and on first use
@@ -974,7 +1098,7 @@ async function startVoice(){
 
 function describeVoiceSocketClose(code, reason){
   const typed = {
-    voice_provider_credential_unavailable:"NyxID 无法获取 OpenAI Realtime 临时凭据。请先连接 openai-realtime 服务后重试。",
+    voice_provider_credential_unavailable:"NyxID 未能签发 OpenAI Realtime 临时凭据。请重新授权语音访问；若仍失败，请检查该服务中的 OpenAI 凭据。",
     voice_credential_unavailable:"本次 NyxID 会话凭据不可用，请重新登录后重试。",
     remote_audio_transport_unavailable:"本部署的语音 provider 暂不可用，请联系管理员检查语音服务配置。",
     "Voice transport attach timed out.":"语音传输连接超时，请重试。",
@@ -1149,7 +1273,7 @@ function renderTest(){
     v.appendChild(banner("warn",ICON.alert,"连不上？",
       '首次使用时本页会自动开通默认语音 agent（创建默认会话并写入 <code class="inline">voice-default</code> 路由规则）；开通失败会在上方给出原因，可直接重试。'+
       '<code class="inline">/ws/voice</code> 在未配置 provider 时返回 503，路由未解析出语音目标时返回 501，会话内部异常返回 5xx。'+
-      '确认本部署已配置语音 provider、且你的 NyxID 拥有 <span class="mono">openai-realtime</span> 服务后重试。'));
+      '确认本部署已配置语音 provider、当前登录已授权 <span class="mono">'+esc(VOICE_REALTIME_SERVICE_SLUG)+'</span>，且该服务内保存了有效的 OpenAI 凭据。'));
   }
   return v;
 }
@@ -1166,7 +1290,7 @@ function renderSettings(){
   cred.innerHTML=
     '<div class="contract">'+
     '<div class="row"><span class="lbl">默认 provider</span><span class="val">'+esc(DEFAULT_MODULE)+'（OpenAI Realtime）</span></div>'+
-    '<div class="row"><span class="lbl">凭据模型</span><span class="val">每会话 NyxID ephemeral（slug <span class="mono">openai-realtime</span>）</span></div>'+
+    '<div class="row"><span class="lbl">凭据模型</span><span class="val">每会话 NyxID ephemeral（slug <span class="mono">'+esc(VOICE_REALTIME_SERVICE_SLUG)+'</span>）</span></div>'+
     '<div class="row"><span class="lbl">长期密钥</span><span class="val">仅存于 NyxID；aevatar 不持有</span></div>'+
     '</div>';
   v.appendChild(panel(ICON.settings,"Provider 凭据",null,badge("ok","NyxID 托管"),cred));

@@ -132,6 +132,11 @@ public static class MainnetHostBuilderExtensions
             options.EnableScriptingCapability = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
+        // Hosted services start in registration order. Register the provider-local index
+        // reconcile before capability modules can add startup readers so schema drift is
+        // migrated before any read-model query executes.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
         builder.Services.AddAuditTrailCore(builder.Configuration);
@@ -369,8 +374,6 @@ public static class MainnetHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.UseDefaultFiles();
-        app.UseStaticFiles();
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
@@ -389,6 +392,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
+        app.MapScheduledAgentCredentialRepairAdminEndpoints();
         app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 

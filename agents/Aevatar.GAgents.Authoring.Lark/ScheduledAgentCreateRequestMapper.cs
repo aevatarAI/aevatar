@@ -178,35 +178,17 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ErrorJson: null);
     }
 
-    private readonly ISecretVault _secretVault;
-
-    public ScheduledAgentCreateRequestMapper(ISecretVault secretVault)
-    {
-        _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
-    }
-
-    public async Task<ScheduledAgentCreateMapResult> MapAsync(
+    public ScheduledAgentCreateMapResult Map(
         ScheduledAgentCreatePlannedRequest request,
         ScheduledAgentApiKeyIssueResult issuedKey,
-        CancellationToken ct = default)
+        SecretReference secretReference)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(issuedKey);
+        ArgumentNullException.ThrowIfNull(secretReference);
 
-        if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId) || string.IsNullOrWhiteSpace(issuedKey.FullKey))
+        if (!issuedKey.Success || string.IsNullOrWhiteSpace(issuedKey.ApiKeyId))
             return ScheduledAgentCreateMapResult.Failed("api_key_unavailable");
-
-        var ownerScopeKey = BuildScheduledNyxApiKeyOwnerScopeKey(request.Caller, request.ScopeId, request.ConversationId, request.ReceiveTarget.Primary.ReceiveId);
-        var storedKey = await _secretVault.PutAsync(new StoreSecretRequest(
-            CredentialSecretPurposes.ScheduledInvocationAgentKey,
-            ownerScopeKey,
-            issuedKey.ApiKeyId,
-            issuedKey.FullKey,
-            "scheduled-agent-create",
-            issuedKey.KeyExpiresAtUnixMs > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(issuedKey.KeyExpiresAtUnixMs)
-                : null),
-            ct);
 
         var schedule = new WorkflowScheduleConfiguration(
             ScheduleId: request.AgentId,
@@ -220,13 +202,13 @@ internal sealed class ScheduledAgentCreateRequestMapper
             Enabled: true,
             Headers: BuildWorkflowHeaders(request, issuedKey),
             ScopeId: request.ScopeId,
-            Auth: BuildWorkflowScheduleAuth(storedKey, issuedKey),
+            Auth: BuildWorkflowScheduleAuth(secretReference, issuedKey),
             ScheduleMode: request.ScheduleMode == SkillRunnerScheduleMode.OneShot
                 ? WorkflowScheduleMode.OneShotAtUtc
                 : WorkflowScheduleMode.RecurringCron,
             OneShotFireAt: request.OneShotRunAtUtc);
 
-        var catalog = BuildCatalogUpsertCommand(request, issuedKey, storedKey);
+        var catalog = BuildCatalogUpsertCommand(request, issuedKey, secretReference);
 
         return new ScheduledAgentCreateMapResult(
             Success: true,
@@ -234,7 +216,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ErrorJson: null);
     }
 
-    private static string BuildScheduledNyxApiKeyOwnerScopeKey(
+    internal static string BuildScheduledNyxApiKeyOwnerScopeKey(
         OwnerScope caller,
         string scopeId,
         string conversationId,
@@ -379,10 +361,10 @@ internal sealed class ScheduledAgentCreateRequestMapper
             : request.ExecutionPrompt ?? "Execute the configured workflow and return plain text only.";
 
     private static WorkflowScheduleAuth BuildWorkflowScheduleAuth(
-        StoreSecretResult storedKey,
+        SecretReference secretReference,
         ScheduledAgentApiKeyIssueResult issuedKey) =>
         new(ScheduledInvocationAgentKey: new WorkflowScheduleAgentKeyCredentialReference(
-            storedKey.Reference,
+            secretReference.Clone(),
             issuedKey.ApiKeyId ?? string.Empty,
             issuedKey.KeyExpiresAtUnixMs));
 
@@ -414,13 +396,14 @@ internal sealed class ScheduledAgentCreateRequestMapper
     private static UserAgentCatalogUpsertCommand BuildCatalogUpsertCommand(
         ScheduledAgentCreatePlannedRequest request,
         ScheduledAgentApiKeyIssueResult issuedKey,
-        StoreSecretResult storedKey) =>
+        SecretReference secretReference) =>
         new()
         {
             AgentId = request.AgentId,
             ConversationId = request.ConversationId,
             NyxProviderSlug = request.PrimaryOutboundSlug,
-            NyxApiKeyReference = storedKey.Reference.Clone(),
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = secretReference.Clone(),
             AgentType = ScheduledWorkflowAgentDefaults.AgentType,
             TemplateName = request.DisplayName ?? request.Reference.Name,
             ScopeId = request.ScopeId,

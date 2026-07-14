@@ -203,6 +203,18 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
 
 ## Connect + turn sequence
 
+The browser `/voice` surface keeps its provider grant separate from the shared
+console login. Before route provisioning or microphone access, it obtains a
+feature token whose RFC 8707 resources are the union of the baseline Aevatar
+resource and
+`<same-NyxID-resource-base>/api/v1/proxy/s/<configured-realtime-service-slug>`.
+The browser derives that URI from the injected Aevatar resource, so it preserves
+the resource server's canonical base across deployments. The
+authorization-code exchange repeats that exact resource set, and refresh uses
+the resources stored with the feature token. The shared baseline token is not
+overwritten. Owning the NyxID service and authorizing a particular access token
+to proxy it are separate facts.
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
@@ -262,7 +274,7 @@ sequenceDiagram
 | Media relay | `VoiceVolatileMediaStreamPort` (volatile, per-lease) | `VoiceSession` + WebRTC/WHIP transcode |
 | Brain state | `VoicePresenceModule` on a `RoleGAgent` actor | — (no `session.update`) |
 | Provider | `OpenAIRealtimeProvider` (direct WS) / MiniCPM | — |
-| Credentials | `VoiceToolExecutionContext` + `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer only |
+| Credentials | `/voice` feature-scoped OAuth token + `VoiceToolExecutionContext` / `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer authorized for both Aevatar and the configured realtime service |
 | Tools | `IVoiceToolInvoker` / `IAgentToolSource` (+ NyxID connected-service) | `/edge-tools` HTTP surface (LAN execution) |
 | Device events | `/api/device-events` HMAC ingress → actor | `AevatarDeviceEventClient` (HMAC sign) |
 

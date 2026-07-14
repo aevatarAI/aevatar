@@ -20,7 +20,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _scheduledAgentMapper;
-    private readonly ScheduledAgentApiKeyIssuer _scheduledAgentApiKeyIssuer;
+    private readonly IScheduledAgentCredentialLifecycle _scheduledAgentCredentialLifecycle;
     private readonly IScheduledInvocationAuthorizationPlanner _scheduledInvocationAuthorizationPlanner;
     private readonly ScheduledAgentCreatorOptions _scheduledAgentCreatorOptions;
     private readonly ILogger<AgentBuilderTool>? _toolLogger;
@@ -35,7 +35,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper scheduledAgentMapper,
-        ScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
+        IScheduledAgentCredentialLifecycle scheduledAgentCredentialLifecycle,
         IScheduledInvocationAuthorizationPlanner? scheduledInvocationAuthorizationPlanner = null,
         ScheduledAgentCreatorOptions? scheduledAgentCreatorOptions = null,
         ILogger<AgentBuilderTool>? toolLogger = null,
@@ -49,7 +49,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _scheduledAgentMapper = scheduledAgentMapper ?? throw new ArgumentNullException(nameof(scheduledAgentMapper));
-        _scheduledAgentApiKeyIssuer = scheduledAgentApiKeyIssuer ?? throw new ArgumentNullException(nameof(scheduledAgentApiKeyIssuer));
+        _scheduledAgentCredentialLifecycle = scheduledAgentCredentialLifecycle ?? throw new ArgumentNullException(nameof(scheduledAgentCredentialLifecycle));
         _scheduledInvocationAuthorizationPlanner = scheduledInvocationAuthorizationPlanner ?? UnavailableAuthorizationPlanner.Instance;
         _scheduledAgentCreatorOptions = scheduledAgentCreatorOptions ?? new ScheduledAgentCreatorOptions();
         _toolLogger = toolLogger;
@@ -68,13 +68,12 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _scheduledDispatchService,
                 _catalogCommandPort,
                 _callerScopeResolver,
-                _scheduledAgentApiKeyIssuer,
                 _toolLogger),
             new ScheduledAgentCreatorTool(
                 _scheduledWorkflowAgentCreationPort,
                 _callerScopeResolver,
                 _scheduledAgentMapper,
-                _scheduledAgentApiKeyIssuer,
+                _scheduledAgentCredentialLifecycle,
                 _scheduledInvocationAuthorizationPlanner,
                 _scheduledAgentCreatorOptions,
                 _creatorToolLogger),

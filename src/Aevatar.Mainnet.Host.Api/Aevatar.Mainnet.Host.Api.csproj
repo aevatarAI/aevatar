@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Aevatar.Mainnet.Host.Api</AssemblyName>
     <RootNamespace>Aevatar.Mainnet.Host.Api</RootNamespace>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />

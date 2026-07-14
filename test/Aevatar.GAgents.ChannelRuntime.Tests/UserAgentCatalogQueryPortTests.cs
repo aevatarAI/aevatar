@@ -1,7 +1,9 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -124,9 +126,99 @@ public sealed class UserAgentCatalogQueryPortTests
         pending[0].AgentId.Should().Be("alice-agent");
         pending[0].ApiKeyId.Should().Be("key-alice");
         pending[0].OwnerScope!.MatchesStrictly(alice).Should().BeTrue();
+        pending[0].NyxApiKeyReference.Should().NotBeNull();
+        pending[0].NyxApiKeyReference!.Ref.Should().Be("sec-alice-agent");
+        pending[0].NyxApiKeyReference!.Purpose.Should().Be(CredentialSecretPurposes.ScheduledNyxApiKey);
+        pending[0].NyxApiKeyReference!.OwnerScopeKey.Should().Be("owner-alice-agent");
+        pending[0].NyxApiKeyReference!.Version.Should().Be(1);
+        pending[0].NyxApiKeyReference!.Fingerprint.Should().Be("sha256:test");
+        pending[0].NyxIdTrack.Should().NotBeNull();
+        pending[0].NyxIdTrack!.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        pending[0].NyxIdTrack!.AttemptCount.Should().Be(2);
+        pending[0].NyxIdTrack!.LastAttemptAt.Should().BeEquivalentTo(Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 6, 20, 10, 1, 0, TimeSpan.Zero)));
+        pending[0].NyxIdTrack!.LastHttpStatus.Should().Be(503);
+        pending[0].NyxIdTrack!.LastError.Should().Be("nyx unavailable");
+        pending[0].NyxIdTrack!.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        pending[0].VaultTrack.Should().NotBeNull();
+        pending[0].VaultTrack!.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Completed);
+        pending[0].VaultTrack!.AttemptCount.Should().Be(1);
+        pending[0].VaultTrack!.LastAttemptAt.Should().BeEquivalentTo(Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 6, 20, 10, 2, 0, TimeSpan.Zero)));
+        pending[0].VaultTrack!.LastHttpStatus.Should().Be(0);
+        pending[0].VaultTrack!.LastError.Should().BeEmpty();
+        pending[0].VaultTrack!.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.None);
+        pending[0].VaultRevocationDescriptor.Should().NotBeNull();
+        pending[0].VaultRevocationDescriptor!.Ref.Should().Be("sec-alice-agent");
+        pending[0].VaultRevocationDescriptor!.SubjectId.Should().Be("key-alice");
+        pending[0].VaultRevocationDescriptor!.ReferenceAvailability.Should()
+            .Be(ScheduledCredentialVaultReferenceAvailability.Confirmed);
+        pending[0].SecretSubjectId.Should().Be("key-alice");
+        pending[0].RepairReason.Should().Be("restore exact reference");
+        pending[0].RequestedBySubjectId.Should().Be("admin-1");
+        pending[0].RepairRequestedAtUnixMs.Should().Be(1_750_412_800_000);
         revocationReader.Queries.Should().ContainSingle();
         revocationReader.Queries[0].Filters.Select(static filter => filter.FieldPath)
             .Should().Contain($"{nameof(UserAgentApiKeyRevocationDocument.OwnerScope)}.{nameof(OwnerScope.SenderId)}");
+    }
+
+    [Fact]
+    public async Task QueryPendingApiKeyRevocationsByCallerAsync_CollapsesLegacyAndCanonicalCopies()
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-a");
+        var legacy = BuildRevocationDocument("agent-a", "key-a", owner);
+        var canonical = legacy.Clone();
+        canonical.Id = ScheduledAgentCredentialRevocationDocumentIds.Build(
+            canonical.AgentId,
+            canonical.ApiKeyId,
+            canonical.NyxApiKeyReference.Ref);
+        canonical.LastError = "canonical-copy";
+        var port = new UserAgentCatalogQueryPort(
+            new RecordingDocumentReader([]),
+            new RecordingRevocationDocumentReader([legacy, canonical]));
+
+        var pending = await port.QueryPendingApiKeyRevocationsByCallerAsync(
+            owner,
+            CancellationToken.None);
+
+        pending.Should().ContainSingle();
+        pending[0].AgentId.Should().Be("agent-a");
+        pending[0].ApiKeyId.Should().Be("key-a");
+        pending[0].LastError.Should().Be("canonical-copy");
+        pending[0].CatalogAuthorityStateVersion.Should().Be(3);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueryPendingApiKeyRevocationsByCallerAsync_SelectsHighestAuthorityVersionRegardlessOfOrder(
+        bool canonicalFirst)
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-versioned");
+        var newerLegacy = BuildRevocationDocument("agent-versioned", "key-versioned", owner);
+        newerLegacy.StateVersion = 4;
+        newerLegacy.LastError = "newer-legacy-copy";
+        var olderCanonical = newerLegacy.Clone();
+        olderCanonical.Id = ScheduledAgentCredentialRevocationDocumentIds.Build(
+            olderCanonical.AgentId,
+            olderCanonical.ApiKeyId,
+            olderCanonical.NyxApiKeyReference.Ref);
+        olderCanonical.StateVersion = 3;
+        olderCanonical.LastError = "older-canonical-copy";
+        var documents = canonicalFirst
+            ? new List<UserAgentApiKeyRevocationDocument> { olderCanonical, newerLegacy }
+            : [newerLegacy, olderCanonical];
+        var port = new UserAgentCatalogQueryPort(
+            new RecordingDocumentReader([]),
+            new RecordingRevocationDocumentReader(documents));
+
+        var pending = await port.QueryPendingApiKeyRevocationsByCallerAsync(
+            owner,
+            CancellationToken.None);
+
+        pending.Should().ContainSingle();
+        pending[0].CatalogAuthorityStateVersion.Should().Be(4);
+        pending[0].LastError.Should().Be("newer-legacy-copy");
     }
 
     private static UserAgentCatalogDocument BuildDocument(string agentId, OwnerScope ownerScope) =>
@@ -170,10 +262,48 @@ public sealed class UserAgentCatalogQueryPortTests
             AgentId = agentId,
             ApiKeyId = apiKeyId,
             OwnerScope = ownerScope.Clone(),
+            NyxApiKeyReference = new SecretReference
+            {
+                Ref = $"sec-{agentId}",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = $"owner-{agentId}",
+                Version = 1,
+                Fingerprint = "sha256:test",
+            },
             AttemptCount = 1,
             LastHttpStatus = 503,
             LastError = "upstream unavailable",
             FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+            NyxIdTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+                AttemptCount = 2,
+                LastAttemptAt = Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 20, 10, 1, 0, TimeSpan.Zero)),
+                LastHttpStatus = 503,
+                LastError = "nyx unavailable",
+                FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+            },
+            VaultTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Completed,
+                AttemptCount = 1,
+                LastAttemptAt = Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 6, 20, 10, 2, 0, TimeSpan.Zero)),
+                FailureKind = UserAgentApiKeyRevocationFailureKind.None,
+            },
+            VaultRevocationDescriptor = new ScheduledCredentialVaultRevocationDescriptor
+            {
+                Ref = $"sec-{agentId}",
+                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                OwnerScopeKey = $"owner-{agentId}",
+                SubjectId = apiKeyId,
+                ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+            },
+            SecretSubjectId = apiKeyId,
+            RepairReason = "restore exact reference",
+            RequestedBySubjectId = "admin-1",
+            RepairRequestedAtUnixMs = 1_750_412_800_000,
             StateVersion = 3,
             LastEventId = "evt-3",
         };
