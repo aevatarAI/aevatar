@@ -256,6 +256,7 @@ public static class ServiceCollectionExtensions
                     broker,
                     sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
                 : new NoopScheduledServiceInvocationCredentialExchangePort());
+
     private static void AddScheduledCredentialAdmissionPort(this IServiceCollection services) =>
         services.TryAddSingleton<IScheduledDispatchCredentialAdmissionPort>(sp =>
             sp.GetService<IExternalIdentityBindingQueryPort>() is { } bindingQueryPort
