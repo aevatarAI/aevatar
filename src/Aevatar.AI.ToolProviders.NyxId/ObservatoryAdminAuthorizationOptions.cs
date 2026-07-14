@@ -3,6 +3,7 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 public sealed class ObservatoryAdminAuthorizationOptions
 {
     public const string ConfigSection = "Aevatar:AdminAccess";
+    internal const string LegacyConfigSection = "Aevatar:Observatory";
 
     public string[] AllowedUserIds { get; set; } = [];
 

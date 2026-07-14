@@ -133,10 +133,42 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         if (parsed.IsInvalid)
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
 
-        return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
+        var authority = source?.NyxIdAuthority;
+        if (authority != null && !parsed.IsValid)
+        {
+            throw new ArgumentException(
+                "Workflow caller NyxID authority requires a valid caller credential.",
+                nameof(source));
+        }
+
+        var credential = new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
         {
             BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
         };
+        if (authority != null)
+        {
+            var platform = Normalize(authority.Platform);
+            var externalUserId = Normalize(authority.ExternalUserId);
+            var scope = Normalize(authority.Scope);
+            if (string.IsNullOrWhiteSpace(platform) ||
+                string.IsNullOrWhiteSpace(externalUserId) ||
+                string.IsNullOrWhiteSpace(scope))
+            {
+                throw new ArgumentException(
+                    "Workflow caller NyxID authority is incomplete.",
+                    nameof(source));
+            }
+
+            credential.NyxIdAuthority = new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+            {
+                Platform = platform,
+                Tenant = Normalize(authority.Tenant),
+                ExternalUserId = externalUserId,
+                Scope = scope,
+            };
+        }
+
+        return credential;
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowRunForkSeed ToProto(

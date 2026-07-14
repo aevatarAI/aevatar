@@ -363,6 +363,28 @@ public sealed class WorkflowRunObservatoryQueryServiceTests
     }
 
     [Fact]
+    public async Task GetRunForScopeAsync_ShouldSanitizeCurrentStateErrors_WhenReportNotYetMaterialized()
+    {
+        var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Failed, started: 1, updated: 9);
+        snapshot.LastError = "Authorization: Bearer last-error-secret";
+        snapshot.SagaStatus = WorkflowSagaStatus.CompensationDeadLetter;
+        snapshot.DeadLetterError = """{"api_key":"dead-letter-secret","reason":"refund failed"}""";
+        var currentState = new FakeCurrentStateQueryPort { SingleResult = snapshot };
+        var service = new WorkflowRunObservatoryQueryService(currentState, new FakeArtifactQueryPort { Report = null });
+
+        var detail = await service.GetRunForScopeAsync(CallerScope, "run-1");
+
+        detail.Should().NotBeNull();
+        var lastError = detail!.Diagnostics.Single(item => item.Code == "current_state_last_error");
+        var deadLetterError = detail.Diagnostics.Single(item => item.Code == "compensation_dead_letter");
+        lastError.Message.Should().Contain("[redacted]");
+        deadLetterError.Message.Should().Contain("\"api_key\":\"[redacted]\"");
+        detail.Diagnostics.Select(item => item.Message).Should().NotContain(item =>
+            item.Contains("last-error-secret", StringComparison.Ordinal) ||
+            item.Contains("dead-letter-secret", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task GetRunForScopeAsync_ShouldExplainProblemTerminalWithoutFailureDetail()
     {
         var snapshot = Snapshot("run-1", CallerScope, WorkflowRunCompletionStatus.Stopped, started: 1, updated: 9);

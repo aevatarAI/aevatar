@@ -1951,7 +1951,9 @@ public sealed class ScheduledDispatchEndpointsTests
     private sealed class FakeScheduledServiceInvocationCredentialExchangePort : IScheduledServiceInvocationCredentialExchangePort
     {
         public ScheduledServiceInvocationCredentialExchangeResult ScopeOwnerExchangeResult { get; init; } =
-            ScheduledServiceInvocationCredentialExchangeResult.Success("owner-token");
+            ScheduledServiceInvocationCredentialExchangeResult.Success(
+                "owner-token",
+                DateTimeOffset.UtcNow.AddMinutes(5));
 
         public List<ScheduledServiceInvocationNyxIdCredentialSource> ScopeOwnerSources { get; } = [];
 
@@ -1965,7 +1967,9 @@ public sealed class ScheduledDispatchEndpointsTests
                 return Task.FromResult(ScopeOwnerExchangeResult);
             }
 
-            return Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success("sender-token"));
+            return Task.FromResult(ScheduledServiceInvocationCredentialExchangeResult.Success(
+                "sender-token",
+                DateTimeOffset.UtcNow.AddMinutes(5)));
         }
     }
 }

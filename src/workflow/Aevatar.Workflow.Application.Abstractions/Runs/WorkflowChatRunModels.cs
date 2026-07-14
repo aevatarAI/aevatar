@@ -58,7 +58,15 @@ public sealed record WorkflowLlmControl(
     string? RoutePreference = null,
     string? SenderNyxIdAccessToken = null);
 
-public sealed record WorkflowCallerCredential(string? BearerToken = null);
+public sealed record WorkflowCallerNyxIdAuthority(
+    string Platform,
+    string Tenant,
+    string ExternalUserId,
+    string Scope);
+
+public sealed record WorkflowCallerCredential(
+    string? BearerToken = null,
+    WorkflowCallerNyxIdAuthority? NyxIdAuthority = null);
 
 public sealed record WorkflowExternalIngressContext(
     string RouteKey,

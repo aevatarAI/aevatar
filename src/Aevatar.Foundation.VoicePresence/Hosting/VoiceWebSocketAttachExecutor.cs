@@ -33,14 +33,15 @@ public sealed class VoiceWebSocketAttachExecutor
         HttpContext http,
         VoiceRealtimeSessionAccepted accepted,
         IVoiceVolatileMediaStreamPort mediaStreamPort,
-        VoiceToolCredentialTransportBinding? transportBinding = null)
+        VoiceToolCredentialTransportBinding? transportBinding = null,
+        string? selectedSubprotocol = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(accepted);
         ArgumentNullException.ThrowIfNull(mediaStreamPort);
 
         var options = _options.Value;
-        var ws = await http.WebSockets.AcceptWebSocketAsync();
+        var ws = await http.WebSockets.AcceptWebSocketAsync(selectedSubprotocol);
         var transport = new WebSocketVoiceTransport(ws, _logger);
         var attached = false;
         var detachHandle = accepted.LeaseHandle;

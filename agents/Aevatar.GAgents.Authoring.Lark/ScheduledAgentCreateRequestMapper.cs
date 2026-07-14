@@ -226,7 +226,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 : WorkflowScheduleMode.RecurringCron,
             OneShotFireAt: request.OneShotRunAtUtc);
 
-        var catalog = BuildCatalogUpsertCommand(request, issuedKey);
+        var catalog = BuildCatalogUpsertCommand(request, issuedKey, storedKey);
 
         return new ScheduledAgentCreateMapResult(
             Success: true,
@@ -413,13 +413,14 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
     private static UserAgentCatalogUpsertCommand BuildCatalogUpsertCommand(
         ScheduledAgentCreatePlannedRequest request,
-        ScheduledAgentApiKeyIssueResult issuedKey) =>
+        ScheduledAgentApiKeyIssueResult issuedKey,
+        StoreSecretResult storedKey) =>
         new()
         {
             AgentId = request.AgentId,
             ConversationId = request.ConversationId,
             NyxProviderSlug = request.PrimaryOutboundSlug,
-            NyxApiKey = issuedKey.FullKey,
+            NyxApiKeyReference = storedKey.Reference.Clone(),
             AgentType = ScheduledWorkflowAgentDefaults.AgentType,
             TemplateName = request.DisplayName ?? request.Reference.Name,
             ScopeId = request.ScopeId,

@@ -61,10 +61,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         // rejection — an unguarded ensure would return an accepted receipt for
         // a schedule that never materializes. Surface the tombstone as the same
         // typed not-found the mutators throw, so callers can pick a fresh id.
-        await EnsureMutableAsync(normalized.ScheduleId, ct);
+        var existing = await GetMutableScheduleAsync(normalized.ScheduleId, ct);
         normalized = AdmitCredentialRequirement(
             normalized,
-            ScheduledDispatchCredentialRequirementOperation.Ensure);
+            ScheduledDispatchCredentialRequirementOperation.Ensure,
+            existing?.Schedule);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -88,10 +89,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             context,
             requireScheduleId: true,
             ct);
-        await EnsureMutableAsync(normalized.ScheduleId, ct);
+        var existing = await GetMutableScheduleAsync(normalized.ScheduleId, ct);
         normalized = AdmitCredentialRequirement(
             normalized,
-            ScheduledDispatchCredentialRequirementOperation.Update);
+            ScheduledDispatchCredentialRequirementOperation.Update,
+            existing?.Schedule);
 
         var dispatch = await _targetPreparationService.PrepareAsync(
             normalized,
@@ -359,9 +361,24 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
     private ScheduledDispatchConfiguration AdmitCredentialRequirement(
         ScheduledDispatchConfiguration configuration,
-        ScheduledDispatchCredentialRequirementOperation operation)
+        ScheduledDispatchCredentialRequirementOperation operation,
+        ScheduledDispatchSummary? existingSchedule = null)
     {
         var request = ScheduledDispatchCredentialRequirementRequests.FromConfiguration(configuration, operation);
+        if ((operation is ScheduledDispatchCredentialRequirementOperation.Ensure or
+             ScheduledDispatchCredentialRequirementOperation.Update) &&
+            request.CredentialSource.Kind == ScheduledDispatchCredentialSourceKind.None &&
+            existingSchedule != null &&
+            existingSchedule.TargetKind == configuration.Target.Kind &&
+            existingSchedule.ScheduleKind == configuration.ScheduleKind)
+        {
+            request = request with
+            {
+                CredentialSource = new ScheduledDispatchCredentialSourceSummary(
+                    existingSchedule.CredentialSourceKind),
+            };
+        }
+
         var decision = _credentialRequirementPolicy.Evaluate(request);
         if (!decision.Allowed)
             throw new ArgumentException(decision.Message, nameof(configuration));
@@ -579,6 +596,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             Version = reference.Version,
             OwnerScopeKey = NormalizeRequired(reference.OwnerScopeKey, nameof(reference.OwnerScopeKey)),
             CreatedAtUnixMs = reference.CreatedAtUnixMs,
+            ExpiresAtUnixMs = reference.ExpiresAtUnixMs,
         };
 
     private static ScheduledInvocationAgentKeyCredentialReference NormalizeScheduledInvocationAgentKey(

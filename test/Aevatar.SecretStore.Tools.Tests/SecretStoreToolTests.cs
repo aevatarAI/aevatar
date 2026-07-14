@@ -31,6 +31,11 @@ public sealed class SecretStoreToolTests
             error);
 
         generated.Should().Be(0);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.GetUnixFileMode(path).Should().Be(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
         var generatedJson = File.ReadAllText(path);
         generatedJson.Should().Contain("\"activeKeyId\"");
         generatedJson.Should().Contain("\"keys\"");
@@ -55,6 +60,27 @@ public sealed class SecretStoreToolTests
         updatedDocument.ActiveKeyId.Should().Be("key-b");
         updatedDocument.Keys.Should().ContainKeys("key-a", "key-b");
         updatedDocument.FingerprintKey.Should().Be(initialFingerprintKey);
+    }
+
+    [Fact]
+    public void LoadKeyring_ShouldRepairOverPermissiveUnixFileMode()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var directory = new TempDirectory();
+        var path = Path.Combine(directory.Path, "keyring.json");
+        SecretStoreKeyringDocument.Create("key-a").SaveToFile(path, overwrite: false);
+        File.SetUnixFileMode(
+            path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite |
+            UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        var loaded = SecretStoreKeyringDocument.LoadFromFile(path);
+
+        loaded.ActiveKeyId.Should().Be("key-a");
+        File.GetUnixFileMode(path).Should().Be(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     [Fact]
@@ -435,19 +461,24 @@ public sealed class SecretStoreToolTests
     {
         var connectionString = RequireGarnetConnectionString();
         using var connection = await ConnectionMultiplexer.ConnectAsync(connectionString);
-        var database = connection.GetDatabase();
+        const int configuredDatabase = 1;
+        var database = connection.GetDatabase(configuredDatabase);
+        var defaultDatabase = connection.GetDatabase(0);
         var prefix = $"aevatar:test:secret-sweep:{Guid.NewGuid():N}";
         var key = $"{prefix}:record";
+        var defaultDatabaseKey = $"{prefix}:default-database-record";
         var missingKey = $"{prefix}:missing";
         var originalValue = Encoding.UTF8.GetBytes("old-record");
         var updatedValue = Encoding.UTF8.GetBytes("new-record");
         var wrongExpectedValue = Encoding.UTF8.GetBytes("wrong-record");
 
         (await database.StringSetAsync(key, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
-        using var target = await RedisSecretStoreSweepTarget.ConnectAsync(connectionString, database: -1);
+        (await defaultDatabase.StringSetAsync(defaultDatabaseKey, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
+        using var target = await RedisSecretStoreSweepTarget.ConnectAsync(connectionString, configuredDatabase);
 
         var scan = await target.ScanAsync($"{prefix}:*", cursor: 0, count: 100);
         scan.Keys.Should().Contain(key);
+        scan.Keys.Should().NotContain(defaultDatabaseKey);
         var loaded = await target.GetAsync(key);
         loaded.Should().Equal(originalValue);
 
@@ -768,6 +799,7 @@ public sealed class SecretStoreToolTests
             string key,
             ReadOnlyMemory<byte> expectedValue,
             ReadOnlyMemory<byte> newValue,
+            TimeSpan? expiry,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -778,7 +810,11 @@ public sealed class SecretStoreToolTests
             }
 
             Values[key] = newValue.ToArray();
-            Expirations[key] = null;
+            Expirations.TryGetValue(key, out var existingExpiry);
+            Expirations[key] = existingExpiry.HasValue &&
+                               (!expiry.HasValue || existingExpiry.Value < expiry.Value)
+                ? existingExpiry
+                : expiry;
             return Task.FromResult(true);
         }
 

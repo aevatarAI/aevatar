@@ -86,6 +86,8 @@ public sealed class GarnetSecretStoreTests
             expiresAt));
 
         stored.Reference.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        keyValueStore.Expirations.Values.Should().ContainSingle()
+            .Which.Should().Be(TimeSpan.FromMinutes(5));
         var record = GarnetSecretVaultRecord.Parser.ParseFrom(
             keyValueStore.Values.Should().ContainSingle().Subject.Value);
         record.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
@@ -108,6 +110,67 @@ public sealed class GarnetSecretStoreTests
             "user-alpha",
             "test resolve expired"));
         expired.Resolved.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldReapplyRemainingExpiryWhenRotating()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var clock = new ManualTime(new DateTimeOffset(2026, 7, 5, 12, 0, 0, TimeSpan.Zero));
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, clock);
+        var expiresAt = clock.GetUtcNow().AddMinutes(5);
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store expiring",
+            expiresAt));
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var rotated = await vault.RotateAsync(new RotateSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "rotated-secret",
+            "test rotate expiring"));
+
+        rotated.Reference.ExpiresAtUnixMs.Should().Be(expiresAt.ToUnixTimeMilliseconds());
+        keyValueStore.Expirations.Values.Should().ContainSingle()
+            .Which.Should().Be(TimeSpan.FromMinutes(4));
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldNotExpandShorterBackendExpiryWhenRotating()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var clock = new ManualTime(new DateTimeOffset(2026, 7, 5, 12, 0, 0, TimeSpan.Zero));
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, clock);
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store expiring",
+            clock.GetUtcNow().AddMinutes(10)));
+        var key = keyValueStore.Expirations.Keys.Should().ContainSingle().Which;
+        keyValueStore.Expirations[key] = TimeSpan.FromMinutes(2);
+
+        await vault.RotateAsync(new RotateSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "rotated-secret",
+            "test rotate expiring"));
+
+        keyValueStore.Expirations.Values.Should().ContainSingle()
+            .Which.Should().Be(TimeSpan.FromMinutes(2));
     }
 
     [Fact]
@@ -270,17 +333,29 @@ public sealed class GarnetSecretStoreTests
         byte[] wrongExpected = [0x00, 0x01, 0xFE, 0x00];
         byte[] updated = [0x10, 0x20, 0x30, 0x40];
 
-        await store.SetAsync(key, original, null);
+        await store.SetAsync(key, original, TimeSpan.FromMinutes(2));
 
-        var rejectedSet = await store.CompareSetAsync(key, wrongExpected, updated);
+        var rejectedSet = await store.CompareSetAsync(
+            key,
+            wrongExpected,
+            updated,
+            TimeSpan.FromMinutes(4));
 
         rejectedSet.Should().BeFalse();
         (await store.GetAsync(key)).Should().Equal(original);
 
-        var acceptedSet = await store.CompareSetAsync(key, original, updated);
+        var acceptedSet = await store.CompareSetAsync(
+            key,
+            original,
+            updated,
+            TimeSpan.FromMinutes(4));
 
         acceptedSet.Should().BeTrue();
         (await store.GetAsync(key)).Should().Equal(updated);
+        var ttl = await connection.GetDatabase(options.Database).KeyTimeToLiveAsync(key);
+        ttl.Should().NotBeNull();
+        ttl.Should().BeGreaterThan(TimeSpan.FromMinutes(1));
+        ttl.Should().BeLessThanOrEqualTo(TimeSpan.FromMinutes(2));
 
         var rejectedDelete = await store.CompareDeleteAsync(key, original);
 
@@ -782,6 +857,7 @@ public sealed class GarnetSecretStoreTests
             string key,
             ReadOnlyMemory<byte> expectedValue,
             ReadOnlyMemory<byte> newValue,
+            TimeSpan? expiry,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -798,6 +874,11 @@ public sealed class GarnetSecretStoreTests
             }
 
             Values[key] = newValue.ToArray();
+            Expirations.TryGetValue(key, out var existingExpiry);
+            Expirations[key] = existingExpiry.HasValue &&
+                               (!expiry.HasValue || existingExpiry.Value < expiry.Value)
+                ? existingExpiry
+                : expiry;
             return Task.FromResult(true);
         }
 

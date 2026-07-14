@@ -371,7 +371,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
             }),
         };
         var auth = new ScheduledServiceInvocationAuth(
-            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("proxy"));
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
@@ -389,6 +391,10 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerDurableBearerToken);
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-owner");
         invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().NotBeNull();
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Platform.Should().Be("lark");
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.ExternalUserId.Should().Be("ou-owner-1");
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Scope.Should().Be("proxy");
         var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
             invokedChat.CallerDurableCredential.Ref,
             invokedChat.CallerDurableCredential.Purpose,
@@ -429,6 +435,73 @@ public sealed class ScheduledDispatchServiceInvocationTests
             .WithMessage("*caller credential vault is not configured*");
         credentialExchange.Sources.Should().ContainSingle();
         invocationPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithWorkflowProjection_ShouldBoundVaultSecretToExchangeExpiry()
+    {
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(5);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort(
+            "owner-token",
+            expiresAt: expiresAt);
+        var secretVault = new RecordingSecretVault(null);
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
+        var auth = new ScheduledServiceInvocationAuth(
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
+
+        await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-owner"));
+
+        secretVault.StoreRequests.Should().ContainSingle()
+            .Which.ExpiresAt.Should().Be(expiresAt);
+        invocationPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WhenInvocationFails_ShouldRevokeProjectedCredential()
+    {
+        var invocationPort = new RecordingServiceInvocationPort(new InvalidOperationException("dispatch failed"));
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("owner-token");
+        var secretVault = new RecordingSecretVault(null);
+        var port = new ScheduledServiceInvocationDispatchPort(invocationPort, credentialExchange, secretVault);
+        var auth = new ScheduledServiceInvocationAuth(
+            ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                "proxy",
+                new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-owner-1")));
+
+        var act = () => port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
+            new ServiceInvocationRequest
+            {
+                CommandId = "cmd-invoke",
+                CorrelationId = "corr-invoke",
+                Identity = new ServiceIdentity { TenantId = "owner-nyx-user", ServiceId = "svc" },
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            },
+            auth,
+            ProjectNyxIdAccessTokenToWorkflowCallerCredential: true,
+            ScheduleId: "schedule-owner"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("dispatch failed");
+        secretVault.RevokeRequests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new RevokeSecretRequest(
+                "sec-workflow-caller-1",
+                CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                "schedule:schedule-owner",
+                "lark:tenant-1:ou-owner-1",
+                "scheduled-workflow-dispatch-failed"));
     }
 
     [Fact]
@@ -1032,7 +1105,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
     [Fact]
     public async Task NyxIdScheduledServiceInvocationCredentialExchangePort_ShouldIssueTokenForSubjectAndScope()
     {
-        var broker = new RecordingCapabilityBroker { AccessToken = " sender-token " };
+        var expiresAtUnix = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds();
+        var broker = new RecordingCapabilityBroker
+        {
+            AccessToken = " sender-token ",
+            ExpiresAtUnix = expiresAtUnix,
+        };
         var port = new NyxIdScheduledServiceInvocationCredentialExchangePort(
             broker,
             NullLogger<NyxIdScheduledServiceInvocationCredentialExchangePort>.Instance);
@@ -1041,6 +1119,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
         result.Succeeded.Should().BeTrue();
         result.AccessToken.Should().Be(" sender-token ");
+        result.ExpiresAt.Should().Be(DateTimeOffset.FromUnixTimeSeconds(expiresAtUnix));
         broker.Subjects.Should().ContainSingle().Which.Should().BeEquivalentTo(new ExternalSubjectRef
         {
             Platform = "lark",
@@ -1178,7 +1257,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
         };
 
-    private sealed class RecordingServiceInvocationPort : IServiceInvocationPort
+    private sealed class RecordingServiceInvocationPort(Exception? failure = null) : IServiceInvocationPort
     {
         public List<ServiceInvocationRequest> Requests { get; } = [];
 
@@ -1188,6 +1267,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
         {
             ct.ThrowIfCancellationRequested();
             Requests.Add(request.Clone());
+            if (failure != null)
+                throw failure;
+
             return Task.FromResult(new ServiceInvocationAcceptedReceipt
             {
                 CommandId = request.CommandId,
@@ -1199,7 +1281,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
     private sealed class RecordingScheduledServiceInvocationCredentialExchangePort(
         string? accessToken = null,
-        string? error = null) : IScheduledServiceInvocationCredentialExchangePort
+        string? error = null,
+        DateTimeOffset? expiresAt = null) : IScheduledServiceInvocationCredentialExchangePort
     {
         public List<ScheduledServiceInvocationNyxIdCredentialSource> Sources { get; } = [];
         public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueNyxIdAsync(
@@ -1213,7 +1296,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
         private ScheduledServiceInvocationCredentialExchangeResult CreateResult() =>
             error == null
-                ? ScheduledServiceInvocationCredentialExchangeResult.Success(accessToken ?? "sender-token")
+                ? ScheduledServiceInvocationCredentialExchangeResult.Success(
+                    accessToken ?? "sender-token",
+                    expiresAt ?? DateTimeOffset.UtcNow.AddMinutes(5))
                 : ScheduledServiceInvocationCredentialExchangeResult.Failure(error);
     }
 
@@ -1223,6 +1308,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     {
         public List<ResolveSecretRequest> ResolveRequests { get; } = [];
         public List<StoreSecretRequest> StoreRequests { get; } = [];
+        public List<RevokeSecretRequest> RevokeRequests { get; } = [];
         private SecretReference? _storedReference;
         private string? _storedSubjectId;
         private string? _storedSecret;
@@ -1237,6 +1323,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 Purpose = request.Purpose,
                 OwnerScopeKey = request.OwnerScopeKey,
                 Version = 1,
+                ExpiresAtUnixMs = request.ExpiresAt?.ToUnixTimeMilliseconds() ?? 0,
             };
             _storedSubjectId = request.SubjectId;
             _storedSecret = request.Secret;
@@ -1264,13 +1351,18 @@ public sealed class ScheduledDispatchServiceInvocationTests
         public Task<RotateSecretResult> RotateAsync(RotateSecretRequest request, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            RevokeRequests.Add(request);
+            return Task.FromResult(new RevokeSecretResult(true));
+        }
     }
 
     private sealed class RecordingCapabilityBroker : INyxIdCapabilityBroker
     {
         public string AccessToken { get; init; } = "sender-token";
+        public long ExpiresAtUnix { get; init; } = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds();
         public string? Failure { get; init; }
         public List<ExternalSubjectRef> Subjects { get; } = [];
         public List<CapabilityScope> Scopes { get; } = [];
@@ -1304,7 +1396,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     "https://nyxid.test/api/v1/proxy/s/aevatar"),
                 "unexpected" => throw new InvalidOperationException("broker failed"),
                 "empty-token" => Task.FromResult(new CapabilityHandle()),
-                _ => Task.FromResult(new CapabilityHandle { AccessToken = AccessToken }),
+                _ => Task.FromResult(new CapabilityHandle
+                {
+                    AccessToken = AccessToken,
+                    ExpiresAtUnix = ExpiresAtUnix,
+                }),
             };
         }
 

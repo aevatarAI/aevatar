@@ -804,7 +804,13 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.AgentType.Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
             captured.CatalogEntry.TemplateName.Should().Be("Daily Report");
             captured.CatalogEntry.ScopeId.Should().Be("scope-bot-1");
-            captured.CatalogEntry.NyxApiKey.Should().Be("full-secret-key");
+#pragma warning disable CS0612 // verifies new commands do not carry deprecated plaintext credentials
+            captured.CatalogEntry.NyxApiKey.Should().BeEmpty();
+#pragma warning restore CS0612
+            captured.CatalogEntry.NyxApiKeyReference.Should().NotBeNull();
+            captured.CatalogEntry.NyxApiKeyReference.Ref.Should().Be(agentKey.SecretReference.Ref);
+            captured.CatalogEntry.NyxApiKeyReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+            captured.CatalogEntry.NyxApiKeyReference.OwnerScopeKey.Should().Be(agentKey.SecretReference.OwnerScopeKey);
             captured.CatalogEntry.ApiKeyId.Should().Be("key-created");
             captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot");
             captured.CatalogEntry.ConversationId.Should().Be("oc_conversation");

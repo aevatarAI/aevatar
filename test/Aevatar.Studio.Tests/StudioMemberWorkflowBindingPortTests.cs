@@ -70,7 +70,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
     }
 
     [Fact]
-    public async Task BindAsync_ShouldWaitForBindingRunSucceededBeforeReturning()
+    public async Task BindAsync_ShouldReturnAcceptedReceiptWithoutPollingBindingRun()
     {
         var memberService = new RecordingMemberService();
         memberService.EnqueueBindingRun(StudioMemberBindingRunStatusNames.PlatformBindingPending);
@@ -78,7 +78,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
         var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort, (_, _) => Task.CompletedTask);
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -87,13 +87,17 @@ public sealed class StudioMemberWorkflowBindingPortTests
 
         result.Success.Should().BeTrue();
         result.Operation.Should().Be(StudioMemberWorkflowBindingOperationNames.Bind);
-        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
-        memberService.GetBindingRunCallCount.Should().Be(2);
+        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
+        result.BindingRunId.Should().Be("bind-run-1");
+        result.AckStage.Should().Be(StudioMemberBindingAckStageNames.DispatchAccepted);
+        result.BindingRunRole.Should().Be(StudioMemberBindingRunRoleNames.Candidate);
+        result.RevisionId.Should().BeNull();
+        memberService.GetBindingRunCallCount.Should().Be(0);
         saveAndBindPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
-    public async Task BindAsync_WhenBindingRunReadModelIsNotMaterializedYet_ShouldKeepPolling()
+    public async Task BindAsync_WhenBindingRunReadModelIsNotMaterializedYet_ShouldNotQueryIt()
     {
         var memberService = new RecordingMemberService
         {
@@ -103,19 +107,19 @@ public sealed class StudioMemberWorkflowBindingPortTests
         var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort, (_, _) => Task.CompletedTask);
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
             MemberId: "member-1",
             WorkflowYaml: "name: demo\nsteps: []\n"));
 
-        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
-        memberService.GetBindingRunCallCount.Should().Be(2);
+        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
+        memberService.GetBindingRunCallCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task BindAsync_WhenBindingRunFails_ShouldRejectInsteadOfReportingAcceptedAsSuccess()
+    public async Task BindAsync_WhenBindingRunLaterFails_ShouldStillReturnAcceptedReceipt()
     {
         var memberService = new RecordingMemberService();
         memberService.EnqueueBindingRun(
@@ -127,16 +131,17 @@ public sealed class StudioMemberWorkflowBindingPortTests
         var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort, (_, _) => Task.CompletedTask);
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
 
-        var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
+        var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
             MemberId: "member-1",
             WorkflowYaml: "name: demo\nsteps: []\n"));
 
-        await action.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Studio member workflow binding ended with status 'failed': workflow parse failed");
-        memberService.GetBindingRunCallCount.Should().Be(1);
+        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
+        result.BindingRunId.Should().Be("bind-run-1");
+        memberService.GetBindingRunCallCount.Should().Be(0,
+            "dispatch acceptance must not be reclassified from an eventually consistent read model");
     }
 
     [Fact]
@@ -149,7 +154,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
         var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort, (_, _) => Task.CompletedTask);
+        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -157,8 +162,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
             WorkflowYaml: "name: demo\nsteps: []\n"));
 
         result.Operation.Should().Be(StudioMemberWorkflowBindingOperationNames.Bind);
-        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
+        result.Status.Should().Be(StudioMemberBindingRunStatusNames.Accepted);
         memberService.LastRequest.Should().NotBeNull();
+        memberService.GetBindingRunCallCount.Should().Be(0);
         saveAndBindPort.LastRequest.Should().BeNull();
     }
 

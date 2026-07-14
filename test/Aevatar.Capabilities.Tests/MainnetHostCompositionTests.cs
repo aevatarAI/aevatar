@@ -38,6 +38,7 @@ using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -672,6 +673,23 @@ public sealed class MainnetHostCompositionTests
 
         aclOptions.GrantMatchesGrainEventStoreInternal.Should().BeTrue();
         aclOptions.GrantDescription.Should().Contain("aevatar-oauth-clients");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_InProduction_ShouldRegisterDistributedIdentityAssertionReplayGuard()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: Environments.Production);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(IIdentityAssertionReplayGuard));
+        descriptor.ImplementationType.Should().Be(typeof(DistributedIdentityAssertionReplayGuard));
     }
 
     [Theory]

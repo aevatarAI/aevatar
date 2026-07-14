@@ -60,4 +60,27 @@ public sealed class WebSocketSubprotocolTokenTests
 
         WebSocketSubprotocolToken.ExtractBearer(protocols).Should().Be(Jwt);
     }
+
+    [Fact]
+    public void SelectVoiceSubprotocol_ReturnsOnlyFixedNonSensitiveProtocol()
+    {
+        var protocols = new[]
+        {
+            WebSocketSubprotocolToken.BearerPrefix + Jwt,
+            WebSocketSubprotocolToken.VoiceSubprotocol,
+        };
+
+        WebSocketSubprotocolToken.SelectVoiceSubprotocol(protocols)
+            .Should().Be(WebSocketSubprotocolToken.VoiceSubprotocol);
+    }
+
+    [Fact]
+    public void SelectVoiceSubprotocol_DoesNotEchoBearerOrInventLegacyProtocol()
+    {
+        WebSocketSubprotocolToken.SelectVoiceSubprotocol(
+                new[] { WebSocketSubprotocolToken.BearerPrefix + Jwt })
+            .Should().BeNull();
+        WebSocketSubprotocolToken.SelectVoiceSubprotocol(null).Should().BeNull();
+        WebSocketSubprotocolToken.SelectVoiceSubprotocol(Array.Empty<string>()).Should().BeNull();
+    }
 }
