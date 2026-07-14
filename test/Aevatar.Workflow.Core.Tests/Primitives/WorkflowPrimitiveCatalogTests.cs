@@ -19,6 +19,16 @@ public sealed class WorkflowPrimitiveCatalogTests
     }
 
     [Fact]
+    public void ToCanonicalType_ShouldResolveExecuteCodexAsToolCall()
+    {
+        WorkflowPrimitiveCatalog.ToCanonicalType("execute_codex").Should().Be("tool_call");
+        WorkflowPrimitiveCatalog.IsSideEffectingPrimitive("execute_codex").Should().BeTrue();
+        new WorkflowCoreModulePack().Modules
+            .Single(registration => registration.ModuleType.Name == "ToolCallModule")
+            .Names.Should().Contain("execute_codex");
+    }
+
+    [Fact]
     public void BuiltInCanonicalTypes_ShouldIncludeNotifyWithoutEmitOrPublishAlias()
     {
         WorkflowPrimitiveCatalog.ToCanonicalType("notify").Should().Be("notify");

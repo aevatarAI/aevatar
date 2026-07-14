@@ -65,6 +65,11 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
                 "NyxID binding does not grant the requested schedule scope.");
         }
+        catch (BindingServiceAccessMismatchException)
+        {
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "NyxID binding does not grant the required Aevatar service.");
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Scheduled service invocation NyxID credential exchange failed.");

@@ -1015,6 +1015,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     [InlineData("not-found")]
     [InlineData("revoked")]
     [InlineData("scope")]
+    [InlineData("service")]
     [InlineData("empty-token")]
     [InlineData("unexpected")]
     public async Task NyxIdScheduledServiceInvocationCredentialExchangePort_ShouldMapBrokerFailures(string failure)
@@ -1032,6 +1033,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             "not-found" => "NyxID binding was not found for the scheduled subject.",
             "revoked" => "NyxID binding was revoked for the scheduled subject.",
             "scope" => "NyxID binding does not grant the requested schedule scope.",
+            "service" => "NyxID binding does not grant the required Aevatar service.",
             "empty-token" => "NyxID credential exchange returned an empty access token.",
             _ => "NyxID credential exchange failed.",
         });
@@ -1258,6 +1260,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 "not-found" => throw new BindingNotFoundException(externalSubject),
                 "revoked" => throw new BindingRevokedException(externalSubject),
                 "scope" => throw new BindingScopeMismatchException(externalSubject),
+                "service" => throw new BindingServiceAccessMismatchException(
+                    externalSubject,
+                    "https://nyxid.test/api/v1/proxy/s/aevatar"),
                 "unexpected" => throw new InvalidOperationException("broker failed"),
                 "empty-token" => Task.FromResult(new CapabilityHandle()),
                 _ => Task.FromResult(new CapabilityHandle { AccessToken = AccessToken }),

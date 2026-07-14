@@ -13,6 +13,8 @@ import "Credentials/credential_secret_references.proto";
 // client_id and HMAC key — no appsettings, no secrets store, no per-host
 // drift. See ADR-0017 §Implementation Notes #1 for the HMAC key invariant.
 message AevatarOAuthClientState {
+  reserved 28, 29;
+  reserved "default_service_slugs", "provisioning_retry_default_service_slugs";
   // Opaque OAuth client_id returned by NyxID's RFC 7591 dynamic registration
   // endpoint. Empty when not yet provisioned.
   string client_id = 1;
@@ -96,12 +98,6 @@ message AevatarOAuthClientState {
   // rotation grace window. Set only when a rotation demoted an existing
   // ref-backed key; empty on initial seed and for legacy state.
   aevatar.credentials.SecretReference previous_hmac_key_ref = 27;
-  // NyxID Developer App service slugs that should be preselected as service
-  // access defaults when users authorize aevatar. This is a stable product
-  // authorization semantic, not extension metadata.
-  repeated string default_service_slugs = 28;
-  // Actor-owned retry copy of [default_service_slugs].
-  repeated string provisioning_retry_default_service_slugs = 29;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -110,6 +106,8 @@ message AevatarOAuthClientState {
 // duplicate OAuth clients at NyxID — see PR #521 review (codex/k2p6/v4-pro
 // consensus on the cold-boot race).
 message EnsureAevatarOAuthClientProvisionedCommand {
+  reserved 6;
+  reserved "default_service_slugs";
   string nyxid_authority = 1;
   string redirect_uri = 2;
   // Optional override for the DCR <c>client_name</c>; bootstrap leaves blank.
@@ -121,14 +119,14 @@ message EnsureAevatarOAuthClientProvisionedCommand {
   // must disable the startup env switch after one successful run to avoid
   // creating a new NyxID client on every restart.
   bool force_reprovision = 5;
-  // NyxID user-service slugs to grant by default on the consent screen.
-  repeated string default_service_slugs = 6;
 }
 
 // Durable self-callback payload fired when an actor-owned OAuth provisioning
 // retry becomes due. The actor validates it against typed retry facts before
 // re-entering the DCR path.
 message AevatarOAuthClientProvisioningRetryFiredEvent {
+  reserved 11;
+  reserved "default_service_slugs";
   int32 attempt = 1;
   int64 due_unix_ms = 2;
   string nyxid_authority = 3;
@@ -139,7 +137,6 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
   int64 fired_at_unix_ms = 8;
   repeated string redirect_uris = 9;
   bool force_reprovision = 10;
-  repeated string default_service_slugs = 11;
 }
 
 // Issued by tests / manual operator scripts that already hold a client_id
@@ -147,6 +144,8 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
 // NEVER uses this — it always sends EnsureAevatarOAuthClientProvisionedCommand
 // instead so the actor mediates the DCR call.
 message ProvisionAevatarOAuthClientCommand {
+  reserved 7;
+  reserved "default_service_slugs";
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
@@ -165,9 +164,6 @@ message ProvisionAevatarOAuthClientCommand {
   // Full redirect URI allowlist pinned for the supplied client_id. Empty means
   // preserve existing list or fall back to [redirect_uri] for legacy callers.
   repeated string redirect_uris = 6;
-  // Default NyxID service slugs pinned for this client. Empty means preserve
-  // existing list or fall back to the aevatar default for legacy callers.
-  repeated string default_service_slugs = 7;
 }
 
 // Issued by ops to force a fresh HMAC key rotation. Old tokens signed with
@@ -191,6 +187,8 @@ message AevatarOAuthClientProjectionRebuildRequestedEvent {
 // Persisted after a failed actor-owned provisioning attempt schedules a
 // durable self-callback for the next retry.
 message AevatarOAuthClientProvisioningRetryScheduledEvent {
+  reserved 12;
+  reserved "default_service_slugs";
   int32 attempt = 1;
   int64 due_unix_ms = 2;
   string nyxid_authority = 3;
@@ -202,7 +200,6 @@ message AevatarOAuthClientProvisioningRetryScheduledEvent {
   google.protobuf.Timestamp scheduled_at = 9;
   repeated string redirect_uris = 10;
   bool force_reprovision = 11;
-  repeated string default_service_slugs = 12;
 }
 
 // Persisted when provisioning reaches a terminal successful branch and the
@@ -235,6 +232,8 @@ message AevatarOAuthClientDriftReconciledEvent {
 // the readmodel and so the actor can detect redirect-uri drift across
 // redeploys.
 message AevatarOAuthClientProvisionedEvent {
+  reserved 8;
+  reserved "default_service_slugs";
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
@@ -250,8 +249,6 @@ message AevatarOAuthClientProvisionedEvent {
   string oauth_scope = 6;
   // Full redirect URI allowlist registered with NyxID at this DCR call.
   repeated string redirect_uris = 7;
-  // Default NyxID service slugs registered with NyxID at this DCR call.
-  repeated string default_service_slugs = 8;
 }
 
 // Persisted when the actor seeds or rotates its HMAC key. On rotation, the
@@ -291,6 +288,8 @@ message AevatarOAuthClientBrokerCapabilityObservedEvent {
 // MUST keep ES index `aevatar-oauth-client-*` access scoped to the same
 // services that can read grain events.
 message AevatarOAuthClientDocument {
+  reserved 21;
+  reserved "default_service_slugs";
   string id = 1;
   int64 state_version = 2;
   string last_event_id = 3;
@@ -333,7 +332,4 @@ message AevatarOAuthClientDocument {
   // Secret-vault reference for the demoted previous HMAC key mirrored from
   // state for the rotation grace window.
   aevatar.credentials.SecretReference previous_hmac_key_ref = 20;
-  // Mirror of AevatarOAuthClientState.default_service_slugs for diagnostics
-  // and bootstrap drift detection.
-  repeated string default_service_slugs = 21;
 }

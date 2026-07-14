@@ -28,6 +28,7 @@ public static class WorkflowPrimitiveCatalog
             ["wait"] = "wait_signal",
             ["bridge_call"] = "connector_call",
             ["cli_call"] = "connector_call",
+            ["execute_codex"] = "tool_call",
             ["mcp_call"] = "connector_call",
             ["http_get"] = "connector_call",
             ["http_post"] = "connector_call",

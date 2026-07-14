@@ -235,6 +235,11 @@ public class WorkflowParserConfigurationTests
                 type: cli_call
                 parameters:
                   connector: demo_cli
+              - id: s_codex
+                type: execute_codex
+                parameters:
+                  tool: should_not_override
+                  arguments: '{"service":"codex-node","principal":"runner","prompt":"test"}'
               - id: s_mcp
                 type: mcp_call
                 parameters:
@@ -262,6 +267,11 @@ public class WorkflowParserConfigurationTests
         workflow.Steps.First(s => s.Id == "s_http_delete").Parameters["method"].Should().Be("DELETE");
 
         workflow.Steps.First(s => s.Id == "s_cli").Type.Should().Be("connector_call");
+
+        var codex = workflow.Steps.First(s => s.Id == "s_codex");
+        codex.Type.Should().Be("tool_call");
+        codex.Parameters["tool"].Should().Be("execute_codex");
+        codex.Parameters["arguments"].Should().Contain("codex-node");
 
         var mcp = workflow.Steps.First(s => s.Id == "s_mcp");
         mcp.Type.Should().Be("connector_call");

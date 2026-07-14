@@ -12,7 +12,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 
@@ -157,6 +156,18 @@ public static class IdentityOAuthEndpoints
                 detail = "Aevatar 集群正在初始化 NyxID 客户端,请 30 秒后回到 Lark 重新发送 /init。",
             });
         }
+        catch (NyxIdRequiredServiceAccessException ex)
+        {
+            logger.LogInformation(
+                ex,
+                "OAuth callback rejected because the user did not grant aevatar's required NyxID service. correlation={CorrelationId}",
+                decode.CorrelationId);
+            return Results.Json(new
+            {
+                error = "required_service_access_missing",
+                detail = "NyxID 授权未包含 Aevatar service。请回到 Lark 重新发送 /init,并在授权页保留 Aevatar service。",
+            }, statusCode: StatusCodes.Status409Conflict);
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "OAuth callback authorization-code exchange failed for correlation {CorrelationId}", decode.CorrelationId);
@@ -264,7 +275,6 @@ public static class IdentityOAuthEndpoints
 
     internal static async Task<IResult> HandleAevatarOAuthClientStatusAsync(
         [FromServices] IAevatarOAuthClientProvider provider,
-        [FromServices] IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions,
         CancellationToken ct)
     {
         try
@@ -273,20 +283,14 @@ public static class IdentityOAuthEndpoints
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var resolvedRedirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris();
             var registeredRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(snapshot.RedirectUris ?? []);
-            var resolvedDefaultServiceSlugs = AevatarOAuthClientDefaultServices.Resolve(defaultServiceOptions);
-            var registeredDefaultServiceSlugs = AevatarOAuthClientDefaultServices.Normalize(snapshot.DefaultServiceSlugs);
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
             var redirectUriListDrifted = registeredRedirectUris.Count == 0
                 || registeredRedirectUris.Count != resolvedRedirectUris.Count
                 || !registeredRedirectUris.SequenceEqual(resolvedRedirectUris, StringComparer.Ordinal);
             var oauthScopeDrifted = !AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope);
-            var defaultServicesDrifted = !AevatarOAuthClientDefaultServices.ListsEqual(
-                registeredDefaultServiceSlugs,
-                resolvedDefaultServiceSlugs);
             var status = redirectUriDrifted || redirectUriListDrifted
                 ? "redirect_uri_drifted"
-                : defaultServicesDrifted ? "default_services_drifted"
                 : oauthScopeDrifted ? "oauth_scope_drifted"
                 : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
@@ -304,14 +308,9 @@ public static class IdentityOAuthEndpoints
                 oauth_scope_registered = snapshot.OauthScope,
                 oauth_scope_required = AevatarOAuthClientScopes.AuthorizationScope,
                 oauth_scope_drifted = oauthScopeDrifted,
-                default_service_slugs_registered = registeredDefaultServiceSlugs,
-                default_service_slugs_resolved = resolvedDefaultServiceSlugs,
-                default_service_slugs_drifted = defaultServicesDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
-                ops_handoff = defaultServicesDrifted
-                    ? "Bootstrap must re-run DCR so NyxID Developer Apps preselects the aevatar service during authorization."
-                    : oauthScopeDrifted
+                ops_handoff = oauthScopeDrifted
                     ? "Bootstrap must re-run DCR so the OAuth client includes the proxy scope required by LLM route selection."
                     : snapshot.BrokerCapabilityObserved
                         ? null
@@ -351,7 +350,6 @@ public static class IdentityOAuthEndpoints
         [FromBody] RebuildAevatarOAuthClientRequest? body,
         [FromServices] ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         [FromServices] ILoggerFactory loggerFactory,
-        [FromServices] IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
             http,
@@ -359,7 +357,6 @@ public static class IdentityOAuthEndpoints
             http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
             rebuildDispatch,
             loggerFactory,
-            defaultServiceOptions,
             ct);
 
     /// <summary>
@@ -372,7 +369,6 @@ public static class IdentityOAuthEndpoints
         IPlatformAdminAuthorizer? adminAuthorizer,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         ILoggerFactory loggerFactory,
-        IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions,
         CancellationToken ct)
     {
         // Refactor (iter27/cluster-028-identity-oauth-endpoint):
@@ -398,7 +394,6 @@ public static class IdentityOAuthEndpoints
         var redirectUri = NyxIdRedirectUriResolver.Resolve(logger);
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(logger);
         var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
-        var defaultServiceSlugs = AevatarOAuthClientDefaultServices.Resolve(defaultServiceOptions, logger);
 
         // Validate Unix-seconds before dispatching: AevatarOAuthClient
         // ProjectionProvider later calls DateTimeOffset.FromUnixTimeSeconds
@@ -440,7 +435,6 @@ public static class IdentityOAuthEndpoints
                 RedirectUri = redirectUri,
             };
             command.RedirectUris.AddRange(redirectUris);
-            command.DefaultServiceSlugs.AddRange(defaultServiceSlugs);
             accepted = await rebuildDispatch
                 .DispatchAsync(command, ct)
                 .ConfigureAwait(false);

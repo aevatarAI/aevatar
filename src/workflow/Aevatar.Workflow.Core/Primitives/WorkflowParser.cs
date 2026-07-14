@@ -870,6 +870,9 @@ public sealed class WorkflowParser
                     parameters["operation"] = toolName;
                 }
                 break;
+            case "execute_codex":
+                parameters["tool"] = "execute_codex";
+                break;
             case "foreach_llm":
                 AddIfMissing(parameters, "sub_step_type", "llm_call");
                 break;

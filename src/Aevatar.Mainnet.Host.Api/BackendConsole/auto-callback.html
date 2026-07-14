@@ -33,6 +33,7 @@
   var BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
   var AUTHORITY = BACKEND_CONSOLE_CONFIG.authority || "";
   var CLIENT_ID = BACKEND_CONSOLE_CONFIG.clientId || "";
+  var RESOURCES = Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [];
   var REDIRECT_URI = location.origin + "/auto/callback";
   var STORAGE_KEY = BACKEND_CONSOLE_CONFIG.storageKey || "";
   var TOKEN_KEY = STORAGE_KEY + ":token";
@@ -61,6 +62,7 @@
   form.set("redirect_uri", REDIRECT_URI);
   form.set("client_id", CLIENT_ID);
   form.set("code_verifier", pending.verifier);
+  RESOURCES.forEach(function(resource){ form.append("resource", resource); });
 
   fetch(AUTHORITY + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() })
     .then(function(res){

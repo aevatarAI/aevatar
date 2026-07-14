@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Workflow.Application.Observatory;
 
@@ -12,7 +13,7 @@ namespace Aevatar.Workflow.Application.Observatory;
 //     snapshot.ScopeId == scopeId, else return null so the endpoint maps it to 404 (D8 — no existence
 //     disclosure). Only then serve the timeline / graph (reused, runId-only, pure-read ports).
 public sealed class WorkflowRunObservatoryQueryService
-    : IWorkflowRunObservatoryQueryService, IWorkflowRunAdminOverviewQueryService
+    : IWorkflowRunObservatoryQueryService, IWorkflowRunAdminQueryService
 {
     private const int DefaultRunListTake = 100;
     private const int MaxRunListTake = 500;
@@ -59,8 +60,8 @@ public sealed class WorkflowRunObservatoryQueryService
 
     // 06-20-observatory-admin-cross-scope (G3/G4): cross-scope overview. No ScopeId in the query => the projection
     //   returns runs across ALL scopes (recent-N, bounded by Take). No ownership gate. Authorization is enforced
-    //   upstream at the endpoint (admin/operator only) BEFORE this is called. Status filter is applied within the
-    //   recent-N window, mirroring the scope-bound list.
+    //   upstream at the endpoint (admin/operator only) BEFORE this is called. Filters are applied by the
+    //   projection store before the recent-N result is bounded by Take.
     public async Task<IReadOnlyList<ObservatoryRunSummary>> ListAllRunsAsync(
         ObservatoryRunListFilter filter,
         CancellationToken ct = default)
@@ -80,6 +81,28 @@ public sealed class WorkflowRunObservatoryQueryService
                               string.Equals(summary.Status, statusFilter, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(summary => summary.StartedAtUtc ?? summary.UpdatedAtUtc)
             .ToList();
+    }
+
+    public async Task<ObservatoryRunDetail?> GetRunAsync(
+        string runId,
+        CancellationToken ct = default)
+    {
+        var snapshot = await ResolveRunAsync(runId, ct);
+        if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.ScopeId))
+            return null;
+
+        return await BuildRunDetailAsync(snapshot, ct);
+    }
+
+    public async Task<ObservatoryRunGraph?> GetRunGraphAsync(
+        string runId,
+        CancellationToken ct = default)
+    {
+        var snapshot = await ResolveRunAsync(runId, ct);
+        if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.ScopeId))
+            return null;
+
+        return await BuildRunGraphAsync(snapshot, ct);
     }
 
     // Translates the observatory filter into the source query so status / origin / definition / time-range
@@ -109,6 +132,13 @@ public sealed class WorkflowRunObservatoryQueryService
         if (snapshot == null)
             return null;
 
+        return await BuildRunDetailAsync(snapshot, ct);
+    }
+
+    private async Task<ObservatoryRunDetail> BuildRunDetailAsync(
+        WorkflowActorSnapshot snapshot,
+        CancellationToken ct)
+    {
         // One read gives the committed timeline + authoritative usage aggregate (no usage in the timeline
         // data map). Falls back to the snapshot summary if the run-isolated report has not materialized yet.
         var report = await _artifactQueryPort.GetWorkflowRunReportArtifactAsync(snapshot.ActorId, ct);
@@ -118,6 +148,7 @@ public sealed class WorkflowRunObservatoryQueryService
             {
                 Summary = ToRunSummary(snapshot),
                 Timeline = [],
+                Diagnostics = BuildDiagnostics(snapshot, report: null, steps: [], viewEvents: []),
                 UsageTotals = new ObservatoryUsageTotals(),
             };
         }
@@ -139,6 +170,7 @@ public sealed class WorkflowRunObservatoryQueryService
                 item,
                 ResolveRoleReplyContent(item, roleReplyByRole)))
             .ToList();
+        var steps = report.Steps.Select(ToStepDetail).ToList();
 
         return new ObservatoryRunDetail
         {
@@ -147,7 +179,8 @@ public sealed class WorkflowRunObservatoryQueryService
             Input = report.Input,
             FinalOutput = report.FinalOutput,
             FinalError = report.FinalError,
-            Steps = report.Steps.Select(ToStepDetail).ToList(),
+            Diagnostics = BuildDiagnostics(snapshot, report, steps, viewEvents),
+            Steps = steps,
             Timeline = viewEvents,
             Statistics = ToStatistics(report.Summary),
             UsageTotals = WorkflowRunObservatoryTimelineMapper.ToUsageTotals(report.Usage),
@@ -177,6 +210,13 @@ public sealed class WorkflowRunObservatoryQueryService
         if (snapshot == null)
             return null;
 
+        return await BuildRunGraphAsync(snapshot, ct);
+    }
+
+    private async Task<ObservatoryRunGraph> BuildRunGraphAsync(
+        WorkflowActorSnapshot snapshot,
+        CancellationToken ct)
+    {
         var subgraph = await _artifactQueryPort.GetWorkflowRunGraphExportSubgraphAsync(
             snapshot.ActorId,
             ct: ct);
@@ -232,6 +272,17 @@ public sealed class WorkflowRunObservatoryQueryService
             : null;
     }
 
+    private async Task<WorkflowActorSnapshot?> ResolveRunAsync(
+        string runId,
+        CancellationToken ct)
+    {
+        var normalizedRunId = runId?.Trim() ?? string.Empty;
+        if (normalizedRunId.Length == 0)
+            return null;
+
+        return await _currentStateQueryPort.GetWorkflowActorCurrentStateAsync(normalizedRunId, ct);
+    }
+
     private static ObservatoryRunSummary ToRunSummary(WorkflowActorSnapshot snapshot)
     {
         return new ObservatoryRunSummary
@@ -283,6 +334,250 @@ public sealed class WorkflowRunObservatoryQueryService
             RoleReplyCount = summary.RoleReplyCount,
             StepTypeCounts = summary.StepTypeCounts,
         };
+
+    private static IReadOnlyList<ObservatoryRunDiagnostic> BuildDiagnostics(
+        WorkflowActorSnapshot snapshot,
+        WorkflowRunReport? report,
+        IReadOnlyList<ObservatoryStepDetail> steps,
+        IReadOnlyList<ObservatoryViewEvent> viewEvents)
+    {
+        var diagnostics = new List<ObservatoryRunDiagnostic>();
+
+        AppendCurrentStateDiagnostics(diagnostics, snapshot);
+        AppendReportDiagnostics(diagnostics, snapshot, report, steps, viewEvents);
+        AppendActiveStepDiagnostic(diagnostics, steps);
+
+        if (IsProblemTerminal(snapshot.CompletionStatus))
+            AppendTerminalDiagnostics(diagnostics, snapshot, steps);
+
+        return diagnostics
+            .OrderBy(diagnostic => diagnostic.TimestampUtc ?? DateTimeOffset.MaxValue)
+            .ThenBy(diagnostic => diagnostic.Code, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static void AppendCurrentStateDiagnostics(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        WorkflowActorSnapshot snapshot)
+    {
+        if (snapshot.SagaStatus == WorkflowSagaStatus.CompensationDeadLetter ||
+            !string.IsNullOrWhiteSpace(snapshot.DeadLetterError) ||
+            !string.IsNullOrWhiteSpace(snapshot.DeadLetterFailedCompensationStepId))
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = NonDefault(snapshot.LastUpdatedAt),
+                Severity = "error",
+                Code = "compensation_dead_letter",
+                Source = "current-state",
+                StepId = snapshot.DeadLetterFailedCompensationStepId,
+                Message = string.IsNullOrWhiteSpace(snapshot.DeadLetterError)
+                    ? "Workflow compensation entered dead-letter state."
+                    : snapshot.DeadLetterError,
+                Hint = snapshot.DeadLetterRemainingUncompensated > 0
+                    ? $"Compensation stopped with {snapshot.DeadLetterRemainingUncompensated} uncompensated step(s)."
+                    : "Compensation stopped in a terminal dead-letter state.",
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.LastError))
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = NonDefault(snapshot.LastUpdatedAt),
+                Severity = "error",
+                Code = "current_state_last_error",
+                Source = "current-state",
+                Message = snapshot.LastError,
+                Hint = "This is the latest committed error on the workflow current-state read model.",
+            });
+        }
+    }
+
+    private static void AppendReportDiagnostics(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        WorkflowActorSnapshot snapshot,
+        WorkflowRunReport? report,
+        IEnumerable<ObservatoryStepDetail> steps,
+        IEnumerable<ObservatoryViewEvent> viewEvents)
+    {
+        if (!string.IsNullOrWhiteSpace(report?.FinalError))
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = NonDefault(report.EndedAt) ?? NonDefault(snapshot.LastUpdatedAt),
+                Severity = "error",
+                Code = "final_error",
+                Source = "run-report",
+                Message = report.FinalError,
+                Hint = "This is the final error captured in the committed run report.",
+            });
+        }
+
+        foreach (var step in steps.Where(step => step.Success == false || !string.IsNullOrWhiteSpace(step.Error)))
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = step.CompletedAtUtc ?? step.RequestedAtUtc,
+                Severity = "error",
+                Code = "step_failed",
+                Source = "run-report.step",
+                StepId = step.StepId,
+                StepType = step.StepType,
+                TargetRole = step.TargetRole,
+                Message = string.IsNullOrWhiteSpace(step.Error)
+                    ? "Step was marked unsuccessful without a materialized error message."
+                    : step.Error,
+                Hint = BuildStepHint(step),
+            });
+        }
+
+        foreach (var item in viewEvents.Where(IsFailureViewEvent))
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = item.TimestampUtc,
+                Severity = item.Kind == "RunStopped" ? "warning" : "error",
+                Code = item.ToolCall is { Success: false } ? "tool_call_failed" : "timeline_failure_event",
+                Source = "run-report.timeline",
+                StepId = item.StepId,
+                StepType = item.StepType,
+                Message = FailureEventMessage(item),
+                Hint = "This event came from the committed workflow timeline.",
+            });
+        }
+    }
+
+    private static void AppendActiveStepDiagnostic(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        IEnumerable<ObservatoryStepDetail> steps)
+    {
+        var activeStep = steps
+            .Where(step => step.RequestedAtUtc.HasValue && !step.CompletedAtUtc.HasValue)
+            .OrderBy(step => step.RequestedAtUtc)
+            .LastOrDefault();
+        if (activeStep == null)
+            return;
+
+        AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+        {
+            TimestampUtc = activeStep.RequestedAtUtc,
+            Severity = "info",
+            Code = "active_step",
+            Source = "run-report.step",
+            StepId = activeStep.StepId,
+            StepType = activeStep.StepType,
+            TargetRole = activeStep.TargetRole,
+            Message = "Last materialized active step has not completed yet.",
+            Hint = BuildStepHint(activeStep),
+        });
+    }
+
+    private static void AppendTerminalDiagnostics(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        WorkflowActorSnapshot snapshot,
+        IEnumerable<ObservatoryStepDetail> steps)
+    {
+        var lastStep = steps
+            .OrderBy(step => step.CompletedAtUtc ?? step.RequestedAtUtc ?? DateTimeOffset.MinValue)
+            .LastOrDefault(step =>
+                !string.IsNullOrWhiteSpace(step.StepId) ||
+                !string.IsNullOrWhiteSpace(step.StepType) ||
+                !string.IsNullOrWhiteSpace(step.TargetRole));
+        if (lastStep != null)
+        {
+            AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+            {
+                TimestampUtc = lastStep.CompletedAtUtc ?? lastStep.RequestedAtUtc,
+                Severity = "info",
+                Code = "last_known_step",
+                Source = "run-report.step",
+                StepId = lastStep.StepId,
+                StepType = lastStep.StepType,
+                TargetRole = lastStep.TargetRole,
+                Message = $"Last materialized step before terminal status: {StepDisplayName(lastStep)}.",
+                Hint = "Inspect this step first when reporting where the workflow stopped.",
+            });
+        }
+
+        if (diagnostics.Any(IsProblemDiagnostic))
+            return;
+
+        AppendDistinct(diagnostics, new ObservatoryRunDiagnostic
+        {
+            TimestampUtc = NonDefault(snapshot.LastUpdatedAt),
+            Severity = "warning",
+            Code = "terminal_without_failure_detail",
+            Source = "current-state",
+            Message = $"Run ended with status '{MapStatus(snapshot.CompletionStatus)}', but no final error or failed step has materialized.",
+            Hint = "Include the run id and state version when filing an issue; the run-report artifact may be incomplete.",
+        });
+    }
+
+    private static bool IsFailureViewEvent(ObservatoryViewEvent item) =>
+        item.Kind is "RunError" or "RunStopped" || item.ToolCall is { Success: false };
+
+    private static string FailureEventMessage(ObservatoryViewEvent item)
+    {
+        if (item.ToolCall is { Success: false } toolCall)
+            return string.IsNullOrWhiteSpace(toolCall.Error)
+                ? $"Tool call '{toolCall.ToolName}' failed."
+                : toolCall.Error;
+
+        return string.IsNullOrWhiteSpace(item.Message)
+            ? item.Stage
+            : item.Message;
+    }
+
+    private static string BuildStepHint(ObservatoryStepDetail step)
+    {
+        var parts = new[]
+        {
+            string.IsNullOrWhiteSpace(step.StepType) ? string.Empty : $"type={step.StepType}",
+            string.IsNullOrWhiteSpace(step.TargetRole) ? string.Empty : $"target={step.TargetRole}",
+            string.IsNullOrWhiteSpace(step.NextStepId) ? string.Empty : $"next={step.NextStepId}",
+            string.IsNullOrWhiteSpace(step.BranchKey) ? string.Empty : $"branch={step.BranchKey}",
+        }.Where(part => part.Length > 0);
+
+        return string.Join(", ", parts);
+    }
+
+    private static string StepDisplayName(ObservatoryStepDetail step)
+    {
+        if (!string.IsNullOrWhiteSpace(step.StepId))
+            return step.StepId;
+        if (!string.IsNullOrWhiteSpace(step.StepType))
+            return step.StepType;
+        return string.IsNullOrWhiteSpace(step.TargetRole) ? "unknown step" : step.TargetRole;
+    }
+
+    private static bool IsProblemTerminal(WorkflowRunCompletionStatus status) =>
+        status is WorkflowRunCompletionStatus.Failed or
+            WorkflowRunCompletionStatus.TimedOut or
+            WorkflowRunCompletionStatus.Stopped;
+
+    private static bool IsProblemDiagnostic(ObservatoryRunDiagnostic diagnostic) =>
+        diagnostic.Severity is "error" or "warning";
+
+    private static DateTimeOffset? NonDefault(DateTimeOffset value) =>
+        value == default ? null : value;
+
+    private static void AppendDistinct(
+        ICollection<ObservatoryRunDiagnostic> diagnostics,
+        ObservatoryRunDiagnostic entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Message) &&
+            string.IsNullOrWhiteSpace(entry.StepId) &&
+            string.IsNullOrWhiteSpace(entry.Code))
+            return;
+
+        var duplicate = diagnostics.Any(existing =>
+            string.Equals(existing.Code, entry.Code, StringComparison.Ordinal) &&
+            string.Equals(existing.StepId, entry.StepId, StringComparison.Ordinal) &&
+            string.Equals(existing.Message, entry.Message, StringComparison.Ordinal));
+        if (!duplicate)
+            diagnostics.Add(entry);
+    }
 
     private static string MapStatus(WorkflowRunCompletionStatus status) =>
         status switch

@@ -696,6 +696,7 @@ button{font-family:inherit;cursor:pointer;}
 .obs-adminbar{display:flex;align-items:center;gap:10px;padding:11px 20px;background:var(--failed-bg);border-bottom:1px solid var(--failed-bd);flex-wrap:wrap;}
 .obs-adminbar .ab-label{font-size:12.5px;color:var(--failed);font-weight:550;}
 .ab-input{height:30px;padding:0 10px;border:1px solid var(--border);border-radius:6px;font:13px var(--sans);background:var(--surface);min-width:200px;}
+.obs-adminbar .ab-input{flex:0 1 420px;min-width:280px;}
 .ab-input:focus{outline:0;border-color:var(--primary);}
 .ab-hint{font-size:12px;color:var(--muted);}
 .obs-filterbar{border-bottom:1px solid var(--border);background:var(--surface);}
@@ -740,8 +741,27 @@ button{font-family:inherit;cursor:pointer;}
 .tl-body{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
 .tl-step{font-size:13px;color:var(--heading);font-weight:550;}
 .tl-dur{font-size:11.5px;color:var(--faint);}
+.tl-msg{font-size:12px;color:var(--muted);width:100%;line-height:1.5;}
 .tl-err{font-family:var(--mono);font-size:11.5px;color:var(--failed);background:var(--failed-bg);padding:2px 7px;border-radius:4px;width:100%;}
 .logs{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:var(--r-panel);padding:14px 16px;white-space:pre-wrap;}
+.step-list,.diag-list{display:flex;flex-direction:column;gap:10px;}
+.step-card,.diag-card{border:1px solid var(--border);border-radius:7px;background:var(--surface);padding:12px 14px;}
+.step-card.failed,.diag-card.error{border-color:var(--failed-bd);background:var(--failed-bg);}
+.diag-card.warning{border-color:var(--waiting-bd);background:var(--waiting-bg);}
+.step-head,.diag-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+.step-title,.diag-title{font-size:13px;color:var(--heading);font-weight:600;}
+.step-meta,.diag-meta{font-size:11.5px;color:var(--faint);font-family:var(--mono);}
+.step-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;margin-top:8px;}
+.step-kv{font-size:12px;color:var(--muted);min-width:0;}
+.step-kv b{display:block;color:var(--faint);font-weight:500;margin-bottom:2px;}
+.step-kv span{font-family:var(--mono);color:var(--heading);word-break:break-word;}
+.param-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.param-pill{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:2px 6px;max-width:100%;word-break:break-all;}
+.diag-msg{font-size:13px;color:var(--fg);line-height:1.55;white-space:pre-wrap;}
+.diag-hint{font-size:12px;color:var(--muted);line-height:1.45;margin-top:6px;}
+.issue-box{display:flex;flex-direction:column;gap:10px;}
+.issue-actions{display:flex;justify-content:flex-end;}
+.issue-pre{font-family:var(--mono);font-size:12px;line-height:1.55;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:var(--r-panel);padding:14px 16px;white-space:pre-wrap;overflow:auto;}
 .artifacts{display:flex;flex-direction:column;gap:8px;}
 .artifact-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;}
 .art-name{font-size:13px;color:var(--heading);flex:1 1 auto;}
@@ -1369,7 +1389,7 @@ function statsForEmployee(eid){ return null; }
    code 交换经共享 /auto/callback 完成后回跳本页（returnTo=/admin）。
    ============================================================ */
 var OIDC={ authority:BACKEND_CONSOLE_CONFIG.authority||'', clientId:BACKEND_CONSOLE_CONFIG.clientId||'',
-  scope:BACKEND_CONSOLE_CONFIG.scope||'', redirectUri:location.origin+'/auto/callback', storageKey:BACKEND_CONSOLE_CONFIG.storageKey||'' };
+  scope:BACKEND_CONSOLE_CONFIG.scope||'', resources:Array.isArray(BACKEND_CONSOLE_CONFIG.resources)?BACKEND_CONSOLE_CONFIG.resources:[], redirectUri:location.origin+'/auto/callback', storageKey:BACKEND_CONSOLE_CONFIG.storageKey||'' };
 var TOKEN_KEY=OIDC.storageKey+':token', PKCE_KEY=OIDC.storageKey+':pkce';
 function getToken(){ try{ var t=JSON.parse(localStorage.getItem(TOKEN_KEY)||'null'); return (t&&t.access_token)?t:null; }catch(e){ return null; } }
 function accessToken(){ var t=getToken(); return t?t.access_token:null; }
@@ -1392,6 +1412,7 @@ async function beginLogin(){
   var u=new URL(OIDC.authority.replace(/\/+$/,'')+'/oauth/authorize');
   u.searchParams.set('response_type','code'); u.searchParams.set('client_id',OIDC.clientId);
   u.searchParams.set('redirect_uri',OIDC.redirectUri); u.searchParams.set('scope',OIDC.scope);
+  OIDC.resources.forEach(function(resource){ u.searchParams.append('resource',resource); });
   u.searchParams.set('state',state); u.searchParams.set('code_challenge',challenge); u.searchParams.set('code_challenge_method','S256');
   location.assign(u.toString());
 }
@@ -1441,6 +1462,7 @@ async function loadStatus(rerender){
 /* 列表是 SUMMARY（无内联 timeline/graph/logs/usage）；详情 + DAG 选中时按 runId 懒加载并缓存。 */
 var OBS_RUNS=[];                 /* 已映射的 summary 行：{id,name,status,origin,scope,definition,...} */
 var OBS_RUNS_LOADED=false, OBS_RUNS_ERR=null, OBS_RUNS_LOADING=false;
+var OBS_RUNS_REQUEST=0, OBS_POLL_TIMER=null;
 var OBS_DETAIL={};               /* runId -> {loading,err,detail}；detail 为 obsDetail 渲染所需结构 */
 /* 真实 status 枚举 -> 渲染内部枚举 running|success|failed|stuck */
 function obsMapStatus(s){
@@ -1472,19 +1494,50 @@ function mapObsRuns(list){
 /* /runs/{id} (+ /graph) -> obsDetail 渲染所需结构（usage/timeline/logs/artifacts/graph） */
 function mapObsDetail(d,graph){
   d=d||{}; var sum=d.summary||{};
-  var steps=d.steps||[]; var tl=d.timeline||[];
+  var rawSteps=d.steps||[]; var rawTimeline=d.timeline||[];
   var ut=d.usageTotals||{}; var stats=d.statistics||{};
+  var steps=rawSteps.map(function(s,i){
+    s=s||{}; return { idx:i+1, id:s.stepId||'', stepId:s.stepId||'', stepType:s.stepType||'',
+      targetRole:s.targetRole||'', requestedAtUtc:s.requestedAtUtc||'', completedAtUtc:s.completedAtUtc||'',
+      success:s.success, status:obsStepStatus(s), duration:obsDurMs(s.durationMs), durationMs:s.durationMs,
+      outputPreview:s.outputPreview||'', error:s.error||'', params:s.requestParameters||{},
+      nextStepId:s.nextStepId||'', branchKey:s.branchKey||'', usage:s.usage||{} }; });
+  var events=rawTimeline.map(function(e){
+    e=e||{}; var tc=e.toolCall||null;
+    var msg=e.content||e.message||(tc&&(tc.error||tc.toolName))||'';
+    var st=(e.kind==='RunError'||(tc&&tc.success===false))?'failed':(e.kind==='RunStopped'?'stuck':(e.kind==='RunFinished'?'success':'running'));
+    return { t:obsTime(e.timestampUtc), timestampUtc:e.timestampUtc||'', kind:e.kind||'Event', stage:e.stage||'',
+      stepId:e.stepId||'', stepType:e.stepType||'', agentId:e.agentId||'', text:msg, message:e.message||'',
+      content:e.content||'', toolCall:tc, data:e.data||{}, st:st }; });
   var usage={
     tokens:obsNum(ut.totalTokens!=null?ut.totalTokens:(ut.promptTokens||0)+(ut.completionTokens||0)),
     steps:(stats.completedSteps!=null?stats.completedSteps:steps.filter(function(s){return s.completedAtUtc;}).length)
       +'/'+(stats.totalSteps!=null?stats.totalSteps:steps.length),
     time:obsTimeline_span(steps,sum), cost:obsCost(ut.cost) };
-  var timeline=steps.map(function(s){
-    return { t:obsTime(s.requestedAtUtc||s.completedAtUtc), step:(s.stepType||s.targetRole||s.stepId||'步骤'),
-      st:obsStepStatus(s), dur:obsDurMs(s.durationMs), err:s.error||null }; });
-  /* logs：优先 timeline 内容；回退到步骤错误/产出预览 */
+  var timeline;
+  if(events.length){
+    timeline=events.map(function(e){
+      return { t:e.t, step:obsEventTitle(e), st:e.st, dur:'', err:e.st==='failed'?e.text:null,
+        msg:e.text, kind:e.kind, stage:e.stage, stepId:e.stepId, agentId:e.agentId };
+    });
+  } else {
+    timeline=steps.map(function(s){
+      return { t:obsTime(s.requestedAtUtc||s.completedAtUtc), step:(s.stepType||s.targetRole||s.stepId||'步骤'),
+        st:s.status, dur:s.duration, err:s.error||null, msg:s.outputPreview||'', kind:'Step', stage:'step.trace', stepId:s.stepId, agentId:s.targetRole };
+    });
+  }
+  var diagnostics=(d.diagnostics||[]).map(function(t){
+    t=t||{}; return { t:obsTime(t.timestampUtc), timestampUtc:t.timestampUtc||'', severity:t.severity||'info',
+      code:t.code||'diagnostic', source:t.source||'observatory', message:t.message||'',
+      hint:t.hint||'', stepId:t.stepId||'', stepType:t.stepType||'', targetRole:t.targetRole||'' }; });
+  if(!diagnostics.length){
+    if(d.finalError){ diagnostics.push({t:'—',severity:'error',code:'final_error',source:'client-fallback',message:d.finalError,hint:'后端未返回诊断信息，前端从 finalError 构造。',stepId:'',stepType:'',targetRole:''}); }
+    steps.forEach(function(s){ if(s.error){ diagnostics.push({t:obsTime(s.completedAtUtc||s.requestedAtUtc),severity:'error',code:'step_failed',source:'client-fallback',message:s.error,hint:obsStepHint(s),stepId:s.stepId,stepType:s.stepType,targetRole:s.targetRole}); } });
+  }
+  /* logs：失败诊断优先；然后输出 committed timeline 内容；回退到步骤错误/产出预览 */
   var logs=[];
-  tl.forEach(function(e){ var msg=e.message||e.content||(e.toolCall&&e.toolCall.toolName); if(msg){ logs.push((e.timestampUtc?obsTime(e.timestampUtc)+' ':'')+(e.stage?'['+e.stage+'] ':'')+msg); } });
+  diagnostics.forEach(function(t){ logs.push((t.t||'—')+' DIAGNOSTIC '+(t.severity||'info').toUpperCase()+' ['+t.code+'] '+(t.stepId?'step='+t.stepId+' ':'')+t.message+(t.hint?' | '+t.hint:'')); });
+  events.forEach(function(e){ if(e.text){ logs.push((e.timestampUtc?obsTime(e.timestampUtc)+' ':'')+(e.stage?'['+e.stage+'] ':'')+e.text); } });
   if(!logs.length){ steps.forEach(function(s){ if(s.error){ logs.push(obsTime(s.requestedAtUtc)+' ERROR '+s.error); } else if(s.outputPreview){ logs.push(obsTime(s.completedAtUtc||s.requestedAtUtc)+' '+(s.stepType||'')+' '+s.outputPreview); } }); }
   if(d.finalError) logs.push('FINAL ERROR '+d.finalError);
   /* graph：优先真实 DAG nodes/edges；回退到步骤序列 */
@@ -1492,17 +1545,43 @@ function mapObsDetail(d,graph){
   if(graph && graph.nodes && graph.nodes.length){
     var byStep={}; steps.forEach(function(s){ byStep[s.stepId]=s; });
     gnodes=graph.nodes.map(function(n){ var s=byStep[n.stepId]||{};
-      return { name:(n.nodeType||s.stepType||n.nodeId), st:(s.stepId?obsStepStatus(s):'waiting'),
-        io:obsNodeIo(n,graph) }; });
+      return { name:(n.nodeType||s.stepType||n.nodeId), st:(s.stepId?s.status:'waiting'),
+        io:obsNodeIo(n,graph), stepId:n.stepId||'', nodeId:n.nodeId||'' }; });
   } else {
-    gnodes=steps.map(function(s){ return { name:(s.stepType||s.targetRole||s.stepId), st:obsStepStatus(s), io:'—' }; });
+    gnodes=steps.map(function(s){ return { name:(s.stepType||s.targetRole||s.stepId), st:s.status, io:'—', stepId:s.stepId, nodeId:s.stepId }; });
   }
   /* artifacts：summary 无文件列表；finalOutput 视为单一产出 */
   var artifacts=[]; if(d.finalOutput){ artifacts.push({ name:'finalOutput', size:obsBytes(d.finalOutput), content:d.finalOutput }); }
-  return { id:sum.runId, name:sum.workflowName||sum.runId, status:obsMapStatus(sum.status),
+  var mapped={ id:sum.runId, name:sum.workflowName||sum.runId, status:obsMapStatus(sum.status),
+    rawStatus:sum.status||'', origin:sum.runOrigin||'—', stateVersion:sum.stateVersion,
     scope:sum.scopeId||'—', definition:sum.definitionId||sum.workflowName||'—',
     input:d.input||'', finalOutput:d.finalOutput||'', finalError:d.finalError||'',
-    usage:usage, timeline:timeline, logs:logs, graph:gnodes, artifacts:artifacts };
+    usage:usage, steps:steps, timeline:timeline, events:events, diagnostics:diagnostics, logs:logs, graph:gnodes, artifacts:artifacts };
+  mapped.issue=obsIssuePayload(mapped);
+  return mapped;
+}
+function obsEventTitle(e){
+  var label={RunStarted:'Run started',RunFinished:'Run finished',RunError:'Run error',RunStopped:'Run stopped',
+    StepStarted:'Step started',StepFinished:'Step finished',ToolCall:'Tool call',Message:'Message',
+    HumanInputRequest:'Human input',SignalWaiting:'Signal waiting',SignalBuffered:'Signal buffered'}[e.kind]||e.kind||'Event';
+  if(e.stepId) label+=' · '+e.stepId;
+  else if(e.agentId) label+=' · @'+e.agentId;
+  if(e.stage) label+=' · '+e.stage;
+  return label;
+}
+function obsStepHint(s){
+  var p=[]; if(s.stepType)p.push('type='+s.stepType); if(s.targetRole)p.push('target='+s.targetRole);
+  if(s.nextStepId)p.push('next='+s.nextStepId); if(s.branchKey)p.push('branch='+s.branchKey);
+  return p.join(', ');
+}
+function obsIssuePayload(d){
+  return JSON.stringify({
+    runId:d.id, scopeId:d.scope, workflow:d.name, status:d.rawStatus||d.status,
+    stateVersion:d.stateVersion, finalError:d.finalError||'',
+    diagnostics:(d.diagnostics||[]).map(function(t){return {severity:t.severity,code:t.code,source:t.source,stepId:t.stepId,stepType:t.stepType,targetRole:t.targetRole,message:t.message,hint:t.hint,timestampUtc:t.timestampUtc};}),
+    failedSteps:(d.steps||[]).filter(function(s){return s.status==='failed'||s.error;}).map(function(s){return {stepId:s.stepId,stepType:s.stepType,targetRole:s.targetRole,error:s.error,requestedAtUtc:s.requestedAtUtc,completedAtUtc:s.completedAtUtc,nextStepId:s.nextStepId,branchKey:s.branchKey};}),
+    lastKnownStep:(d.steps||[]).slice().reverse().filter(function(s){return s.stepId||s.stepType||s.targetRole;})[0]||null
+  }, null, 2);
 }
 function obsTimeline_span(steps,sum){
   var ts=steps.map(function(s){return s.requestedAtUtc;}).filter(Boolean).map(function(x){return new Date(x).getTime();});
@@ -1519,41 +1598,54 @@ function obsNodeIo(n,graph){
 function obsBytes(s){ var n=(s==null?'':String(s)).length; if(n<1024) return n+' B'; return (Math.round(n/102.4)/10)+' KB'; }
 /* 加载 summary 列表（admin 跨 scope 用 OBS_SCOPE：'__all__' 或具体 id） */
 function loadObsRuns(rerender){
+  var requestId=++OBS_RUNS_REQUEST;
   OBS_RUNS_LOADING=true; if(rerender) rerender();
-  var scope=(OBS_STATE&&OBS_STATE.scope)||'__all__';
+  var scope=(ACCOUNT&&ACCOUNT.admin)?((OBS_STATE&&OBS_STATE.scope)||'__all__'):'__self__';
   var q=scope&&scope!=='__self__'?('?scope='+encodeURIComponent(scope)):'';
   return adminJson('/api/workflow/observatory/runs'+q).then(function(j){
+    if(requestId!==OBS_RUNS_REQUEST) return;
     if(j&&j.forbidden){ OBS_RUNS=[]; OBS_RUNS_ERR='需要平台管理员权限才能跨 scope 观测'; }
     else { OBS_RUNS=mapObsRuns(Array.isArray(j)?j:(j&&j.items)||[]); OBS_RUNS_ERR=null;
-      if(OBS_RUNS.length && (!OBS_STATE.selectedId || !OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0])){
+      if(OBS_STATE.selectedId && !OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0]){
+        obsUpsertRunFromDetail(OBS_STATE.selectedId,(OBS_DETAIL[OBS_STATE.selectedId]&&OBS_DETAIL[OBS_STATE.selectedId].detail)||null);
+      }
+      if(OBS_RUNS.length && !OBS_STATE.selectedId){
         OBS_STATE.selectedId=OBS_RUNS[0].id; } }
-  }).catch(function(e){ OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; })
-  .then(function(){ OBS_RUNS_LOADED=true; OBS_RUNS_LOADING=false; if(rerender) rerender(); });
+  }).catch(function(e){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; } })
+  .then(function(){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS_LOADED=true; OBS_RUNS_LOADING=false; if(rerender) rerender(); } });
 }
-/* 该 run 自己的 scopeId：detail/graph 必须按 run 所属 scope 拉取，admin __all__ 列表里的跨 scope run 才能打开（否则后端按调用者自身 scope 校验→404）。 */
-function obsRunScope(runId){ var r=(OBS_RUNS||[]).filter(function(x){return x.id===runId;})[0]; return (r&&r.scope)||''; }
+function obsOpenDirectRun(runId,rerenderList,rerenderDetail){
+  runId=(runId||'').trim(); if(!runId) return;
+  OBS_STATE.selectedId=runId;
+  obsUpsertRunFromDetail(runId,null);
+  if(rerenderList) rerenderList();
+  if(rerenderDetail) rerenderDetail();
+  delete OBS_DETAIL[runId];
+  loadObsDetail(runId,function(){ if(rerenderList) rerenderList(); if(rerenderDetail) rerenderDetail(); });
+}
 /* 选中 run 时懒加载详情 + DAG，缓存到 OBS_DETAIL[runId]。 */
 function loadObsDetail(runId,rerender){
   if(!runId) return Promise.resolve();
   if(OBS_DETAIL[runId] && (OBS_DETAIL[runId].loading || OBS_DETAIL[runId].detail)) { if(rerender) rerender(); return Promise.resolve(); }
   OBS_DETAIL[runId]={loading:true,err:null,detail:null}; if(rerender) rerender();
-  var rs=obsRunScope(runId);
-  var sq=rs?('?scope='+encodeURIComponent(rs)):'';
-  var base='/api/workflow/observatory/runs/'+encodeURIComponent(runId);
+  var base=(ACCOUNT&&ACCOUNT.admin)
+    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)
+    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId);
   return Promise.all([
-    adminJson(base+sq).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
+    adminJson(base).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
     loadObsGraph(runId).catch(function(){ return null; })
   ]).then(function(res){ var d=res[0], g=res[1];
     if(d&&d.forbidden){ OBS_DETAIL[runId]={loading:false,err:'无权查看该 run（403）',detail:null}; }
-    else if(!d){ OBS_DETAIL[runId]={loading:false,err:'该 run 不存在或不属于当前 scope',detail:null}; }
-    else { OBS_DETAIL[runId]={loading:false,err:null,detail:mapObsDetail(d,g)}; }
+    else if(!d){ OBS_DETAIL[runId]={loading:false,err:'该 run 不存在或不在当前账号的可见范围',detail:null}; }
+    else { var detail=mapObsDetail(d,g); OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail); }
   }).catch(function(e){ OBS_DETAIL[runId]={loading:false,err:(e&&(e.body||e.message))||'详情加载失败',detail:null}; })
   .then(function(){ if(rerender) rerender(); });
 }
 function loadObsGraph(runId){
-  var rs=obsRunScope(runId);
-  var sq=rs?('?scope='+encodeURIComponent(rs)):'';
-  return adminJson('/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph'+sq).then(function(g){
+  var path=(ACCOUNT&&ACCOUNT.admin)
+    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)+'/graph'
+    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph';
+  return adminJson(path).then(function(g){
     return (g&&g.forbidden)?null:g; });
 }
 /* admin 跨 scope：email -> 候选 scope（仅管理员；403 诚实降级） */
@@ -2846,8 +2938,25 @@ function viewStatus(){
 
 /* ================= ③ 运行观测台 Run Observatory ================= */
 var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,statusFilter:[],scope:'__all__'};
-function obsSelected(){ return OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0]||OBS_RUNS[0]||null; }
-function originPill(o){ var lbl={schedule:'排班',manual:'手动',api:'API',channel:'通道'}[o]||o; return '<span class="origin-pill">'+lbl+'</span>'; }
+function obsSyntheticRun(id){
+  var d=OBS_DETAIL[id]&&OBS_DETAIL[id].detail;
+  return d?{id:d.id||id,name:d.name||id,status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion}
+    :{id:id,name:'Run '+obsShortRunId(id),status:'stuck',origin:'direct',scope:'—',definition:'—',rawStatus:'unknown'};
+}
+function obsSelected(){
+  if(OBS_STATE.selectedId){
+    return OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0]||obsSyntheticRun(OBS_STATE.selectedId);
+  }
+  return OBS_RUNS[0]||null;
+}
+function obsShortRunId(id){ id=String(id||''); return id.length>30?'…'+id.slice(-30):id; }
+function obsUpsertRunFromDetail(runId,d){
+  d=d||obsSyntheticRun(runId); var found=false;
+  OBS_RUNS=OBS_RUNS.map(function(r){ if(r.id!==runId) return r; found=true;
+    return Object.assign({},r,{name:d.name||r.name,status:d.status||r.status,origin:d.origin||r.origin,scope:d.scope||r.scope,definition:d.definition||r.definition,rawStatus:d.rawStatus||r.rawStatus,stateVersion:d.stateVersion!=null?d.stateVersion:r.stateVersion}); });
+  if(!found) OBS_RUNS.unshift({id:runId,name:d.name||('Run '+obsShortRunId(runId)),status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion});
+}
+function originPill(o){ var lbl={schedule:'排班',manual:'手动',api:'API',channel:'通道'}[o]||o; return '<span class="origin-pill">'+esc(lbl)+'</span>'; }
 function obsRunsFiltered(){
   if(!OBS_STATE.statusFilter.length) return OBS_RUNS;
   return OBS_RUNS.filter(function(r){return OBS_STATE.statusFilter.indexOf(r.status)>=0;});
@@ -2857,12 +2966,63 @@ function obsList(){
   if(OBS_RUNS_ERR) return '<div class="alert"><span class="grow">'+esc(OBS_RUNS_ERR)+'</span><button class="btn" data-act="obsReload">重试</button></div>';
   var rows=obsRunsFiltered().map(function(r){
     var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',stuck:'var(--waiting)'}[r.status]||'var(--idle)';
-    return '<button class="obs-row'+(r.id===OBS_STATE.selectedId?' on':'')+'" data-obsrun="'+r.id+'">'+
+    return '<button class="obs-row'+(r.id===OBS_STATE.selectedId?' on':'')+'" data-obsrun="'+esc(r.id)+'">'+
       '<span class="obs-dot" style="background:'+sd+'"></span>'+
-      '<span class="obs-row-main"><span class="obs-row-name">'+esc(r.name)+'</span><span class="obs-row-id tnum">'+esc((function(x){x=String(x||'');var i=x.lastIndexOf(':run:');var t=i>=0?x.slice(i+1):x;return t.length>26?t.slice(0,26)+'…':t;})(r.id))+'</span></span>'+
+      '<span class="obs-row-main"><span class="obs-row-name">'+esc(r.name)+'</span><span class="obs-row-id tnum">'+esc(obsShortRunId(r.id))+'</span></span>'+
       statusTag(r.status)+originPill(r.origin)+'</button>';
   }).join('');
   return rows||emptyBlock('run');
+}
+function obsTabs(d){
+  var tabs=[['timeline','Timeline',''],['steps','Steps',d.steps&&d.steps.length],['diagnostics','Diagnostics',d.diagnostics&&d.diagnostics.length],['logs','Logs',''],['artifacts','Artifacts',''],['graph','Graph','']];
+  return tabs.map(function(x){ var t=x[0],lbl=x[1],n=x[2];
+    return '<button class="obs-tab'+(t===OBS_STATE.tab?' on':'')+'" data-obstab="'+t+'">'+lbl+(n?'<span class="filter-badge num" style="margin-left:6px">'+n+'</span>':'')+'</button>';
+  }).join('');
+}
+function obsTimelineView(r){
+  return r.timeline.length?'<div class="timeline">'+r.timeline.map(function(s){
+    var errTxt=s.err||(s.st==='failed'&&r.diagnostics.length?r.diagnostics[0].message:'');
+    return '<div class="tl-item tl-'+s.st+'"><span class="tl-time tnum">'+esc(s.t)+'</span><span class="tl-dot"></span>'+
+      '<span class="tl-body"><span class="tl-step">'+esc(s.step)+'</span>'+statusTag(s.st)+(s.dur?'<span class="tl-dur tnum">'+esc(s.dur)+'</span>':'')+
+      (s.msg&&!errTxt?'<span class="tl-msg">'+esc(s.msg)+'</span>':'')+
+      (errTxt?'<span class="tl-err">'+esc(errTxt)+'</span>':'')+'</span></div>';
+  }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无事件').replace('该员工还没有执行记录。','本次 Run 尚无 timeline 事件。');
+}
+function obsStepsView(r){
+  if(!r.steps.length) return emptyBlock('run').replace('暂无 Run','暂无步骤').replace('该员工还没有执行记录。','本次 Run 尚无步骤 trace。');
+  return '<div class="step-list">'+r.steps.map(function(s){
+    var params=Object.keys(s.params||{}).sort().map(function(k){return '<span class="param-pill">'+esc(k)+'='+esc(s.params[k])+'</span>';}).join('');
+    return '<div class="step-card '+(s.status==='failed'?'failed':'')+'">'+
+      '<div class="step-head"><span class="step-title">'+esc(s.stepId||('step '+s.idx))+'</span>'+statusTag(s.status)+
+      '<span class="step-meta">'+esc(s.stepType||'unknown')+(s.targetRole?' · @'+esc(s.targetRole):'')+'</span></div>'+
+      '<div class="step-grid">'+
+        '<div class="step-kv"><b>requested</b><span>'+esc(s.requestedAtUtc||'—')+'</span></div>'+
+        '<div class="step-kv"><b>completed</b><span>'+esc(s.completedAtUtc||'—')+'</span></div>'+
+        '<div class="step-kv"><b>duration</b><span>'+esc(s.duration)+'</span></div>'+
+        '<div class="step-kv"><b>route</b><span>'+esc((s.branchKey||'default')+(s.nextStepId?' -> '+s.nextStepId:''))+'</span></div>'+
+      '</div>'+
+      (params?'<div class="param-pills">'+params+'</div>':'')+
+      (s.error?'<div class="tl-err" style="margin-top:8px">'+esc(s.error)+'</div>':'')+
+      (s.outputPreview?'<div class="tl-msg" style="margin-top:8px">'+esc(s.outputPreview)+'</div>':'')+
+    '</div>';
+  }).join('')+'</div>';
+}
+function obsDiagnosticsView(r){
+  var top='<div class="issue-box"><div class="issue-actions"><button class="ibtn" data-act="obsCopyIssue" style="height:26px">复制 issue payload</button></div></div>';
+  if(!r.diagnostics.length) return top+emptyBlock('run').replace('暂无 Run','暂无诊断信息').replace('该员工还没有执行记录。','后端暂未返回本次 Run 的失败诊断。');
+  return top+'<div class="diag-list">'+r.diagnostics.map(function(t){
+    return '<div class="diag-card '+esc(t.severity)+'">'+
+      '<div class="diag-head"><span class="diag-title">'+esc((t.severity||'info').toUpperCase())+' · '+esc(t.code||'diagnostic')+'</span>'+
+      '<span class="diag-meta">'+esc(t.t||'—')+' · '+esc(t.source||'—')+(t.stepId?' · step '+esc(t.stepId):'')+'</span></div>'+
+      '<div class="diag-msg">'+esc(t.message||'—')+'</div>'+
+      (t.stepType||t.targetRole?'<div class="diag-hint">挂点：'+esc([t.stepType,t.targetRole].filter(Boolean).join(' · '))+'</div>':'')+
+      (t.hint?'<div class="diag-hint">'+esc(t.hint)+'</div>':'')+
+    '</div>';
+  }).join('')+'</div>';
+}
+function obsIssueView(r){
+  return '<div class="issue-box"><div class="issue-actions"><button class="ibtn" data-act="obsCopyIssue" style="height:26px">复制 issue payload</button></div>'+
+    '<pre class="issue-pre">'+esc(r.issue||'{}')+'</pre></div>';
 }
 function obsDetail(r){
   if(!r) return emptyBlock('run');
@@ -2877,18 +3037,14 @@ function obsDetail(r){
   r=d; /* 渲染映射后的详情，沿用既有结构 */
   var usage='<div class="usage-strip">'+
     usageCell('tokens',r.usage.tokens)+usageCell('steps',r.usage.steps)+usageCell('time',r.usage.time)+usageCell('cost',r.usage.cost)+'</div>';
-  var tabs=['timeline','logs','artifacts','graph'].map(function(t){
-    var lbl={timeline:'Timeline',logs:'Logs',artifacts:'Artifacts',graph:'Graph'}[t];
-    return '<button class="obs-tab'+(t===OBS_STATE.tab?' on':'')+'" data-obstab="'+t+'">'+lbl+'</button>';
-  }).join('');
+  var tabs=obsTabs(r);
   var content;
   if(OBS_STATE.tab==='timeline'){
-    content=r.timeline.length?'<div class="timeline">'+r.timeline.map(function(s){
-      var errTxt=s.err||(s.st==='failed'&&r.logs.length?r.logs[r.logs.length-1]:'');
-      return '<div class="tl-item tl-'+s.st+'"><span class="tl-time tnum">'+s.t+'</span><span class="tl-dot"></span>'+
-        '<span class="tl-body"><span class="tl-step">'+esc(s.step)+'</span>'+statusTag(s.st)+'<span class="tl-dur tnum">'+s.dur+'</span>'+
-        (errTxt?'<span class="tl-err">'+esc(errTxt)+'</span>':'')+'</span></div>';
-    }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无步骤').replace('该员工还没有执行记录。','本次 Run 尚无步骤事件。');
+    content=obsTimelineView(r);
+  } else if(OBS_STATE.tab==='steps'){
+    content=obsStepsView(r);
+  } else if(OBS_STATE.tab==='diagnostics'){
+    content=obsDiagnosticsView(r)+obsIssueView(r);
   } else if(OBS_STATE.tab==='logs'){
     content=r.logs.length?'<pre class="logs">'+r.logs.map(esc).join('\n')+'</pre>':emptyBlock('run').replace('暂无 Run','暂无日志').replace('该员工还没有执行记录。','本次 Run 尚无日志输出。');
   } else if(OBS_STATE.tab==='artifacts'){
@@ -2926,7 +3082,8 @@ function obsFilterBar(){
 }
 function viewObservatory(){
   var adminBar=(ACCOUNT&&ACCOUNT.admin)?('<div class="obs-adminbar"><span class="auth-badge admin">ADMIN</span><span class="ab-label">跨 scope 观测</span>'+
-    '<input class="ab-input" id="obs-scope-in" placeholder="email（查其 scope）或 scope id"><button class="btn" data-act="obsResolve">解析 scope</button>'+
+    '<input class="ab-input" id="obs-scope-in" placeholder="email 或 scope id"><button class="btn" data-act="obsResolve">前往</button>'+
+    '<input class="ab-input" id="obs-run-in" placeholder="完整 run id"><button class="btn" data-act="obsOpenRun">打开运行</button>'+
     '<span class="ab-hint" id="obs-resolve-hint">'+(OBS_STATE.scope&&OBS_STATE.scope!=='__all__'?'当前观测 scope：'+esc(OBS_STATE.scope)+'　<button class="ibtn" data-act="obsScopeAll" style="height:22px">全部</button>':'当前观测全部 scope（__all__）')+'</span></div>'):'';
   return {html:moduleSubHeader('observatory','<span class="inline-refresh"><i class="live-dot" style="background:var(--success)"></i> 轮询 ~3s '+srcBadge('ready')+'</span>')+
     '<div class="obs-region">'+adminBar+obsFilterBar()+
@@ -2943,6 +3100,17 @@ function bindObservatory(root){
   function selectRun(id){ OBS_STATE.selectedId=id; reList(); reDetail(); loadObsDetail(id,reDetail); }
   /* 首屏拉取真实运行列表，到达后选中首行并预取其详情 */
   loadObsRuns(function(){ reList(); reDetail(); var sel=obsSelected(); if(sel) loadObsDetail(sel.id,reDetail); });
+  if(OBS_POLL_TIMER) clearInterval(OBS_POLL_TIMER);
+  OBS_POLL_TIMER=setInterval(function(){
+    var routeParts=curParts();
+    if(document.hidden||(routeParts[0]||defaultModule())!=='observatory') return;
+    loadObsRuns().then(function(){
+      reList(); var selected=obsSelected();
+      if(!selected){ reDetail(); return; }
+      delete OBS_DETAIL[selected.id];
+      loadObsDetail(selected.id,reDetail);
+    });
+  },3000);
   root.addEventListener('click',function(ev){
     var row=ev.target.closest('[data-obsrun]'); if(row){ selectRun(row.getAttribute('data-obsrun')); return; }
     var tab=ev.target.closest('[data-obstab]'); if(tab){ OBS_STATE.tab=tab.getAttribute('data-obstab'); reDetail(); return; }
@@ -2956,6 +3124,8 @@ function bindObservatory(root){
     else if(a==='obsReloadDetail'){ var rid=act.getAttribute('data-run'); if(rid){ delete OBS_DETAIL[rid]; loadObsDetail(rid,reDetail); } }
     else if(a==='obsCopy'){ var cv=act.getAttribute('data-copy');
       copyWithToast(cv, '已复制 run id：'+cv, '复制失败，请手动选择：'+cv); }
+    else if(a==='obsCopyIssue'){ var si=obsSelected(), cd=si&&OBS_DETAIL[si.id], iv=(cd&&cd.detail&&cd.detail.issue)||'{}';
+      copyWithToast(iv, '已复制 issue payload', '复制失败，请手动选择 issue payload'); }
     else if(a==='artDl'){ var sel=obsSelected(), cache=sel&&OBS_DETAIL[sel.id], d=cache&&cache.detail;
       var art=d&&(d.artifacts||[]).filter(function(x){return x.name===act.getAttribute('data-name');})[0];
       if(art&&art.content!=null){ try{ var blob=new Blob([art.content],{type:'text/plain'}); var u=URL.createObjectURL(blob);
@@ -2982,13 +3152,20 @@ function bindObservatory(root){
         hint.style.color='var(--success)';
         loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); });
       }).catch(function(e){ hint.innerHTML='解析失败：'+esc((e&&(e.body||e.message))||'未知错误'); hint.style.color='var(--failed)'; });
+    } else if(a==='obsOpenRun'){
+      var runId=(root.querySelector('#obs-run-in')||{}).value||'', runHint=root.querySelector('#obs-resolve-hint');
+      runId=runId.trim();
+      if(!runId){ runHint.textContent='请输入完整 run id'; runHint.style.color='var(--waiting)'; return; }
+      runHint.innerHTML='正在打开 run：<b class="tnum">'+esc(obsShortRunId(runId))+'</b>'; runHint.style.color='var(--idle)';
+      obsOpenDirectRun(runId,reList,reDetail);
     }
   });
 }
 /* 复用 viewObservatory 的 adminBar 片段（用于 scope 切换后局部刷新） */
 function viewObsAdminBar(){
   return (ACCOUNT&&ACCOUNT.admin)?('<div class="obs-adminbar"><span class="auth-badge admin">ADMIN</span><span class="ab-label">跨 scope 观测</span>'+
-    '<input class="ab-input" id="obs-scope-in" placeholder="email（查其 scope）或 scope id"><button class="btn" data-act="obsResolve">解析 scope</button>'+
+    '<input class="ab-input" id="obs-scope-in" placeholder="email 或 scope id"><button class="btn" data-act="obsResolve">前往</button>'+
+    '<input class="ab-input" id="obs-run-in" placeholder="完整 run id"><button class="btn" data-act="obsOpenRun">打开运行</button>'+
     '<span class="ab-hint" id="obs-resolve-hint">'+(OBS_STATE.scope&&OBS_STATE.scope!=='__all__'?'当前观测 scope：'+esc(OBS_STATE.scope)+'　<button class="ibtn" data-act="obsScopeAll" style="height:22px">全部</button>':'当前观测全部 scope（__all__）')+'</span></div>'):'';
 }
 
@@ -3777,8 +3954,8 @@ function viewVoice(){
 /* 内嵌真页(同源共享 token);onload 注入 CSS 隐藏真页自带 .topbar(brand+suite-nav),消除与 /admin 左栏的双层导航。 */
 function embedTrim(f){ try{ var d=f.contentDocument; if(d&&d.head){ var s=d.createElement('style'); s.textContent='.topbar{display:none!important}'; d.head.appendChild(s); } }catch(e){} }
 function suiteFrame(src,title){ return '<iframe class="suite-embed" src="'+src+'" title="'+title+'" data-console-frame="1" onload="embedTrim(this)"></iframe>'; }
-/* 真页更完整的用真页(观测台全 trace/token graph、CQRS 4 面板、Studio 对话编排、Voice 真在场/WebRTC——我的预览版全 mock 不可用)→iframe;状态/技能/排班/通道保留更优本地实现。 */
-function viewObservatory(){ return {html:suiteFrame('/workflow/observatory','运行观测台')}; }
+/* CQRS/Studio/Voice 使用同源真页 iframe；运行观测台在 /admin 内保留本地实现，承载 admin run-id 直查与失败诊断。 */
+function viewObservatoryFrame(){ return {html:suiteFrame('/workflow/observatory','运行观测台')}; }
 function viewCqrs(){ if(!(ACCOUNT&&ACCOUNT.admin)) return {html:moduleSubHeader('cqrs','')+'<div class="view-scroll">'+auth403('CQRS 投影管道仅平台管理员可见。')+'</div>'}; return {html:suiteFrame('/cqrs','投影管道 CQRS')}; }
 function viewStudio(){ return {html:suiteFrame('/workflow/studio','编排工作台')}; }
 function viewVoice(){ return {html:suiteFrame('/voice','语音台')}; }
@@ -4371,7 +4548,7 @@ function bindEvents(){
          不再依赖 OBS_RUNS 是否已含该 run（看板数据在 FLEET_RUNS_BY_SCOPE，与 OBS_RUNS 是两套加载）。
          Fleet 为跨 scope __all__，强制 observatory 同口径，确保 loadObsRuns 后该 run 在列表内被选中、
          详情按其自身 scope 拉取，而非因 selectedId 未命中回落到首行。 */
-      if(rid){ OBS_STATE.selectedId=rid; OBS_STATE.scope='__all__'; }
+      if(rid){ OBS_STATE.selectedId=rid; OBS_STATE.scope='__all__'; obsUpsertRunFromDetail(rid,null); }
       navigate(['observatory'],{}); return; }
     var empEl=t.closest&&t.closest('[data-emp][data-co]');
     if(empEl){ navigate(['fleet','c',empEl.getAttribute('data-co'),'e',empEl.getAttribute('data-emp')],{}); return; }

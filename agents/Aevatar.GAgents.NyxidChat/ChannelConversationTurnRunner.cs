@@ -2609,6 +2609,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             TriggerBindingReconcile(subject);
             return null;
         }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding lacks the required aevatar service; reconciling the local binding so the sender can reauthorize. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            TriggerBindingReconcile(subject, "nyx_required_service_missing");
+            return null;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(
@@ -2621,7 +2632,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
     }
 
-    private void TriggerBindingReconcile(ExternalSubjectRef subject)
+    private void TriggerBindingReconcile(
+        ExternalSubjectRef subject,
+        string reason = "nyx_invalid_grant")
     {
         var reconciler = _bindingRevocationReconciler;
         if (reconciler is null)
@@ -2633,7 +2646,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             try
             {
                 await reconciler
-                    .ReconcileRevokedAsync(subjectSnapshot, "nyx_invalid_grant", CancellationToken.None)
+                    .ReconcileRevokedAsync(subjectSnapshot, reason, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

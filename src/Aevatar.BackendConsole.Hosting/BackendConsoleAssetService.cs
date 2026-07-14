@@ -71,6 +71,7 @@ public sealed class BackendConsoleAssetService(IOptions<BackendConsoleOptions> o
             authority = options.OidcAuthority ?? string.Empty,
             clientId = options.OidcClientId ?? string.Empty,
             scope = options.OidcScope ?? string.Empty,
+            resources = options.OidcResources ?? [],
             nyxidApi = options.NyxApiBaseUrl ?? string.Empty,
             storageKey = options.StorageKey ?? string.Empty,
             defaultReturnPath = options.DefaultReturnPath ?? string.Empty,

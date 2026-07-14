@@ -156,6 +156,33 @@ public sealed class IdentityOAuthCallbackEndpointTests
         text.Should().Contain("/whoami");
     }
 
+    [Fact]
+    public async Task MissingRequiredService_ReturnsConflictWithoutBindingDispatch()
+    {
+        var subject = SampleSubject();
+        var broker = NewBroker(subject, "unused-binding");
+        broker.ExchangeAuthorizationCodeAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<BrokerAuthorizationCodeResult>>(_ => throw new NyxIdRequiredServiceAccessException(
+                "https://nyxid.test/api/v1/proxy/s/aevatar"));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            Substitute.For<IExternalIdentityBindingQueryPort>(),
+            bindingDispatch,
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>(),
+            format: "json");
+
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        bindingDispatch.Commands.Should().BeEmpty();
+    }
+
     // Refactor (iter27/cluster-028-identity-oauth-endpoint):
     //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
     //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等

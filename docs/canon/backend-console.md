@@ -41,19 +41,33 @@ Nyx/OIDC deployment facts are host configuration, not page source:
 | `Aevatar:BackendConsole:OidcAuthority` | Browser OIDC authority; falls back to existing Nyx/Auth authority config when empty. |
 | `Aevatar:BackendConsole:OidcClientId` | Public OIDC client id used by browser PKCE. |
 | `Aevatar:BackendConsole:OidcScope` | Browser OIDC scope. |
+| `Aevatar:BackendConsole:OidcResources` | Additional RFC 8707 resource indicators. The host always includes `{OidcAuthority}/api/v1/proxy/s/aevatar`. |
 | `Aevatar:BackendConsole:NyxApiBaseUrl` | Nyx REST API base used by admin-only owner resolution. |
 | `Aevatar:BackendConsole:StorageKey` | Shared browser localStorage/sessionStorage prefix. |
 | `Aevatar:BackendConsole:DefaultReturnPath` | Safe default redirect path after `/auto/callback`. |
 
 Each configurable HTML asset contains `__BACKEND_CONSOLE_CONFIG__`. The serving helper replaces that placeholder with JSON rendered from `BackendConsoleOptions`. The six `HOST_BACKEND_CONSOLE_*` environment variables are optional overrides for host deployment, but `.refactor-loop/host.env` is not a production configuration source.
 
-The OIDC client id is a public browser client value, not a secret. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
 
 ## 3. Endpoint Boundary
 
 Backend console page endpoints are static shells. They may be anonymous because the browser page performs OIDC PKCE login and all data endpoints enforce authorization server-side.
 
 Static shell endpoint files must not introduce mutating data APIs. Data surfaces stay in their existing API endpoint files, with their existing authorization and audit rules. Adding a new console page means adding the asset, declaring it as an embedded resource, mapping a GET shell route, and extending the guard inventory.
+
+Workflow Observatory data endpoints are read-only. Normal run detail reads remain scope-bound under
+`GET /api/workflow/observatory/runs/{runId}` and `GET /api/workflow/observatory/runs/{runId}/graph`.
+Aevatar admins resolved by `IPlatformAdminAuthorizer` may use
+`GET /api/workflow/observatory/admin/runs/{runId}` and
+`GET /api/workflow/observatory/admin/runs/{runId}/graph` to resolve a known run id across scopes. These admin
+drilldown endpoints still read only workflow current-state/readmodel artifacts; they do not replay events, prime
+projections, or dispatch actor commands.
+
+Run detail responses expose `diagnostics` assembled from the committed workflow current-state snapshot and the
+materialized run-report artifact. Diagnostics are query-time explanations for operators; they are not durable log
+entries or deletion tombstones and must not be presented as either. Admin controls accept a run id through an
+explicit run-id input. The browser must not infer run identity from actor-id prefixes or delimiters.
 
 ## 4. Governance
 

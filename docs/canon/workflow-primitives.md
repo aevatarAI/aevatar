@@ -659,6 +659,25 @@ steps:
       on_error: "continue"
 ```
 
+### `execute_codex`
+
+- 作用：通过 NyxID 现有 SSH service/node 路由，在目标主机上执行一次已安装的 Codex CLI 任务；不使用 Aevatar CLI connector，也不读取 `~/.aevatar/connectors.json`。
+- 语义：这是 `tool_call` 的窄语法糖；解析后 canonical type 为 `tool_call` 并固定 `tool=execute_codex`，因此复用 `ToolCallModule` 的 side-effect ledger、审批挂起与 durable resume 链路。
+- 路由：`service` 是 NyxID SSH 类型 UserService 的 slug/UUID，不是裸 `node_id`。NyxID 把 service 解析为 catalog SSH service，再通过该 service 的 node binding 路由。若 Codex 装在 node 机器本身，SSH service 必须指向该机器并绑定该 node。
+- 输入：工具只接受 `service`、`principal`、`prompt` 与可选 `timeout_secs`。prompt 会在 Aevatar 内编码后，由固定的 `codex exec -` 命令通过 stdin 提交，workflow 不能追加 shell/Codex flags。
+- 配置：Codex 安装、登录态、model、sandbox、approval policy 与其他 Codex 行为由目标 SSH principal 的 node-local Codex 配置负责；进程工作目录由该 SSH 账号/目标主机部署负责。Aevatar 和 NyxID 不选择 Codex Pro 或任何模型。
+- 边界：NyxID SSH exec 最长 `300s`，prompt 最多 `6000` UTF-8 bytes，stdout/stderr 各最多 `1MiB`。预计超过五分钟的任务使用 `workflows/codex_long_running_handoff.yaml` 的 submit/callback continuation 模式。
+- 安全：`execute_codex` 与 `ssh_exec` 一起受 `NyxIdToolOptions.EnableSshExecTool` 和同一审批策略控制。目标主机应是专用 sandbox；不要在 workflow YAML 中携带 Codex token、`CODEX_HOME`、model 或 sandbox bypass 参数。
+
+```yaml
+steps:
+  - id: implement_change
+    type: execute_codex
+    timeout_ms: 320000
+    parameters:
+      arguments: '{"service":"${json(input.service)}","principal":"${json(input.principal)}","prompt":"${json(input.prompt)}","timeout_secs":300}'
+```
+
 ```yaml
 steps:
   - id: get_health

@@ -467,6 +467,7 @@ const CFG = {
   authority: BACKEND_CONSOLE_CONFIG.authority || "",
   clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
   scope: BACKEND_CONSOLE_CONFIG.scope || "",
+  resources: Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [],
   redirectUri: location.origin + "/auto/callback",
   storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
 };
@@ -498,6 +499,7 @@ async function beginLogin(){
   u.searchParams.set("client_id", CFG.clientId);
   u.searchParams.set("redirect_uri", CFG.redirectUri);
   u.searchParams.set("scope", CFG.scope);
+  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
   u.searchParams.set("state", st);
   u.searchParams.set("code_challenge", challenge);
   u.searchParams.set("code_challenge_method", "S256");
@@ -518,6 +520,7 @@ async function completeLoginIfCallback(){
   form.set("redirect_uri", CFG.redirectUri);
   form.set("client_id", CFG.clientId);
   form.set("code_verifier", pending.verifier);
+  CFG.resources.forEach(resource => form.append("resource", resource));
   const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
   sessionStorage.removeItem(PKCE_KEY);
   if(!res.ok){ console.warn("studio: token exchange failed", res.status); return false; }
