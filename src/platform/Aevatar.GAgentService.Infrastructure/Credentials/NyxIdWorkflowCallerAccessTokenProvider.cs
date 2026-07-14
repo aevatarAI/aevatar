@@ -1,7 +1,7 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Credentials;
+using Aevatar.Workflow.Abstractions.Credentials;
 
 namespace Aevatar.GAgentService.Infrastructure.Credentials;
 

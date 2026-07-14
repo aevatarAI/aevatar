@@ -1,9 +1,11 @@
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Credentials;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Credentials;
+using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
@@ -14,14 +16,12 @@ public sealed class NyxIdWorkflowCallerAccessTokenProviderTests
     public async Task IssueAsync_WithoutBroker_ShouldComposeAndFailClosedWhenTokenIsRequested()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IWorkflowCallerAccessTokenProvider, NyxIdWorkflowCallerAccessTokenProvider>();
+        services.AddGAgentServiceCapability(new ConfigurationBuilder().Build());
 
-        using var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
-        {
-            ValidateOnBuild = true,
-            ValidateScopes = true,
-        });
+        using var serviceProvider = services.BuildServiceProvider();
         var provider = serviceProvider.GetRequiredService<IWorkflowCallerAccessTokenProvider>();
+
+        provider.Should().BeOfType<NyxIdWorkflowCallerAccessTokenProvider>();
 
         var act = () => provider.IssueAsync(new WorkflowCallerNyxIdAuthority
         {
@@ -72,6 +72,23 @@ public sealed class NyxIdWorkflowCallerAccessTokenProviderTests
         await act.Should().ThrowAsync<ArgumentException>();
     }
 
+    [Fact]
+    public async Task IssueAsync_ShouldFailClosed_WhenBrokerReturnsWhitespaceToken()
+    {
+        var provider = new NyxIdWorkflowCallerAccessTokenProvider(new EmptyTokenCapabilityBroker());
+
+        var act = () => provider.IssueAsync(new WorkflowCallerNyxIdAuthority
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-1",
+            ExternalUserId = "user-1",
+            Scope = "invoke",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*returned an empty access token*");
+    }
+
     private sealed class RotatingCapabilityBroker : INyxIdCapabilityBroker
     {
         public List<(ExternalSubjectRef Subject, CapabilityScope Scope)> Requests { get; } = [];
@@ -97,6 +114,30 @@ public sealed class NyxIdWorkflowCallerAccessTokenProviderTests
                 ExpiresAtUnix = sequence,
             });
         }
+
+        public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            IssueShortLivedAsync(externalSubject, scope, ct);
+    }
+
+    private sealed class EmptyTokenCapabilityBroker : INyxIdCapabilityBroker
+    {
+        public Task<BindingChallenge> StartExternalBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task RevokeBindingAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            Task.FromResult(new CapabilityHandle { AccessToken = "   " });
 
         public Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
             ExternalSubjectRef externalSubject,

@@ -1,5 +1,5 @@
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Credentials;
+using Aevatar.Workflow.Abstractions.Credentials;
 
 namespace Aevatar.Workflow.Core.Execution;
 

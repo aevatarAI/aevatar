@@ -1,6 +1,4 @@
-using Aevatar.Workflow.Abstractions;
-
-namespace Aevatar.Workflow.Application.Abstractions.Credentials;
+namespace Aevatar.Workflow.Abstractions.Credentials;
 
 public interface IWorkflowCallerAccessTokenProvider
 {
