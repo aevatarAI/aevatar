@@ -10,6 +10,7 @@ using NSubstitute;
 using Xunit;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Authorization;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -105,10 +106,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"list"}""");
@@ -140,10 +138,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(callerScopeResolver);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
         try
         {
             var result = await tool.ExecuteAsync("""{"action":"upsert"}""");
@@ -185,10 +180,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton<ISecretVault>(secretVault);
         var tool = CreateTool(services);
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -212,9 +204,11 @@ public sealed class AgentDeliveryTargetToolTests
 
             issuer.Issues.Should().ContainSingle();
             issuer.Issues[0].AgentId.Should().Be("aelf-twitter-approval");
-            issuer.Issues[0].ServiceSlugs.PrimaryOutboundSlug.Should().Be("api-lark-bot-2");
-            issuer.Issues[0].ServiceSlugs.RequiresOrnnService.Should().BeFalse();
-            issuer.Issues[0].SkillName.Should().BeEmpty();
+            issuer.Issues[0].Plan.Owner.OwnerSubject.Should().Be("user-1");
+            issuer.Issues[0].Plan.NyxIdServiceGrants.Should().ContainSingle()
+                .Which.UserServiceId.Should().Be("svc-lark-2");
+            issuer.Issues[0].Plan.CredentialPolicy.AllowAllServices.Should().BeFalse();
+            issuer.Issues[0].Plan.CredentialPolicy.AllowAllNodes.Should().BeFalse();
 
             captured.Should().NotBeNull();
             captured!.AgentId.Should().Be("aelf-twitter-approval");
@@ -267,12 +261,10 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), new RecordingApiKeyIssuer());
+        var tool = new AgentDeliveryTargetTool(
+            queryPort, commandPort, resolver, new InMemorySecretVault(), new RecordingApiKeyIssuer(), CreatePlanner());
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -318,12 +310,10 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
+        var tool = new AgentDeliveryTargetTool(
+            queryPort, commandPort, resolver, new InMemorySecretVault(), issuer, CreatePlanner());
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -369,12 +359,10 @@ public sealed class AgentDeliveryTargetToolTests
             commandPort,
             resolver,
             new InMemorySecretVault(),
-            new RecordingApiKeyIssuer());
+            new RecordingApiKeyIssuer(),
+            CreatePlanner());
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
         try
         {
             var result = await tool.ExecuteAsync("""
@@ -414,12 +402,10 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
+        var tool = new AgentDeliveryTargetTool(
+            queryPort, commandPort, resolver, new InMemorySecretVault(), issuer, CreatePlanner());
 
-        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
-        {
-            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
-        });
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
         try
         {
             var act = () => tool.ExecuteAsync("""
@@ -1281,8 +1267,18 @@ public sealed class AgentDeliveryTargetToolTests
             provider.GetService<IUserAgentCatalogCommandPort>() ?? Substitute.For<IUserAgentCatalogCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
-            provider.GetService<IScheduledAgentApiKeyIssuer>());
+            provider.GetService<IScheduledAgentApiKeyIssuer>(),
+            provider.GetService<IScheduledInvocationAuthorizationPlanner>() ?? CreatePlanner());
     }
+
+    private static AgentToolExecutionContext CreateAuthenticatedContext(string nyxUserId) =>
+        AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("session-token", "session-token", null),
+            Caller = new AgentToolCallerContext("scope-alpha", nyxUserId, "message-alpha"),
+            Channel = new AgentToolChannelContext("nyxid", nyxUserId, "tenant-alpha", "message-alpha", null),
+            SenderBinding = new AgentToolSenderBindingContext("binding-alpha", nyxUserId, "tenant-alpha"),
+        };
 
     private static IServiceCollection CreateDefaultServices()
     {
@@ -1320,13 +1316,12 @@ public sealed class AgentDeliveryTargetToolTests
 
         public Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
             string token,
-            ScheduledAgentServiceSlugs serviceSlugs,
-            string agentId,
-            string skillName,
-            string? scopeId,
+            ScheduledInvocationAuthorizationPlan plan,
+            string credentialName,
             CancellationToken ct)
         {
-            Issues.Add(new IssueCall(token, serviceSlugs, agentId, skillName, scopeId));
+            var agentId = plan.InvocationTarget.Lark.ScheduledAgentId;
+            Issues.Add(new IssueCall(token, plan.Clone(), credentialName));
             return Task.FromResult(ScheduledAgentApiKeyIssueResult.Succeeded($"key-{agentId}", "secret-created-key"));
         }
 
@@ -1345,8 +1340,32 @@ public sealed class AgentDeliveryTargetToolTests
 
     private sealed record IssueCall(
         string Token,
-        ScheduledAgentServiceSlugs ServiceSlugs,
-        string AgentId,
-        string SkillName,
-        string? ScopeId);
+        ScheduledInvocationAuthorizationPlan Plan,
+        string CredentialName)
+    {
+        public string AgentId => Plan.InvocationTarget.Lark.ScheduledAgentId;
+    }
+
+    private static IScheduledInvocationAuthorizationPlanner CreatePlanner() =>
+        new ScheduledInvocationAuthorizationPlanner(new DeliveryTargetSnapshotQueryPort());
+
+    private sealed class DeliveryTargetSnapshotQueryPort : INyxIdCatalogSnapshotQueryPort
+    {
+        public Task<NyxIdCatalogSnapshot?> GetAsync(NyxIdCatalogOwnerIdentity owner, CancellationToken ct = default)
+        {
+            var now = DateTimeOffset.UtcNow;
+            return Task.FromResult<NyxIdCatalogSnapshot?>(new NyxIdCatalogSnapshot(
+                owner.Clone(),
+                23,
+                now,
+                now.AddMinutes(10),
+                "catalog-r23",
+                "catalog-digest-r23",
+                [
+                    new NyxIdServiceGrant { UserServiceId = "svc-lark", ServiceSlug = "api-lark-bot", NodeGrantsNotRequired = true },
+                    new NyxIdServiceGrant { UserServiceId = "svc-lark-2", ServiceSlug = "api-lark-bot-2", NodeGrantsNotRequired = true },
+                    new NyxIdServiceGrant { UserServiceId = "svc-email", ServiceSlug = "api-email-outbound", NodeGrantsNotRequired = true },
+                ]));
+        }
+    }
 }

@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Authorization;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
@@ -13,6 +14,8 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _mapper;
     private readonly ScheduledAgentApiKeyIssuer _apiKeyIssuer;
+    private readonly IScheduledInvocationAuthorizationPlanner _authorizationPlanner;
+    private readonly ScheduledAgentCreatorOptions _options;
     private readonly ILogger<ScheduledAgentCreatorTool>? _logger;
 
     internal ScheduledAgentCreatorTool(
@@ -20,12 +23,16 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper mapper,
         ScheduledAgentApiKeyIssuer apiKeyIssuer,
+        IScheduledInvocationAuthorizationPlanner? authorizationPlanner = null,
+        ScheduledAgentCreatorOptions? options = null,
         ILogger<ScheduledAgentCreatorTool>? logger = null)
     {
         _scheduledWorkflowAgentCreationPort = scheduledWorkflowAgentCreationPort ?? throw new ArgumentNullException(nameof(scheduledWorkflowAgentCreationPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _apiKeyIssuer = apiKeyIssuer ?? throw new ArgumentNullException(nameof(apiKeyIssuer));
+        _authorizationPlanner = authorizationPlanner ?? UnavailableAuthorizationPlanner.Instance;
+        _options = options ?? new ScheduledAgentCreatorOptions();
         _logger = logger;
     }
 
@@ -182,7 +189,25 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         if (!plan.Success)
             return plan.ErrorJson ?? """{"error":"validation_error"}""";
 
-        var key = await _apiKeyIssuer.IssueAsync(token, plan.ServiceSlugs!, agentId, plan.Request!.Reference.Name, plan.Request!.ScopeId, ct);
+        var authorizationRequest = BuildAuthorizationRequest(plan, caller, agentId);
+        if (authorizationRequest is null)
+            return """{"error":"authenticated_owner_context_unavailable"}""";
+
+        var authorization = await _authorizationPlanner.PlanAsync(authorizationRequest, ct);
+        if (!authorization.Success)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = authorization.FailureCode.ToString(),
+                detail = authorization.Detail,
+            });
+        }
+
+        var key = await _apiKeyIssuer.IssueAsync(
+            token,
+            authorization.Plan!,
+            $"aevatar-scheduled-agent-{agentId}",
+            ct);
         if (!key.Success)
             return key.ToErrorJson();
 
@@ -212,5 +237,80 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             api_key_id = key.ApiKeyId,
             note = "Scheduled agent create accepted for dispatch. Use agent_builder agent_status to observe projection state.",
         });
+    }
+
+    private ScheduledInvocationAuthorizationRequest? BuildAuthorizationRequest(
+        ScheduledAgentCreatePlanResult plan,
+        OwnerScope caller,
+        string agentId)
+    {
+        var request = plan.Request!;
+        var serviceSlugs = plan.ServiceSlugs!;
+        var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
+        var ownerSubject = Normalize(AgentToolRequestContext.SenderNyxUserId) ?? Normalize(caller.NyxUserId);
+        var subjectPlatform = Normalize(caller.Platform);
+        var subjectExternalUserId = Normalize(caller.SenderId);
+        if (bindingId is null || ownerSubject is null || subjectPlatform is null || subjectExternalUserId is null ||
+            _options.ApiKeyLifetimeDays <= 0)
+        {
+            return null;
+        }
+
+        var requiredSlugs = new List<string>();
+        if (serviceSlugs.RequiresOrnnService)
+            requiredSlugs.Add(Normalize(_options.OrnnServiceSlug) ?? ScheduledAgentCreatorOptions.DefaultOrnnServiceSlug);
+        requiredSlugs.Add(serviceSlugs.PrimaryOutboundSlug);
+        if (!string.IsNullOrWhiteSpace(serviceSlugs.FailureNotificationSlug))
+            requiredSlugs.Add(serviceSlugs.FailureNotificationSlug);
+        requiredSlugs.AddRange(serviceSlugs.RequiredServiceSlugs);
+
+        var now = DateTimeOffset.UtcNow;
+        return new ScheduledInvocationAuthorizationRequest(
+            new ScheduledInvocationTarget
+            {
+                Lark = new LarkScheduledInvocationTarget
+                {
+                    ScopeId = request.ScopeId,
+                    ScheduledAgentId = agentId,
+                    ConversationId = request.ConversationId,
+                    SkillName = request.Reference.Name,
+                },
+            },
+            new AuthenticatedNyxIdOwnerContext
+            {
+                Owner = new NyxIdCatalogOwnerIdentity
+                {
+                    Authority = "nyxid",
+                    OwnerKind = NyxIdCatalogOwnerKind.Personal,
+                    OwnerSubject = ownerSubject,
+                },
+                SubjectPlatform = subjectPlatform,
+                SubjectTenant = Normalize(caller.RegistrationScopeId) ?? string.Empty,
+                SubjectExternalUserId = subjectExternalUserId,
+                VerifiedBindingId = bindingId,
+            },
+            [],
+            new ScheduledInvocationAuthorizationAuthority(),
+            now.AddDays(_options.ApiKeyLifetimeDays),
+            now)
+        {
+            RequiredNyxIdServiceSlugs = requiredSlugs,
+            ServiceGrantsNotRequired = requiredSlugs.Count == 0,
+        };
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed class UnavailableAuthorizationPlanner : IScheduledInvocationAuthorizationPlanner
+    {
+        public static readonly UnavailableAuthorizationPlanner Instance = new();
+
+        public Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
+            ScheduledInvocationAuthorizationRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(ScheduledInvocationAuthorizationPlanResult.Failed(
+                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                "scheduled_invocation_authorization_planner_unavailable"));
     }
 }

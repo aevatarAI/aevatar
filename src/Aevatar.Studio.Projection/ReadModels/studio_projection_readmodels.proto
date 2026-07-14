@@ -5,6 +5,39 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
+message NyxIdCatalogSnapshotCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string authority = 10;
+  int32 owner_kind = 11;
+  string owner_subject = 12;
+  repeated NyxIdCatalogSnapshotServiceReadModel services = 13;
+  google.protobuf.Timestamp observed_at = 14;
+  google.protobuf.Timestamp fresh_until = 15;
+  string external_revision = 16;
+  string content_digest = 17;
+  bool invalidated = 18;
+  string invalidation_reason = 19;
+}
+
+message NyxIdCatalogSnapshotServiceReadModel {
+  string user_service_id = 1;
+  string display_name = 2;
+  repeated NyxIdCatalogSnapshotNodeReadModel nodes = 3;
+  bool node_grants_not_required = 4;
+  bool reachable = 5;
+  string service_slug = 6;
+}
+
+message NyxIdCatalogSnapshotNodeReadModel {
+  string node_id = 1;
+  string display_name = 2;
+  bool primary = 3;
+}
+
 // ─── Workflow Board Execution Materialized View ───
 //
 // Studio owns the workflow board product surface. The authoritative facts

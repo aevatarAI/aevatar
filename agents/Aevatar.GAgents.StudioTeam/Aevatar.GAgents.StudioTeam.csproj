@@ -21,5 +21,6 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="studio_team_messages.proto" GrpcServices="None" />
+    <Protobuf Include="nyxid_catalog_snapshot.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

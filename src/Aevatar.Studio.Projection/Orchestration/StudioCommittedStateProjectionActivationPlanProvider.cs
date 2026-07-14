@@ -30,6 +30,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(StudioMemberGAgent)] = StudioMemberGAgent.ProjectionKind,
             [typeof(StudioMemberBindingRunGAgent)] = StudioMemberBindingRunGAgent.ProjectionKind,
             [typeof(StudioTeamGAgent)] = StudioTeamGAgent.ProjectionKind,
+            [typeof(NyxIdCatalogSnapshotGAgent)] = NyxIdCatalogSnapshotGAgent.ProjectionKind,
             [typeof(StudioWorkspaceGAgent)] = StudioWorkspaceGAgent.ProjectionKind,
         };
 

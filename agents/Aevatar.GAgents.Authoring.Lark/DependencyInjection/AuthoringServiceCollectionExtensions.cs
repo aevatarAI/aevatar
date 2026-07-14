@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -54,6 +55,8 @@ public static class AuthoringServiceCollectionExtensions
             sp.GetRequiredService<ICallerScopeResolver>(),
             sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
             sp.GetRequiredService<ScheduledAgentApiKeyIssuer>(),
+            sp.GetRequiredService<IScheduledInvocationAuthorizationPlanner>(),
+            sp.GetRequiredService<ScheduledAgentCreatorOptions>(),
             sp.GetService<ILogger<AgentBuilderTool>>(),
             sp.GetService<ILogger<ScheduledAgentCreatorTool>>());
 }

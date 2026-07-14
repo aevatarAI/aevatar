@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Authorization;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
@@ -20,6 +21,8 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _scheduledAgentMapper;
     private readonly ScheduledAgentApiKeyIssuer _scheduledAgentApiKeyIssuer;
+    private readonly IScheduledInvocationAuthorizationPlanner _scheduledInvocationAuthorizationPlanner;
+    private readonly ScheduledAgentCreatorOptions _scheduledAgentCreatorOptions;
     private readonly ILogger<AgentBuilderTool>? _toolLogger;
     private readonly ILogger<ScheduledAgentCreatorTool>? _creatorToolLogger;
 
@@ -33,6 +36,8 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper scheduledAgentMapper,
         ScheduledAgentApiKeyIssuer scheduledAgentApiKeyIssuer,
+        IScheduledInvocationAuthorizationPlanner? scheduledInvocationAuthorizationPlanner = null,
+        ScheduledAgentCreatorOptions? scheduledAgentCreatorOptions = null,
         ILogger<AgentBuilderTool>? toolLogger = null,
         ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null)
     {
@@ -45,6 +50,8 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _scheduledAgentMapper = scheduledAgentMapper ?? throw new ArgumentNullException(nameof(scheduledAgentMapper));
         _scheduledAgentApiKeyIssuer = scheduledAgentApiKeyIssuer ?? throw new ArgumentNullException(nameof(scheduledAgentApiKeyIssuer));
+        _scheduledInvocationAuthorizationPlanner = scheduledInvocationAuthorizationPlanner ?? UnavailableAuthorizationPlanner.Instance;
+        _scheduledAgentCreatorOptions = scheduledAgentCreatorOptions ?? new ScheduledAgentCreatorOptions();
         _toolLogger = toolLogger;
         _creatorToolLogger = creatorToolLogger;
     }
@@ -68,8 +75,22 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _callerScopeResolver,
                 _scheduledAgentMapper,
                 _scheduledAgentApiKeyIssuer,
+                _scheduledInvocationAuthorizationPlanner,
+                _scheduledAgentCreatorOptions,
                 _creatorToolLogger),
         ];
         return Task.FromResult(tools);
+    }
+
+    private sealed class UnavailableAuthorizationPlanner : IScheduledInvocationAuthorizationPlanner
+    {
+        public static readonly UnavailableAuthorizationPlanner Instance = new();
+
+        public Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
+            ScheduledInvocationAuthorizationRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(ScheduledInvocationAuthorizationPlanResult.Failed(
+                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                "scheduled_invocation_authorization_planner_unavailable"));
     }
 }

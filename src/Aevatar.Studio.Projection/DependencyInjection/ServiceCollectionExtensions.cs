@@ -18,6 +18,7 @@ using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Workspace;
+using Aevatar.Studio.Application.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -127,6 +128,10 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
+            NyxIdCatalogSnapshotCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
             StudioWorkspaceCurrentStateProjector>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberCreatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberImplementationUpdatedAuditTranslator>());
@@ -205,6 +210,10 @@ public static class ServiceCollectionExtensions
             StudioTeamCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<NyxIdCatalogSnapshotCurrentStateDocument>,
+            NyxIdCatalogSnapshotCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<StudioWorkspaceCurrentStateDocument>,
             StudioWorkspaceCurrentStateDocumentMetadataProvider>();
 
@@ -229,6 +238,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
         services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
         services.TryAddSingleton<IStudioWorkspaceQueryPort, ProjectionStudioWorkspaceQueryPort>();
+        services.TryAddSingleton<INyxIdCatalogSnapshotQueryPort, ProjectionNyxIdCatalogSnapshotQueryPort>();
 
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();

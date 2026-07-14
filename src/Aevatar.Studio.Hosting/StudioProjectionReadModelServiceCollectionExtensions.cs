@@ -60,6 +60,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<StudioMemberCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<NyxIdCatalogSnapshotCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioWorkspaceCurrentStateDocument>(services, configuration);
         }
         else
@@ -78,6 +79,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StudioMemberCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
+            RegisterInMemory<NyxIdCatalogSnapshotCurrentStateDocument>(services);
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
         }
 
@@ -154,6 +156,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<NyxIdCatalogSnapshotCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind);
     }
 
@@ -203,6 +206,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StudioMemberState.Descriptor,
             StudioMemberBindingRunState.Descriptor,
             StudioTeamState.Descriptor,
+            NyxIdCatalogSnapshotState.Descriptor,
             StudioWorkspaceState.Descriptor);
     }
 

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Application.Authorization;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
@@ -86,6 +87,13 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
                 "caller_subject_unavailable",
                 "owner subject is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
         }
+        var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
+        var nyxUserId = Normalize(AgentToolRequestContext.SenderNyxUserId) ?? ownerSubject;
+        var subjectPlatform = Normalize(AgentToolRequestContext.ChannelPlatform) ?? "nyxid";
+        var subjectExternalUserId = Normalize(AgentToolRequestContext.ChannelSenderId) ?? ownerSubject;
+        if (bindingId is null && !string.Equals(subjectPlatform, "nyxid", StringComparison.Ordinal))
+            return ErrorJson("authenticated_owner_context_unavailable", "A verified NyxID binding is required to authorize a Team schedule.");
+        bindingId ??= $"nyxid:{nyxUserId}";
 
         ScheduleStudioMemberWorkflowArguments? args;
         try
@@ -121,7 +129,20 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
             MemberId: memberId,
             ScheduleCron: scheduleCron,
             ScheduleTimezone: scheduleTimezone,
-            CallerSubjectExternalUserId: ownerSubject)
+            AuthenticatedOwner: new AuthenticatedNyxIdOwnerContext
+            {
+                Owner = new NyxIdCatalogOwnerIdentity
+                {
+                    Authority = "nyxid",
+                    OwnerKind = NyxIdCatalogOwnerKind.Personal,
+                    OwnerSubject = nyxUserId,
+                },
+                SubjectPlatform = subjectPlatform,
+                SubjectTenant = Normalize(AgentToolRequestContext.ChannelRegistrationScopeId) ?? string.Empty,
+                SubjectExternalUserId = subjectExternalUserId,
+                VerifiedBindingId = bindingId,
+            },
+            CredentialExpiresAtUtc: DateTimeOffset.UtcNow.AddDays(30))
         {
             Prompt = Normalize(args.Prompt),
             DisplayName = Normalize(args.DisplayName),
@@ -129,7 +150,10 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
 
         try
         {
-            var result = await _schedulePort.EnsureAsync(request, ct);
+            var preflight = await _schedulePort.PreflightAsync(request, ct);
+            if (!preflight.Success)
+                return ErrorJson(preflight.FailureCode.ToString(), preflight.Detail);
+            var result = await _schedulePort.CreateAsync(request, preflight.Plan!.PermissionDigest, ct);
             return JsonSerializer.Serialize(
                 new ScheduleStudioMemberWorkflowResultJson(
                     Success: result.Success,

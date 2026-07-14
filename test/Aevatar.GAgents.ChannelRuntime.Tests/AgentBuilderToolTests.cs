@@ -21,6 +21,7 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.Platform.Lark;
+using Aevatar.Studio.Application.Authorization;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -1755,6 +1756,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(existingNotificationPort);
         services.AddSingleton<LarkMessageComposer>();
         services.AddSingleton(callerScopeResolver);
+        services.AddSingleton(Substitute.For<IScheduledInvocationAuthorizationPlanner>());
 
         services.AddLarkAgentAuthoring();
         services.AddLarkAgentAuthoring();

@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Authorization;
 
 namespace Aevatar.AI.ToolProviders.AgentCatalog;
 
@@ -30,19 +31,22 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ISecretVault _secretVault;
     private readonly IScheduledAgentApiKeyIssuer? _apiKeyIssuer;
+    private readonly IScheduledInvocationAuthorizationPlanner? _authorizationPlanner;
 
     public AgentDeliveryTargetTool(
         IUserAgentCatalogQueryPort queryPort,
         IUserAgentCatalogCommandPort commandPort,
         ICallerScopeResolver callerScopeResolver,
         ISecretVault secretVault,
-        IScheduledAgentApiKeyIssuer? apiKeyIssuer = null)
+        IScheduledAgentApiKeyIssuer? apiKeyIssuer = null,
+        IScheduledInvocationAuthorizationPlanner? authorizationPlanner = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
         _apiKeyIssuer = apiKeyIssuer;
+        _authorizationPlanner = authorizationPlanner;
     }
 
     public string Name => "agent_delivery_targets";
@@ -123,7 +127,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         {
             return action switch
             {
-                "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _secretVault, _apiKeyIssuer, token, caller, root, ct),
+                "create" => await CreateAsync(_queryPort, _commandPort, _callerScopeResolver, _secretVault, _apiKeyIssuer, _authorizationPlanner, token, caller, root, ct),
                 "upsert" => await UpsertAsync(_queryPort, _commandPort, caller, root, ct),
                 "delete" => await DeleteAsync(_queryPort, _commandPort, _apiKeyIssuer, token, caller, root, ct),
                 _ => await ListAsync(_queryPort, caller, ct),
@@ -139,12 +143,13 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         ICallerScopeResolver callerScopeResolver,
         ISecretVault secretVault,
         IScheduledAgentApiKeyIssuer? apiKeyIssuer,
+        IScheduledInvocationAuthorizationPlanner? authorizationPlanner,
         string token,
         OwnerScope caller,
         JsonElement args,
         CancellationToken ct)
     {
-        if (apiKeyIssuer is null)
+        if (apiKeyIssuer is null || authorizationPlanner is null)
         {
             return JsonSerializer.Serialize(new
             {
@@ -197,16 +202,56 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         }
 
         var keyScopeId = keyScope.RegistrationScopeId;
+        var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
+        var ownerSubject = Normalize(AgentToolRequestContext.SenderNyxUserId) ?? Normalize(keyScope.NyxUserId);
+        var subjectPlatform = Normalize(AgentToolRequestContext.Current?.Channel.Platform) ?? Normalize(keyScope.Platform);
+        var subjectExternalUserId = Normalize(AgentToolRequestContext.Current?.Channel.SenderId) ??
+                                    Normalize(keyScope.SenderId) ?? ownerSubject;
+        if (bindingId is null || ownerSubject is null || subjectPlatform is null || subjectExternalUserId is null)
+        {
+            return JsonSerializer.Serialize(new { error = "authenticated_owner_context_unavailable" });
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var authorization = await authorizationPlanner.PlanAsync(
+            new ScheduledInvocationAuthorizationRequest(
+                new ScheduledInvocationTarget
+                {
+                    Lark = new LarkScheduledInvocationTarget
+                    {
+                        ScopeId = keyScopeId,
+                        ScheduledAgentId = deliveryTargetId.value!,
+                        ConversationId = conversationId.value!,
+                    },
+                },
+                new AuthenticatedNyxIdOwnerContext
+                {
+                    Owner = new NyxIdCatalogOwnerIdentity
+                    {
+                        Authority = "nyxid",
+                        OwnerKind = NyxIdCatalogOwnerKind.Personal,
+                        OwnerSubject = ownerSubject,
+                    },
+                    SubjectPlatform = subjectPlatform,
+                    SubjectTenant = keyScopeId,
+                    SubjectExternalUserId = subjectExternalUserId,
+                    VerifiedBindingId = bindingId,
+                },
+                [],
+                new ScheduledInvocationAuthorizationAuthority(),
+                now.AddDays(90),
+                now)
+            {
+                RequiredNyxIdServiceSlugs = [nyxProviderSlug.value!],
+            },
+            ct);
+        if (!authorization.Success)
+            return JsonSerializer.Serialize(new { error = authorization.FailureCode.ToString(), detail = authorization.Detail });
+
         var key = await apiKeyIssuer.IssueAsync(
             token,
-            new ScheduledAgentServiceSlugs(
-                nyxProviderSlug.value!,
-                FailureNotificationSlug: null,
-                RequiredServiceSlugs: [],
-                RequiresOrnnService: false),
-            deliveryTargetId.value!,
-            skillName: string.Empty,
-            scopeId: keyScopeId,
+            authorization.Plan!,
+            $"aevatar-delivery-target-{deliveryTargetId.value}",
             ct);
         if (!key.Success)
             return key.ToErrorJson();

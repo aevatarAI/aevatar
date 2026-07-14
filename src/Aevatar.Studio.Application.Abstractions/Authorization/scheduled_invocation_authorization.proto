@@ -1,0 +1,111 @@
+syntax = "proto3";
+package aevatar.studio.authorization;
+option csharp_namespace = "Aevatar.Studio.Application.Authorization";
+
+import "google/protobuf/timestamp.proto";
+
+enum NyxIdCatalogOwnerKind {
+  NYX_ID_CATALOG_OWNER_KIND_UNSPECIFIED = 0;
+  NYX_ID_CATALOG_OWNER_KIND_PERSONAL = 1;
+  NYX_ID_CATALOG_OWNER_KIND_ORGANIZATION = 2;
+}
+
+enum ScheduledInvocationAuthorizationFailureCode {
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_UNSPECIFIED = 0;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SNAPSHOT_NOT_FOUND = 1;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SNAPSHOT_STALE = 2;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_OWNER_MISMATCH = 3;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SERVICE_NOT_FOUND = 4;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NODE_GRANT_MISSING = 5;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_AUTHORIZATION_PLAN_CHANGED = 6;
+}
+
+message NyxIdCatalogOwnerIdentity {
+  string authority = 1;
+  NyxIdCatalogOwnerKind owner_kind = 2;
+  string owner_subject = 3;
+}
+
+message StudioScheduledInvocationTarget {
+  string scope_id = 1;
+  string team_id = 2;
+  string member_id = 3;
+  string published_service_id = 4;
+  string workflow_id = 5;
+  string workflow_revision = 6;
+}
+
+message LarkScheduledInvocationTarget {
+  string scope_id = 1;
+  string scheduled_agent_id = 2;
+  string conversation_id = 3;
+  string skill_name = 4;
+}
+
+message ScheduledInvocationTarget {
+  oneof target {
+    StudioScheduledInvocationTarget studio = 1;
+    LarkScheduledInvocationTarget lark = 2;
+  }
+}
+
+message AuthenticatedNyxIdOwnerContext {
+  NyxIdCatalogOwnerIdentity owner = 1;
+  string subject_platform = 2;
+  string subject_tenant = 3;
+  string subject_external_user_id = 4;
+  string verified_binding_id = 5;
+}
+
+message NyxIdNodeGrant {
+  string node_id = 1;
+  string display_name = 2;
+  bool primary = 3;
+}
+
+message NyxIdServiceGrant {
+  string user_service_id = 1;
+  string display_name = 2;
+  repeated NyxIdNodeGrant node_grants = 3;
+  bool node_grants_not_required = 4;
+  string service_slug = 5;
+}
+
+message ScheduledInvocationCredentialPolicy {
+  string scopes = 1;
+  bool allow_all_services = 2;
+  bool allow_all_nodes = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string policy_version = 5;
+  bool service_grants_not_required = 6;
+}
+
+message ScheduledInvocationAuthorizationAuthority {
+  int64 member_state_version = 1;
+  int64 workflow_state_version = 2;
+  int64 connector_state_version = 3;
+  int64 owner_llm_state_version = 4;
+  int64 catalog_state_version = 5;
+  google.protobuf.Timestamp catalog_observed_at = 6;
+  google.protobuf.Timestamp catalog_fresh_until = 7;
+  string catalog_external_revision = 8;
+  string catalog_content_digest = 9;
+}
+
+message ScheduledInvocationAuthorizationDisclosure {
+  bool dedicated_to_schedule = 1;
+  bool secret_managed_by_aevatar = 2;
+  bool browser_receives_raw_key = 3;
+  bool delete_revokes_credential = 4;
+  bool pause_resume_revokes_credential = 5;
+}
+
+message ScheduledInvocationAuthorizationPlan {
+  ScheduledInvocationTarget invocation_target = 1;
+  NyxIdCatalogOwnerIdentity owner = 2;
+  repeated NyxIdServiceGrant nyx_id_service_grants = 3;
+  ScheduledInvocationCredentialPolicy credential_policy = 4;
+  ScheduledInvocationAuthorizationAuthority authority = 5;
+  ScheduledInvocationAuthorizationDisclosure disclosure = 6;
+  string permission_digest = 7;
+}

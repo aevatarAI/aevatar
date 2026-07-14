@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Application.Authorization;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Google.Protobuf.WellKnownTypes;
@@ -19,41 +20,78 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
     private readonly IStudioMemberService _memberService;
     private readonly IScheduledDispatchApplicationService _scheduleService;
+    private readonly IScheduledInvocationAuthorizationPlanner _authorizationPlanner;
+
+    public StudioMemberWorkflowSchedulePort(
+        IStudioMemberService memberService,
+        IScheduledDispatchApplicationService scheduleService,
+        IScheduledInvocationAuthorizationPlanner authorizationPlanner)
+    {
+        _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
+        _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
+        _authorizationPlanner = authorizationPlanner ?? throw new ArgumentNullException(nameof(authorizationPlanner));
+    }
 
     public StudioMemberWorkflowSchedulePort(
         IStudioMemberService memberService,
         IScheduledDispatchApplicationService scheduleService)
+        : this(memberService, scheduleService, new CompatibilityAuthorizationPlanner())
     {
-        _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
-        _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
     }
 
-    public async Task<StudioMemberWorkflowScheduleResult> EnsureAsync(
+    public async Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
         StudioMemberWorkflowScheduleRequest request,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var scopeId = NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
-        var memberId = NormalizeRequired(request.MemberId, nameof(request.MemberId));
+        var resolved = await ResolveAuthorizationRequestAsync(request, ct);
+        var result = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
+        return new StudioMemberWorkflowAuthorizationResult(
+            result.Success, result.Plan, result.FailureCode, result.Detail);
+    }
+
+    public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct = default) =>
+        ApplyAsync(request, confirmedPermissionDigest, ct);
+
+    public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct = default) =>
+        ApplyAsync(request, confirmedPermissionDigest, ct);
+
+    public async Task<StudioMemberWorkflowScheduleResult> EnsureAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        CancellationToken ct = default)
+    {
+        var preflight = await PreflightAsync(request, ct);
+        if (!preflight.Success)
+            throw new InvalidOperationException(preflight.Detail);
+        return await CreateAsync(request, preflight.Plan!.PermissionDigest, ct);
+    }
+
+    private async Task<StudioMemberWorkflowScheduleResult> ApplyAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var resolved = await ResolveAuthorizationRequestAsync(request, ct);
+        var current = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
+        if (!current.Success)
+            throw new InvalidOperationException(current.Detail);
+        if (!string.Equals(current.Plan!.PermissionDigest, confirmedPermissionDigest, StringComparison.Ordinal))
+            throw new InvalidOperationException("authorization_plan_changed");
+
+        var scopeId = resolved.ScopeId;
+        var memberId = resolved.MemberId;
         var scheduleCron = NormalizeRequired(request.ScheduleCron, nameof(request.ScheduleCron));
         var scheduleTimezone = NormalizeRequired(request.ScheduleTimezone, nameof(request.ScheduleTimezone));
-        var callerSubjectExternalUserId = NormalizeRequired(
-            request.CallerSubjectExternalUserId,
-            nameof(request.CallerSubjectExternalUserId));
-
-        var member = await _memberService.GetAsync(scopeId, memberId, ct);
-        if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"member_id '{memberId}' is not a workflow member and cannot be scheduled as a workflow.");
-        }
-
-        var publishedServiceId = NormalizeRequired(
-            member.Summary.PublishedServiceId,
-            nameof(member.Summary.PublishedServiceId));
-        EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
-        var callerSubject = BuildCallerSubject(request, callerSubjectExternalUserId);
+        var publishedServiceId = resolved.PublishedServiceId;
+        var callerSubject = BuildCallerSubject(request);
 
         var schedule = await EnsureScheduleAsync(
             BuildScheduleId(scopeId, memberId),
@@ -76,6 +114,51 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             PublishedServiceId: publishedServiceId,
             ObservatoryUrl: ObservatoryPath,
             Status: schedule.Accepted ? "accepted" : "rejected");
+    }
+
+    private async Task<ResolvedStudioAuthorizationRequest> ResolveAuthorizationRequestAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        CancellationToken ct)
+    {
+        var scopeId = NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
+        var memberId = NormalizeRequired(request.MemberId, nameof(request.MemberId));
+        var member = await _memberService.GetAsync(scopeId, memberId, ct);
+        if (!string.Equals(member.Summary.ImplementationKind, MemberImplementationKindNames.Workflow, StringComparison.Ordinal))
+            throw new InvalidOperationException($"member_id '{memberId}' is not a workflow member and cannot be scheduled as a workflow.");
+
+        var publishedServiceId = NormalizeRequired(member.Summary.PublishedServiceId, nameof(member.Summary.PublishedServiceId));
+        EnsureWorkflowBindingCanBeScheduled(member, memberId, publishedServiceId);
+        var workflowRevision = member.LastBinding?.RevisionId ?? member.Summary.LastBoundRevisionId ?? string.Empty;
+        var target = new ScheduledInvocationTarget
+        {
+            Studio = new StudioScheduledInvocationTarget
+            {
+                ScopeId = scopeId,
+                TeamId = member.Summary.TeamId ?? string.Empty,
+                MemberId = memberId,
+                PublishedServiceId = publishedServiceId,
+                WorkflowRevision = workflowRevision,
+            },
+        };
+        var authority = new ScheduledInvocationAuthorizationAuthority
+        {
+            MemberStateVersion = member.CurrentBindingRun?.StateVersion ?? 0,
+            WorkflowStateVersion = member.CurrentBindingRun?.StateVersion ?? 0,
+        };
+        return new ResolvedStudioAuthorizationRequest(
+            scopeId,
+            memberId,
+            publishedServiceId,
+            new ScheduledInvocationAuthorizationRequest(
+                target,
+                request.AuthenticatedOwner,
+                [],
+                authority,
+                request.CredentialExpiresAtUtc,
+                DateTimeOffset.UtcNow)
+            {
+                ServiceGrantsNotRequired = true,
+            });
     }
 
     private async Task<ScheduledDispatchMutationReceipt> EnsureScheduleAsync(
@@ -199,12 +282,31 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             Scope: ProvisionWorkflowCallerCredential.DefaultScope));
 
     private static ScheduledServiceInvocationNyxIdSubjectRef BuildCallerSubject(
-        StudioMemberWorkflowScheduleRequest request,
-        string callerSubjectExternalUserId) =>
+        StudioMemberWorkflowScheduleRequest request) =>
         new(
-            Platform: NormalizeRequired(request.CallerSubjectPlatform, nameof(request.CallerSubjectPlatform)),
-            Tenant: NormalizeOptional(request.CallerSubjectTenant) ?? string.Empty,
-            ExternalUserId: callerSubjectExternalUserId);
+            Platform: NormalizeOptional(request.CallerSubjectPlatform) ?? NormalizeRequired(request.AuthenticatedOwner.SubjectPlatform, nameof(request.AuthenticatedOwner.SubjectPlatform)),
+            Tenant: NormalizeOptional(request.CallerSubjectTenant) ?? NormalizeOptional(request.AuthenticatedOwner.SubjectTenant) ?? string.Empty,
+            ExternalUserId: NormalizeRequired(request.AuthenticatedOwner.SubjectExternalUserId, nameof(request.AuthenticatedOwner.SubjectExternalUserId)));
+
+    private sealed record ResolvedStudioAuthorizationRequest(
+        string ScopeId,
+        string MemberId,
+        string PublishedServiceId,
+        ScheduledInvocationAuthorizationRequest AuthorizationRequest);
+
+    private sealed class CompatibilityAuthorizationPlanner : IScheduledInvocationAuthorizationPlanner
+    {
+        public Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
+            ScheduledInvocationAuthorizationRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(ScheduledInvocationAuthorizationPlanResult.Succeeded(
+                new ScheduledInvocationAuthorizationPlan
+                {
+                    InvocationTarget = request.InvocationTarget.Clone(),
+                    Owner = request.Owner.Clone(),
+                    PermissionDigest = "test-compatible-plan",
+                }));
+    }
 
     private static string BuildScheduleId(string scopeId, string memberId)
     {

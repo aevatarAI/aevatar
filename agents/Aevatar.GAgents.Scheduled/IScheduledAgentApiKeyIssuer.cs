@@ -1,21 +1,22 @@
 namespace Aevatar.GAgents.Scheduled;
 
+using Aevatar.Studio.Application.Authorization;
+
 public interface IScheduledAgentApiKeyIssuer
 {
     Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
         string token,
-        ScheduledAgentServiceSlugs serviceSlugs,
-        string agentId,
-        string skillName,
-        string? scopeId,
-        CancellationToken ct);
+        ScheduledInvocationAuthorizationPlan plan,
+        string credentialName,
+        CancellationToken ct) =>
+        Task.FromResult(ScheduledAgentApiKeyIssueResult.Failed("typed_authorization_plan_not_supported"));
 
     Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct);
 
     Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct);
 }
 
-public sealed record ScheduledAgentServiceSlugs(
+public sealed record ScheduledAgentServiceRequirements(
     string PrimaryOutboundSlug,
     string? FailureNotificationSlug,
     IReadOnlyList<string> RequiredServiceSlugs,

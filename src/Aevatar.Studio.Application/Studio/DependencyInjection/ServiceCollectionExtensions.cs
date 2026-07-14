@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Studio.Application.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
@@ -43,6 +44,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();
         services.TryAddSingleton<IStudioMemberWorkflowBindingPort, StudioMemberWorkflowBindingPort>();
         services.TryAddSingleton<IStudioMemberWorkflowSchedulePort, StudioMemberWorkflowSchedulePort>();
+        services.TryAddSingleton<IScheduledInvocationAuthorizationPlanner, ScheduledInvocationAuthorizationPlanner>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.TryAddSingleton<IWorkflowBoardClock, SystemWorkflowBoardClock>();
         services.TryAddSingleton<IWorkflowBoardRosterQueryPort, StudioWorkflowBoardRosterQueryPort>();

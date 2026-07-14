@@ -3,6 +3,8 @@ using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Authorization;
+using Google.Protobuf.WellKnownTypes;
 using FluentAssertions;
 using Xunit;
 
@@ -10,6 +12,46 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ScheduledAgentApiKeyIssuerTests
 {
+    [Fact]
+    public async Task IssueAsync_WithAuthorizationPlan_CopiesExactServiceAndNodeGrants()
+    {
+        var handler = new RoutingJsonHandler("""{"id":"key-1","full_key":"secret"}""");
+        var issuer = CreateIssuer(handler);
+        var plan = new ScheduledInvocationAuthorizationPlan
+        {
+            Owner = new NyxIdCatalogOwnerIdentity
+            {
+                Authority = "https://nyx.example.com",
+                OwnerKind = NyxIdCatalogOwnerKind.Personal,
+                OwnerSubject = "owner-alpha",
+            },
+            CredentialPolicy = new ScheduledInvocationCredentialPolicy
+            {
+                Scopes = "read proxy",
+                AllowAllServices = false,
+                AllowAllNodes = false,
+                ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-21T00:00:00Z")),
+                PolicyVersion = "scheduled-invocation-auth/v1",
+            },
+        };
+        var service = new NyxIdServiceGrant { UserServiceId = "us-alpha", DisplayName = "Connector" };
+        service.NodeGrants.Add(new NyxIdNodeGrant { NodeId = "node-primary", Primary = true });
+        service.NodeGrants.Add(new NyxIdNodeGrant { NodeId = "node-fallback", Primary = false });
+        plan.NyxIdServiceGrants.Add(service);
+
+        var result = await issuer.IssueAsync("session-token", plan, "scheduled-key", CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        handler.RequestBodies.Should().ContainSingle();
+        using var body = System.Text.Json.JsonDocument.Parse(handler.RequestBodies.Single());
+        body.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static value => value.GetString())
+            .Should().Equal("us-alpha");
+        body.RootElement.GetProperty("allowed_node_ids").EnumerateArray().Select(static value => value.GetString())
+            .Should().Equal("node-fallback", "node-primary");
+        body.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+        body.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+    }
+
     [Fact]
     public async Task RevokeAsync_WithSuccessfulDelete_Completes()
     {
@@ -110,15 +152,18 @@ public sealed class ScheduledAgentApiKeyIssuerTests
         }
 
         public List<string> Requests { get; } = [];
+        public List<string> RequestBodies { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request.RequestUri?.PathAndQuery ?? string.Empty);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            if (request.Content is not null)
+                RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_json, Encoding.UTF8, "application/json"),
-            });
+            };
         }
     }
 }

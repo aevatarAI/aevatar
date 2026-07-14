@@ -6,4 +6,14 @@
     <AssemblyName>Aevatar.Studio.Application.Abstractions</AssemblyName>
     <RootNamespace>Aevatar.Studio.Application</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Authorization/scheduled_invocation_authorization.proto" GrpcServices="None" />
+  </ItemGroup>
 </Project>

@@ -1,0 +1,64 @@
+syntax = "proto3";
+package aevatar.gagents.studio_team.nyxid_catalog;
+option csharp_namespace = "Aevatar.GAgents.StudioTeam";
+
+import "google/protobuf/timestamp.proto";
+
+enum NyxIdCatalogSnapshotOwnerKind {
+  NYX_ID_CATALOG_SNAPSHOT_OWNER_KIND_UNSPECIFIED = 0;
+  NYX_ID_CATALOG_SNAPSHOT_OWNER_KIND_PERSONAL = 1;
+  NYX_ID_CATALOG_SNAPSHOT_OWNER_KIND_ORGANIZATION = 2;
+}
+
+message NyxIdCatalogSnapshotOwner {
+  string authority = 1;
+  NyxIdCatalogSnapshotOwnerKind owner_kind = 2;
+  string owner_subject = 3;
+}
+
+message NyxIdCatalogSnapshotNode {
+  string node_id = 1;
+  string display_name = 2;
+  bool primary = 3;
+}
+
+message NyxIdCatalogSnapshotService {
+  string user_service_id = 1;
+  string display_name = 2;
+  repeated NyxIdCatalogSnapshotNode nodes = 3;
+  bool node_grants_not_required = 4;
+  bool reachable = 5;
+  string service_slug = 6;
+}
+
+message NyxIdCatalogSnapshotState {
+  NyxIdCatalogSnapshotOwner owner = 1;
+  repeated NyxIdCatalogSnapshotService services = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp fresh_until = 4;
+  string external_revision = 5;
+  string content_digest = 6;
+  bool invalidated = 7;
+  string invalidation_reason = 8;
+}
+
+message NyxIdCatalogSnapshotObservedEvent {
+  NyxIdCatalogSnapshotOwner owner = 1;
+  repeated NyxIdCatalogSnapshotService services = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp fresh_until = 4;
+  string external_revision = 5;
+  string content_digest = 6;
+}
+
+message NyxIdCatalogSnapshotRefreshFailedEvent {
+  NyxIdCatalogSnapshotOwner owner = 1;
+  google.protobuf.Timestamp failed_at = 2;
+  string failure_code = 3;
+}
+
+message NyxIdCatalogSnapshotInvalidatedEvent {
+  NyxIdCatalogSnapshotOwner owner = 1;
+  google.protobuf.Timestamp invalidated_at = 2;
+  string reason = 3;
+}
