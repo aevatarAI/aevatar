@@ -8,6 +8,7 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
+import { teamAutomationApi } from "@/shared/api/teamAutomationApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { studioApi } from "@/shared/studio/api";
 import {
@@ -327,6 +328,57 @@ function mockCreateScheduledDispatchSummary(overrides?: Record<string, any>) {
     deleted: false,
     ...overrides,
   };
+}
+
+function mockCreateTeamAutomationPermissionReview(
+  overrides?: Record<string, any>,
+) {
+  return {
+    status: "ready",
+    permissionDigest: "perm-digest-alpha-v1",
+    policyVersion: "agent-key-policy-v1",
+    credentialPlan: {
+      mode: "dedicated-per-schedule",
+      hostedBy: "Aevatar",
+      browserReceivesRawKey: false,
+      expiresAt: "2026-09-30T00:00:00Z",
+    },
+    serviceGrants: [
+      {
+        grantId: "service-chat-invoke",
+        targetId: "svc-alpha",
+        displayName: "Published service svc-alpha",
+        permission: "Invoke workflow chat endpoint",
+      },
+    ],
+    nodeGrants: [
+      {
+        grantId: "workflow-runtime-start",
+        targetId: "workflow-runtime",
+        displayName: "Workflow runtime",
+        permission: "Start scheduled workflow runs",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+const forbiddenAutomationSecretMarkers = [
+  "fullKey",
+  "full_key",
+  "OAuth token",
+  "oauth token",
+  "SecretReference",
+  "apiKeyId",
+  "ak-alpha",
+] as const;
+
+function expectNoAutomationSecretMarkers(value: unknown) {
+  const serialized =
+    typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  for (const marker of forbiddenAutomationSecretMarkers) {
+    expect(serialized).not.toContain(marker);
+  }
 }
 
 function collectRenderedStyleText(): string {
@@ -675,6 +727,12 @@ jest.mock("@/shared/api/scheduledDispatchApi", () => ({
   },
 }));
 
+jest.mock("@/shared/api/teamAutomationApi", () => ({
+  teamAutomationApi: {
+    preflightCreate: jest.fn(async () => mockCreateTeamAutomationPermissionReview()),
+  },
+}));
+
 jest.mock("@/shared/agui/sseFrameNormalizer", () => ({
   parseBackendSSEStream: jest.fn(async function* () {
     yield {
@@ -988,6 +1046,10 @@ describe("TeamDetailPage", () => {
       ackedAt: "2026-06-10T08:35:00Z",
       ackStage: "accepted",
     }));
+    (teamAutomationApi.preflightCreate as jest.Mock).mockReset();
+    (teamAutomationApi.preflightCreate as jest.Mock).mockImplementation(
+      async () => mockCreateTeamAutomationPermissionReview(),
+    );
     (scheduledDispatchApi.update as jest.Mock).mockReset();
     (scheduledDispatchApi.update as jest.Mock).mockImplementation(async () => ({
       scheduleId: "sch-alpha",
@@ -2689,7 +2751,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getAllByText("已触发").length).toBeGreaterThan(0);
   });
 
-  it("creates member recurring work with the published service identity", async () => {
+  it("creates member recurring work after Agent Key permission review and consent", async () => {
     window.history.replaceState(
       {},
       "",
@@ -2707,12 +2769,15 @@ describe("TeamDetailPage", () => {
         totalCount: 1,
       });
 
-    renderWithQueryClient(React.createElement(TeamDetailPage));
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(TeamDetailPage),
+    );
 
     fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
     expect(await screen.findByText("1. 目标成员")).toBeTruthy();
     expect(screen.getByText("2. 要执行的任务")).toBeTruthy();
     expect(screen.getByText("3. 运行节奏")).toBeTruthy();
+    expect(screen.getByText("4. 审查 Agent Key 授权")).toBeTruthy();
     const defaultTimezone =
       Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     expect(screen.getByText(`工作日 09:00 · ${defaultTimezone}`)).toBeTruthy();
@@ -2730,55 +2795,141 @@ describe("TeamDetailPage", () => {
       target: { value: "Asia/Shanghai" },
     });
     expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+    fireEvent.click(screen.getByRole("button", { name: "审查权限" }));
 
     await waitFor(() => {
-      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+      expect(teamAutomationApi.preflightCreate).toHaveBeenCalled();
     });
-    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
-    expect(payload).toEqual(
+    const reviewPayload = (teamAutomationApi.preflightCreate as jest.Mock).mock
+      .calls[0][0];
+    expect(reviewPayload).toEqual(
       expect.objectContaining({
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        memberId: "member-team-alpha",
+        publishedServiceId: "alpha-service",
+        serviceRevisionId: "rev-2",
         displayName: "Daily escalation digest",
         cronExpression: "0 9 * * 1-5",
         timezone: "Asia/Shanghai",
         enabled: true,
-        headers: {
-          source: "team-automations",
-        },
-        workflowChatTarget: {
-          identity: {
-            tenantId: "scope-1",
-            appId: "default",
-            namespace: "default",
-            serviceId: "alpha-service",
-          },
-          prompt: "Summarize escalations and follow-up owners.",
-          revisionId: "rev-2",
-        },
+        prompt: "Summarize escalations and follow-up owners.",
       }),
     );
-    expect(JSON.stringify(payload)).not.toContain("member-team-alpha");
-    expect(JSON.stringify(payload)).not.toContain("wf-team-alpha");
-    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
-    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
-    await waitFor(() => {
-      expect(screen.getAllByText("Daily escalation digest").length).toBeGreaterThan(
-        0,
-      );
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
+    expect(screen.getByText("凭据模式：dedicated-per-schedule")).toBeTruthy();
+    expect(screen.getByText("由 Aevatar 托管")).toBeTruthy();
+    expect(
+      screen.getByText("浏览器不会接收 Agent Key 原文"),
+    ).toBeTruthy();
+    expect(screen.getByText("服务权限")).toBeTruthy();
+    expect(screen.getByText("节点权限")).toBeTruthy();
+    expect(screen.getByText("权限摘要：perm-digest-alpha-v1")).toBeTruthy();
+    const createButton = screen.getByRole("button", {
+      name: "暂不可创建",
     });
-    expect(screen.getByText("正在等待计划同步")).toBeTruthy();
-
-    await waitFor(
-      () => {
-        expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(2);
-      },
-      { timeout: 2_000 },
+    expect(createButton).toBeDisabled();
+    fireEvent.click(
+      screen.getByLabelText(/我同意 Aevatar 为此定时任务创建专用的 Agent Key/),
     );
-    await waitFor(() => {
-      expect(screen.getAllByText("Daily escalation digest").length).toBeGreaterThan(
-        0,
-      );
+    expect(createButton).toBeDisabled();
+    fireEvent.click(createButton);
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
+    expectNoAutomationSecretMarkers(reviewPayload);
+    expectNoAutomationSecretMarkers(
+      queryClient.getQueryCache().getAll().map((query) => query.state.data),
+    );
+    expectNoAutomationSecretMarkers(document.body.textContent ?? "");
+    expect(screen.getByText(
+      "当前仅供预览。在接入专用后端契约前，不会创建自动化或 Agent Key。",
+    )).toBeTruthy();
+    expect(message.success).not.toHaveBeenCalledWith(
+      "自动化创建请求已受理。",
+    );
+    expect(scheduledDispatchApi.listAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not submit when permission review closes before consent and keeps the draft", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
     });
+    fireEvent.change(within(dialog).getByLabelText("自动化名称"), {
+      target: { value: "Draft escalation digest" },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/周期 Prompt/), {
+      target: { value: "Keep this draft after review closes." },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "审查权限" }));
+
+    expect(await within(dialog).findByText("凭据模式：dedicated-per-schedule")).toBeTruthy();
+    expect(
+      within(dialog).getByRole("button", {
+        name: "暂不可创建",
+      }),
+    ).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("button", { name: /关.*闭/ }));
+
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    const reopenedDialog = await screen.findByRole("dialog", {
+      name: "新建成员自动化",
+    });
+    expect(within(reopenedDialog).getByLabelText("自动化名称")).toHaveValue(
+      "Draft escalation digest",
+    );
+    expect(within(reopenedDialog).getByLabelText(/周期 Prompt/)).toHaveValue(
+      "Keep this draft after review closes.",
+    );
+    expect(
+      within(reopenedDialog).getByText(
+        "目标和运行节奏准备好后即可审查权限。",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("blocks consent when the permission plan changes and requires a fresh review", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+    );
+    (teamAutomationApi.preflightCreate as jest.Mock)
+      .mockResolvedValueOnce(
+        mockCreateTeamAutomationPermissionReview({
+          status: "plan-changed",
+          warning: "权限范围已更新，请重新审查。",
+        }),
+      )
+      .mockResolvedValueOnce(mockCreateTeamAutomationPermissionReview());
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
+    fireEvent.change(await screen.findByLabelText("自动化名称"), {
+      target: { value: "Daily escalation digest" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "审查权限" }));
+
+    expect(await screen.findByText("权限范围已更新，请重新审查。")).toBeTruthy();
+    expect(
+      screen.queryByLabelText(/我同意 Aevatar 为此定时任务创建专用的 Agent Key/),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "刷新审查" }));
+
+    expect(
+      await screen.findByLabelText(/我同意 Aevatar 为此定时任务创建专用的 Agent Key/),
+    ).toBeTruthy();
+    expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(2);
   });
 
   it("previews next runs from the automation form", async () => {
@@ -2843,28 +2994,29 @@ describe("TeamDetailPage", () => {
     fireEvent.change(within(dialog).getByLabelText("自动化名称"), {
       target: { value: "Daily escalation digest" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "创建自动化" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "审查权限" }));
 
     await waitFor(() => {
-      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+      expect(teamAutomationApi.preflightCreate).toHaveBeenCalled();
     });
-    expect((scheduledDispatchApi.create as jest.Mock).mock.calls[0][0]).toEqual(
+    expect((teamAutomationApi.preflightCreate as jest.Mock).mock.calls[0][0]).toEqual(
       expect.objectContaining({
         displayName: "Daily escalation digest",
-        workflowChatTarget: {
-          identity: {
-            tenantId: "scope-1",
-            appId: "default",
-            namespace: "default",
-            serviceId: "alpha-service",
-          },
-          prompt: "",
-          revisionId: "rev-2",
-        },
+        prompt: "",
+        publishedServiceId: "alpha-service",
+        serviceRevisionId: "rev-2",
       }),
     );
+    fireEvent.click(
+      within(dialog).getByLabelText(/我同意 Aevatar 为此定时任务创建专用的 Agent Key/),
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "暂不可创建",
+      }),
+    );
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
     expect(message.error).not.toHaveBeenCalledWith("保存前请先描述周期任务。");
-    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
   });
 
   it("creates member recurring work with the default service revision when the active serving revision is missing", async () => {
@@ -2896,18 +3048,14 @@ describe("TeamDetailPage", () => {
     fireEvent.change(screen.getByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+    fireEvent.click(screen.getByRole("button", { name: "审查权限" }));
 
     await waitFor(() => {
-      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+      expect(teamAutomationApi.preflightCreate).toHaveBeenCalled();
     });
-    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
-    expect(payload.workflowChatTarget).toEqual(
-      expect.objectContaining({
-        revisionId: "rev-2",
-      }),
-    );
-    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+    const payload = (teamAutomationApi.preflightCreate as jest.Mock).mock.calls[0][0];
+    expect(payload).toEqual(expect.objectContaining({ serviceRevisionId: "rev-2" }));
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
   });
 
   it("creates member recurring work without a revision when no serving revision is available", async () => {
@@ -2937,34 +3085,40 @@ describe("TeamDetailPage", () => {
     fireEvent.change(await screen.findByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
+    fireEvent.click(screen.getByRole("button", { name: "审查权限" }));
 
     await waitFor(() => {
-      expect(scheduledDispatchApi.create).toHaveBeenCalled();
+      expect(teamAutomationApi.preflightCreate).toHaveBeenCalled();
     });
-    const payload = (scheduledDispatchApi.create as jest.Mock).mock.calls[0][0];
-    expect(payload.workflowChatTarget).toEqual({
-      identity: {
-        tenantId: "scope-1",
-        appId: "default",
-        namespace: "default",
-        serviceId: "alpha-service",
-      },
-      prompt: "Summarize escalations and follow-up owners.",
-    });
-    expect(message.success).toHaveBeenCalledWith("自动化已创建。");
+    const payload = (teamAutomationApi.preflightCreate as jest.Mock).mock.calls[0][0];
+    expect(payload).toEqual(
+      expect.objectContaining({
+        publishedServiceId: "alpha-service",
+        prompt: "Summarize escalations and follow-up owners.",
+      }),
+    );
+    expect(payload).not.toEqual(
+      expect.objectContaining({
+        serviceRevisionId: expect.any(String),
+      }),
+    );
+    fireEvent.click(
+      screen.getByLabelText(/我同意 Aevatar 为此定时任务创建专用的 Agent Key/),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "暂不可创建" }),
+    );
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
   });
 
-  it("keeps schedule create failures inside the automations flow", async () => {
+  it("keeps the draft and recovers when permission preflight fails", async () => {
     window.history.replaceState(
       {},
       "",
       "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
     );
-    (scheduledDispatchApi.create as jest.Mock).mockRejectedValueOnce(
-      new Error(
-        "One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
-      ),
+    (teamAutomationApi.preflightCreate as jest.Mock).mockRejectedValueOnce(
+      new Error("Mock permission review failed."),
     );
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
@@ -2973,14 +3127,15 @@ describe("TeamDetailPage", () => {
     fireEvent.change(await screen.findByLabelText(/周期 Prompt/), {
       target: { value: "Summarize escalations and follow-up owners." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "创建自动化" }));
-
-    await waitFor(() => {
-      expect(message.error).toHaveBeenCalledWith(
-        "自动化未创建：One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
-      );
-    });
-    expect(message.success).not.toHaveBeenCalledWith("自动化已创建。");
+    fireEvent.click(screen.getByRole("button", { name: "审查权限" }));
+    expect(await screen.findByText("权限审查需要处理")).toBeTruthy();
+    expect(screen.getByLabelText(/周期 Prompt/)).toHaveValue(
+      "Summarize escalations and follow-up owners.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "审查权限" }));
+    expect(await screen.findByText("凭据模式：dedicated-per-schedule")).toBeTruthy();
+    expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(2);
+    expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
   });
 
   it("edits member recurring work with the published service identity", async () => {
