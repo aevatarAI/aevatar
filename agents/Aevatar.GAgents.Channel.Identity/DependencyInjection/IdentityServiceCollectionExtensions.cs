@@ -189,14 +189,7 @@ public static class IdentityServiceCollectionExtensions
         // resolved HttpClient + HttpMessageHandler inside the singleton and
         // silently defeated the 2-min handler rotation, so long-running
         // silos would never pick up DNS / TLS-cert changes.
-        var brokerOptions = services.AddOptions<NyxIdBrokerOptions>();
-        if (configuration is not null)
-        {
-            brokerOptions.Configure(options =>
-                options.ResourceServerBaseUrl =
-                    configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey]?.Trim().TrimEnd('/')
-                    ?? string.Empty);
-        }
+        services.AddOptions<NyxIdBrokerOptions>();
         services.TryAddSingleton<StateTokenCodec>();
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
