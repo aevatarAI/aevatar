@@ -181,7 +181,7 @@ public static class IdentityServiceCollectionExtensions
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-rebuild"));
 
-        // ─── Broker (self-bootstrapping, no appsettings dependency) ───
+        // ─── Broker (OAuth client self-bootstrapping) ───
         // Register broker as a *singleton* and inject IHttpClientFactory so
         // each call resolves a fresh HttpClient backed by the factory's
         // rotating handler pool. The earlier shape — AddHttpClient<T>()
@@ -189,7 +189,14 @@ public static class IdentityServiceCollectionExtensions
         // resolved HttpClient + HttpMessageHandler inside the singleton and
         // silently defeated the 2-min handler rotation, so long-running
         // silos would never pick up DNS / TLS-cert changes.
-        services.AddOptions<NyxIdBrokerOptions>();
+        var brokerOptions = services.AddOptions<NyxIdBrokerOptions>();
+        if (configuration is not null)
+        {
+            brokerOptions.Configure(options =>
+                options.ResourceServerBaseUrl =
+                    configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey]?.Trim().TrimEnd('/')
+                    ?? string.Empty);
+        }
         services.TryAddSingleton<StateTokenCodec>();
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();

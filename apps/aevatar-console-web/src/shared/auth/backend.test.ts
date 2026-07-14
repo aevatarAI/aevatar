@@ -4,7 +4,7 @@ import {
   refreshNyxIDTokenSet,
 } from "./backend";
 
-const requiredResource = "https://nyx.example/api/v1/proxy/s/aevatar";
+const requiredResource = "https://nyx-api.example/api/v1/proxy/s/aevatar";
 
 describe("NyxID backend auth API", () => {
   const originalFetch = global.fetch;
@@ -189,7 +189,7 @@ describe("NyxID backend auth API", () => {
       "Content-Type": "application/x-www-form-urlencoded",
     });
     expect(String(init.body)).toBe(
-      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1&resource=https%3A%2F%2Fnyx.example%2Fapi%2Fv1%2Fproxy%2Fs%2Faevatar",
+      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1&resource=https%3A%2F%2Fnyx-api.example%2Fapi%2Fv1%2Fproxy%2Fs%2Faevatar",
     );
   });
 
