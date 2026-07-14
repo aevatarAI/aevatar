@@ -472,10 +472,12 @@ const memberRunMetricLabelStyle: React.CSSProperties = {
 const targetActionStyle: React.CSSProperties = {
   alignItems: 'center',
   display: 'flex',
-  flex: '0 0 auto',
+  flex: '0 1 auto',
   flexWrap: 'wrap',
   gap: 8,
   justifyContent: 'flex-end',
+  maxWidth: '100%',
+  minWidth: 0,
 };
 
 const memberRunTargetActionStyle: React.CSSProperties = {
@@ -1912,6 +1914,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
               </div>
             </div>
             <div
+              data-testid="studio-invoke-target-actions"
               style={
                 isMemberRunSurface
                   ? memberRunTargetActionStyle

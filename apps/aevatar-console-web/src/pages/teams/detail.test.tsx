@@ -329,6 +329,12 @@ function mockCreateScheduledDispatchSummary(overrides?: Record<string, any>) {
   };
 }
 
+function collectRenderedStyleText(): string {
+  return Array.from(document.querySelectorAll("style"))
+    .map((styleElement) => styleElement.textContent ?? "")
+    .join("\n");
+}
+
 function mockCreateRunAudit(scopeId: string, runId: string) {
   return {
     summary: {
@@ -2371,6 +2377,47 @@ describe("TeamDetailPage", () => {
     ).toBeTruthy();
   });
 
+  it("keeps Team member row actions reachable before the tablet layout clips them", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "编辑团队" });
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    await screen.findByLabelText("调用");
+
+    const memberTable = screen.getByTestId("team-members-table");
+    expect(memberTable).toHaveClass("team-members-table-container");
+    expect(memberTable).toHaveAttribute("data-responsive-layout", "container");
+
+    const memberRow = document.querySelector(".team-members-table-row");
+    expect(memberRow).toBeTruthy();
+    expect(memberRow).toHaveStyle({
+      gridTemplateColumns:
+        "minmax(260px, 1.4fr) minmax(140px, 0.45fr) minmax(180px, 0.7fr) 252px",
+    });
+
+    const memberActions = memberRow?.querySelector(
+      ".team-members-table-primary-actions",
+    ) as HTMLElement | null;
+    expect(memberActions).toBeTruthy();
+    expect(within(memberActions as HTMLElement).getByLabelText("调用")).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("发布运行记录"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("自动化"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("Workflow Studio"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("清除入口成员"),
+    ).toBeTruthy();
+    expect(
+      within(memberActions as HTMLElement).getByLabelText("删除成员"),
+    ).toBeTruthy();
+
+  });
+
   it("renders member-owned automations from the backend schedules API", async () => {
     window.history.replaceState(
       {},
@@ -2400,6 +2447,41 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     expect(await screen.findByText("Daily escalation digest")).toBeTruthy();
+    const automationRow = screen.getByLabelText("Daily escalation digest");
+    expect(automationRow).toHaveClass("team-automation-row");
+    expect(automationRow).toHaveStyle({
+      gridTemplateColumns:
+        "minmax(0, 1.16fr) minmax(0, 0.72fr) minmax(0, 0.48fr) max-content",
+      width: "100%",
+    });
+    expect(
+      automationRow.querySelector(".team-automation-row__automation"),
+    ).toBeTruthy();
+    expect(
+      automationRow.querySelector(".team-automation-row__member"),
+    ).toBeTruthy();
+    expect(
+      automationRow.querySelector(".team-automation-row__schedule"),
+    ).toBeTruthy();
+    const automationActions = automationRow.querySelector(
+      ".team-automation-actions",
+    ) as HTMLElement | null;
+    expect(automationActions).toBeTruthy();
+    expect(automationActions?.style.inlineSize).toBe("max-content");
+    expect(automationActions?.style.minWidth).toBe("max-content");
+    expect(within(automationActions as HTMLElement).getByLabelText("编辑")).toBeTruthy();
+    expect(
+      within(automationActions as HTMLElement).getByLabelText("立即运行"),
+    ).toBeTruthy();
+    expect(within(automationActions as HTMLElement).getByLabelText("暂停")).toBeTruthy();
+    expect(within(automationActions as HTMLElement).getByLabelText("删除")).toBeTruthy();
+    const responsiveRules = collectRenderedStyleText();
+    expect(responsiveRules).toContain("@media (max-width: 900px)");
+    expect(responsiveRules).toContain(
+      "grid-template-columns: minmax(0, 1fr) max-content !important;",
+    );
+    expect(responsiveRules).toContain("@media (max-width: 640px)");
+    expect(responsiveRules).toContain("grid-row: auto;");
     expect(screen.getByText("计划")).toBeTruthy();
     expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
     expect(screen.getAllByText("已暂停").length).toBeGreaterThan(0);
