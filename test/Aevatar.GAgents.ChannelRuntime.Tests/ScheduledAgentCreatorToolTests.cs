@@ -940,6 +940,58 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenOnlyLegacyOutboundSlugAvailable_ShouldUseLegacyOutboundSlug()
+    {
+        var handler = CreateSuccessHandler(serviceListJson: """
+            {
+              "keys": [
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-legacy-lark","slug":"api-lark-bot-legacy"},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
+              ]
+            }
+            """);
+        var harness = CreateHarness(handler: handler);
+        ScheduledWorkflowAgentCreateRequest? captured = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
+        var metadata = new Dictionary<string, string>(BaseExternalMetadata(includeOutboundSlug: false), StringComparer.Ordinal)
+        {
+            [ChannelMetadataKeys.LarkOutboundProxySlug] = "api-lark-bot-legacy",
+        };
+
+        await WithToolContext(CreateToolContext(externalMetadata: metadata), async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            captured.Should().NotBeNull();
+            captured!.Schedule.Headers["scheduled_agent.nyx_provider_slug"].Should().Be("api-lark-bot-legacy");
+            captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot-legacy");
+            captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-legacy");
+
+            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-legacy-lark", "svc-lark-failure");
+        });
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenDeliveryAddressTypeMissing_ShouldNotStoreChatTypeAsAddressType()
     {
         var harness = CreateHarness();

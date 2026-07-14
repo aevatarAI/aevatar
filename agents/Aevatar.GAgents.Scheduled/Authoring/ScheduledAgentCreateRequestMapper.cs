@@ -122,7 +122,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (conversationId is null)
             return ScheduledAgentCreatePlanResult.Failed("conversation_id_unavailable");
 
-        var contextOutboundSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.OutboundProviderSlug));
+        var contextOutboundSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.OutboundProviderSlug))
+            ?? Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.LarkOutboundProxySlug));
         var primarySlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ScheduledAgentNyxProviderSlugHeader))
             ?? contextOutboundSlug;
         if (primarySlug is null)
