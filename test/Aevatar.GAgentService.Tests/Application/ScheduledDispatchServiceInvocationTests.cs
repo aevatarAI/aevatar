@@ -276,6 +276,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var invokedRequest = invocationPort.Requests.Should().ContainSingle().Which;
         invokedRequest.Payload.Unpack<StringValue>().Value.Should().Be("invoke");
         invokedRequest.ScheduleId.Should().Be("schedule-invoke");
+        // Fix (remote-ci/coverage-quality): workflow projection carries authority without
+        // exchanging or storing a token, so stale vault rollback fixtures must not be used.
         credentialExchange.Sources.Should().BeEmpty();
         receipt.Accepted.Should().BeTrue();
         receipt.CommandId.Should().Be("cmd-invoke");
