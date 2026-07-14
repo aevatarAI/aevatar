@@ -25,25 +25,29 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public Task<AuditTrailAppendResult> AppendAsync(
+    public async Task<AuditTrailAppendResult> AppendAsync(
         AuditRecord record,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         var sanitized = _sanitizer.Sanitize(record);
-        lock (_records)
+        var document = ToDocument(sanitized);
+        var write = await UpsertAsync(document, cancellationToken);
+        return write.Disposition switch
         {
-            _records.Add(sanitized.Clone());
-            _documents.Add(ToDocument(sanitized));
-        }
-
-        var result = AuditTrailAppendResult.Appended(
-            sanitized.AuditId,
-            sanitized.AuditActorId,
-            sanitized.OccurredAt.ToDateTimeOffset());
-
-        return Task.FromResult(result);
+            AuditTrailArtifactWriteDisposition.Applied => AuditTrailAppendResult.Appended(
+                sanitized.AuditId,
+                sanitized.AuditActorId,
+                sanitized.OccurredAt.ToDateTimeOffset()),
+            AuditTrailArtifactWriteDisposition.Duplicate => AuditTrailAppendResult.Duplicate(sanitized.AuditId),
+            AuditTrailArtifactWriteDisposition.Conflict => AuditTrailAppendResult.Conflict(
+                sanitized.AuditId,
+                "Audit id already exists with different content."),
+            _ => AuditTrailAppendResult.StoreUnavailable(
+                sanitized.AuditId,
+                $"Audit artifact write was not applied: {write.Disposition}."),
+        };
     }
 
     public async Task<IReadOnlyList<AuditTrailAppendResult>> AppendManyAsync(
@@ -77,9 +81,9 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
     public Task<AuditTrailArtifactWriteResult> UpsertAsync(AuditTrailDocument document, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(document.Record);
         ct.ThrowIfCancellationRequested();
 
-        var record = _sanitizer.Sanitize(document.Record);
         lock (_records)
         {
             var existing = _documents.FirstOrDefault(candidate =>
@@ -91,7 +95,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
                     : AuditTrailArtifactWriteResult.Conflict());
             }
 
-            _records.Add(record.Clone());
+            _records.Add(document.Record.Clone());
             _documents.Add(document.Clone());
         }
 

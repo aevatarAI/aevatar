@@ -26,7 +26,8 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
     public string Description =>
         "Bind workflow YAML to an existing Studio member in the caller's current Aevatar scope. " +
         "Use this after creating a team/member when the workflow should appear on that member's Studio workflow page. " +
-        "Supply member_id and workflow_yaml, plus optional workflow_id; do not provide scope_id because scope is taken from the session context.";
+        "Supply member_id and workflow_yaml, plus optional workflow_id; do not provide scope_id because scope is taken from the session context. " +
+        "The result acknowledges dispatch and includes a binding_run_url for observing completion.";
 
     public string ParametersSchema => """
         {

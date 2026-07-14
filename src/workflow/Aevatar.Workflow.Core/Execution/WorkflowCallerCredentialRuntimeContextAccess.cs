@@ -20,6 +20,9 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         {
             ClearCallerCredential = true,
         };
+        var authority = WorkflowRunExecutionContextStateAccess.NormalizeCallerNyxIdAuthority(
+            credential?.NyxIdAuthority,
+            nameof(credential));
         var hasDurableCredential = HasDurableCallerCredential(credential?.DurableCallerCredential);
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
         if (parsed.IsInvalid)
@@ -31,12 +34,22 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
             delta.CallerCredential = new WorkflowCallerCredential
             {
                 DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
+                NyxIdAuthority = authority,
             };
             return delta;
         }
 
         if (parsed.IsMissing)
+        {
+            if (authority != null)
+            {
+                throw new ArgumentException(
+                    "Workflow caller NyxID authority requires a caller credential.",
+                    nameof(credential));
+            }
+
             return delta;
+        }
 
         var runtimeSecretStore = WorkflowRunExecutionContextStateAccess.ResolveRuntimeSecretStore(stateHost)
             ?? throw new InvalidOperationException("Workflow caller credential runtime secret store is unavailable.");
@@ -53,6 +66,7 @@ internal static class WorkflowCallerCredentialRuntimeContextAccess
         delta.CallerCredential = new WorkflowCallerCredential
         {
             RuntimeSecretReference = stored.Reference,
+            NyxIdAuthority = authority,
         };
         return delta;
     }

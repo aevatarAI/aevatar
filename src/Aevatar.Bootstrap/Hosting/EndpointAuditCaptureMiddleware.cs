@@ -15,6 +15,7 @@ public sealed class EndpointAuditCaptureMiddleware
     private const string AttemptedSuffix = ".attempted";
     private const string AnonymousCanonicalActorKey = "system:endpoint-audit-anonymous";
     private const string UnknownScopeId = "unknown";
+    private static readonly TimeSpan TerminalAppendTimeout = TimeSpan.FromSeconds(5);
 
     private readonly RequestDelegate _next;
     private readonly IAuditTrailAppender? _appender;
@@ -89,10 +90,11 @@ public sealed class EndpointAuditCaptureMiddleware
             }
 
             var outcome = EndpointAuditOutcomeClassifier.Classify(context, capturedException);
+            using var terminalAppendTimeout = new CancellationTokenSource(TerminalAppendTimeout, _timeProvider);
             await AppendBestEffortAsync(
                 _appender,
                 () => BuildRecord(context, metadata, _identityHasher, metadata.OperationName, outcome),
-                context.RequestAborted);
+                terminalAppendTimeout.Token);
         }
     }
 

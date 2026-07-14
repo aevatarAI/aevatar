@@ -219,7 +219,9 @@ public static class PolicyAwareVoiceEndpoints
                 http,
                 accepted,
                 mediaStreamPort,
-                toolContextAdmission.TransportBinding);
+                toolContextAdmission.TransportBinding,
+                WebSocketSubprotocolToken.SelectVoiceSubprotocol(
+                    http.WebSockets.WebSocketRequestedProtocols));
         }
         finally
         {

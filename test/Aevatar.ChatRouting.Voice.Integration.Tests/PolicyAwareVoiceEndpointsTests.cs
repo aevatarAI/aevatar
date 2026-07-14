@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Security.Claims;
 using System.Text;
+using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -464,6 +465,7 @@ public sealed class PolicyAwareVoiceEndpointsTests
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         wsFeature.AcceptCalls.Should().Be(1);
+        wsFeature.AcceptedSubprotocol.Should().BeNull("legacy clients may connect without offering a subprotocol");
         catalog.Requests.Should().BeEmpty();
         var request = session.Requests.Should().ContainSingle().Which;
         request.ActorId.Should().Be("voice-agent-lark");
@@ -516,6 +518,47 @@ public sealed class PolicyAwareVoiceEndpointsTests
         wsFeature.AcceptCalls.Should().Be(1);                   // attached, not 501
         session.Requests.Should().ContainSingle()
             .Which.ActorId.Should().Be("voice-agent-lark");
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenBrowserOffersVoiceAndBearerProtocols_ShouldSelectOnlyVoiceProtocol()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            VoiceAttachTarget("voice-agent-default", "voice_presence_openai"),
+            []));
+        var catalog = new RecordingCatalogQueryPort(allowedActorIds: ["voice-agent-default"]);
+        var session = new RecordingVoiceRealtimeSession();
+        var mediaPort = new RecordingVolatileMediaStreamPort(
+            attachAsync: transport => transport.DisposeAsync().AsTask());
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        const string callerToken = "header.payload.signature";
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(4);
+        var issuer = new RecordingVoiceToolCredentialIssuer(
+            new VoiceToolCredentialIssueResult(
+                "voice-tool:subprotocol-test",
+                expiresAt,
+                new VoiceToolCredentialTransportBinding(
+                    "voice-tool:subprotocol-test",
+                    callerToken,
+                    expiresAt)));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            catalog,
+            session,
+            mediaPort,
+            toolCredentialIssuer: issuer);
+        var context = CreateVoiceContext(app, "/ws/voice?codec=pcm16&mode=half_duplex");
+        context.Request.Headers["Sec-WebSocket-Protocol"] = string.Join(", ",
+            WebSocketSubprotocolToken.VoiceSubprotocol,
+            WebSocketSubprotocolToken.BearerPrefix + callerToken);
+        var wsFeature = new FakeHttpWebSocketFeature(socket);
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        wsFeature.AcceptCalls.Should().Be(1);
+        wsFeature.AcceptedSubprotocol.Should().Be(WebSocketSubprotocolToken.VoiceSubprotocol);
+        wsFeature.AcceptedSubprotocol.Should().NotStartWith(WebSocketSubprotocolToken.BearerPrefix);
     }
 
     [Fact]
@@ -1549,12 +1592,13 @@ public sealed class PolicyAwareVoiceEndpointsTests
     private sealed class FakeHttpWebSocketFeature(FakeWebSocket socket) : IHttpWebSocketFeature
     {
         public int AcceptCalls { get; private set; }
+        public string? AcceptedSubprotocol { get; private set; }
         public bool IsWebSocketRequest => true;
 
         public Task<WebSocket> AcceptAsync(WebSocketAcceptContext context)
         {
-            _ = context;
             AcceptCalls++;
+            AcceptedSubprotocol = context.SubProtocol;
             return Task.FromResult<WebSocket>(socket);
         }
     }

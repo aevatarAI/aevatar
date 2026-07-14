@@ -18,12 +18,10 @@ public interface IDPoPReplayGuard
 }
 
 /// <summary>
-/// No-op default: treats every <c>jti</c> as fresh. Presence (not replay) of <c>jti</c> is
-/// still enforced by <see cref="DPoPProofValidator"/>; this default deliberately does NOT
-/// dedupe so the feature stays drop-in when no distributed store is wired.
+/// Disabled-feature placeholder that treats every <c>jti</c> as fresh.
 /// <para>
-/// A real deployment should replace this with a shared, TTL-bounded jti cache — cluster-5's
-/// jti cache is the intended backing store — registered against <see cref="IDPoPReplayGuard"/>.
+/// <see cref="DPoPReplayGuardStartupValidator"/> prevents a host from starting with DPoP
+/// enabled while this implementation is registered.
 /// </para>
 /// </summary>
 public sealed class NoOpDPoPReplayGuard : IDPoPReplayGuard

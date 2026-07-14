@@ -9,7 +9,17 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
         if current == false or current ~= ARGV[1] then
             return 0
         end
-        redis.call('SET', KEYS[1], ARGV[2])
+        local existingTtl = redis.call('PTTL', KEYS[1])
+        local requestedTtl = tonumber(ARGV[3])
+        local effectiveTtl = requestedTtl
+        if existingTtl >= 0 and (requestedTtl == -1 or existingTtl < requestedTtl) then
+            effectiveTtl = existingTtl
+        end
+        if effectiveTtl == -1 then
+            redis.call('SET', KEYS[1], ARGV[2])
+        else
+            redis.call('PSETEX', KEYS[1], math.max(1, effectiveTtl), ARGV[2])
+        end
         return 1
         """;
 
@@ -75,6 +85,7 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
         string key,
         ReadOnlyMemory<byte> expectedValue,
         ReadOnlyMemory<byte> newValue,
+        TimeSpan? expiry,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
@@ -83,7 +94,11 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
         var result = await _database.ScriptEvaluateAsync(
             CompareSetScript,
             [key],
-            [expectedValue.ToArray(), newValue.ToArray()]);
+            [
+                expectedValue.ToArray(),
+                newValue.ToArray(),
+                expiry.HasValue ? ToExpiryMilliseconds(expiry.Value) : -1,
+            ]);
         ct.ThrowIfCancellationRequested();
 
         return (long)result == 1;
@@ -108,4 +123,12 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
 
     private static Expiration ToExpiration(TimeSpan? expiry) =>
         expiry.HasValue ? expiry.Value : Expiration.Default;
+
+    private static long ToExpiryMilliseconds(TimeSpan expiry)
+    {
+        if (expiry <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(expiry), "Expiry must be positive.");
+
+        return Math.Max(1, checked((long)Math.Ceiling(expiry.TotalMilliseconds)));
+    }
 }

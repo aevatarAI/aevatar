@@ -19,6 +19,7 @@ public interface IGarnetSecretKeyValueStore
         string key,
         ReadOnlyMemory<byte> expectedValue,
         ReadOnlyMemory<byte> newValue,
+        TimeSpan? expiry,
         CancellationToken ct = default);
 
     Task<bool> CompareDeleteAsync(

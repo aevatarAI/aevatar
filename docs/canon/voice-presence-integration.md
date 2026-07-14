@@ -107,9 +107,12 @@ Authoritative schema: `src/Aevatar.Foundation.VoicePresence.Abstractions/Protos/
 The edge consumes a JSON projection of it (camelCase), hand-parsed by
 `voice-presence` `Aevatar/AevatarRealtimeFrameParser.cs`.
 
-- **Endpoint** — `GET /ws/voice` (policy-resolved). Auth:
-  `Authorization: Bearer <NyxID JWT>` or `?access_token=`. Query:
-  `codec=pcm16`, `mode`, `voice_module_name`. Mainnet does not expose an
+- **Endpoint** — `GET /ws/voice` (policy-resolved). Browser clients offer
+  `aevatar-voice-v1` and `aevatar-bearer.<NyxID JWT>` through
+  `Sec-WebSocket-Protocol`; the host must select only `aevatar-voice-v1` in the
+  upgrade response and must never echo the bearer entry. Non-browser clients
+  may use `Authorization: Bearer <NyxID JWT>`; `?access_token=` is legacy only.
+  Query: `codec=pcm16`, `mode`, `voice_module_name`. Mainnet does not expose an
   actor-id path; explicit voice attachment is represented only by typed
   `ForwardToModel.tool_choice_hint.voice_attach_target`.
 - **Audio** — WebSocket **binary** frames carry raw PCM16 (24 kHz) both

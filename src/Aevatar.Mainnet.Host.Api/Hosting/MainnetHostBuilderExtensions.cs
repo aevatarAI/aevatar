@@ -184,11 +184,19 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
             builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
-        // Single-use jti replay guard for NyxID identity assertions. In-memory + node-local by
-        // default (bounded by each assertion's short lifetime); swap for a distributed backing
-        // (e.g. Garnet) to make replay detection cluster-wide without touching callers.
-        builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard>(
-            sp => new InMemoryIdentityAssertionReplayGuard(sp.GetRequiredService<TimeProvider>()));
+        // Mainnet's single-use assertion guarantee must survive load balancing across replicas.
+        // Development keeps the deterministic in-memory implementation; every other environment
+        // requires the shared Garnet connection composed by the distributed runtime.
+        if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+        {
+            builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard>(
+                sp => new InMemoryIdentityAssertionReplayGuard(sp.GetRequiredService<TimeProvider>()));
+        }
+        else
+        {
+            builder.Services.TryAddSingleton<IIdentityAssertionSingleUseStore, GarnetIdentityAssertionSingleUseStore>();
+            builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard, DistributedIdentityAssertionReplayGuard>();
+        }
         builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         // Default model for direct OpenAI-compatible ingress (/v1/responses, /v1/messages,

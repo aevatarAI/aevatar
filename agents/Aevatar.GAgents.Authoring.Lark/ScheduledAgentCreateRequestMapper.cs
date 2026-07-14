@@ -208,7 +208,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 : WorkflowScheduleMode.RecurringCron,
             OneShotFireAt: request.OneShotRunAtUtc);
 
+<<<<<<< HEAD
         var catalog = BuildCatalogUpsertCommand(request, issuedKey, secretReference);
+=======
+        var catalog = BuildCatalogUpsertCommand(request, issuedKey, storedKey);
+>>>>>>> origin/feature/integrate
 
         return new ScheduledAgentCreateMapResult(
             Success: true,
@@ -396,14 +400,22 @@ internal sealed class ScheduledAgentCreateRequestMapper
     private static UserAgentCatalogUpsertCommand BuildCatalogUpsertCommand(
         ScheduledAgentCreatePlannedRequest request,
         ScheduledAgentApiKeyIssueResult issuedKey,
+<<<<<<< HEAD
         SecretReference secretReference) =>
+=======
+        StoreSecretResult storedKey) =>
+>>>>>>> origin/feature/integrate
         new()
         {
             AgentId = request.AgentId,
             ConversationId = request.ConversationId,
             NyxProviderSlug = request.PrimaryOutboundSlug,
+<<<<<<< HEAD
             NyxApiKey = string.Empty,
             NyxApiKeyReference = secretReference.Clone(),
+=======
+            NyxApiKeyReference = storedKey.Reference.Clone(),
+>>>>>>> origin/feature/integrate
             AgentType = ScheduledWorkflowAgentDefaults.AgentType,
             TemplateName = request.DisplayName ?? request.Reference.Name,
             ScopeId = request.ScopeId,

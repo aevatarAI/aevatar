@@ -31,6 +31,12 @@ public sealed class WorkflowSelfRescheduleModuleTests
         configuration.Prompt.Should().Be("scheduled prompt");
         configuration.ScopeId.Should().Be("scope-1");
         configuration.Headers.Should().Contain("trace", "enabled");
+        configuration.Auth!.SenderNyxId.Should().BeEquivalentTo(
+            new WorkflowScheduleNyxIdCredentialSource(
+                new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-a", "external-user-42"),
+                "proxy"));
+        configuration.Auth.ScopeOwnerNyxId.Should().BeNull();
+        configuration.MutationContext.Should().BeNull();
         var completed = context.Published.Should().ContainSingle().Which.Event.Unpack<StepCompletedEvent>();
         completed.Success.Should().BeTrue();
         completed.Output.Should().Be("schedule-1");
@@ -85,6 +91,55 @@ public sealed class WorkflowSelfRescheduleModuleTests
         configuration.Enabled.Should().BeFalse();
         context.Published.Should().ContainSingle()
             .Which.Event.Unpack<StepCompletedEvent>().Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenUpdatingOwningSchedule_ShouldOmitAuthForActorOwnedPreservation()
+    {
+        var port = new RecordingWorkflowScheduleCommandPort();
+        var module = new WorkflowSelfRescheduleModule(port);
+        var context = new RecordingWorkflowContext
+        {
+            ScheduleId = "schedule-1",
+            CallerNyxIdAuthority = null,
+        };
+
+        await module.HandleAsync(CreateEnvelope(CreateRequest()), context, CancellationToken.None);
+
+        var configuration = port.Configurations.Should().ContainSingle().Which;
+        configuration.Auth.Should().BeNull();
+        configuration.MutationContext.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenCreatingDifferentScheduleWithoutCallerAuthority_ShouldPublishFailure()
+    {
+        var port = new RecordingWorkflowScheduleCommandPort();
+        var module = new WorkflowSelfRescheduleModule(port);
+        var context = new RecordingWorkflowContext { CallerNyxIdAuthority = null };
+
+        await module.HandleAsync(CreateEnvelope(CreateRequest()), context, CancellationToken.None);
+
+        port.Configurations.Should().BeEmpty();
+        var completed = context.Published.Should().ContainSingle().Which.Event.Unpack<StepCompletedEvent>();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be(
+            "workflow caller NyxID authority is required to create a different schedule.");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenTargetScopeDiffersFromRunScope_ShouldPublishFailure()
+    {
+        var port = new RecordingWorkflowScheduleCommandPort();
+        var module = new WorkflowSelfRescheduleModule(port);
+        var context = new RecordingWorkflowContext { ScopeId = "scope-owner" };
+
+        await module.HandleAsync(CreateEnvelope(CreateRequest()), context, CancellationToken.None);
+
+        port.Configurations.Should().BeEmpty();
+        var completed = context.Published.Should().ContainSingle().Which.Event.Unpack<StepCompletedEvent>();
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Be("scope_id must match the workflow run scope.");
     }
 
     [Theory]
@@ -179,6 +234,18 @@ public sealed class WorkflowSelfRescheduleModuleTests
         public EventEnvelope InboundEnvelope { get; } = new();
 
         public string AgentId => "run-actor-1";
+
+        public string ScopeId { get; init; } = "scope-1";
+
+        public string ScheduleId { get; init; } = string.Empty;
+
+        public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority { get; init; } = new()
+        {
+            Platform = "lark",
+            Tenant = "tenant-a",
+            ExternalUserId = "external-user-42",
+            Scope = "proxy",
+        };
 
         public IServiceProvider Services => EmptyServiceProvider.Instance;
 

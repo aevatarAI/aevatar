@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
@@ -6,6 +7,7 @@ namespace Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 public sealed class SecretStoreKeyringDocument
 {
     private const int KeyBytes = 32;
+    private const UnixFileMode OwnerOnlyFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -40,6 +42,7 @@ public sealed class SecretStoreKeyringDocument
 
         try
         {
+            EnsureOwnerOnlyPermissions(path);
             var document = JsonSerializer.Deserialize<SecretStoreKeyringDocument>(File.ReadAllText(path), JsonOptions);
             return document ?? throw new InvalidOperationException("Garnet secret-store keyring is malformed.");
         }
@@ -64,8 +67,24 @@ public sealed class SecretStoreKeyringDocument
         var tempPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(this, JsonOptions));
+            var streamOptions = new FileStreamOptions
+            {
+                Access = FileAccess.Write,
+                Mode = FileMode.CreateNew,
+                Share = FileShare.None,
+            };
+            if (!OperatingSystem.IsWindows())
+                streamOptions.UnixCreateMode = OwnerOnlyFileMode;
+
+            using (var stream = new FileStream(tempPath, streamOptions))
+            using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                writer.Write(JsonSerializer.Serialize(this, JsonOptions));
+            }
+
+            EnsureOwnerOnlyPermissions(tempPath);
             File.Move(tempPath, fullPath, overwrite: true);
+            EnsureOwnerOnlyPermissions(fullPath);
         }
         finally
         {
@@ -123,6 +142,34 @@ public sealed class SecretStoreKeyringDocument
     }
 
     public static string GenerateKeyBase64() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(KeyBytes));
+
+    private static void EnsureOwnerOnlyPermissions(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            if (File.GetUnixFileMode(path) != OwnerOnlyFileMode)
+                File.SetUnixFileMode(path, OwnerOnlyFileMode);
+
+            if (File.GetUnixFileMode(path) != OwnerOnlyFileMode)
+            {
+                throw new InvalidOperationException(
+                    $"Garnet secret-store keyring file must have owner-only permissions: {path}");
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Unable to enforce owner-only permissions on Garnet secret-store keyring file: {path}",
+                ex);
+        }
+    }
 
     private static byte[] DecodeKey(string? base64, string label)
     {

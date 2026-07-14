@@ -918,7 +918,7 @@ const PCM_RATE = 24000;
 const VOICE_FIRST_CONNECT_RETRY_DELAY_MS = 1000;
 const voice = {
   ws:null, status:"idle",            // idle|connecting|listening|speaking|error|ended
-  provisioning:false, retryTimer:null,
+  provisioning:false, retryTimer:null, startGeneration:0,
   detail:"", transcript:"",
   micCtx:null, micStream:null, micNode:null, micSource:null, micGate:true,
   playCtx:null, playHead:0, responseId:0, playoutSeq:0,
@@ -935,6 +935,7 @@ function floatTo16(float32){
 
 async function startVoice(){
   if(voice.ws || voice.provisioning) return;
+  const startGeneration=++voice.startGeneration;
   const token=getToken(); if(!token){ signOutSilent(); return; }
   voice.transcript=""; voice.responseId=0; voice.playoutSeq=0;
 
@@ -944,16 +945,22 @@ async function startVoice(){
   voice.provisioning = true;
   vStatus("connecting","正在检查语音路由…");
   let routeTarget;
-  try { routeTarget = await ensureVoiceRoute(d => vStatus("connecting", d)); }
-  catch(e){ vStatus("error", String(e && e.message || e)); return; }
+  try { routeTarget = await ensureVoiceRoute(d => { if(startGeneration===voice.startGeneration) vStatus("connecting", d); }); }
+  catch(e){ if(startGeneration===voice.startGeneration) vStatus("error", String(e && e.message || e)); return; }
   finally { voice.provisioning = false; }
-  if(voice.status !== "connecting") return; // user hit stop while provisioning
+  if(startGeneration!==voice.startGeneration || voice.status !== "connecting") return; // user hit stop while provisioning
   vStatus("connecting", routeTarget.provisioned ? "已自动开通默认语音 agent · 正在请求麦克风…" : "正在请求麦克风…");
 
   // 1) mic capture → PCM16 24k. Force a 24k AudioContext so no resampling is needed.
+  let micStream;
   try {
-    voice.micStream = await navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
-  } catch(e){ vStatus("error","麦克风权限被拒绝或不可用"); return; }
+    micStream = await navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
+  } catch(e){ if(startGeneration===voice.startGeneration) vStatus("error","麦克风权限被拒绝或不可用"); return; }
+  if(startGeneration!==voice.startGeneration || voice.status !== "connecting"){
+    try { micStream.getTracks().forEach(t=>t.stop()); } catch(err) { console.warn("stale voice mic stream teardown failed", err); }
+    return;
+  }
+  voice.micStream = micStream;
   try { voice.micCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE }); }
   catch(e){ voice.micCtx = new (window.AudioContext||window.webkitAudioContext)(); }
   voice.playCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate:PCM_RATE });
@@ -1091,6 +1098,7 @@ function teardownAudio(){
 }
 
 function stopVoice(silent){
+  voice.startGeneration++;
   if(voice.retryTimer){ clearTimeout(voice.retryTimer); voice.retryTimer=null; }
   if(voice.ws){ try { voice.ws.close(1000,"client ended"); } catch(err) { console.warn("voice websocket close failed", err); } }
   voice.ws=null;

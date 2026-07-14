@@ -40,6 +40,7 @@ internal static class WorkflowRunExecutionContextStateAccess
         {
             ClearCallerCredential = true,
         };
+        var authority = NormalizeCallerNyxIdAuthority(credential?.NyxIdAuthority, nameof(credential));
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(credential?.BearerToken);
         if (parsed.IsInvalid)
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(credential));
@@ -50,12 +51,22 @@ internal static class WorkflowRunExecutionContextStateAccess
             delta.CallerCredential = new WorkflowCallerCredential
             {
                 DurableCallerCredential = credential!.DurableCallerCredential.Clone(),
+                NyxIdAuthority = authority,
             };
             return delta;
         }
 
         if (parsed.IsMissing)
+        {
+            if (authority != null)
+            {
+                throw new ArgumentException(
+                    "Workflow caller NyxID authority requires a caller credential.",
+                    nameof(credential));
+            }
+
             return delta;
+        }
 
         delta.CallerCredential = new WorkflowCallerCredential
         {
@@ -65,6 +76,7 @@ internal static class WorkflowRunExecutionContextStateAccess
                 OwnerRunId = "run-1",
                 OwnerStepId = WorkflowCallerCredentialRuntimeContextAccess.OwnerStepId,
             },
+            NyxIdAuthority = authority,
         };
 
         return delta;
@@ -158,7 +170,11 @@ internal static class WorkflowRunExecutionContextStateAccess
                 callerCredential!.DurableCallerCredential,
                 ct);
             return resolved.Found
-                ? (true, new WorkflowCallerCredential { BearerToken = resolved.Secret })
+                ? (true, new WorkflowCallerCredential
+                {
+                    BearerToken = resolved.Secret,
+                    NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
+                })
                 : (false, new WorkflowCallerCredential());
         }
 
@@ -166,7 +182,11 @@ internal static class WorkflowRunExecutionContextStateAccess
         {
             var resolved = await TryResolveRuntimeSecretAsync(source, callerCredential!.RuntimeSecretReference, ct);
             return resolved.Found
-                ? (true, new WorkflowCallerCredential { BearerToken = resolved.Secret })
+                ? (true, new WorkflowCallerCredential
+                {
+                    BearerToken = resolved.Secret,
+                    NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
+                })
                 : (false, new WorkflowCallerCredential());
         }
 
@@ -185,6 +205,7 @@ internal static class WorkflowRunExecutionContextStateAccess
             credential = new WorkflowCallerCredential
             {
                 BearerToken = parsed.NormalizedBearerToken ?? string.Empty,
+                NyxIdAuthority = callerCredential?.NyxIdAuthority?.Clone(),
             };
             return true;
         }
@@ -368,7 +389,49 @@ internal static class WorkflowRunExecutionContextStateAccess
             clone.CallerCredential.BearerToken = string.Empty;
         if (clone.CallerCredential?.DurableCallerCredential != null)
             clone.CallerCredential.DurableCallerCredential = null;
+        if (clone.CallerCredential?.NyxIdAuthority != null)
+            clone.CallerCredential.NyxIdAuthority = null;
         return clone;
+    }
+
+    internal static WorkflowCallerNyxIdAuthority? NormalizeCallerNyxIdAuthority(
+        WorkflowCallerNyxIdAuthority? source,
+        string parameterName)
+    {
+        if (source == null)
+            return null;
+        if (TryNormalizeCallerNyxIdAuthority(source, out var authority))
+            return authority;
+
+        throw new ArgumentException("Workflow caller NyxID authority is incomplete.", parameterName);
+    }
+
+    internal static bool TryNormalizeCallerNyxIdAuthority(
+        WorkflowCallerNyxIdAuthority? source,
+        out WorkflowCallerNyxIdAuthority? authority)
+    {
+        authority = null;
+        if (source == null)
+            return false;
+
+        var platform = Normalize(source.Platform);
+        var externalUserId = Normalize(source.ExternalUserId);
+        var scope = Normalize(source.Scope);
+        if (string.IsNullOrWhiteSpace(platform) ||
+            string.IsNullOrWhiteSpace(externalUserId) ||
+            string.IsNullOrWhiteSpace(scope))
+        {
+            return false;
+        }
+
+        authority = new WorkflowCallerNyxIdAuthority
+        {
+            Platform = platform,
+            Tenant = Normalize(source.Tenant),
+            ExternalUserId = externalUserId,
+            Scope = scope,
+        };
+        return true;
     }
 
     private static string Normalize(string? value) =>

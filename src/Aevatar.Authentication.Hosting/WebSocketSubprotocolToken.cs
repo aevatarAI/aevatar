@@ -18,9 +18,9 @@ namespace Aevatar.Authentication.Hosting;
 /// </para>
 /// <para>
 /// The client offers two subprotocols: the non-sensitive <see cref="VoiceSubprotocol"/>
-/// and <c>aevatar-bearer.&lt;token&gt;</c>. The server never echoes the bearer one back
-/// (so it stays out of response headers/logs); per RFC 6455 the handshake still
-/// completes when the server selects no subprotocol.
+/// and <c>aevatar-bearer.&lt;token&gt;</c>. The server selects only the non-sensitive
+/// voice protocol. This satisfies browser handshake validation without ever echoing
+/// the bearer entry into response headers or logs.
 /// </para>
 /// </summary>
 public static class WebSocketSubprotocolToken
@@ -38,6 +38,24 @@ public static class WebSocketSubprotocolToken
     /// (VoiceConsolePage.cs).
     /// </summary>
     public const string VoiceSubprotocol = "aevatar-voice-v1";
+
+    /// <summary>
+    /// Selects the fixed non-sensitive voice protocol when the client offered it.
+    /// The bearer-carrying protocol is never eligible for the response handshake.
+    /// </summary>
+    public static string? SelectVoiceSubprotocol(IEnumerable<string>? requestedProtocols)
+    {
+        if (requestedProtocols is null)
+            return null;
+
+        foreach (var protocol in requestedProtocols)
+        {
+            if (string.Equals(protocol, VoiceSubprotocol, StringComparison.Ordinal))
+                return VoiceSubprotocol;
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Returns the bearer token carried in the requested subprotocols (the remainder

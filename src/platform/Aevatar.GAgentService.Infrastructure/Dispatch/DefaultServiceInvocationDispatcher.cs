@@ -229,6 +229,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             return new Aevatar.Workflow.Abstractions.WorkflowCallerCredential
             {
                 DurableCallerCredential = source.CallerDurableCredential.Clone(),
+                NyxIdAuthority = ToWorkflowCallerNyxIdAuthority(
+                    source.CallerDurableCredential.ScheduledCallerNyxIdAuthority),
             };
         }
 
@@ -269,6 +271,32 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
     private static bool HasDurableCallerCredential(DurableCallerCredentialRef? reference) =>
         reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority? ToWorkflowCallerNyxIdAuthority(
+        ScheduledCallerNyxIdAuthority? source)
+    {
+        if (source == null)
+            return null;
+
+        var platform = source.Platform?.Trim() ?? string.Empty;
+        var externalUserId = source.ExternalUserId?.Trim() ?? string.Empty;
+        var scope = source.Scope?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(platform) ||
+            string.IsNullOrWhiteSpace(externalUserId) ||
+            string.IsNullOrWhiteSpace(scope))
+        {
+            throw new InvalidOperationException(
+                "caller_durable_credential NyxID authority is incomplete.");
+        }
+
+        return new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+        {
+            Platform = platform,
+            Tenant = source.Tenant?.Trim() ?? string.Empty,
+            ExternalUserId = externalUserId,
+            Scope = scope,
+        };
+    }
 
     private static string ResolveCallerCredentialSourceKind(
         Aevatar.Workflow.Abstractions.WorkflowCallerCredential credential) =>

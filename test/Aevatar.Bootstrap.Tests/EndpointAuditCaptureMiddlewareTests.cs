@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Bootstrap.Tests;
@@ -270,6 +271,55 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
     }
 
+    [Fact]
+    public async Task RequestCancellation_ShouldAppendCancelledTerminalRecordWithHostOwnedToken()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        using var requestCancellation = new CancellationTokenSource();
+        var context = new DefaultHttpContext
+        {
+            TraceIdentifier = "request-cancelled",
+            RequestAborted = requestCancellation.Token,
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", "user-123"),
+                new Claim("scope_id", "scope-a"),
+            ], "Test")),
+        };
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/audited/widgets/widget-1/cancel";
+        var metadata = new EndpointAuditMetadata(
+            "test.widget.cancel",
+            AuditSensitivityLevel.Confidential,
+            "widget",
+            _ => ValueTask.FromResult<EndpointAuditTarget?>(new EndpointAuditTarget("widget", "widget-1")),
+            _ => ValueTask.FromResult("request captured"),
+            _ => ValueTask.FromResult("result captured"));
+        context.SetEndpoint(new Endpoint(
+            _ => Task.CompletedTask,
+            new EndpointMetadataCollection(metadata),
+            "cancelled endpoint"));
+        RequestDelegate next = _ =>
+        {
+            requestCancellation.Cancel();
+            return Task.FromException(new OperationCanceledException(requestCancellation.Token));
+        };
+        var middleware = new EndpointAuditCaptureMiddleware(
+            next,
+            [appender],
+            [new FakeAuditActorIdentityHasher()],
+            NullLogger<EndpointAuditCaptureMiddleware>.Instance);
+
+        Func<Task> act = () => middleware.InvokeAsync(context);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("test.widget.cancel.attempted");
+        appender.Records[1].OperationName.Should().Be("test.widget.cancel");
+        appender.Records[1].Outcome.Should().Be(AuditOutcome.Cancelled);
+        appender.CancellationStates.Should().Equal(false, false);
+    }
+
     private static async Task<WebApplication> CreateHostAsync(
         RecordingAuditTrailAppender appender,
         ILoggerProvider? loggerProvider = null)
@@ -468,12 +518,16 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     {
         public List<AuditRecord> Records { get; } = [];
 
+        public List<bool> CancellationStates { get; } = [];
+
         public bool ThrowOnAppend { get; init; }
 
         public Task<AuditTrailAppendResult> AppendAsync(
             AuditRecord record,
             CancellationToken cancellationToken = default)
         {
+            CancellationStates.Add(cancellationToken.IsCancellationRequested);
+            cancellationToken.ThrowIfCancellationRequested();
             if (ThrowOnAppend)
             {
                 throw new InvalidOperationException("append failed");

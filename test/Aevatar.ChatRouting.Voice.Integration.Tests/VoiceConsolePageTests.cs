@@ -152,6 +152,30 @@ public sealed class VoiceConsolePageTests
             "the bearer belongs in Sec-WebSocket-Protocol, never in a logged URL");
     }
 
+    [Fact]
+    public void EmbeddedAsset_StopsMicrophone_WhenUserStopsDuringPermissionPrompt()
+    {
+        var html = ReadEmbeddedAsset();
+        var generationCaptured = html.IndexOf("const startGeneration=++voice.startGeneration", StringComparison.Ordinal);
+        var permissionResolved = html.IndexOf("micStream = await navigator.mediaDevices.getUserMedia", StringComparison.Ordinal);
+        var stoppedCheck = html.IndexOf("if(startGeneration!==voice.startGeneration || voice.status !== \"connecting\")", permissionResolved, StringComparison.Ordinal);
+        var staleStreamStopped = html.IndexOf("micStream.getTracks().forEach(t=>t.stop())", stoppedCheck, StringComparison.Ordinal);
+        var streamAssigned = html.IndexOf("voice.micStream = micStream", permissionResolved, StringComparison.Ordinal);
+        var audioContextCreated = html.IndexOf("voice.micCtx = new", permissionResolved, StringComparison.Ordinal);
+        var stopInvalidatesGeneration = html.IndexOf("voice.startGeneration++", StringComparison.Ordinal);
+
+        generationCaptured.Should().BeGreaterThan(0);
+        permissionResolved.Should().BeGreaterThan(0);
+        stoppedCheck.Should().BeGreaterThan(permissionResolved);
+        staleStreamStopped.Should().BeGreaterThan(stoppedCheck);
+        staleStreamStopped.Should().BeLessThan(streamAssigned);
+        streamAssigned.Should().BeGreaterThan(stoppedCheck,
+            "a stale permission result must be stopped before it can replace the active stream");
+        streamAssigned.Should().BeLessThan(audioContextCreated);
+        stopInvalidatesGeneration.Should().BeGreaterThan(0,
+            "stop must invalidate pending permission attempts even when a new start begins immediately");
+    }
+
     private static string ReadEmbeddedAsset()
     {
         var assembly = typeof(PolicyAwareVoiceEndpoints).Assembly;

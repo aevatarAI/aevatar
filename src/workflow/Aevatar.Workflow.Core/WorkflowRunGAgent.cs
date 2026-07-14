@@ -44,6 +44,7 @@ public sealed class WorkflowRunGAgent
     private const string CompletedStatus = "completed";
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
+    private static readonly TimeSpan ScheduledCallerCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
@@ -57,6 +58,7 @@ public sealed class WorkflowRunGAgent
     private readonly SubWorkflowOrchestrator _subWorkflowOrchestrator;
     private readonly ApplicationWorkflowFileArtifactOwnershipPort? _fileArtifactOwnership;
     private readonly ISecretVault? _secretVault;
+    private readonly TimeProvider _timeProvider;
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
@@ -65,7 +67,8 @@ public sealed class WorkflowRunGAgent
         IEnumerable<IWorkflowModulePack> modulePacks,
         IWorkflowDefinitionResolver? workflowDefinitionResolver = null,
         ISecretVault? secretVault = null,
-        ApplicationWorkflowFileArtifactOwnershipPort? fileArtifactOwnership = null)
+        ApplicationWorkflowFileArtifactOwnershipPort? fileArtifactOwnership = null,
+        TimeProvider? timeProvider = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
@@ -95,6 +98,7 @@ public sealed class WorkflowRunGAgent
                 .SelectMany(x => x.Names));
         _fileArtifactOwnership = fileArtifactOwnership;
         _secretVault = secretVault;
+        _timeProvider = timeProvider ?? TimeProvider.System;
 
         _subWorkflowOrchestrator = new SubWorkflowOrchestrator(
             _runtime,
@@ -116,6 +120,19 @@ public sealed class WorkflowRunGAgent
     public string ScopeId => State.ScopeId ?? string.Empty;
 
     public string ScheduleId => State.ScheduleId ?? string.Empty;
+
+    public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
+    {
+        get
+        {
+            var source = State.ExecutionContext?.CallerCredential?.NyxIdAuthority;
+            return WorkflowRunExecutionContextStateAccess.TryNormalizeCallerNyxIdAuthority(
+                source,
+                out var authority)
+                ? authority
+                : null;
+        }
+    }
 
     IRuntimeSecretStore? IRuntimeSecretStoreAccessor.RuntimeSecretStore =>
         (IRuntimeSecretStore?)Services.GetService(typeof(IRuntimeSecretStore));
@@ -844,6 +861,10 @@ public sealed class WorkflowRunGAgent
 
         var stateBeforeCompletion = State.Clone();
         await PersistDomainEventAsync(evt);
+        await TryRevokeScheduledCallerCredentialAsync(
+            stateBeforeCompletion,
+            "workflow-run-completed",
+            CancellationToken.None);
         if (!ShouldSuppressGenericParentCompletion(stateBeforeCompletion))
             await PublishAsync(evt.Clone(), TopologyAudience.Parent);
         await PersistForkRequestOnTerminalFailureAsync(evt, stateBeforeCompletion, CancellationToken.None);
@@ -1487,6 +1508,7 @@ public sealed class WorkflowRunGAgent
                 BearerToken = parsed.IsValid ? parsed.NormalizedBearerToken ?? string.Empty : string.Empty,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
                 DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
+                NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
             };
         }
 
@@ -2037,6 +2059,10 @@ public sealed class WorkflowRunGAgent
 
         var stateBeforeStop = State.Clone();
         await persistAsync(ct);
+        await TryRevokeScheduledCallerCredentialAsync(
+            stateBeforeStop,
+            "workflow-run-stopped",
+            CancellationToken.None);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeStop, CancellationToken.None);
         await _subWorkflowOrchestrator.CleanupPendingInvocationsForRunAsync(runId, stateBeforeStop, CancellationToken.None);
         await CleanupRoleAgentTreeAsync(CancellationToken.None);
@@ -2056,6 +2082,87 @@ public sealed class WorkflowRunGAgent
             Content = BuildStoppedMessage(reason),
             Error = BuildStoppedMessage(reason),
         }, TopologyAudience.Parent);
+    }
+
+    private async Task TryRevokeScheduledCallerCredentialAsync(
+        WorkflowRunState stateBeforeTerminal,
+        string auditReason,
+        CancellationToken ct)
+    {
+        var reference = stateBeforeTerminal.ExecutionContext?
+            .CallerCredential?
+            .DurableCallerCredential;
+        if (reference == null ||
+            reference.SourceKind != DurableCallerCredentialSourceKind.ScheduledDispatch ||
+            !string.Equals(
+                reference.Purpose,
+                CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(reference.Ref) ||
+            string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
+            string.IsNullOrWhiteSpace(reference.SubjectId))
+        {
+            return;
+        }
+
+        if (_secretVault == null)
+        {
+            Logger.LogWarning(
+                "Scheduled workflow caller credential cleanup skipped because the secret vault is unavailable. run={RunId}",
+                stateBeforeTerminal.RunId);
+            return;
+        }
+
+        using var cleanupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var revokeTask = RevokeScheduledCallerCredentialAsync(
+            reference,
+            auditReason,
+            stateBeforeTerminal.RunId,
+            cleanupCts.Token);
+        try
+        {
+            await revokeTask.WaitAsync(
+                ScheduledCallerCredentialCleanupTimeout,
+                _timeProvider,
+                ct);
+        }
+        catch (TimeoutException ex)
+        {
+            cleanupCts.Cancel();
+            Logger.LogWarning(
+                ex,
+                "Scheduled workflow caller credential cleanup timed out after {TimeoutSeconds}s. run={RunId}",
+                ScheduledCallerCredentialCleanupTimeout.TotalSeconds,
+                stateBeforeTerminal.RunId);
+        }
+    }
+
+    private async Task RevokeScheduledCallerCredentialAsync(
+        DurableCallerCredentialRef reference,
+        string auditReason,
+        string runId,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _secretVault!.RevokeAsync(new RevokeSecretRequest(
+                reference.Ref,
+                CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                reference.OwnerScopeKey,
+                reference.SubjectId,
+                auditReason), ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The actor turn owns a bounded cleanup budget; token expiry is the durable fallback.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Scheduled workflow caller credential cleanup failed. run={RunId}",
+                runId);
+        }
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

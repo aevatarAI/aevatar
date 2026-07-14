@@ -25,13 +25,11 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
 
     private readonly ConnectionMultiplexer _connection;
     private readonly IDatabase _database;
-    private readonly IServer _server;
 
     private RedisSecretStoreSweepTarget(ConnectionMultiplexer connection, int database)
     {
         _connection = connection;
         _database = connection.GetDatabase(database);
-        _server = connection.GetServer(connection.GetEndPoints().First());
     }
 
     public static async Task<RedisSecretStoreSweepTarget> ConnectAsync(string connectionString, int database)
@@ -56,7 +54,7 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
             throw new ArgumentOutOfRangeException(nameof(count));
         ct.ThrowIfCancellationRequested();
 
-        var result = await _server.ExecuteAsync(
+        var result = await _database.ExecuteAsync(
             "SCAN",
             cursor.ToString(CultureInfo.InvariantCulture),
             "MATCH",

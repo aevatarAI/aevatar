@@ -1,5 +1,6 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
 using Google.Protobuf.WellKnownTypes;
@@ -24,6 +25,37 @@ public sealed class InMemoryAuditTrailStoreTests
         receipt.AuditActorId.ShouldBe("actor-a");
         page.Records.Single().ScopeId.ShouldBe("scope-a");
         page.Records.Single().ShouldNotBeSameAs(record);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenSameAuditAndContentExists_ShouldReturnDuplicateWithoutAddingRecord()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var record = CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success);
+
+        var first = await store.AppendAsync(record);
+        var second = await store.AppendAsync(record.Clone());
+        var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
+
+        first.Status.ShouldBe(AuditTrailAppendStatus.Appended);
+        second.Status.ShouldBe(AuditTrailAppendStatus.Duplicate);
+        page.Records.Select(static item => item.AuditId).ShouldBe(["audit-1"]);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenSameAuditAndDifferentContentExists_ShouldReturnConflictWithoutReplacingRecord()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var original = CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success);
+        var conflicting = original.Clone();
+        conflicting.RequestSummary = "different request";
+
+        await store.AppendAsync(original);
+        var result = await store.AppendAsync(conflicting);
+        var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
+
+        result.Status.ShouldBe(AuditTrailAppendStatus.Conflict);
+        page.Records.ShouldHaveSingleItem().RequestSummary.ShouldBe("request summary");
     }
 
     [Fact]

@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
+using StackExchange.Redis;
+
 namespace Aevatar.Mainnet.Host.Api.Responses;
 
 /// <summary>
@@ -11,7 +15,10 @@ internal interface IIdentityAssertionReplayGuard
     /// <see langword="false"/> if the same <paramref name="jti"/> was already consumed and its
     /// lifetime (bounded by <paramref name="expiresUtc"/>) has not yet elapsed.
     /// </summary>
-    bool TryConsume(string jti, DateTimeOffset expiresUtc);
+    ValueTask<bool> TryConsumeAsync(
+        string jti,
+        DateTimeOffset expiresUtc,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -20,10 +27,8 @@ internal interface IIdentityAssertionReplayGuard
 /// bounded by the number of assertions currently within their (short) lifetime.
 /// </summary>
 /// <remarks>
-/// This node-local implementation only detects replays observed by the same host instance. A
-/// distributed backing (e.g. a Garnet / Redis-style shared store with per-key TTL keyed by
-/// <c>jti</c>) can replace this default to make the guard cluster-wide without changing the
-/// <see cref="IIdentityAssertionReplayGuard"/> contract or its callers.
+/// This node-local implementation is restricted to Development/test composition. Mainnet
+/// production composition uses <see cref="DistributedIdentityAssertionReplayGuard"/>.
 /// </remarks>
 internal sealed class InMemoryIdentityAssertionReplayGuard : IIdentityAssertionReplayGuard
 {
@@ -42,8 +47,12 @@ internal sealed class InMemoryIdentityAssertionReplayGuard : IIdentityAssertionR
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
-    public bool TryConsume(string jti, DateTimeOffset expiresUtc)
+    public ValueTask<bool> TryConsumeAsync(
+        string jti,
+        DateTimeOffset expiresUtc,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(jti))
             throw new ArgumentException("jti must be a non-empty value.", nameof(jti));
 
@@ -58,7 +67,7 @@ internal sealed class InMemoryIdentityAssertionReplayGuard : IIdentityAssertionR
                 // Seen and still live -> replay. (Anything already expired was evicted above,
                 // so a surviving entry is unambiguously an in-lifetime duplicate.)
                 if (existingExpiry > now)
-                    return false;
+                    return ValueTask.FromResult(false);
             }
 
             // Bound the retention window by the assertion's own expiry; a non-positive window
@@ -67,7 +76,7 @@ internal sealed class InMemoryIdentityAssertionReplayGuard : IIdentityAssertionR
             var retainUntil = expiresUtc > now ? expiresUtc : now;
             _seenExpiryByJti[jti] = retainUntil;
             _expiryOrder.Enqueue(jti, retainUntil);
-            return true;
+            return ValueTask.FromResult(true);
         }
     }
 
@@ -82,5 +91,82 @@ internal sealed class InMemoryIdentityAssertionReplayGuard : IIdentityAssertionR
             if (_seenExpiryByJti.TryGetValue(jti, out var current) && current == expiry)
                 _seenExpiryByJti.Remove(jti);
         }
+    }
+}
+
+internal interface IIdentityAssertionSingleUseStore
+{
+    ValueTask<bool> TryAddAsync(
+        string key,
+        TimeSpan retention,
+        CancellationToken cancellationToken = default);
+}
+
+internal sealed class GarnetIdentityAssertionSingleUseStore : IIdentityAssertionSingleUseStore
+{
+    private readonly IDatabase _database;
+
+    public GarnetIdentityAssertionSingleUseStore(IConnectionMultiplexer connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        _database = connection.GetDatabase();
+    }
+
+    public async ValueTask<bool> TryAddAsync(
+        string key,
+        TimeSpan retention,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var added = await _database.StringSetAsync(
+            key,
+            RedisValue.EmptyString,
+            retention,
+            When.NotExists);
+        cancellationToken.ThrowIfCancellationRequested();
+        return added;
+    }
+}
+
+/// <summary>
+/// Cluster-wide single-use guard backed by Garnet's atomic SET-NX operation and key TTL.
+/// Multiple host replicas share the same key namespace, so exactly one request can consume
+/// a given assertion <c>jti</c> during its signed lifetime.
+/// </summary>
+internal sealed class DistributedIdentityAssertionReplayGuard : IIdentityAssertionReplayGuard
+{
+    private const string KeyPrefix = "aevatar:mainnet:nyxid-identity-assertion:jti:";
+    private static readonly TimeSpan MinimumRetention = TimeSpan.FromMilliseconds(1);
+
+    private readonly IIdentityAssertionSingleUseStore _store;
+    private readonly TimeProvider _timeProvider;
+
+    public DistributedIdentityAssertionReplayGuard(
+        IIdentityAssertionSingleUseStore store,
+        TimeProvider timeProvider)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+    }
+
+    public ValueTask<bool> TryConsumeAsync(
+        string jti,
+        DateTimeOffset expiresUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(jti))
+            throw new ArgumentException("jti must be a non-empty value.", nameof(jti));
+
+        var retention = expiresUtc - _timeProvider.GetUtcNow();
+        if (retention < MinimumRetention)
+            retention = MinimumRetention;
+
+        return _store.TryAddAsync(BuildKey(jti), retention, cancellationToken);
+    }
+
+    private static string BuildKey(string jti)
+    {
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(jti));
+        return KeyPrefix + Convert.ToHexStringLower(digest);
     }
 }
