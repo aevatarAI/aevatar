@@ -24,38 +24,6 @@ describe("teamAutomationApi", () => {
     );
   });
 
-  it("rejects missing consent and never fabricates an accepted receipt", async () => {
-    await expect(
-      teamAutomationApi.create({
-        draft,
-        permissionDigest: "digest-alpha",
-        policyVersion: "policy-alpha",
-        consent: {
-          accepted: false,
-          acceptedAt: "",
-          browserLoginConsent: false,
-          automationAgentKeyConsent: false,
-        },
-      }),
-    ).rejects.toThrow("Team Automation Agent Key consent is required.");
-
-    await expect(
-      teamAutomationApi.create({
-        draft,
-        permissionDigest: "digest-alpha",
-        policyVersion: "policy-alpha",
-        consent: {
-          accepted: true,
-          acceptedAt: "2026-07-14T00:00:00Z",
-          browserLoginConsent: true,
-          automationAgentKeyConsent: true,
-        },
-      }),
-    ).rejects.toThrow(
-      "Team Automation creation is unavailable until the scoped backend contract is connected.",
-    );
-  });
-
   it("builds an explicit mock review without conflating member and service identities", () => {
     const review = buildMockTeamAutomationPermissionReview(draft);
 

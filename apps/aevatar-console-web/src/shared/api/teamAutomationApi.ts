@@ -35,42 +35,9 @@ export type TeamAutomationPermissionReview = {
   readonly warning?: string;
 };
 
-export type TeamAutomationConsent = {
-  readonly accepted: boolean;
-  readonly acceptedAt: string;
-  readonly browserLoginConsent: boolean;
-  readonly automationAgentKeyConsent: boolean;
-};
-
-export type TeamAutomationCreateInput = {
-  readonly draft: TeamAutomationCreateDraft;
-  readonly permissionDigest: string;
-  readonly policyVersion: string;
-  readonly consent: TeamAutomationConsent;
-};
-
-export type TeamAutomationCreateReceipt = {
-  readonly scheduleId: string;
-  readonly scheduleActorId: string;
-  readonly accepted: boolean;
-  readonly commandId: string;
-  readonly correlationId: string;
-  readonly ackedAt: string;
-  readonly ackStage: "accepted";
-  readonly permissionDigest: string;
-  readonly policyVersion: string;
-};
-
 const teamAutomationMockFixtureIds = {
   publishedServiceId: "svc-alpha",
 } as const;
-
-export interface TeamAutomationPermissionReviewPort {
-  preflightCreate(
-    draft: TeamAutomationCreateDraft,
-  ): Promise<TeamAutomationPermissionReview>;
-  create(input: TeamAutomationCreateInput): Promise<TeamAutomationCreateReceipt>;
-}
 
 function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -123,18 +90,6 @@ async function preflightCreateTeamAutomation(
   );
 }
 
-async function createTeamAutomation(
-  input: TeamAutomationCreateInput,
-): Promise<TeamAutomationCreateReceipt> {
-  if (!input.consent.accepted) {
-    throw new Error("Team Automation Agent Key consent is required.");
-  }
-  throw new Error(
-    "Team Automation creation is unavailable until the scoped backend contract is connected.",
-  );
-}
-
-export const teamAutomationApi: TeamAutomationPermissionReviewPort = {
+export const teamAutomationApi = {
   preflightCreate: preflightCreateTeamAutomation,
-  create: createTeamAutomation,
 };

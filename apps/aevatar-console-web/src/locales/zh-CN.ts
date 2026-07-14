@@ -766,8 +766,6 @@ const zhCNMessages = {
   'teams.automations.form.cadenceAria': '自动化节奏',
   'teams.automations.form.close': '关闭',
   'teams.automations.form.create': '创建自动化',
-  'teams.automations.form.createWithConsent':
-    '同意 Agent Key 授权并创建',
   'teams.automations.form.cron': 'Cron 表达式',
   'teams.automations.form.cronAria': 'Cron 表达式',
   'teams.automations.form.cronFiveFieldHint':
@@ -840,10 +838,6 @@ const zhCNMessages = {
   'teams.automations.member.unknown': '未知成员',
   'teams.automations.member.workflowOnly':
     '只有 Workflow 成员可以添加周期任务。',
-  'teams.automations.messages.consentRequired':
-    '创建前请审查并同意使用自动化专用 Agent Key。',
-  'teams.automations.messages.createAccepted':
-    '自动化创建请求已受理。',
   'teams.automations.messages.createFailed': '自动化未创建：{message}',
   'teams.automations.messages.createSuccess': '自动化已创建。',
   'teams.automations.messages.cronRequired': '请先填写 Cron 表达式。',

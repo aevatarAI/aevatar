@@ -805,8 +805,6 @@ const enUSMessages = {
   'teams.automations.form.backendRequired': 'Creation unavailable',
   'teams.automations.form.close': 'Close',
   'teams.automations.form.create': 'Create automation',
-  'teams.automations.form.createWithConsent':
-    'Create with Agent Key consent',
   'teams.automations.form.cron': 'Cron expression',
   'teams.automations.form.cronAria': 'Cron expression',
   'teams.automations.form.cronFiveFieldHint':
@@ -887,11 +885,7 @@ const enUSMessages = {
     'Only workflow members can have recurring work.',
   'teams.automations.messages.createFailed':
     'Automation was not created: {message}',
-  'teams.automations.messages.createAccepted':
-    'Automation creation request accepted.',
   'teams.automations.messages.createSuccess': 'Automation created.',
-  'teams.automations.messages.consentRequired':
-    'Review and consent to the automation-dedicated Agent Key before creating.',
   'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
   'teams.automations.messages.deleteSuccess': 'Automation deleted.',
   'teams.automations.messages.disableSuccess': 'Automation paused.',

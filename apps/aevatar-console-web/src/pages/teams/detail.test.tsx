@@ -363,21 +363,6 @@ function mockCreateTeamAutomationPermissionReview(
   };
 }
 
-function mockCreateTeamAutomationReceipt(overrides?: Record<string, any>) {
-  return {
-    scheduleId: "sch-alpha",
-    scheduleActorId: "schedule-actor-alpha",
-    accepted: true,
-    commandId: "cmd-team-automation-alpha",
-    correlationId: "corr-team-automation-alpha",
-    ackedAt: "2026-06-10T08:35:00Z",
-    ackStage: "accepted",
-    permissionDigest: "perm-digest-alpha-v1",
-    policyVersion: "agent-key-policy-v1",
-    ...overrides,
-  };
-}
-
 const forbiddenAutomationSecretMarkers = [
   "fullKey",
   "full_key",
@@ -745,7 +730,6 @@ jest.mock("@/shared/api/scheduledDispatchApi", () => ({
 jest.mock("@/shared/api/teamAutomationApi", () => ({
   teamAutomationApi: {
     preflightCreate: jest.fn(async () => mockCreateTeamAutomationPermissionReview()),
-    create: jest.fn(async () => mockCreateTeamAutomationReceipt()),
   },
 }));
 
@@ -1065,10 +1049,6 @@ describe("TeamDetailPage", () => {
     (teamAutomationApi.preflightCreate as jest.Mock).mockReset();
     (teamAutomationApi.preflightCreate as jest.Mock).mockImplementation(
       async () => mockCreateTeamAutomationPermissionReview(),
-    );
-    (teamAutomationApi.create as jest.Mock).mockReset();
-    (teamAutomationApi.create as jest.Mock).mockImplementation(
-      async () => mockCreateTeamAutomationReceipt(),
     );
     (scheduledDispatchApi.update as jest.Mock).mockReset();
     (scheduledDispatchApi.update as jest.Mock).mockImplementation(async () => ({
@@ -2854,7 +2834,6 @@ describe("TeamDetailPage", () => {
     );
     expect(createButton).toBeDisabled();
     fireEvent.click(createButton);
-    expect(teamAutomationApi.create).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
     expectNoAutomationSecretMarkers(reviewPayload);
     expectNoAutomationSecretMarkers(
@@ -2899,7 +2878,6 @@ describe("TeamDetailPage", () => {
     ).toBeDisabled();
     fireEvent.click(within(dialog).getByRole("button", { name: /关.*闭/ }));
 
-    expect(teamAutomationApi.create).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
 
     fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
@@ -2952,7 +2930,6 @@ describe("TeamDetailPage", () => {
       await screen.findByLabelText(/我同意 Aevatar 为此定时任务创建专用的 Agent Key/),
     ).toBeTruthy();
     expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(2);
-    expect(teamAutomationApi.create).not.toHaveBeenCalled();
   });
 
   it("previews next runs from the automation form", async () => {
@@ -3038,7 +3015,6 @@ describe("TeamDetailPage", () => {
         name: "暂不可创建",
       }),
     );
-    expect(teamAutomationApi.create).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
     expect(message.error).not.toHaveBeenCalledWith("保存前请先描述周期任务。");
   });
@@ -3132,7 +3108,6 @@ describe("TeamDetailPage", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "暂不可创建" }),
     );
-    expect(teamAutomationApi.create).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
   });
 
@@ -3160,7 +3135,6 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "审查权限" }));
     expect(await screen.findByText("凭据模式：dedicated-per-schedule")).toBeTruthy();
     expect(teamAutomationApi.preflightCreate).toHaveBeenCalledTimes(2);
-    expect(teamAutomationApi.create).not.toHaveBeenCalled();
     expect(scheduledDispatchApi.create).not.toHaveBeenCalled();
   });
 
