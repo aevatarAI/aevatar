@@ -13,18 +13,26 @@ public sealed class NyxIdCodexExecTool : IAgentTool
 {
     private const int MaxPromptUtf8Bytes = 6_000;
 
-    private readonly NyxIdSshExecTool _sshExec;
+    private readonly INyxIdSshCommandExecutor _executor;
+    private readonly NyxIdToolOptions _options;
 
     public NyxIdCodexExecTool(
         NyxIdApiClient client,
         NyxIdToolOptions? options = null,
         ILogger? logger = null)
+        : this(new NyxIdSshCommandExecutor(client, logger), options ?? new NyxIdToolOptions())
     {
-        ArgumentNullException.ThrowIfNull(client);
-        _sshExec = new NyxIdSshExecTool(client, options, logger);
     }
 
-    public string Name => "execute_codex";
+    internal NyxIdCodexExecTool(
+        INyxIdSshCommandExecutor executor,
+        NyxIdToolOptions options)
+    {
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+    }
+
+    public string Name => "codex_exec";
 
     public string Description =>
         "Run one non-interactive Codex CLI task on the host behind a NyxID-bound SSH service. " +
@@ -34,7 +42,7 @@ public sealed class NyxIdCodexExecTool : IAgentTool
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
-    public bool? RequiresApproval(string argumentsJson) => _sshExec.RequiresApproval(argumentsJson);
+    public bool? RequiresApproval(string argumentsJson) => !_options.BypassSshExecApproval;
 
     public string ParametersSchema => """
         {
@@ -92,14 +100,13 @@ public sealed class NyxIdCodexExecTool : IAgentTool
             });
         }
 
-        var sshArguments = JsonSerializer.Serialize(new
-        {
-            service,
-            principal,
-            command = BuildCommand(promptBytes),
-            timeout_secs = args.Str("timeout_secs"),
-        });
-        return await _sshExec.ExecuteAsync(sshArguments, ct).ConfigureAwait(false);
+        return await _executor.ExecuteAsync(
+            new NyxIdSshCommandRequest(
+                service,
+                principal,
+                BuildCommand(promptBytes),
+                args.Int("timeout_secs")),
+            ct).ConfigureAwait(false);
     }
 
     private static string BuildCommand(ReadOnlySpan<byte> promptBytes)

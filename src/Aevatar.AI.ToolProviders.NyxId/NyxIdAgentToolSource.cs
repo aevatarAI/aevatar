@@ -85,8 +85,9 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
                     "Register a local approval handler or explicitly set BypassSshExecApproval before exposing them.");
             }
 
-            tools.Add(new NyxIdSshExecTool(_client, _options, _logger));
-            tools.Add(new NyxIdCodexExecTool(_client, _options, _logger));
+            var sshExecutor = new NyxIdSshCommandExecutor(_client, _logger);
+            tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
+            tools.Add(new NyxIdCodexExecTool(sshExecutor, _options));
         }
 
         _logger.LogInformation(

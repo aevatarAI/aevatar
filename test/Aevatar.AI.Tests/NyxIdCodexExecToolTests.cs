@@ -18,7 +18,7 @@ public sealed class NyxIdCodexExecToolTests
     {
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
-        tool.Name.Should().Be("execute_codex");
+        tool.Name.Should().Be("codex_exec");
         tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.Description.Should().Contain("codex exec -");
@@ -37,6 +37,31 @@ public sealed class NyxIdCodexExecToolTests
             new NyxIdToolOptions { BypassSshExecApproval = true });
 
         tool.RequiresApproval("{}").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_BuildsTypedSshRequest()
+    {
+        var executor = new RecordingSshExecutor();
+        var tool = new NyxIdCodexExecTool(executor, new NyxIdToolOptions());
+        const string prompt = "Inspect this safely'; echo $(id)";
+
+        var result = await tool.ExecuteAsync(JsonSerializer.Serialize(new
+        {
+            service = "codex-node",
+            principal = "runner",
+            prompt,
+            timeout_secs = 90,
+        }));
+
+        result.Should().Be("""{"exit_code":0}""");
+        executor.Request.Should().NotBeNull();
+        executor.Request!.Service.Should().Be("codex-node");
+        executor.Request.Principal.Should().Be("runner");
+        executor.Request.TimeoutSecs.Should().Be(90);
+        executor.Request.Command.Should().EndWith("| codex exec -");
+        executor.Request.Command.Should().NotContain(prompt);
+        DecodePrompt(executor.Request.Command).Should().Be(prompt);
     }
 
     [Fact]
@@ -139,6 +164,19 @@ public sealed class NyxIdCodexExecToolTests
         string Path,
         string? Body,
         string? Authorization);
+
+    private sealed class RecordingSshExecutor : INyxIdSshCommandExecutor
+    {
+        public NyxIdSshCommandRequest? Request { get; private set; }
+
+        public Task<string> ExecuteAsync(
+            NyxIdSshCommandRequest request,
+            CancellationToken ct = default)
+        {
+            Request = request;
+            return Task.FromResult("""{"exit_code":0}""");
+        }
+    }
 
     private sealed class RecordingHandler : HttpMessageHandler
     {

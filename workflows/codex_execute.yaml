@@ -3,7 +3,8 @@ description: Run one bounded Codex CLI task through a NyxID SSH service bound to
 when_to_use: Use when the target SSH host already has Codex installed and configured; use codex_long_running_handoff for work exceeding the NyxID SSH timeout.
 steps:
   - id: execute
-    type: execute_codex
+    type: tool_call
     timeout_ms: 320000
     parameters:
+      tool: codex_exec
       arguments: '{"service":"${json(input.service)}","principal":"${json(input.principal)}","prompt":"${json(input.prompt)}","timeout_secs":300}'
