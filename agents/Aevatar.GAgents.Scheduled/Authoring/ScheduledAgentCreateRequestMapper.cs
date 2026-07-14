@@ -10,6 +10,8 @@ namespace Aevatar.GAgents.Scheduled;
 
 internal sealed class ScheduledAgentCreateRequestMapper
 {
+    private const string ScheduledAgentNyxProviderSlugHeader = "scheduled_agent.nyx_provider_slug";
+
     internal static readonly TimeSpan MinimumOneShotDelay = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan MaximumOneShotDelay = TimeSpan.FromDays(366);
 
@@ -120,7 +122,9 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (conversationId is null)
             return ScheduledAgentCreatePlanResult.Failed("conversation_id_unavailable");
 
-        var primarySlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.OutboundProviderSlug));
+        var contextOutboundSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.OutboundProviderSlug));
+        var primarySlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ScheduledAgentNyxProviderSlugHeader))
+            ?? contextOutboundSlug;
         if (primarySlug is null)
             return ScheduledAgentCreatePlanResult.Failed("channel_outbound_provider_slug_unavailable");
 
@@ -212,13 +216,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
         var platform = Normalize(AgentToolRequestContext.ChannelPlatform)
             ?? Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.Platform))
             ?? string.Empty;
-        var chatType = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.ChatType));
         var primaryAddressId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryAddressId))
             ?? Normalize(AgentToolRequestContext.ChannelDeliveryTargetId)
             ?? Normalize(conversationId)
             ?? string.Empty;
         var primaryAddressType = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryAddressType))
-            ?? chatType
             ?? string.Empty;
         var fallbackAddressId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryFallbackAddressId));
         var fallbackAddressType = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryFallbackAddressType));
@@ -395,7 +397,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ["scheduled_agent.conversation_id"] = request.ConversationId,
             ["scheduled_agent.output_format"] = request.OutputFormat.ToString(),
             ["scheduled_agent.api_key_id"] = issuedKey.ApiKeyId ?? string.Empty,
-            ["scheduled_agent.nyx_provider_slug"] = request.PrimaryOutboundSlug,
+            [ScheduledAgentNyxProviderSlugHeader] = request.PrimaryOutboundSlug,
         };
 
         if (!string.IsNullOrWhiteSpace(request.Model))
