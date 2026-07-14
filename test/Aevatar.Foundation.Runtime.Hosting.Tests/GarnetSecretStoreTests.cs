@@ -1,5 +1,6 @@
 using System.Text;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyInjection;
 using FluentAssertions;
@@ -64,6 +65,103 @@ public sealed class GarnetSecretStoreTests
             "user-beta",
             "test wrong subject"));
         wrongSubject.Resolved.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("in-memory")]
+    [InlineData("garnet")]
+    public async Task SecretVaultRequestedReferenceContract_WithNullReference_AllocatesReference(
+        string provider)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test allocated reference",
+            RequestedRef: null));
+
+        stored.Reference.Ref.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Theory]
+    [InlineData("in-memory", "")]
+    [InlineData("in-memory", " ")]
+    [InlineData("garnet", "")]
+    [InlineData("garnet", " ")]
+    public async Task SecretVaultRequestedReferenceContract_WithBlankReference_RejectsRequest(
+        string provider,
+        string requestedReference)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+
+        var put = () => vault.PutAsync(new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test blank reference",
+            RequestedRef: requestedReference));
+
+        await put.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*RequestedRef*");
+    }
+
+    [Theory]
+    [InlineData("in-memory")]
+    [InlineData("garnet")]
+    public async Task SecretVaultRequestedReferenceContract_WithExactRetry_ReturnsOriginalReference(
+        string provider)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+        var request = new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test exact retry",
+            RequestedRef: "sec_requested_contract");
+
+        var first = await vault.PutAsync(request);
+        var second = await vault.PutAsync(request);
+
+        second.Reference.Should().BeEquivalentTo(first.Reference);
+        second.Reference.Ref.Should().Be("sec_requested_contract");
+    }
+
+    [Theory]
+    [InlineData("in-memory")]
+    [InlineData("garnet")]
+    public async Task SecretVaultRequestedReferenceContract_WithAliasConflict_PreservesOriginalSecret(
+        string provider)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+        var original = new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test alias conflict",
+            RequestedRef: "sec_requested_contract");
+        await vault.PutAsync(original);
+
+        var conflictingPut = () => vault.PutAsync(original with
+        {
+            SubjectId = "key-beta",
+            Secret = "secret-beta",
+        });
+
+        await conflictingPut.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            "sec_requested_contract",
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "test original survives"));
+        resolved.Secret.Should().Be("secret-alpha");
     }
 
     [Fact]
@@ -806,6 +904,18 @@ public sealed class GarnetSecretStoreTests
         SecretVaultPrefix = $"aevatar:test:vault:{Guid.NewGuid():N}",
         RuntimeSecretPrefix = $"aevatar:test:runtime:{Guid.NewGuid():N}",
     };
+
+    private static ISecretVault CreateRequestedReferenceContractVault(string provider) =>
+        provider switch
+        {
+            "in-memory" => new InMemorySecretVault(),
+            "garnet" => new GarnetBackedSecretVault(
+                new RecordingGarnetSecretKeyValueStore(),
+                CreateOptions(),
+                CreateKeyring(),
+                ManualTime.Start),
+            _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, null),
+        };
 
     private static GarnetSecretStoreKeyring CreateKeyring()
     {

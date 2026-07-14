@@ -264,6 +264,10 @@ message UserAgentCatalogApiKeyRevocationRequestedEvent {
   UserAgentApiKeyRevocation revocation = 1;
 }
 
+message UserAgentCatalogCredentialRevocationsMigratedEvent {
+  repeated UserAgentApiKeyRevocation revocations = 1;
+}
+
 message UserAgentCatalogApiKeyRevocationAttemptRecordedEvent {
   string agent_id = 1;
   string api_key_id = 2;

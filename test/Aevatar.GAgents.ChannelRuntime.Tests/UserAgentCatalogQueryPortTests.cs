@@ -188,6 +188,39 @@ public sealed class UserAgentCatalogQueryPortTests
         pending[0].CatalogAuthorityStateVersion.Should().Be(3);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueryPendingApiKeyRevocationsByCallerAsync_SelectsHighestAuthorityVersionRegardlessOfOrder(
+        bool canonicalFirst)
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-versioned");
+        var newerLegacy = BuildRevocationDocument("agent-versioned", "key-versioned", owner);
+        newerLegacy.StateVersion = 4;
+        newerLegacy.LastError = "newer-legacy-copy";
+        var olderCanonical = newerLegacy.Clone();
+        olderCanonical.Id = ScheduledAgentCredentialRevocationDocumentIds.Build(
+            olderCanonical.AgentId,
+            olderCanonical.ApiKeyId,
+            olderCanonical.NyxApiKeyReference.Ref);
+        olderCanonical.StateVersion = 3;
+        olderCanonical.LastError = "older-canonical-copy";
+        var documents = canonicalFirst
+            ? new List<UserAgentApiKeyRevocationDocument> { olderCanonical, newerLegacy }
+            : [newerLegacy, olderCanonical];
+        var port = new UserAgentCatalogQueryPort(
+            new RecordingDocumentReader([]),
+            new RecordingRevocationDocumentReader(documents));
+
+        var pending = await port.QueryPendingApiKeyRevocationsByCallerAsync(
+            owner,
+            CancellationToken.None);
+
+        pending.Should().ContainSingle();
+        pending[0].CatalogAuthorityStateVersion.Should().Be(4);
+        pending[0].LastError.Should().Be("newer-legacy-copy");
+    }
+
     private static UserAgentCatalogDocument BuildDocument(string agentId, OwnerScope ownerScope) =>
         new()
         {

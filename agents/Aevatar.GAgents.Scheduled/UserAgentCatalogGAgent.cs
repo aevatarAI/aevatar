@@ -31,12 +31,30 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
             .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
             .On<UserAgentCatalogApiKeyRevocationRequestedEvent>(ApplyApiKeyRevocationRequested)
+            .On<UserAgentCatalogCredentialRevocationsMigratedEvent>(ApplyCredentialRevocationsMigrated)
             .On<UserAgentCatalogApiKeyRevocationAttemptRecordedEvent>(ApplyApiKeyRevocationAttemptRecorded)
             .On<UserAgentCatalogCredentialRevocationRepairedEvent>(ApplyCredentialRevocationRepaired)
             .On<UserAgentCatalogTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .On<UserAgentCatalogSharedEvent>(ApplyShared)
             .On<UserAgentCatalogUnsharedEvent>(ApplyUnshared)
             .OrCurrent();
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        var migratedRevocations = State.PendingApiKeyRevocations
+            .Where(RequiresCredentialRevocationMigration)
+            .Select(NormalizeRevocation)
+            .ToArray();
+        if (migratedRevocations.Length > 0)
+        {
+            await PersistDomainEventAsync(new UserAgentCatalogCredentialRevocationsMigratedEvent
+            {
+                Revocations = { migratedRevocations },
+            }, ct);
+        }
+
+        await base.OnActivateAsync(ct);
+    }
 
     [EventHandler]
     public async Task HandleUpsertAsync(UserAgentCatalogUpsertCommand command)
@@ -508,6 +526,30 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return next;
     }
 
+    private static UserAgentCatalogState ApplyCredentialRevocationsMigrated(
+        UserAgentCatalogState current,
+        UserAgentCatalogCredentialRevocationsMigratedEvent evt)
+    {
+        if (evt.Revocations.Count == 0)
+            return current;
+
+        var next = current.Clone();
+        for (var index = 0; index < next.PendingApiKeyRevocations.Count; index++)
+        {
+            var existing = next.PendingApiKeyRevocations[index];
+            var migrated = evt.Revocations.FirstOrDefault(candidate =>
+                MatchesRevocationIdentity(
+                    existing,
+                    candidate.AgentId,
+                    candidate.ApiKeyId,
+                    GetSecretReferenceRef(candidate)));
+            if (migrated is not null)
+                next.PendingApiKeyRevocations[index] = NormalizeRevocation(migrated);
+        }
+
+        return next;
+    }
+
     private static UserAgentCatalogState ApplyApiKeyRevocationAttemptRecorded(
         UserAgentCatalogState current,
         UserAgentCatalogApiKeyRevocationAttemptRecordedEvent evt)
@@ -741,15 +783,21 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             LastError = revocation.LastError ?? string.Empty,
             FailureKind = revocation.FailureKind,
         };
+        if (revocation.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified)
+            revocation.NyxIdTrack.Status = ScheduledCredentialRevocationTrackStatus.Pending;
+
+        var derivedVaultStatus = revocation.VaultRevocationDescriptor?.ReferenceAvailability ==
+            ScheduledCredentialVaultReferenceAvailability.NotApplicable
+                ? ScheduledCredentialRevocationTrackStatus.NotApplicable
+                : HasExecutableVaultDescriptor(revocation)
+                    ? ScheduledCredentialRevocationTrackStatus.Pending
+                    : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef;
         revocation.VaultTrack ??= new ScheduledCredentialRevocationTrack
         {
-            Status = revocation.VaultRevocationDescriptor?.ReferenceAvailability ==
-                ScheduledCredentialVaultReferenceAvailability.NotApplicable
-                    ? ScheduledCredentialRevocationTrackStatus.NotApplicable
-                    : HasExecutableVaultDescriptor(revocation)
-                        ? ScheduledCredentialRevocationTrackStatus.Pending
-                        : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
+            Status = derivedVaultStatus,
         };
+        if (revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified)
+            revocation.VaultTrack.Status = derivedVaultStatus;
         if (!HasExecutableVaultDescriptor(revocation) &&
             revocation.VaultRevocationDescriptor?.ReferenceAvailability !=
                 ScheduledCredentialVaultReferenceAvailability.NotApplicable &&
@@ -759,6 +807,15 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         }
         return revocation;
     }
+
+    private static bool RequiresCredentialRevocationMigration(UserAgentApiKeyRevocation revocation) =>
+        revocation.NyxIdTrack is null ||
+        revocation.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified ||
+        revocation.VaultTrack is null ||
+        revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified ||
+        string.IsNullOrWhiteSpace(revocation.SecretSubjectId) ||
+        (IsCompleteReference(revocation.NyxApiKeyReference) &&
+         !HasExecutableVaultDescriptor(revocation));
 
     private static void NormalizeVaultDescriptor(ScheduledCredentialVaultRevocationDescriptor descriptor)
     {

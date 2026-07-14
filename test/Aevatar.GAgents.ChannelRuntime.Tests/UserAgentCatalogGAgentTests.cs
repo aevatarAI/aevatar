@@ -1,7 +1,9 @@
 using System.Text;
+using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -47,6 +49,114 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     {
         _serviceProvider.Dispose();
         return Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WithLegacyCredentialRevocationsSnapshot_CommitsTypedMigrationBeforeRetry()
+    {
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemorySnapshotStore<UserAgentCatalogState>();
+        var services = new ServiceCollection();
+        services.AddSingleton<IEventStore>(store);
+        services.AddSingleton<IEventSourcingSnapshotStore<UserAgentCatalogState>>(snapshotStore);
+        services.AddSingleton(new EventSourcingRuntimeOptions
+        {
+            EnableSnapshots = true,
+        });
+        services.AddTransient(
+            typeof(IEventSourcingBehaviorFactory<>),
+            typeof(DefaultEventSourcingBehaviorFactory<>));
+        using var serviceProvider = services.BuildServiceProvider();
+        var executor = Substitute.For<IScheduledAgentCredentialRevocationExecutor>();
+        var agent = new UserAgentCatalogGAgent(executor)
+        {
+            Services = serviceProvider,
+            EventSourcingBehaviorFactory =
+                serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<UserAgentCatalogState>>(),
+        };
+        SetId(agent, UserAgentCatalogGAgent.WellKnownId);
+
+        await store.AppendAsync(
+            agent.Id,
+            [
+                new StateEvent
+                {
+                    EventId = "evt-before-legacy-snapshot",
+                    Version = 1,
+                    EventData = Any.Pack(new Empty()),
+                },
+            ],
+            expectedVersion: 0);
+        var legacyAttemptedAt = Timestamp.FromDateTimeOffset(
+            new DateTimeOffset(2026, 7, 14, 9, 0, 0, TimeSpan.Zero));
+        var legacyState = new UserAgentCatalogState
+        {
+            PendingApiKeyRevocations =
+            {
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-with-reference",
+                    ApiKeyId = "key-with-reference",
+                    NyxApiKeyReference = CompleteReference("sec-with-reference", "key-with-reference"),
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-a"),
+                    AttemptCount = 2,
+                    LastAttemptAt = legacyAttemptedAt,
+                    LastHttpStatus = 503,
+                    LastError = "legacy nyx failure",
+                    FailureKind = UserAgentApiKeyRevocationFailureKind.Transient,
+                },
+                new UserAgentApiKeyRevocation
+                {
+                    AgentId = "agent-without-reference",
+                    ApiKeyId = "key-without-reference",
+                    OwnerScope = OwnerScope.ForNyxIdNative("user-b"),
+                    AttemptCount = 1,
+                    LastHttpStatus = 401,
+                    LastError = "legacy unauthorized",
+                    FailureKind = UserAgentApiKeyRevocationFailureKind.Unauthorized,
+                },
+            },
+        };
+        var serializedLegacyState = UserAgentCatalogState.Parser.ParseFrom(legacyState.ToByteArray());
+        await snapshotStore.SaveAsync(
+            agent.Id,
+            new EventSourcingSnapshot<UserAgentCatalogState>(serializedLegacyState, 1));
+
+        await agent.ActivateAsync();
+
+        agent.State.PendingApiKeyRevocations.Should().HaveCount(2);
+        var executable = agent.State.PendingApiKeyRevocations.Single(revocation =>
+            revocation.AgentId == "agent-with-reference");
+        executable.SecretSubjectId.Should().Be("key-with-reference");
+        executable.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        executable.NyxIdTrack.AttemptCount.Should().Be(2);
+        executable.NyxIdTrack.LastAttemptAt.Should().BeEquivalentTo(legacyAttemptedAt);
+        executable.NyxIdTrack.LastHttpStatus.Should().Be(503);
+        executable.NyxIdTrack.LastError.Should().Be("legacy nyx failure");
+        executable.NyxIdTrack.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        executable.VaultTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        executable.VaultRevocationDescriptor.ReferenceAvailability.Should().Be(
+            ScheduledCredentialVaultReferenceAvailability.Confirmed);
+
+        var blocked = agent.State.PendingApiKeyRevocations.Single(revocation =>
+            revocation.AgentId == "agent-without-reference");
+        blocked.SecretSubjectId.Should().Be("key-without-reference");
+        blocked.NyxIdTrack.Status.Should().Be(ScheduledCredentialRevocationTrackStatus.Pending);
+        blocked.NyxIdTrack.AttemptCount.Should().Be(1);
+        blocked.NyxIdTrack.LastHttpStatus.Should().Be(401);
+        blocked.NyxIdTrack.LastError.Should().Be("legacy unauthorized");
+        blocked.NyxIdTrack.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Unauthorized);
+        blocked.VaultTrack.Status.Should().Be(
+            ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef);
+
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Should().HaveCount(2);
+        var migration = events[1].EventData.Unpack<UserAgentCatalogCredentialRevocationsMigratedEvent>();
+        migration.Revocations.Should().HaveCount(2);
+        await executor.DidNotReceive().ExecutePendingAsync(
+            Arg.Any<string>(),
+            Arg.Any<UserAgentApiKeyRevocation>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1081,6 +1191,45 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         Version = 1,
         Fingerprint = "sha256:test",
     };
+
+    private static void SetId(GAgentBase agent, string actorId)
+    {
+        var method = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        method!.Invoke(agent, [actorId]);
+    }
+
+    private sealed class InMemorySnapshotStore<TState> : IEventSourcingSnapshotStore<TState>
+        where TState : class, IMessage<TState>, new()
+    {
+        private readonly Dictionary<string, EventSourcingSnapshot<TState>> _snapshots =
+            new(StringComparer.Ordinal);
+
+        public Task<EventSourcingSnapshot<TState>?> LoadAsync(
+            string agentId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _snapshots.TryGetValue(agentId, out var snapshot);
+            return Task.FromResult(snapshot is null
+                ? null
+                : new EventSourcingSnapshot<TState>(snapshot.State.Clone(), snapshot.Version));
+        }
+
+        public Task SaveAsync(
+            string agentId,
+            EventSourcingSnapshot<TState> snapshot,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _snapshots[agentId] = new EventSourcingSnapshot<TState>(
+                snapshot.State.Clone(),
+                snapshot.Version);
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class InMemoryEventStore : IEventStore
     {

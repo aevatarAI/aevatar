@@ -14,6 +14,9 @@ public sealed class InMemorySecretVault : ISecretVault
 
     public Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.RequestedRef is not null && string.IsNullOrWhiteSpace(request.RequestedRef))
+            throw new ArgumentException("RequestedRef must be null or non-empty.", nameof(request));
         ct.ThrowIfCancellationRequested();
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

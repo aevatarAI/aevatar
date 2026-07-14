@@ -760,6 +760,108 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
+    public async Task RevocationReadModelKeyMigration_ReadsEveryCursorPage()
+    {
+        var first = BuildLegacyRevocationDocument("agent-page-1", "key-page-1", "sec-page-1");
+        var second = BuildLegacyRevocationDocument("agent-page-2", "key-page-2", "sec-page-2");
+        var store = new MigrationDocumentStore(
+            new Dictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>>
+            {
+                [string.Empty] = new()
+                {
+                    Items = [first],
+                    NextCursor = "page-2",
+                },
+                ["page-2"] = new()
+                {
+                    Items = [second],
+                },
+            });
+        var service = CreateMigrationService(store);
+
+        var result = await service.MigrateAsync(CancellationToken.None);
+
+        result.MigratedCount.Should().Be(2);
+        result.MaxStateVersion.Should().Be(7);
+        store.QueryCursors.Should().Equal(null, "page-2");
+        store.Upserts.Select(static document => document.Id).Should().BeEquivalentTo(
+        [
+            ScheduledAgentCredentialRevocationDocumentIds.Build(
+                "agent-page-1",
+                "key-page-1",
+                "sec-page-1"),
+            ScheduledAgentCredentialRevocationDocumentIds.Build(
+                "agent-page-2",
+                "key-page-2",
+                "sec-page-2"),
+        ]);
+        store.Deletes.Should().BeEquivalentTo(["agent-page-1", "agent-page-2"]);
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WithoutSecretReference_UsesBlockedDocumentId()
+    {
+        var legacy = BuildLegacyRevocationDocument("agent-blocked-migration", "key-blocked-migration");
+        var store = MigrationDocumentStore.SinglePage(legacy);
+        var service = CreateMigrationService(store);
+
+        await service.MigrateAsync(CancellationToken.None);
+
+        store.Upserts.Should().ContainSingle().Which.Id.Should().Be(
+            ScheduledAgentCredentialRevocationDocumentIds.BuildBlocked(
+                "agent-blocked-migration",
+                "key-blocked-migration"));
+        store.Deletes.Should().ContainSingle().Which.Should().Be("agent-blocked-migration");
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WithIncompleteNaturalIdentity_FailsBeforeWrites()
+    {
+        var incomplete = BuildLegacyRevocationDocument("agent-incomplete", string.Empty);
+        var store = MigrationDocumentStore.SinglePage(incomplete);
+        var service = CreateMigrationService(store);
+
+        var migrate = () => service.MigrateAsync(CancellationToken.None);
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*incomplete natural identity*");
+        store.Upserts.Should().BeEmpty();
+        store.Deletes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WhenCanonicalUpsertIsRejected_DoesNotDeleteLegacyDocument()
+    {
+        var legacy = BuildLegacyRevocationDocument("agent-upsert-rejected", "key-upsert-rejected");
+        var store = MigrationDocumentStore.SinglePage(legacy);
+        store.UpsertResult = ProjectionWriteResult.Conflict();
+        var service = CreateMigrationService(store);
+
+        var migrate = () => service.MigrateAsync(CancellationToken.None);
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*migration was rejected*");
+        store.Upserts.Should().ContainSingle();
+        store.Deletes.Should().BeEmpty("the legacy copy is recovery authority until canonical upsert succeeds");
+    }
+
+    [Fact]
+    public async Task RevocationReadModelKeyMigration_WhenLegacyDeleteIsRejected_FailsForRestartRecovery()
+    {
+        var legacy = BuildLegacyRevocationDocument("agent-delete-rejected", "key-delete-rejected");
+        var store = MigrationDocumentStore.SinglePage(legacy);
+        store.DeleteResult = ProjectionWriteResult.Gap();
+        var service = CreateMigrationService(store);
+
+        var migrate = () => service.MigrateAsync(CancellationToken.None);
+
+        await migrate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*migration was rejected*");
+        store.Upserts.Should().ContainSingle();
+        store.Deletes.Should().ContainSingle().Which.Should().Be("agent-delete-rejected");
+    }
+
+    [Fact]
     public void CredentialRevocationDocumentId_UsesUtf8LengthPrefixedNaturalKey()
     {
         var first = ScheduledAgentCredentialRevocationDocumentIds.Build("a", "bc", "d");
@@ -856,6 +958,32 @@ public sealed class UserAgentCatalogProjectorTests
                 StateRoot = Any.Pack(state),
             }),
         };
+    }
+
+    private static UserAgentApiKeyRevocationReadModelKeyMigrationService CreateMigrationService(
+        MigrationDocumentStore store) =>
+        new(
+            store,
+            store,
+            NullLogger<UserAgentApiKeyRevocationReadModelKeyMigrationService>.Instance);
+
+    private static UserAgentApiKeyRevocationDocument BuildLegacyRevocationDocument(
+        string agentId,
+        string apiKeyId,
+        string? secretReference = null)
+    {
+        var document = new UserAgentApiKeyRevocationDocument
+        {
+            Id = agentId,
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            ActorId = UserAgentCatalogGAgent.WellKnownId,
+            StateVersion = 7,
+            LastEventId = "evt-legacy",
+        };
+        if (!string.IsNullOrWhiteSpace(secretReference))
+            document.NyxApiKeyReference = new SecretReference { Ref = secretReference };
+        return document;
     }
 
     private static EventEnvelope BuildSkillRunnerCommittedEnvelope(string eventId, long version, SkillRunnerState state)
@@ -1002,6 +1130,71 @@ public sealed class UserAgentCatalogProjectorTests
             ct.ThrowIfCancellationRequested();
             _documents.Remove(id);
             return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+    }
+
+    private sealed class MigrationDocumentStore
+        : IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>,
+          IProjectionWriteDispatcher<UserAgentApiKeyRevocationDocument>
+    {
+        private readonly IReadOnlyDictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> _pages;
+
+        public MigrationDocumentStore(
+            IReadOnlyDictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> pages)
+        {
+            _pages = pages;
+        }
+
+        public ProjectionWriteResult UpsertResult { get; set; } = ProjectionWriteResult.Applied();
+
+        public ProjectionWriteResult DeleteResult { get; set; } = ProjectionWriteResult.Applied();
+
+        public List<string?> QueryCursors { get; } = [];
+
+        public List<UserAgentApiKeyRevocationDocument> Upserts { get; } = [];
+
+        public List<string> Deletes { get; } = [];
+
+        public static MigrationDocumentStore SinglePage(
+            params UserAgentApiKeyRevocationDocument[] documents) =>
+            new(new Dictionary<string, ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>>
+            {
+                [string.Empty] = new()
+                {
+                    Items = documents.Select(static document => document.Clone()).ToArray(),
+                },
+            });
+
+        public Task<UserAgentApiKeyRevocationDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default) =>
+            Task.FromResult<UserAgentApiKeyRevocationDocument?>(null);
+
+        public Task<ProjectionDocumentQueryResult<UserAgentApiKeyRevocationDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            QueryCursors.Add(query.Cursor);
+            return Task.FromResult(_pages[query.Cursor ?? string.Empty]);
+        }
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            UserAgentApiKeyRevocationDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Upserts.Add(readModel.Clone());
+            return Task.FromResult(UpsertResult);
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            string id,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Deletes.Add(id);
+            return Task.FromResult(DeleteResult);
         }
     }
 

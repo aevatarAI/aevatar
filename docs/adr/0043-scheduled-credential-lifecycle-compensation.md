@@ -61,6 +61,22 @@ vault revocation, and does not consume attempts. Only the Mainnet administrator 
 may submit a complete exact descriptor; ordinary tools cannot bypass the block or mark it
 not applicable.
 
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A["Committed revocation intent"] --> B["NyxID track: pending"]
+    A --> C["Vault track: pending"]
+    A --> D["Vault track: blocked missing secret ref"]
+    D --> E["Admin exact-reference repair"]
+    E --> C
+    B --> F["NyxID track: terminal"]
+    C --> G["Vault track: terminal"]
+    F --> H{"Both tracks terminal?"}
+    G --> H
+    H -->|"Yes"| I["Remove authoritative revocation fact"]
+    H -->|"No"| J["Keep fact for retry or repair"]
+```
+
 ## Consequences
 
 - Creation failure, initialization failure, deletion, and future rotation use one durable
