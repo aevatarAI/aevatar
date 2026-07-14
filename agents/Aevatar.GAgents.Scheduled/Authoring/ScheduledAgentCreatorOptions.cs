@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Scheduled;
 
 public sealed class ScheduledAgentCreatorOptions
 {

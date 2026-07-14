@@ -1,7 +1,7 @@
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 /// <summary>
 /// Shared <see cref="JsonElement"/> reading helpers for the agent-builder formatters.

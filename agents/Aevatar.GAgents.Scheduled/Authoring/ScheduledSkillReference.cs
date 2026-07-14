@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Scheduled;
 
 internal sealed record ScheduledSkillReference(string Name)
 {

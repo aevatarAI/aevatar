@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Scheduled;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -8,9 +9,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
-using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Scheduled;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -287,7 +286,7 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
-            document.RootElement.GetProperty("detail").GetString().Should().Be("lark_outbound_provider_slug_unavailable");
+            document.RootElement.GetProperty("detail").GetString().Should().Be("channel_outbound_provider_slug_unavailable");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
@@ -295,7 +294,6 @@ public sealed class ScheduledAgentCreatorToolTests
     [Theory]
     [InlineData("missing_scope", "scope_id_unavailable")]
     [InlineData("missing_conversation", "conversation_id_unavailable")]
-    [InlineData("missing_receive_target", "lark_receive_target_unavailable")]
     public async Task ExecuteAsync_WhenTrustedContextIncomplete_ShouldFailClosedBeforeKeyCreation(
         string caseName,
         string expectedDetail)
@@ -818,11 +816,9 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.ChannelAddress.Platform.Should().Be("lark");
             captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot");
             captured.CatalogEntry.ChannelAddress.ConversationId.Should().Be("oc_conversation");
-            captured.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("oc_chat");
-            captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
-            captured.CatalogEntry.ChannelAddress.Fallback.Should().NotBeNull();
-            captured.CatalogEntry.ChannelAddress.Fallback!.AddressId.Should().Be("on_union");
-            captured.CatalogEntry.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("on_union");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().Be("union_id");
+            captured.CatalogEntry.ChannelAddress.Fallback.Should().BeNull();
 #pragma warning disable CS0612 // verifies new writes leave deprecated command fields empty
             captured.CatalogEntry.LarkReceiveId.Should().BeEmpty();
             captured.CatalogEntry.LarkReceiveIdType.Should().BeEmpty();
@@ -1249,9 +1245,6 @@ public sealed class ScheduledAgentCreatorToolTests
             "missing_scope" => CreateToolContext(callerScopeId: null, channelRegistrationScopeId: null),
             "missing_conversation" => CreateToolContext(
                 externalMetadata: BaseExternalMetadata(includeConversationId: false)),
-            "missing_receive_target" => CreateToolContext(
-                channelSenderId: null,
-                externalMetadata: BaseExternalMetadata(includeChatId: false, includeUnionId: false)),
             _ => throw new ArgumentOutOfRangeException(nameof(caseName), caseName, null),
         };
 
@@ -1286,7 +1279,12 @@ public sealed class ScheduledAgentCreatorToolTests
         if (includeUnionId)
             metadata[ChannelMetadataKeys.LarkUnionId] = "on_union";
         if (includeOutboundSlug)
-            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = "api-lark-bot";
+            metadata[ChannelMetadataKeys.OutboundProviderSlug] = "api-lark-bot";
+        if (includeUnionId)
+        {
+            metadata[ChannelMetadataKeys.DeliveryAddressId] = "on_union";
+            metadata[ChannelMetadataKeys.DeliveryAddressType] = "union_id";
+        }
         return metadata;
     }
 

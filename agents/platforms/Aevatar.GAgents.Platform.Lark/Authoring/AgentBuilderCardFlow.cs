@@ -2,10 +2,9 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 public static class AgentBuilderCardFlow
 {
@@ -18,6 +17,7 @@ public static class AgentBuilderCardFlow
     private const string EnableAgentAction = AgentBuilderActionIds.EnableAgent;
     private const string ConfirmDeleteAgentAction = AgentBuilderActionIds.ConfirmDeleteAgent;
     private const string DeleteAgentAction = AgentBuilderActionIds.DeleteAgent;
+    private const string DisabledStatus = "disabled";
     private const string ListAgentsCommand = "/agents";
     private const string AgentStatusCommand = "/agent-status";
     private const string RunAgentCommand = "/run-agent";
@@ -422,7 +422,7 @@ public static class AgentBuilderCardFlow
 
         var isDisabled = string.Equals(
             status,
-            SkillRunnerDefaults.StatusDisabled,
+            DisabledStatus,
             StringComparison.OrdinalIgnoreCase);
         content.Actions.Add(BuildAgentScopedCardAction("Refresh Status", AgentStatusAction, agentId, isPrimary: false));
         if (isDisabled)

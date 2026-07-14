@@ -1135,7 +1135,7 @@ adapter 在构造 `ChatActivity` 时**必须**：
 **已合入的 PR 代码资产**：
 - PR #174 / #177 的 webhook 安全 + durable dedup —— 迁进 Lark adapter transport 内部
 - 历史上的 Lark stream patch / direct webhook 代码已在统一 inbound backbone 落地后退役，不再作为当前实现目标
-- PR #193 的 Day One private-chat agent builder —— 迁进 `Aevatar.GAgents.Authoring` 后保留
+- PR #193 的 Day One private-chat agent builder now follows the §9.4 split: generic tools under `Aevatar.GAgents.Scheduled/Authoring`, Lark UI mapping under `Aevatar.GAgents.Platform.Lark/Authoring`
 - `RuntimeCallbackLease` —— scheduler 底层原语，不重造
 
 （总纲已前置到 §5 开头。）
@@ -1541,10 +1541,8 @@ agents/                                ← production code
 │   ├── Aevatar.GAgents.Platform.Slack/
 │   └── Aevatar.GAgents.Platform.Discord/
 │     (Aevatar.GAgents.Platform.WeChat 由独立 RFC 引入，同结构)
-├── Aevatar.GAgents.Authoring/          ← 从 ChannelRuntime 拎出：AgentBuilderCardFlow +
-│                                        Templates + Tool。职责 = 通过对话/模板创作 agent
 ├── Aevatar.GAgents.Scheduled/          ← 从 ChannelRuntime 拎出：SkillRunner + WorkflowAgent
-│                                        + UserAgentCatalog
+│                                        + UserAgentCatalog + generic agent-builder tools
 ├── Aevatar.GAgents.Device/             ← 从 ChannelRuntime 拎出：DeviceRegistration
 │
 │   ┌── 以下为现有模块，本 RFC 不动 ──┐
@@ -1566,7 +1564,6 @@ test/
 ├── Aevatar.GAgents.Platform.Telegram.Tests/
 ├── Aevatar.GAgents.Platform.Slack.Tests/
 ├── Aevatar.GAgents.Platform.Discord.Tests/
-├── Aevatar.GAgents.Authoring.Tests/
 ├── Aevatar.GAgents.Scheduled.Tests/
 ├── Aevatar.GAgents.Device.Tests/
 │
@@ -1614,18 +1611,11 @@ aevatar 仓库按 slnf 分片构建（`aevatar.foundation.slnf` / `aevatar.ai.sl
 - `ConversationGAgent` 用户长期记忆**调用 `Aevatar.GAgents.UserMemory`**（新集成）
 - `ChatbotClassifier` 按需挂 `IChannelMiddleware`
 
-### 9.4 `Aevatar.GAgents.Authoring` 的 Lark-specific 现状（必须处理）
+### 9.4 Authoring ownership split
 
-RFC 把 `AgentBuilderCardFlow` / `AgentBuilderTool` / `FeishuCardHumanInteractionPort` 迁进独立的 `Aevatar.GAgents.Authoring` 包，职责是"通过对话/模板创作 agent"。
+`Aevatar.GAgents.Authoring.Lark` is retired. Generic lifecycle and scheduled-agent tools (`AgentBuilderTool`, `ScheduledAgentCreatorTool`, `AgentBuilderToolSource`) live under `Aevatar.GAgents.Scheduled/Authoring`, because they operate on the catalog, scheduled dispatch, caller scope, and workflow schedule ports. Lark slash/card/action mapping (`AgentBuilderCardFlow`, `AgentBuilderCardContent`) lives under `Aevatar.GAgents.Platform.Lark/Authoring`, because it translates Lark `p2p` / `card_action` UI facts into generic tool commands.
 
-**但现状**：`AgentBuilderCardFlow.cs` 硬编码 `p2p` / `card_action` / Lark 卡片 action 名字；`FeishuCardHumanInteractionPort.cs` 只支持 Lark 卡片交互。这**不是 channel-agnostic**，直接"搬包"会把 Lark-specific 的交互模型埋进一个看似通用的包名里。
-
-三个选项：
-- (a) **Authoring 仅 Lark**：承认事实，包名改为 `Aevatar.GAgents.Authoring.Lark` 或 `Aevatar.GAgents.LarkAuthoring`，未来 Slack / Discord 的 authoring 各做各的
-- (b) **抽通用 + 拎 Lark 实现**：`Aevatar.GAgents.Authoring.Abstractions`（`IAgentBuilderFlow` / `IHumanInteractionPort`）+ `Aevatar.GAgents.Authoring.Lark`（当前实现迁入）；后续 channel 实现各自 port
-- (c) **本 RFC 暂不拎 Authoring**：Authoring 留在 ChannelRuntime 或迁到一个不误导的名字，等有第二个 channel 的 Day One 需求再拆
-
-**本 RFC 推荐 (b)**：抽象 + 实现分包，成本适中，未来扩展不会撕裂。但要显式承认"Authoring 的 channel-agnostic 化是额外工作"，不是物理拎包就完事。
+The boundary is: generic authoring must not reference `Aevatar.GAgents.Platform.Lark`; Lark adapter code may call generic scheduled tools but must not own schedule lifecycle, catalog semantics, auth semantics, or workflow execution semantics.
 
 ## 9.5 Durable ingress cut point（inbound 持久化契约）
 
@@ -2250,7 +2240,7 @@ v1 cutover step 2 细化为：
 | 抽象层把已有 `IPlatformAdapter` / `IProjectionMaterializationContext` / `ICurrentStateProjectionMaterializer` 重做一遍 | 中 | 高 | 本 RFC §5 总纲 + §6 明确复用现有接口，review 重点检查 "为什么不 compose existing"，而不是"要不要造新的" |
 | 团队多人并行但抽象未稳定，各 adapter 实现漂移 | 中 | 高 | Conformance Suite + Composer unit tests 双硬 gate。抽象未稳定前不开新 channel adapter |
 | 跨包 caller 更新（物理拆包阶段）遗漏 | 中 | 中 | csproj 层循环依赖检查 + Architecture.Tests 守住边界 + 渐进 rename with type-forward |
-| Authoring 包迁移时 Lark-specific 交互模型埋进通用包名 | 中 | 中 | 见 §9.4，按 (b) 方案拆 `Authoring.Abstractions` + `Authoring.Lark`；不做"搬包就完"的假迁移 |
+| Authoring 包迁移时 Lark-specific 交互模型埋进通用包名 | 中 | 中 | 见 §9.4，generic tools stay in `Aevatar.GAgents.Scheduled/Authoring`, and Lark UI/action mapping stays in `Aevatar.GAgents.Platform.Lark/Authoring`; no standalone `Authoring.Lark` package |
 | Credentials 按现有 proto 路径同步进 query store | 中 | 高 | §9.6 强制 `credential_ref` + secret manager；Slack/Discord 凭据绝不入 proto；Lark `encrypt_key` 顺手迁出 |
 | Inbound raw payload / error message 旁路泄露 short-lived tokens 或 PII | 中 | 高 | §9.6.1 强制 adapter ingress 前 redact short-lived credentials；`RawPayloadBlobRef` blob 加密 + TTL + 审计；`EmitResult.ErrorMessage` 禁止 vendor raw body；Conformance §8.3 fault test 验证 |
 | **Hot conversation 串行瓶颈**（活跃 Slack channel / Discord guild 所有消息挤一个 `ConversationGAgent`） | 中 | 中 | 10x 规模前可接受（Orleans grain turn-based concurrency 对普通 chat 足够）。监控 grain p99 turn latency + message arrival rate；超阈值时拆子 grain（thread / session / work-item 粒度）或把 ingress/dedup 和 bot turn execution 分离，ingress 水平扩 / bot turn 按 conversation 串行 |
