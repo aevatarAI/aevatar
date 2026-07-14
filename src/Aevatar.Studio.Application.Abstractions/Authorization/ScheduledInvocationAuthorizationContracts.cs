@@ -51,29 +51,3 @@ public interface IScheduledInvocationAuthorizationPlanner
         ScheduledInvocationAuthorizationRequest request,
         CancellationToken ct = default);
 }
-
-public sealed record ScheduledInvocationCredentialIssueResult(
-    bool Success,
-    string Error,
-    string ApiKeyId,
-    string FullKey,
-    long ExpiresAtUnixTimeMilliseconds);
-
-public interface IScheduledInvocationCredentialIssuer
-{
-    Task<ScheduledInvocationCredentialIssueResult> IssueAsync(
-        string ownerBearer,
-        ScheduledInvocationAuthorizationPlan plan,
-        string credentialName,
-        CancellationToken ct = default);
-}
-
-public interface IScheduledInvocationCredentialProvisioner
-{
-    Task<ScheduledInvocationCredentialIssueResult> ProvisionAsync(
-        string ownerBearer,
-        ScheduledInvocationAuthorizationRequest request,
-        string confirmedPermissionDigest,
-        string credentialName,
-        CancellationToken ct = default);
-}

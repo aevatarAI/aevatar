@@ -1,7 +1,12 @@
 using System.Reflection;
+using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Application.Authorization;
+using Aevatar.Studio.Projection.Orchestration;
+using Aevatar.Studio.Projection.Projectors;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
@@ -71,6 +76,82 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
         refreshed.Invalidated.Should().BeFalse();
         refreshed.InvalidationReason.Should().BeEmpty();
         refreshed.ContentDigest.Should().Be("digest-2");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldMaterializeCommittedAuthoritativeState()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdCatalogSnapshotCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(ObservedAt.AddMinutes(3)));
+        var state = new NyxIdCatalogSnapshotState
+        {
+            Owner = ActorOwner(),
+            ObservedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+            FreshUntil = Timestamp.FromDateTimeOffset(ObservedAt.AddHours(1)),
+            ExternalRevision = "revision-19",
+            ContentDigest = "digest-19",
+            Invalidated = true,
+            InvalidationReason = "credential_revoked",
+            Services =
+            {
+                new NyxIdCatalogSnapshotService
+                {
+                    UserServiceId = "svc-alpha",
+                    DisplayName = "Connector Alpha",
+                    ServiceSlug = "connector-alpha",
+                    Reachable = true,
+                    Nodes =
+                    {
+                        new NyxIdCatalogSnapshotNode
+                        {
+                            NodeId = "node-primary",
+                            DisplayName = "Primary",
+                            Primary = true,
+                        },
+                    },
+                },
+            },
+        };
+
+        await projector.ProjectAsync(Context(), CommittedEnvelope(state, version: 19, eventId: "evt-19"));
+
+        dispatcher.Upserts.Should().ContainSingle();
+        var document = dispatcher.Upserts[0];
+        document.ActorId.Should().Be("nyx-catalog-alpha");
+        document.StateVersion.Should().Be(19);
+        document.LastEventId.Should().Be("evt-19");
+        document.Invalidated.Should().BeTrue();
+        document.InvalidationReason.Should().Be("credential_revoked");
+        document.Services.Should().ContainSingle().Which.Nodes.Should().ContainSingle()
+            .Which.NodeId.Should().Be("node-primary");
+    }
+
+    [Fact]
+    public async Task Projector_WhenEnvelopeIsNotMatchingCommittedState_ShouldNotWrite()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new NyxIdCatalogSnapshotCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(ObservedAt));
+
+        await projector.ProjectAsync(Context(), new EventEnvelope
+        {
+            Id = "evt-unrelated",
+            Payload = Any.Pack(new NyxIdCatalogSnapshotObservedEvent()),
+        });
+        await projector.ProjectAsync(Context(), new EventEnvelope
+        {
+            Id = "evt-wrong-state",
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent { EventId = "evt-wrong-state", Version = 20 },
+                StateRoot = Any.Pack(new NyxIdCatalogSnapshotObservedEvent()),
+            }),
+        });
+
+        dispatcher.Upserts.Should().BeEmpty();
     }
 
     private static NyxIdCatalogSnapshotCurrentStateDocument Document(
@@ -149,6 +230,55 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("TransitionState method not found.");
         return (NyxIdCatalogSnapshotState)method.Invoke(agent, [state, evt])!;
+    }
+
+    private static StudioMaterializationContext Context() => new()
+    {
+        RootActorId = "nyx-catalog-alpha",
+        ProjectionKind = NyxIdCatalogSnapshotGAgent.ProjectionKind,
+    };
+
+    private static EventEnvelope CommittedEnvelope(
+        NyxIdCatalogSnapshotState state,
+        long version,
+        string eventId) => new()
+    {
+        Id = eventId,
+        Timestamp = Timestamp.FromDateTimeOffset(ObservedAt),
+        Route = EnvelopeRouteSemantics.CreateObserverPublication("nyx-catalog-alpha"),
+        Payload = Any.Pack(new CommittedStateEventPublished
+        {
+            StateEvent = new StateEvent
+            {
+                EventId = eventId,
+                Version = version,
+                EventData = Any.Pack(Observed(ActorOwner(), "digest-19")),
+                Timestamp = Timestamp.FromDateTimeOffset(ObservedAt),
+            },
+            StateRoot = Any.Pack(state),
+        }),
+    };
+
+    private sealed class RecordingWriteDispatcher
+        : IProjectionWriteDispatcher<NyxIdCatalogSnapshotCurrentStateDocument>
+    {
+        public List<NyxIdCatalogSnapshotCurrentStateDocument> Upserts { get; } = [];
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            NyxIdCatalogSnapshotCurrentStateDocument readModel,
+            CancellationToken ct = default)
+        {
+            Upserts.Add(readModel);
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+    }
+
+    private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
     }
 
     private sealed class FilteringReader(IReadOnlyList<NyxIdCatalogSnapshotCurrentStateDocument> documents)

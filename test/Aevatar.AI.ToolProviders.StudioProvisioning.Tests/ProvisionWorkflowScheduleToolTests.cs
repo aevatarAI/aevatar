@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Studio.Application.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -811,12 +812,39 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
     private sealed class RecordingMemberWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
     {
+        private const string PermissionDigest = "permission-digest-alpha";
         public StudioMemberWorkflowScheduleRequest? LastRequest { get; private set; }
 
-        public Task<StudioMemberWorkflowScheduleResult> EnsureAsync(
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
             StudioMemberWorkflowScheduleRequest request,
             CancellationToken ct = default)
         {
+            LastRequest = request;
+            return Task.FromResult(new StudioMemberWorkflowAuthorizationResult(
+                true,
+                new ScheduledInvocationAuthorizationPlan { PermissionDigest = PermissionDigest },
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty));
+        }
+
+        public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
+        public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
+        private Task<StudioMemberWorkflowScheduleResult> CompleteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest)
+        {
+            if (!string.Equals(confirmedPermissionDigest, PermissionDigest, StringComparison.Ordinal))
+                throw new InvalidOperationException("authorization_plan_changed");
             LastRequest = request;
             return Task.FromResult(new StudioMemberWorkflowScheduleResult(
                 Success: true,

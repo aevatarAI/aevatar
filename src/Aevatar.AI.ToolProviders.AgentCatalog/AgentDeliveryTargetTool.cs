@@ -158,30 +158,17 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        var deliveryTargetId = GetRequired(args, "'delivery_target_id' is required for create", "delivery_target_id", "agent_id", "deliveryTargetId", "agentId");
-        if (deliveryTargetId.error != null)
-            return deliveryTargetId.error;
+        var parsed = ParseCreateArguments(args);
+        if (parsed.Error is not null)
+            return parsed.Error;
+        var input = parsed.Arguments!;
 
-        var conversationId = GetRequired(args, "'conversation_id' is required for create", "conversation_id", "conversationId");
-        if (conversationId.error != null)
-            return conversationId.error;
-
-        var nyxProviderSlug = GetRequired(args, "'nyx_provider_slug' is required for create", "nyx_provider_slug", "nyxProviderSlug");
-        if (nyxProviderSlug.error != null)
-            return nyxProviderSlug.error;
-
-        var platform = GetRequired(args, "'platform' is required for create", "platform");
-        if (platform.error != null)
-            return platform.error;
-
-        var targetPlatform = platform.value!;
-
-        if (await queryPort.ExistsActiveAsync(deliveryTargetId.value!, ct))
+        if (await queryPort.ExistsActiveAsync(input.DeliveryTargetId, ct))
         {
             return JsonSerializer.Serialize(new
             {
                 error = "delivery_target_already_exists",
-                delivery_target_id = deliveryTargetId.value,
+                delivery_target_id = input.DeliveryTargetId,
                 hint = "Use a different delivery_target_id. Existing delivery target ids are globally reserved.",
             });
         }
@@ -201,114 +188,212 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             });
         }
 
-        var keyScopeId = keyScope.RegistrationScopeId;
-        var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
-        var ownerSubject = Normalize(AgentToolRequestContext.SenderNyxUserId) ?? Normalize(keyScope.NyxUserId);
-        var subjectPlatform = Normalize(AgentToolRequestContext.Current?.Channel.Platform) ?? Normalize(keyScope.Platform);
-        var subjectExternalUserId = Normalize(AgentToolRequestContext.Current?.Channel.SenderId) ??
-                                    Normalize(keyScope.SenderId) ?? ownerSubject;
-        if (bindingId is null || ownerSubject is null || subjectPlatform is null || subjectExternalUserId is null)
-        {
+        var ownerEvidence = ResolveAuthenticatedOwnerEvidence(keyScope);
+        if (ownerEvidence is null)
             return JsonSerializer.Serialize(new { error = "authenticated_owner_context_unavailable" });
-        }
 
-        var now = DateTimeOffset.UtcNow;
-        var authorization = await authorizationPlanner.PlanAsync(
-            new ScheduledInvocationAuthorizationRequest(
-                new ScheduledInvocationTarget
-                {
-                    Lark = new LarkScheduledInvocationTarget
-                    {
-                        ScopeId = keyScopeId,
-                        ScheduledAgentId = deliveryTargetId.value!,
-                        ConversationId = conversationId.value!,
-                    },
-                },
-                new AuthenticatedNyxIdOwnerContext
-                {
-                    Owner = new NyxIdCatalogOwnerIdentity
-                    {
-                        Authority = "nyxid",
-                        OwnerKind = NyxIdCatalogOwnerKind.Personal,
-                        OwnerSubject = ownerSubject,
-                    },
-                    SubjectPlatform = subjectPlatform,
-                    SubjectTenant = keyScopeId,
-                    SubjectExternalUserId = subjectExternalUserId,
-                    VerifiedBindingId = bindingId,
-                },
-                [],
-                new ScheduledInvocationAuthorizationAuthority(),
-                now.AddDays(90),
-                now)
-            {
-                RequiredNyxIdServiceSlugs = [nyxProviderSlug.value!],
-            },
-            ct);
+        var authorizationRequest = BuildAuthorizationRequest(
+            keyScope.RegistrationScopeId,
+            input.DeliveryTargetId,
+            input.ConversationId,
+            input.ProviderSlug,
+            ownerEvidence.OwnerSubject,
+            ownerEvidence.SubjectPlatform,
+            ownerEvidence.SubjectExternalUserId,
+            ownerEvidence.BindingId);
+        var authorization = await authorizationPlanner.PlanAsync(authorizationRequest, ct);
         if (!authorization.Success)
             return JsonSerializer.Serialize(new { error = authorization.FailureCode.ToString(), detail = authorization.Detail });
 
         var credentialLifecycle = new ScheduledAgentCredentialLifecycle(secretVault, commandPort, apiKeyIssuer);
-        var provisioned = await credentialLifecycle.ProvisionAsync(
-            token,
-            authorization.Plan!,
-            $"aevatar-delivery-target-{deliveryTargetId.value}",
-            deliveryTargetId.value!,
-            caller,
-            CredentialSecretPurposes.ScheduledNyxApiKey,
-            BuildScheduledNyxApiKeyOwnerScopeKey(caller, keyScopeId, conversationId.value!, deliveryTargetId.value!),
-            "delivery-target-create",
-            ct);
+        var provisioned = await ProvisionCredentialAsync(
+            credentialLifecycle, token, authorization.Plan!, input.DeliveryTargetId, caller,
+            keyScope.RegistrationScopeId, input.ConversationId, ct);
         if (!provisioned.Success)
             return provisioned.IssuedKey.ToErrorJson();
         var key = provisioned.IssuedKey;
 
+        await PersistCreatedTargetAsync(
+            commandPort, credentialLifecycle, token, input, keyScope.RegistrationScopeId,
+            caller, provisioned, ct);
+
+        return JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            agent_id = input.DeliveryTargetId,
+            delivery_target_id = input.DeliveryTargetId,
+            platform = input.TargetPlatform,
+            conversation_id = input.ConversationId,
+            nyx_provider_slug = input.ProviderSlug,
+            api_key_id = key.ApiKeyId,
+            note = "Delivery target create accepted. Projection is propagating; try 'list' after a few seconds.",
+            });
+    }
+
+    private static async Task PersistCreatedTargetAsync(
+        IUserAgentCatalogCommandPort commandPort,
+        ScheduledAgentCredentialLifecycle credentialLifecycle,
+        string token,
+        CreateArguments input,
+        string scopeId,
+        OwnerScope caller,
+        ScheduledAgentCredentialProvisionResult provisioned,
+        CancellationToken ct)
+    {
         try
         {
             await commandPort.UpsertAsync(
-                new UserAgentCatalogUpsertCommand
-                {
-                    AgentId = deliveryTargetId.value!,
-                    ConversationId = conversationId.value!,
-                    NyxProviderSlug = nyxProviderSlug.value!,
-                    NyxApiKey = string.Empty,
-                    NyxApiKeyReference = provisioned.SecretReference,
-                    ApiKeyId = key.ApiKeyId ?? string.Empty,
-                    AgentType = "delivery_target",
-                    TemplateName = "explicit_delivery_target",
-                    ScopeId = keyScopeId,
-                    TargetPlatform = targetPlatform,
-                    ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
-                        targetPlatform,
-                        nyxProviderSlug.value!,
-                        conversationId.value!,
-                        conversationId.value!,
-                        string.Empty,
-                        null,
-                        null),
-                    OwnerScope = caller.Clone(),
-                },
+                BuildCreateCommand(
+                    input.DeliveryTargetId, input.ConversationId, input.ProviderSlug, input.TargetPlatform,
+                    scopeId, caller, provisioned.SecretReference, provisioned.IssuedKey.ApiKeyId),
                 ct);
         }
         catch
         {
             await credentialLifecycle.RequestRevocationAsync(
-                token, deliveryTargetId.value!, key.ApiKeyId!, caller, provisioned.SecretReference!, CancellationToken.None);
+                token, input.DeliveryTargetId, provisioned.IssuedKey.ApiKeyId!, caller,
+                provisioned.SecretReference!, CancellationToken.None);
             throw;
         }
-
-        return JsonSerializer.Serialize(new
-        {
-            status = "accepted",
-            agent_id = deliveryTargetId.value,
-            delivery_target_id = deliveryTargetId.value,
-            platform = targetPlatform,
-            conversation_id = conversationId.value,
-            nyx_provider_slug = nyxProviderSlug.value,
-            api_key_id = key.ApiKeyId,
-            note = "Delivery target create accepted. Projection is propagating; try 'list' after a few seconds.",
-            });
     }
+
+    private static CreateArgumentsResult ParseCreateArguments(JsonElement args)
+    {
+        var deliveryTargetId = GetRequired(args, "'delivery_target_id' is required for create", "delivery_target_id", "agent_id", "deliveryTargetId", "agentId");
+        if (deliveryTargetId.error is not null)
+            return new(null, deliveryTargetId.error);
+        var conversationId = GetRequired(args, "'conversation_id' is required for create", "conversation_id", "conversationId");
+        if (conversationId.error is not null)
+            return new(null, conversationId.error);
+        var providerSlug = GetRequired(args, "'nyx_provider_slug' is required for create", "nyx_provider_slug", "nyxProviderSlug");
+        if (providerSlug.error is not null)
+            return new(null, providerSlug.error);
+        var platform = GetRequired(args, "'platform' is required for create", "platform");
+        return platform.error is null
+            ? new(new CreateArguments(deliveryTargetId.value!, conversationId.value!, providerSlug.value!, platform.value!), null)
+            : new(null, platform.error);
+    }
+
+    private static AuthenticatedOwnerEvidence? ResolveAuthenticatedOwnerEvidence(OwnerScope keyScope)
+    {
+        var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
+        var ownerSubject = Normalize(AgentToolRequestContext.SenderNyxUserId) ?? Normalize(keyScope.NyxUserId);
+        var subjectPlatform = Normalize(AgentToolRequestContext.Current?.Channel.Platform) ?? Normalize(keyScope.Platform);
+        var subjectExternalUserId = Normalize(AgentToolRequestContext.Current?.Channel.SenderId) ??
+                                    Normalize(keyScope.SenderId) ?? ownerSubject;
+        return bindingId is null || ownerSubject is null || subjectPlatform is null || subjectExternalUserId is null
+            ? null
+            : new AuthenticatedOwnerEvidence(ownerSubject, subjectPlatform, subjectExternalUserId, bindingId);
+    }
+
+    private sealed record CreateArguments(
+        string DeliveryTargetId,
+        string ConversationId,
+        string ProviderSlug,
+        string TargetPlatform);
+
+    private sealed record CreateArgumentsResult(CreateArguments? Arguments, string? Error);
+
+    private sealed record AuthenticatedOwnerEvidence(
+        string OwnerSubject,
+        string SubjectPlatform,
+        string SubjectExternalUserId,
+        string BindingId);
+
+    private static ScheduledInvocationAuthorizationRequest BuildAuthorizationRequest(
+        string scopeId,
+        string deliveryTargetId,
+        string conversationId,
+        string providerSlug,
+        string ownerSubject,
+        string subjectPlatform,
+        string subjectExternalUserId,
+        string bindingId)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new ScheduledInvocationAuthorizationRequest(
+            new ScheduledInvocationTarget
+            {
+                Lark = new LarkScheduledInvocationTarget
+                {
+                    ScopeId = scopeId,
+                    ScheduledAgentId = deliveryTargetId,
+                    ConversationId = conversationId,
+                },
+            },
+            new AuthenticatedNyxIdOwnerContext
+            {
+                Owner = new NyxIdCatalogOwnerIdentity
+                {
+                    Authority = "nyxid",
+                    OwnerKind = NyxIdCatalogOwnerKind.Personal,
+                    OwnerSubject = ownerSubject,
+                },
+                SubjectPlatform = subjectPlatform,
+                SubjectTenant = scopeId,
+                SubjectExternalUserId = subjectExternalUserId,
+                VerifiedBindingId = bindingId,
+            },
+            [],
+            new ScheduledInvocationAuthorizationAuthority(),
+            now.AddDays(90),
+            now)
+        {
+            RequiredNyxIdServiceSlugs = [providerSlug],
+        };
+    }
+
+    private static Task<ScheduledAgentCredentialProvisionResult> ProvisionCredentialAsync(
+        ScheduledAgentCredentialLifecycle credentialLifecycle,
+        string token,
+        ScheduledInvocationAuthorizationPlan authorizationPlan,
+        string deliveryTargetId,
+        OwnerScope caller,
+        string scopeId,
+        string conversationId,
+        CancellationToken ct) =>
+        credentialLifecycle.ProvisionAsync(
+            token,
+            authorizationPlan,
+            $"aevatar-delivery-target-{deliveryTargetId}",
+            deliveryTargetId,
+            caller,
+            CredentialSecretPurposes.ScheduledNyxApiKey,
+            BuildScheduledNyxApiKeyOwnerScopeKey(caller, scopeId, conversationId, deliveryTargetId),
+            "delivery-target-create",
+            ct);
+
+    private static UserAgentCatalogUpsertCommand BuildCreateCommand(
+        string deliveryTargetId,
+        string conversationId,
+        string providerSlug,
+        string targetPlatform,
+        string scopeId,
+        OwnerScope caller,
+        SecretReference? secretReference,
+        string? apiKeyId) =>
+        new()
+        {
+            AgentId = deliveryTargetId,
+            ConversationId = conversationId,
+            NyxProviderSlug = providerSlug,
+            NyxApiKey = string.Empty,
+            NyxApiKeyReference = secretReference,
+            ApiKeyId = apiKeyId ?? string.Empty,
+            AgentType = "delivery_target",
+            TemplateName = "explicit_delivery_target",
+            ScopeId = scopeId,
+            TargetPlatform = targetPlatform,
+            ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                targetPlatform,
+                providerSlug,
+                conversationId,
+                conversationId,
+                string.Empty,
+                null,
+                null),
+            OwnerScope = caller.Clone(),
+        };
 
     private static string BuildScheduledNyxApiKeyOwnerScopeKey(
         OwnerScope caller,

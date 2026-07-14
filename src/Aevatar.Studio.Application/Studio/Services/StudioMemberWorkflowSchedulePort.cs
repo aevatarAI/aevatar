@@ -32,13 +32,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         _authorizationPlanner = authorizationPlanner ?? throw new ArgumentNullException(nameof(authorizationPlanner));
     }
 
-    public StudioMemberWorkflowSchedulePort(
-        IStudioMemberService memberService,
-        IScheduledDispatchApplicationService scheduleService)
-        : this(memberService, scheduleService, new CompatibilityAuthorizationPlanner())
-    {
-    }
-
     public async Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
         StudioMemberWorkflowScheduleRequest request,
         CancellationToken ct = default)
@@ -62,16 +55,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string confirmedPermissionDigest,
         CancellationToken ct = default) =>
         ApplyAsync(request, confirmedPermissionDigest, ct);
-
-    public async Task<StudioMemberWorkflowScheduleResult> EnsureAsync(
-        StudioMemberWorkflowScheduleRequest request,
-        CancellationToken ct = default)
-    {
-        var preflight = await PreflightAsync(request, ct);
-        if (!preflight.Success)
-            throw new InvalidOperationException(preflight.Detail);
-        return await CreateAsync(request, preflight.Plan!.PermissionDigest, ct);
-    }
 
     private async Task<StudioMemberWorkflowScheduleResult> ApplyAsync(
         StudioMemberWorkflowScheduleRequest request,
@@ -293,20 +276,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string MemberId,
         string PublishedServiceId,
         ScheduledInvocationAuthorizationRequest AuthorizationRequest);
-
-    private sealed class CompatibilityAuthorizationPlanner : IScheduledInvocationAuthorizationPlanner
-    {
-        public Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
-            ScheduledInvocationAuthorizationRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(ScheduledInvocationAuthorizationPlanResult.Succeeded(
-                new ScheduledInvocationAuthorizationPlan
-                {
-                    InvocationTarget = request.InvocationTarget.Clone(),
-                    Owner = request.Owner.Clone(),
-                    PermissionDigest = "test-compatible-plan",
-                }));
-    }
 
     private static string BuildScheduleId(string scopeId, string memberId)
     {

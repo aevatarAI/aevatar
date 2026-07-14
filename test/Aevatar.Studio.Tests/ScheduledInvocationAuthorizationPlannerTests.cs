@@ -43,20 +43,70 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
     }
 
-    [Fact]
-    public async Task ProvisionAsync_WhenDigestChanged_DoesNotIssueCredential()
+    [Theory]
+    [InlineData("incomplete-context", ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, "authenticated_owner_context_incomplete")]
+    [InlineData("missing-snapshot", ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "nyxid_catalog_snapshot_not_found")]
+    [InlineData("owner-mismatch", ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, "nyxid_catalog_owner_mismatch")]
+    [InlineData("missing-service", ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, "nyxid_service_not_found:us-connector")]
+    [InlineData("ambiguous-slug", ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, "nyxid_service_slug_not_unique:connector")]
+    [InlineData("unreachable-service", ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, "nyxid_service_unreachable:us-connector")]
+    [InlineData("missing-node-grant", ScheduledInvocationAuthorizationFailureCode.NodeGrantMissing, "nyxid_node_grant_missing:us-connector")]
+    [InlineData("empty-grants", ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, "nyxid_service_grants_empty")]
+    public async Task PlanAsync_WhenAuthorizationEvidenceIsInvalid_FailsClosed(
+        string scenario,
+        ScheduledInvocationAuthorizationFailureCode expectedCode,
+        string expectedDetail)
     {
-        var planner = new StubPlanner(ScheduledInvocationAuthorizationPlanResult.Succeeded(new ScheduledInvocationAuthorizationPlan
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00Z");
+        var owner = Owner("subject-personal");
+        var request = Request(owner, now);
+        NyxIdCatalogSnapshot? snapshot = new(
+            owner, 17, now.AddMinutes(-1), now.AddMinutes(14), "etag-1", "catalog-digest-1",
+            [Service("us-connector", ("node-primary", true))]);
+
+        switch (scenario)
         {
-            PermissionDigest = "new-digest",
-        }));
-        var issuer = new RecordingIssuer();
-        var provisioner = new ScheduledInvocationCredentialProvisioner(planner, issuer);
+            case "incomplete-context":
+                request.OwnerContext.VerifiedBindingId = string.Empty;
+                break;
+            case "missing-snapshot":
+                snapshot = null;
+                break;
+            case "owner-mismatch":
+                snapshot = snapshot with { Owner = Owner("different-subject") };
+                break;
+            case "missing-service":
+                snapshot = snapshot with { Services = [] };
+                break;
+            case "ambiguous-slug":
+                request = request with { RequiredNyxIdServiceIds = [] };
+                request = request with { RequiredNyxIdServiceSlugs = ["connector"] };
+                snapshot = snapshot with
+                {
+                    Services =
+                    [
+                        ServiceWithSlug("service-a", "connector", ("node-a", true)),
+                        ServiceWithSlug("service-b", "connector", ("node-b", true)),
+                    ],
+                };
+                break;
+            case "unreachable-service":
+                snapshot = snapshot with { UnreachableServiceIds = new HashSet<string>(["us-connector"], StringComparer.Ordinal) };
+                break;
+            case "missing-node-grant":
+                snapshot = snapshot with { Services = [Service("us-connector")] };
+                break;
+            case "empty-grants":
+                request = request with { RequiredNyxIdServiceIds = [] };
+                break;
+        }
 
-        var result = await provisioner.ProvisionAsync("bearer", Request(Owner("subject-personal"), DateTimeOffset.UtcNow), "old-digest", "key");
+        var result = await new ScheduledInvocationAuthorizationPlanner(new StubSnapshotQueryPort(snapshot))
+            .PlanAsync(request);
 
-        result.Error.Should().Be("authorization_plan_changed");
-        issuer.CallCount.Should().Be(0);
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(expectedCode);
+        result.Detail.Should().Be(expectedDetail);
     }
 
     private static ScheduledInvocationAuthorizationRequest Request(NyxIdCatalogOwnerIdentity owner, DateTimeOffset now) => new(
@@ -81,8 +131,14 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     };
 
     private static NyxIdServiceGrant Service(string id, params (string Id, bool Primary)[] nodes)
+        => ServiceWithSlug(id, string.Empty, nodes);
+
+    private static NyxIdServiceGrant ServiceWithSlug(
+        string id,
+        string slug,
+        params (string Id, bool Primary)[] nodes)
     {
-        var service = new NyxIdServiceGrant { UserServiceId = id, DisplayName = id };
+        var service = new NyxIdServiceGrant { UserServiceId = id, DisplayName = id, ServiceSlug = slug };
         service.NodeGrants.Add(nodes.Select(static node => new NyxIdNodeGrant
         {
             NodeId = node.Id, DisplayName = node.Id, Primary = node.Primary,
@@ -90,25 +146,10 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         return service;
     }
 
-    private sealed class StubSnapshotQueryPort(NyxIdCatalogSnapshot snapshot) : INyxIdCatalogSnapshotQueryPort
+    private sealed class StubSnapshotQueryPort(NyxIdCatalogSnapshot? snapshot) : INyxIdCatalogSnapshotQueryPort
     {
         public Task<NyxIdCatalogSnapshot?> GetAsync(NyxIdCatalogOwnerIdentity owner, CancellationToken ct = default) =>
             Task.FromResult<NyxIdCatalogSnapshot?>(snapshot);
     }
 
-    private sealed class StubPlanner(ScheduledInvocationAuthorizationPlanResult result) : IScheduledInvocationAuthorizationPlanner
-    {
-        public Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(ScheduledInvocationAuthorizationRequest request, CancellationToken ct = default) =>
-            Task.FromResult(result);
-    }
-
-    private sealed class RecordingIssuer : IScheduledInvocationCredentialIssuer
-    {
-        public int CallCount { get; private set; }
-        public Task<ScheduledInvocationCredentialIssueResult> IssueAsync(string ownerBearer, ScheduledInvocationAuthorizationPlan plan, string credentialName, CancellationToken ct = default)
-        {
-            CallCount++;
-            return Task.FromResult(new ScheduledInvocationCredentialIssueResult(true, "", "key-id", "secret", 1));
-        }
-    }
 }
