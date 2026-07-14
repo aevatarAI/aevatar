@@ -28,8 +28,12 @@ public sealed class AevatarInvocationDispatcher
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
     private const string DeletedGAgentActorNameAlias = "actor_name";
     private const string ChannelWorkflowDeliveryUnavailableCode = "channel_workflow_delivery_unavailable";
+    private const string WorkflowBackgroundDeliveryBindingDegradedCode = "binding_degraded";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
         "This channel bot is not provisioned for workflow result delivery, so the workflow was not started: its terminal result could not be delivered back to this chat. Start the workflow from a surface that can observe the run result, or re-register the channel bot to enable workflow result delivery.";
+    private const string WorkflowBackgroundDeliveryReservationFailedMessage =
+        "Workflow result delivery could not be prepared, so the workflow was not started. Retry from this chat, or start the workflow from a surface that can observe its result.";
+    private static readonly TimeSpan WorkflowBackgroundDeliveryReservationLifetime = TimeSpan.FromDays(30);
     private static readonly string[] ProtectedCallerMetadataKeys =
     [
         LLMRequestMetadataKeys.ScopeId,
@@ -331,7 +335,7 @@ public sealed class AevatarInvocationDispatcher
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
-        var backgroundDelivery = ResolveWorkflowBackgroundDelivery(wait, AgentToolRequestContext.Current);
+        var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
         if (backgroundDelivery.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
         if (backgroundDelivery.ShouldRegister && _workflowRunDeliveryRegistrationPort is null)
@@ -363,9 +367,72 @@ public sealed class AevatarInvocationDispatcher
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
             CallerCredential: callerCredential.Value);
 
-        var result = await _workflowDispatchService.DispatchAsync(command, ct);
+        return await DispatchWorkflowForChatRunAsync(
+            chatRunRequest,
+            command,
+            wait,
+            scope.Value!.ScopeId,
+            backgroundDelivery,
+            ct);
+    }
+
+    private async Task<ChatRunToolCompletionRequest> DispatchWorkflowForChatRunAsync(
+        ChatRunToolCompletionRequest? chatRunRequest,
+        WorkflowChatRunRequest command,
+        InvocationWaitMode wait,
+        string scopeId,
+        WorkflowBackgroundDeliveryResolution backgroundDelivery,
+        CancellationToken ct)
+    {
+        WorkflowBackgroundDeliveryReservationContext? deliveryReservation = null;
+        string? workflowCorrelationIdSeed = null;
+        if (backgroundDelivery.ShouldRegister)
+        {
+            var workflowCommandIdSeed = ResolveCommandId();
+            workflowCorrelationIdSeed = ResolveWorkflowCorrelationId(workflowCommandIdSeed);
+            var reservation = await ReserveWorkflowRunBackgroundDeliveryAsync(
+                    workflowCommandIdSeed,
+                    backgroundDelivery.WorkflowResultDeliveryCredential!,
+                    AgentToolRequestContext.Current,
+                    ct)
+                .ConfigureAwait(false);
+            if (reservation.Error != null)
+            {
+                return ToChatRunRequest(
+                    chatRunRequest,
+                    AevatarInvocationJson.Error(reservation.Error),
+                    reservation.Error);
+            }
+
+            deliveryReservation = reservation.Context;
+        }
+
+        command = command with
+        {
+            CommandIdSeed = deliveryReservation?.Reservation.ExpectedWorkflowCommandId,
+            CorrelationIdSeed = workflowCorrelationIdSeed,
+            CompletionNotificationTarget = ToWorkflowCompletionNotificationTarget(deliveryReservation),
+        };
+
+        CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> result;
+        try
+        {
+            result = await _workflowDispatchService.DispatchAsync(command, ct);
+        }
+        catch (Exception ex)
+        {
+            await TryAbandonWorkflowRunBackgroundDeliveryAsync(
+                    deliveryReservation,
+                    $"workflow dispatch threw before acceptance: {ex.GetType().Name}")
+                .ConfigureAwait(false);
+            throw;
+        }
         if (!result.Succeeded || result.Receipt == null)
         {
+            await TryAbandonWorkflowRunBackgroundDeliveryAsync(
+                    deliveryReservation,
+                    $"workflow dispatch was not accepted: {result.Error}")
+                .ConfigureAwait(false);
             var message = result.Error == WorkflowChatRunStartError.WorkflowNotFound
                 ? WorkflowChatRunStartErrorGuidance.WorkflowNotFound
                 : $"Workflow start failed: {result.Error}";
@@ -376,36 +443,40 @@ public sealed class AevatarInvocationDispatcher
         }
 
         var receipt = result.Receipt;
+        if (result.Admission is { Accepted: false })
+        {
+            await TryAbandonWorkflowRunBackgroundDeliveryAsync(
+                    deliveryReservation,
+                    "workflow dispatch admission was rejected")
+                .ConfigureAwait(false);
+            var admissionError = Error(
+                "dispatch_not_accepted",
+                "Workflow start was not accepted by the target actor inbox.");
+            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(admissionError), admissionError);
+        }
+
+        if (!MatchesReservedWorkflowCommand(deliveryReservation, receipt.CommandId))
+        {
+            _logger.LogWarning(
+                "Workflow run background delivery binding degraded after acceptance: code={Code} reason=command_identity_mismatch actorId={ActorId} expectedCommandId={ExpectedCommandId} acceptedCommandId={AcceptedCommandId}",
+                WorkflowBackgroundDeliveryBindingDegradedCode,
+                receipt.ActorId,
+                deliveryReservation?.Reservation.ExpectedWorkflowCommandId ?? string.Empty,
+                receipt.CommandId);
+        }
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
             : string.Empty;
         WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
-        if (wait == InvocationWaitMode.Stream && backgroundDelivery.ShouldRegister)
+        if (deliveryReservation != null)
         {
-            var registration = await RegisterWorkflowRunBackgroundDeliveryAsync(
+            workflowRunDeliveryReceipt = await RegisterWorkflowRunBackgroundDeliveryAsync(
                     receipt,
                     receipt.CommandId,
                     streamTopic,
-                    backgroundDelivery.WorkflowResultDeliveryCredential!,
-                    AgentToolRequestContext.Current,
+                    deliveryReservation,
                     ct)
                 .ConfigureAwait(false);
-            if (registration.Error != null)
-            {
-                return ToChatRunRequest(chatRunRequest, new InvocationToolResult
-                {
-                    RunId = receipt.CommandId,
-                    Status = "background_delivery_failed",
-                    StreamTopic = string.Empty,
-                    ActorId = receipt.ActorId,
-                    CommandId = receipt.CommandId,
-                    CorrelationId = receipt.CorrelationId,
-                    Wait = wait,
-                    Error = registration.Error,
-                }, scope.Value!.ScopeId);
-            }
-
-            workflowRunDeliveryReceipt = registration.Receipt;
         }
 
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
@@ -418,7 +489,7 @@ public sealed class AevatarInvocationDispatcher
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
             WorkflowRunDelivery = workflowRunDeliveryReceipt,
-        }, scope.Value!.ScopeId);
+        }, scopeId);
     }
 
     private async Task<ChatRunToolCompletionRequest> StartManagedSubWorkflowForChatRunAsync(
@@ -623,7 +694,7 @@ public sealed class AevatarInvocationDispatcher
     {
         EnsureWorkflowTeamChatTarget(target, invocationRequest);
 
-        var backgroundDelivery = ResolveWorkflowBackgroundDelivery(wait, AgentToolRequestContext.Current);
+        var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
         if (backgroundDelivery.Error != null)
         {
             return ToChatRunRequest(
@@ -651,9 +722,57 @@ public sealed class AevatarInvocationDispatcher
 
         ApplyWorkflowServiceInvocationContext(invocationRequest, callerCredential.Value);
 
-        var serviceReceipt = await _serviceInvocationDispatcher.DispatchAsync(target, invocationRequest, ct);
+        WorkflowBackgroundDeliveryReservationContext? deliveryReservation = null;
+        if (backgroundDelivery.ShouldRegister)
+        {
+            var commandId = ResolveCommandId();
+            var correlationId = ResolveWorkflowCorrelationId(commandId);
+            var reservation = await ReserveWorkflowRunBackgroundDeliveryAsync(
+                    commandId,
+                    backgroundDelivery.WorkflowResultDeliveryCredential!,
+                    AgentToolRequestContext.Current,
+                    ct)
+                .ConfigureAwait(false);
+            if (reservation.Error != null)
+            {
+                return ToChatRunRequest(
+                    chatRunRequest,
+                    AevatarInvocationJson.Error(reservation.Error),
+                    reservation.Error);
+            }
+
+            deliveryReservation = reservation.Context;
+            invocationRequest.CommandId = commandId;
+            invocationRequest.CorrelationId = correlationId;
+            invocationRequest.WorkflowCompletionNotificationTarget =
+                ToWorkflowServiceCompletionNotificationTarget(deliveryReservation);
+        }
+
+        ServiceInvocationAcceptedReceipt serviceReceipt;
+        try
+        {
+            serviceReceipt = await _serviceInvocationDispatcher.DispatchAsync(target, invocationRequest, ct);
+        }
+        catch (Exception ex)
+        {
+            await TryAbandonWorkflowRunBackgroundDeliveryAsync(
+                    deliveryReservation,
+                    $"workflow service dispatch threw before acceptance: {ex.GetType().Name}")
+                .ConfigureAwait(false);
+            throw;
+        }
         var serviceRunId = ResolveServiceRunId(serviceReceipt);
         var receipt = ToWorkflowAcceptedReceipt(serviceReceipt);
+
+        if (!MatchesReservedWorkflowCommand(deliveryReservation, receipt.CommandId))
+        {
+            _logger.LogWarning(
+                "Workflow service background delivery binding degraded after acceptance: code={Code} reason=command_identity_mismatch actorId={ActorId} expectedCommandId={ExpectedCommandId} acceptedCommandId={AcceptedCommandId}",
+                WorkflowBackgroundDeliveryBindingDegradedCode,
+                receipt.ActorId,
+                deliveryReservation?.Reservation.ExpectedWorkflowCommandId ?? string.Empty,
+                receipt.CommandId);
+        }
 
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForServiceRun(
@@ -663,37 +782,15 @@ public sealed class AevatarInvocationDispatcher
             : string.Empty;
 
         WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
-        if (wait == InvocationWaitMode.Stream && backgroundDelivery.ShouldRegister)
+        if (deliveryReservation != null)
         {
-            var registration = await RegisterWorkflowRunBackgroundDeliveryAsync(
+            workflowRunDeliveryReceipt = await RegisterWorkflowRunBackgroundDeliveryAsync(
                     receipt,
                     serviceRunId,
                     streamTopic,
-                    backgroundDelivery.WorkflowResultDeliveryCredential!,
-                    AgentToolRequestContext.Current,
+                    deliveryReservation,
                     ct)
                 .ConfigureAwait(false);
-            if (registration.Error != null)
-            {
-                return ToChatRunRequest(
-                    chatRunRequest,
-                    new InvocationToolResult
-                    {
-                        RunId = serviceRunId,
-                        Status = "background_delivery_failed",
-                        StreamTopic = string.Empty,
-                        ActorId = receipt.ActorId,
-                        CommandId = receipt.CommandId,
-                        CorrelationId = receipt.CorrelationId,
-                        ServiceId = resolution.PublishedServiceId,
-                        EndpointId = request.EndpointId.Trim(),
-                        Wait = wait,
-                        Error = registration.Error,
-                    },
-                    resolution.ScopeId);
-            }
-
-            workflowRunDeliveryReceipt = registration.Receipt;
         }
 
         return ToChatRunRequest(
@@ -889,119 +986,285 @@ public sealed class AevatarInvocationDispatcher
         }
     }
 
-    private async Task<WorkflowBackgroundDeliveryRegistrationResult> RegisterWorkflowRunBackgroundDeliveryAsync(
-        WorkflowChatRunAcceptedReceipt receipt,
-        string serviceRunId,
-        string streamTopic,
+    private async Task<WorkflowBackgroundDeliveryReservationResult> ReserveWorkflowRunBackgroundDeliveryAsync(
+        string workflowCommandId,
         ChannelWorkflowResultDeliveryCredential workflowResultDeliveryCredential,
         AgentToolExecutionContext? context,
         CancellationToken ct)
     {
-        var registration = BuildWorkflowRunDeliveryRegistration(
-            receipt,
-            serviceRunId,
-            streamTopic,
+        var reservation = BuildWorkflowRunDeliveryReservation(
+            workflowCommandId,
             workflowResultDeliveryCredential,
             context);
-        if (registration is null)
+        if (reservation is null || _workflowRunDeliveryRegistrationPort is null)
         {
-            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
-                ChannelWorkflowDeliveryUnavailableCode,
-                ChannelWorkflowDeliveryUnavailableMessage));
-        }
-
-        if (_workflowRunDeliveryRegistrationPort is null)
-        {
-            _logger.LogInformation(
-                "Workflow run background delivery registration skipped because no registration port is available: actorId={ActorId} commandId={CommandId}",
-                receipt.ActorId,
-                receipt.CommandId);
-            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
+            return WorkflowBackgroundDeliveryReservationResult.Failed(Error(
                 ChannelWorkflowDeliveryUnavailableCode,
                 ChannelWorkflowDeliveryUnavailableMessage));
         }
 
         try
         {
-            var deliveryReceipt = await _workflowRunDeliveryRegistrationPort
-                .RegisterAsync(registration, ct)
+            var receipt = await _workflowRunDeliveryRegistrationPort
+                .ReserveAsync(reservation, ct)
                 .ConfigureAwait(false);
-            if (!IsDurableWorkflowRunDeliveryReceipt(deliveryReceipt))
+            if (receipt is null)
             {
-                return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
-                    "workflow_background_delivery_registration_failed",
-                    "Workflow background delivery registration did not return a durable receipt."));
+                return WorkflowBackgroundDeliveryReservationResult.Failed(Error(
+                    "workflow_background_delivery_reservation_failed",
+                    "Workflow background delivery reservation did not return a durable command target."));
             }
 
-            return WorkflowBackgroundDeliveryRegistrationResult.Success(deliveryReceipt);
+            var reservationContext = new WorkflowBackgroundDeliveryReservationContext(reservation, receipt);
+            if (!IsDurableWorkflowRunDeliveryReservationReceipt(receipt, reservation))
+            {
+                await TryAbandonWorkflowRunBackgroundDeliveryAsync(
+                        reservationContext,
+                        "reservation receipt did not match the requested workflow command")
+                    .ConfigureAwait(false);
+                return WorkflowBackgroundDeliveryReservationResult.Failed(Error(
+                    "workflow_background_delivery_reservation_failed",
+                    "Workflow background delivery reservation did not return a durable command target."));
+            }
+
+            return WorkflowBackgroundDeliveryReservationResult.Success(
+                new WorkflowBackgroundDeliveryReservationContext(
+                    reservation,
+                    new WorkflowRunBackgroundDeliveryReservationReceipt(
+                        receipt.DeliveryActorId.Trim(),
+                        receipt.DeliveryId.Trim(),
+                        receipt.WorkflowCommandId.Trim())));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(
                 ex,
-                "Workflow run background delivery registration failed after accepted receipt: actorId={ActorId} commandId={CommandId}",
-                receipt.ActorId,
-                receipt.CommandId);
-            return WorkflowBackgroundDeliveryRegistrationResult.Failed(Error(
-                "workflow_background_delivery_registration_failed",
-                $"Workflow background delivery registration failed after workflow start acceptance: {ex.Message}"));
+                "Workflow run background delivery reservation failed before dispatch: commandId={CommandId}",
+                workflowCommandId);
+            return WorkflowBackgroundDeliveryReservationResult.Failed(Error(
+                "workflow_background_delivery_reservation_failed",
+                WorkflowBackgroundDeliveryReservationFailedMessage));
         }
     }
 
-    private static bool IsDurableWorkflowRunDeliveryReceipt(WorkflowRunBackgroundDeliveryReceipt? receipt) =>
-        receipt is not null &&
-        !string.IsNullOrWhiteSpace(receipt.DeliveryActorId) &&
-        !string.IsNullOrWhiteSpace(receipt.WorkflowActorId) &&
-        !string.IsNullOrWhiteSpace(receipt.WorkflowCommandId);
-
-    private static WorkflowRunBackgroundDeliveryRegistration? BuildWorkflowRunDeliveryRegistration(
+    private async Task<WorkflowRunBackgroundDeliveryReceipt> RegisterWorkflowRunBackgroundDeliveryAsync(
         WorkflowChatRunAcceptedReceipt receipt,
         string serviceRunId,
         string streamTopic,
+        WorkflowBackgroundDeliveryReservationContext deliveryReservation,
+        CancellationToken ct)
+    {
+        var registration = BuildWorkflowRunDeliveryRegistration(
+            receipt,
+            serviceRunId,
+            streamTopic,
+            deliveryReservation.Reservation);
+        var fallbackReceipt = BuildWorkflowRunDeliveryFallbackReceipt(
+            registration,
+            deliveryReservation.Receipt);
+
+        if (_workflowRunDeliveryRegistrationPort is null)
+        {
+            _logger.LogWarning(
+                "Workflow run background delivery binding degraded after acceptance: code={Code} reason=registration_port_unavailable actorId={ActorId} commandId={CommandId}",
+                WorkflowBackgroundDeliveryBindingDegradedCode,
+                receipt.ActorId,
+                receipt.CommandId);
+            return fallbackReceipt;
+        }
+
+        try
+        {
+            var deliveryReceipt = await _workflowRunDeliveryRegistrationPort
+                .RegisterAsync(deliveryReservation.Receipt, registration, ct)
+                .ConfigureAwait(false);
+            if (!IsDurableWorkflowRunDeliveryReceipt(deliveryReceipt, deliveryReservation))
+            {
+                _logger.LogWarning(
+                    "Workflow run background delivery binding degraded after acceptance: code={Code} reason=invalid_registration_receipt actorId={ActorId} commandId={CommandId}",
+                    WorkflowBackgroundDeliveryBindingDegradedCode,
+                    receipt.ActorId,
+                    receipt.CommandId);
+                return fallbackReceipt;
+            }
+
+            return deliveryReceipt;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow run background delivery binding degraded after acceptance: code={Code} reason=registration_failed actorId={ActorId} commandId={CommandId}",
+                WorkflowBackgroundDeliveryBindingDegradedCode,
+                receipt.ActorId,
+                receipt.CommandId);
+            return fallbackReceipt;
+        }
+    }
+
+    private async Task TryAbandonWorkflowRunBackgroundDeliveryAsync(
+        WorkflowBackgroundDeliveryReservationContext? deliveryReservation,
+        string reason)
+    {
+        if (deliveryReservation is null || _workflowRunDeliveryRegistrationPort is null)
+            return;
+
+        try
+        {
+            await _workflowRunDeliveryRegistrationPort
+                .AbandonAsync(
+                    deliveryReservation.Receipt,
+                    string.IsNullOrWhiteSpace(reason) ? "workflow dispatch did not complete registration" : reason,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Workflow run background delivery reservation abandonment failed: deliveryActorId={DeliveryActorId} commandId={CommandId}",
+                deliveryReservation.Receipt.DeliveryActorId,
+                deliveryReservation.Receipt.WorkflowCommandId);
+        }
+    }
+
+    private static bool IsDurableWorkflowRunDeliveryReservationReceipt(
+        WorkflowRunBackgroundDeliveryReservationReceipt? receipt,
+        WorkflowRunBackgroundDeliveryReservation reservation) =>
+        receipt is not null &&
+        !string.IsNullOrWhiteSpace(receipt.DeliveryActorId) &&
+        string.Equals(
+            receipt.DeliveryId?.Trim(),
+            reservation.DeliveryId,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            receipt.WorkflowCommandId?.Trim(),
+            reservation.ExpectedWorkflowCommandId,
+            StringComparison.Ordinal);
+
+    private static bool IsDurableWorkflowRunDeliveryReceipt(
+        WorkflowRunBackgroundDeliveryReceipt? receipt,
+        WorkflowBackgroundDeliveryReservationContext deliveryReservation) =>
+        receipt is not null &&
+        string.Equals(
+            receipt.DeliveryActorId?.Trim(),
+            deliveryReservation.Receipt.DeliveryActorId?.Trim(),
+            StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(receipt.WorkflowActorId) &&
+        string.Equals(
+            receipt.WorkflowCommandId?.Trim(),
+            deliveryReservation.Reservation.ExpectedWorkflowCommandId,
+            StringComparison.Ordinal);
+
+    private static WorkflowRunBackgroundDeliveryReservation? BuildWorkflowRunDeliveryReservation(
+        string workflowCommandId,
         ChannelWorkflowResultDeliveryCredential workflowResultDeliveryCredential,
         AgentToolExecutionContext? context)
     {
         context ??= AgentToolExecutionContext.Empty;
         var platform = Normalize(context.Channel.Platform);
         var replyMessageId = Normalize(context.Channel.MessageId);
-        if (platform is null || replyMessageId is null ||
+        var normalizedCommandId = Normalize(workflowCommandId);
+        if (platform is null || replyMessageId is null || normalizedCommandId is null ||
             !IsUsableWorkflowResultDeliveryCredential(workflowResultDeliveryCredential))
             return null;
 
-        var platformMessageId = Normalize(context.Channel.PlatformMessageId) ??
-                                string.Empty;
-        var registrationScopeId = Normalize(context.Channel.RegistrationScopeId) ??
-                                  Normalize(context.Caller.ScopeId) ??
-                                  string.Empty;
-        var deliveryId = $"workflow-run-delivery:{SanitizeActorIdSegment(receipt.ActorId)}:{SanitizeActorIdSegment(receipt.CommandId)}";
+        var nowUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var expiresAtUnixMs = nowUnixMs + (long)WorkflowBackgroundDeliveryReservationLifetime.TotalMilliseconds;
+        var credentialExpiresAtUnixMs = workflowResultDeliveryCredential.SecretReference?.ExpiresAtUnixMs ?? 0;
+        if (credentialExpiresAtUnixMs > 0)
+            expiresAtUnixMs = Math.Min(expiresAtUnixMs, credentialExpiresAtUnixMs);
+
+        return new WorkflowRunBackgroundDeliveryReservation(
+            deliveryId: $"workflow-delivery:{Guid.NewGuid():N}",
+            expectedWorkflowCommandId: normalizedCommandId,
+            channelPlatform: platform,
+            replyMessageId: replyMessageId,
+            platformMessageId: Normalize(context.Channel.PlatformMessageId) ?? string.Empty,
+            workflowResultDeliveryCredential: workflowResultDeliveryCredential,
+            registrationScopeId: Normalize(context.Channel.RegistrationScopeId) ??
+                                 Normalize(context.Caller.ScopeId) ??
+                                 string.Empty,
+            botRegistrationId: Normalize(context.Channel.BotRegistrationId) ?? string.Empty,
+            expiresAtUnixMs: expiresAtUnixMs);
+    }
+
+    private static WorkflowRunBackgroundDeliveryRegistration BuildWorkflowRunDeliveryRegistration(
+        WorkflowChatRunAcceptedReceipt receipt,
+        string serviceRunId,
+        string streamTopic,
+        WorkflowRunBackgroundDeliveryReservation reservation)
+    {
         var normalizedWorkflowRunId = string.IsNullOrWhiteSpace(serviceRunId)
             ? receipt.ActorId
             : serviceRunId.Trim();
         return new WorkflowRunBackgroundDeliveryRegistration(
-            DeliveryId: deliveryId,
+            DeliveryId: reservation.DeliveryId,
             WorkflowActorId: receipt.ActorId,
             WorkflowRunId: normalizedWorkflowRunId,
             WorkflowCommandId: receipt.CommandId,
             WorkflowCorrelationId: receipt.CorrelationId,
             StreamTopic: streamTopic,
-            ChannelPlatform: platform,
-            ReplyMessageId: replyMessageId,
-            PlatformMessageId: platformMessageId,
-            WorkflowResultDeliveryCredential: workflowResultDeliveryCredential.Clone(),
-            RegistrationScopeId: registrationScopeId,
-            BotRegistrationId: Normalize(context.Channel.BotRegistrationId) ?? string.Empty);
+            ChannelPlatform: reservation.ChannelPlatform,
+            ReplyMessageId: reservation.ReplyMessageId,
+            PlatformMessageId: reservation.PlatformMessageId,
+            WorkflowResultDeliveryCredential: reservation.WorkflowResultDeliveryCredential.Clone(),
+            RegistrationScopeId: reservation.RegistrationScopeId,
+            BotRegistrationId: reservation.BotRegistrationId);
     }
+
+    private static WorkflowRunBackgroundDeliveryReceipt BuildWorkflowRunDeliveryFallbackReceipt(
+        WorkflowRunBackgroundDeliveryRegistration registration,
+        WorkflowRunBackgroundDeliveryReservationReceipt reservationReceipt) =>
+        new()
+        {
+            DeliveryActorId = reservationReceipt.DeliveryActorId,
+            WorkflowActorId = registration.WorkflowActorId,
+            WorkflowRunId = registration.WorkflowRunId,
+            WorkflowCommandId = registration.WorkflowCommandId,
+            WorkflowCorrelationId = registration.WorkflowCorrelationId,
+            StreamTopic = registration.StreamTopic,
+            ChannelPlatform = registration.ChannelPlatform,
+            ReplyMessageId = registration.ReplyMessageId,
+            PlatformMessageId = registration.PlatformMessageId,
+            RegistrationScopeId = registration.RegistrationScopeId,
+        };
+
+    private static bool MatchesReservedWorkflowCommand(
+        WorkflowBackgroundDeliveryReservationContext? deliveryReservation,
+        string workflowCommandId) =>
+        deliveryReservation is null || string.Equals(
+            deliveryReservation.Reservation.ExpectedWorkflowCommandId,
+            workflowCommandId?.Trim(),
+            StringComparison.Ordinal);
+
+    private static Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget?
+        ToWorkflowCompletionNotificationTarget(
+        WorkflowBackgroundDeliveryReservationContext? deliveryReservation) =>
+        deliveryReservation is null
+            ? null
+            : new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget(
+                deliveryReservation.Receipt.DeliveryActorId,
+                deliveryReservation.Receipt.DeliveryId,
+                deliveryReservation.Reservation.ExpiresAtUnixMs);
+
+    private static WorkflowServiceCompletionNotificationTarget? ToWorkflowServiceCompletionNotificationTarget(
+        WorkflowBackgroundDeliveryReservationContext? deliveryReservation) =>
+        deliveryReservation is null
+            ? null
+            : new WorkflowServiceCompletionNotificationTarget
+            {
+                ActorId = deliveryReservation.Receipt.DeliveryActorId,
+                DeliveryId = deliveryReservation.Receipt.DeliveryId,
+                ExpiresAtUnixMs = deliveryReservation.Reservation.ExpiresAtUnixMs,
+            };
 
     private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>
         Error(ChannelWorkflowDeliveryUnavailableCode, ChannelWorkflowDeliveryUnavailableMessage);
 
     private WorkflowBackgroundDeliveryResolution ResolveWorkflowBackgroundDelivery(
-        InvocationWaitMode wait,
         AgentToolExecutionContext? context)
     {
-        if (wait != InvocationWaitMode.Stream)
-            return WorkflowBackgroundDeliveryResolution.Disabled();
-
         context ??= AgentToolExecutionContext.Empty;
         if (Normalize(context.Channel.Platform) is null || Normalize(context.Channel.MessageId) is null)
             return WorkflowBackgroundDeliveryResolution.Disabled();
@@ -1581,6 +1844,17 @@ public sealed class AevatarInvocationDispatcher
         ?? Normalize(AgentToolRequestContext.RequestId)
         ?? Guid.NewGuid().ToString("N");
 
+    private static string ResolveWorkflowCorrelationId(string commandId) =>
+        new[]
+            {
+                Normalize(AgentToolRequestContext.RequestId),
+                Normalize(AgentToolRequestContext.ResponseId),
+            }
+            .FirstOrDefault(candidate =>
+                candidate is not null &&
+                !string.Equals(candidate, commandId, StringComparison.Ordinal))
+        ?? $"workflow-correlation:{commandId}";
+
     private static string ResolveSessionId() =>
         Normalize(AgentToolRequestContext.ResponseId)
         ?? Normalize(AgentToolRequestContext.RequestId)
@@ -1589,15 +1863,6 @@ public sealed class AevatarInvocationDispatcher
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-    private static string SanitizeActorIdSegment(string? value)
-    {
-        var normalized = Normalize(value) ?? "missing";
-        var chars = normalized
-            .Select(static c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-')
-            .ToArray();
-        return new string(chars);
-    }
 
     private static string? EmptyToNull(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
@@ -1649,14 +1914,19 @@ public sealed class AevatarInvocationDispatcher
             new(false, null, error);
     }
 
-    private sealed record WorkflowBackgroundDeliveryRegistrationResult(
-        WorkflowRunBackgroundDeliveryReceipt? Receipt,
+    private sealed record WorkflowBackgroundDeliveryReservationContext(
+        WorkflowRunBackgroundDeliveryReservation Reservation,
+        WorkflowRunBackgroundDeliveryReservationReceipt Receipt);
+
+    private sealed record WorkflowBackgroundDeliveryReservationResult(
+        WorkflowBackgroundDeliveryReservationContext? Context,
         InvocationToolError? Error)
     {
-        public static WorkflowBackgroundDeliveryRegistrationResult Success(WorkflowRunBackgroundDeliveryReceipt receipt) =>
-            new(receipt, null);
+        public static WorkflowBackgroundDeliveryReservationResult Success(
+            WorkflowBackgroundDeliveryReservationContext context) =>
+            new(context, null);
 
-        public static WorkflowBackgroundDeliveryRegistrationResult Failed(InvocationToolError error) =>
+        public static WorkflowBackgroundDeliveryReservationResult Failed(InvocationToolError error) =>
             new(null, error);
     }
 

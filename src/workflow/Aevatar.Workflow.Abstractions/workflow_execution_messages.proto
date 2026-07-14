@@ -38,6 +38,83 @@ enum WorkflowStepFailureOutcome {
   WORKFLOW_STEP_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
 }
 
+enum WorkflowRunTerminalStatus {
+  WORKFLOW_RUN_TERMINAL_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_RUN_TERMINAL_STATUS_COMPLETED = 1;
+  WORKFLOW_RUN_TERMINAL_STATUS_FAILED = 2;
+  WORKFLOW_RUN_TERMINAL_STATUS_STOPPED = 3;
+}
+
+enum WorkflowRunTerminalNotificationDeliveryStatus {
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_PREPARED = 1;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_DISPATCHED = 3;
+  WORKFLOW_RUN_TERMINAL_NOTIFICATION_DELIVERY_STATUS_EXPIRED = 4;
+}
+
+message WorkflowCompletionNotificationTarget {
+  string actor_id = 1;
+  string delivery_id = 2;
+  int64 expires_at_unix_ms = 3;
+}
+
+message WorkflowRunTerminalNotification {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  WorkflowRunTerminalStatus status = 6;
+  string output = 7;
+  string error = 8;
+  google.protobuf.Timestamp terminal_at = 9;
+}
+
+message WorkflowRunCompletionNotificationTargetAdoptedEvent {
+  WorkflowCompletionNotificationTarget completion_notification_target = 1;
+  string workflow_run_id = 2;
+  string scope_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  google.protobuf.Timestamp adopted_at = 6;
+}
+
+message WorkflowRunTerminalNotificationPreparedEvent {
+  WorkflowRunTerminalNotification notification = 1;
+  int32 attempt = 2;
+  google.protobuf.Timestamp prepared_at = 3;
+}
+
+message WorkflowRunTerminalNotificationDispatchedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp dispatched_at = 4;
+}
+
+message WorkflowRunTerminalNotificationRetryScheduledEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  int32 attempt = 3;
+  string callback_id = 4;
+  google.protobuf.Timestamp retry_at = 5;
+}
+
+message WorkflowRunTerminalNotificationRetryFiredEvent {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  int32 attempt = 4;
+}
+
+message WorkflowRunTerminalNotificationExpiredEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  int32 attempt = 3;
+  google.protobuf.Timestamp expired_at = 4;
+}
+
 message WorkflowFileRef {
   string file_id = 1;
   string artifact_id = 2;
@@ -121,6 +198,7 @@ message WorkflowChatRequestEvent {
   WorkflowCallerCredential caller_credential = 10;
   WorkflowRunForkSeed fork_seed = 11;
   WorkflowExternalIngressContext external_ingress = 12;
+  WorkflowCompletionNotificationTarget completion_notification_target = 13;
 }
 
 message WorkflowRunForkSeed
@@ -193,6 +271,9 @@ message WorkflowRunExecutionStartedEvent
   int32 attempt = 7;
   repeated WorkflowFileRef input_file_refs = 8;
   google.protobuf.Timestamp started_at_utc = 9;
+  WorkflowCompletionNotificationTarget completion_notification_target = 10;
+  string workflow_command_id = 11;
+  string workflow_correlation_id = 12;
 }
 message WorkflowRunExecutionContextDelta
 {
