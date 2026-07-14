@@ -84,6 +84,7 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddSingleton<ISkillRunnerOutboundDeliveryPort, ChannelNativeSkillRunnerOutboundDeliveryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionBootstrapActivator>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
+        services.TryAddSingleton<IScheduledWorkflowAgentCreationPort, ScheduledWorkflowAgentCreationPort>();
         services.TryAddSingleton<ISkillRunnerCronSchedulePort, SkillRunnerCronSchedulePort>();
         services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
         // Caller-scope resolver chain (issue #466 §B). Channel resolver runs first so

@@ -365,10 +365,13 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             ConversationId: conversationId,
             NyxProviderSlug: platform == "telegram" ? "api-telegram-bot" : "api-lark-bot",
             NyxApiKey: "nyx-api-key-1",
-            LarkReceiveId: platform == "lark" ? larkReceiveId ?? conversationId : string.Empty,
-            LarkReceiveIdType: platform == "lark" ? "chat_id" : string.Empty,
-            LarkReceiveIdFallback: string.Empty,
-            LarkReceiveIdTypeFallback: string.Empty,
+            ChannelAddress: new Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress(
+                platform,
+                platform == "telegram" ? "api-telegram-bot" : "api-lark-bot",
+                conversationId,
+                new Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddressEndpoint(
+                    platform == "lark" ? larkReceiveId ?? conversationId : conversationId,
+                    platform == "lark" ? "chat_id" : string.Empty)),
             OutputFormat: SkillRunnerOutputFormat.Auto,
             TemplateName: string.Empty,
             AgentType: string.Empty);

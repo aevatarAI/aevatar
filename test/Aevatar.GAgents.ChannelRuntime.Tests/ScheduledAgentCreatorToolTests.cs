@@ -11,6 +11,7 @@ using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -725,15 +726,22 @@ public sealed class ScheduledAgentCreatorToolTests
         var caller = OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender");
         var secretVault = new InMemorySecretVault();
         var harness = CreateHarness(scope: caller, secretVault: secretVault);
-        InitializeSkillRunnerCommand? captured = null;
-        string? capturedAgentId = null;
-        bool? capturedRunImmediately = null;
-        harness.SkillRunnerPort.InitializeAsync(
-                Arg.Do<string>(value => capturedAgentId = value),
-                Arg.Do<InitializeSkillRunnerCommand>(value => captured = value),
-                Arg.Do<bool>(value => capturedRunImmediately = value),
+        ScheduledWorkflowAgentCreateRequest? captured = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
 
         await WithToolContext(async () =>
         {
@@ -752,19 +760,6 @@ public sealed class ScheduledAgentCreatorToolTests
                   "max_history_messages": 12,
                   "requires_nyxid_proxy_success": true,
                   "output_format": "feishu_doc",
-                  "external_trigger_sources": [
-                    {
-                      "source_id": " webhook-main ",
-                      "kind": "webhook",
-                      "enabled": true,
-                      "display_name": " Main webhook "
-                    },
-                    {
-                      "source_id": "channel-lark",
-                      "kind": "channel_inbound",
-                      "enabled": false
-                    }
-                  ],
                   "run_immediately": true
                 }
                 """);
@@ -775,56 +770,66 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.TryGetProperty("full_key", out _).Should().BeFalse();
             document.RootElement.TryGetProperty("committed", out _).Should().BeFalse();
 
-            capturedAgentId.Should().StartWith("skill-runner-");
-            capturedRunImmediately.Should().BeTrue();
+            document.RootElement.GetProperty("agent_id").GetString().Should().StartWith("scheduled-workflow-");
             captured.Should().NotBeNull();
-            captured!.SkillName.Should().Be("daily-report");
-            captured.TemplateName.Should().Be("Daily Report");
-            captured.SkillContent.Should().BeEmpty();
-            captured.SkillRef.Should().NotBeNull();
-            captured.SkillRef.Name.Should().Be("daily-report");
-            captured.SkillRef.Source.Should().Be(SkillRunnerSkillSource.Ornn);
-            captured.SkillRef.Version.Should().BeEmpty();
-            captured.SkillRef.AllowInlineFallback.Should().BeFalse();
-            captured.ExecutionPrompt.Should().Be("Send concise bullets.");
-            captured.ScheduleCron.Should().Be("0 9 * * *");
-            captured.ScheduleTimezone.Should().Be("Asia/Singapore");
-            captured.Enabled.Should().BeTrue();
-            captured.ScopeId.Should().Be("scope-bot-1");
-            captured.ProviderName.Should().Be("nyxid");
-            captured.Model.Should().Be("gpt-5.1");
-            captured.Temperature.Should().Be(0.2);
-            captured.MaxTokens.Should().Be(1200);
-            captured.MaxToolRounds.Should().Be(6);
-            captured.MaxHistoryMessages.Should().Be(12);
-            captured.RequiresNyxidProxySuccess.Should().BeTrue();
-            captured.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
-            captured.ExternalTriggerSources.Should().HaveCount(2);
-            captured.ExternalTriggerSources[0].SourceId.Should().Be("webhook-main");
-            captured.ExternalTriggerSources[0].Kind.Should().Be(ExternalTriggerSourceKind.Webhook);
-            captured.ExternalTriggerSources[0].Enabled.Should().BeTrue();
-            captured.ExternalTriggerSources[0].DisplayName.Should().Be("Main webhook");
-            captured.ExternalTriggerSources[1].SourceId.Should().Be("channel-lark");
-            captured.ExternalTriggerSources[1].Kind.Should().Be(ExternalTriggerSourceKind.ChannelInbound);
-            captured.ExternalTriggerSources[1].Enabled.Should().BeFalse();
-            captured.OutboundConfig.NyxApiKey.Should().BeEmpty();
-            captured.OutboundConfig.ApiKeyId.Should().Be("key-created");
-            captured.OutboundConfig.NyxApiKeyReference.Should().NotBeNull();
-            captured.OutboundConfig.NyxApiKeyReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
-            captured.OutboundConfig.NyxApiKeyReference.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            captured.OutboundConfig.NyxApiKeyReference.OwnerScopeKey.Should().NotBeNullOrWhiteSpace();
-            captured.OutboundConfig.NyxApiKeyReference.Ref.Should().NotBe("full-secret-key");
-            captured.OutboundConfig.NyxProviderSlug.Should().Be("api-lark-bot");
-            captured.OutboundConfig.FailureNotificationProviderSlug.Should().Be("api-lark-bot-inbound");
-            captured.OutboundConfig.ConversationId.Should().Be("oc_conversation");
-            captured.OutboundConfig.LarkReceiveId.Should().Be("oc_chat");
-            captured.OutboundConfig.LarkReceiveIdType.Should().Be("chat_id");
-            captured.OutboundConfig.LarkReceiveIdFallback.Should().Be("on_union");
-            captured.OutboundConfig.LarkReceiveIdTypeFallback.Should().Be("union_id");
-            captured.OutboundConfig.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
-            captured.OutboundConfig.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
-            captured.OutboundConfig.OwnerNyxUserId.Should().BeEmpty();
-            captured.OutboundConfig.Platform.Should().BeEmpty();
+            captured!.RunImmediately.Should().BeTrue();
+            captured.Schedule.ScheduleId.Should().StartWith("scheduled-workflow-");
+            captured.Schedule.DisplayName.Should().Be("Daily Report");
+            captured.Schedule.WorkflowName.Should().Be("daily-report");
+            captured.Schedule.Prompt.Should().Be("Send concise bullets.");
+            captured.Schedule.CronExpression.Should().Be("0 9 * * *");
+            captured.Schedule.Timezone.Should().Be("Asia/Singapore");
+            captured.Schedule.Enabled.Should().BeTrue();
+            captured.Schedule.ScopeId.Should().Be("scope-bot-1");
+            captured.Schedule.ScheduleMode.Should().Be(WorkflowScheduleMode.RecurringCron);
+            captured.Schedule.OneShotFireAt.Should().BeNull();
+            captured.Schedule.Auth.Should().NotBeNull();
+            captured.Schedule.Auth!.ScheduledInvocationAgentKey.Should().NotBeNull();
+            var agentKey = captured.Schedule.Auth.ScheduledInvocationAgentKey!;
+            agentKey.ApiKeyId.Should().Be("key-created");
+            agentKey.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+            agentKey.SecretReference.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            agentKey.SecretReference.OwnerScopeKey.Should().NotBeNullOrWhiteSpace();
+            agentKey.SecretReference.Ref.Should().NotBe("full-secret-key");
+            captured.Schedule.Headers["scheduled_agent.agent_type"].Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
+            captured.Schedule.Headers["scheduled_agent.conversation_id"].Should().Be("oc_conversation");
+            captured.Schedule.Headers["scheduled_agent.output_format"].Should().Be(SkillRunnerOutputFormat.FeishuDoc.ToString());
+            captured.Schedule.Headers["scheduled_agent.api_key_id"].Should().Be("key-created");
+            captured.Schedule.Headers["scheduled_agent.nyx_provider_slug"].Should().Be("api-lark-bot");
+            captured.Schedule.Headers["workflow.llm.model"].Should().Be("gpt-5.1");
+            captured.Schedule.Headers["workflow.llm.provider"].Should().Be("nyxid");
+            captured.Schedule.Headers["workflow.llm.max_tool_rounds"].Should().Be("6");
+            captured.Schedule.Headers["workflow.llm.max_history_messages"].Should().Be("12");
+            captured.CatalogEntry.AgentId.Should().Be(captured.Schedule.ScheduleId);
+            captured.CatalogEntry.AgentType.Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
+            captured.CatalogEntry.TemplateName.Should().Be("Daily Report");
+            captured.CatalogEntry.ScopeId.Should().Be("scope-bot-1");
+            captured.CatalogEntry.NyxApiKey.Should().Be("full-secret-key");
+            captured.CatalogEntry.ApiKeyId.Should().Be("key-created");
+            captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot");
+            captured.CatalogEntry.ConversationId.Should().Be("oc_conversation");
+            captured.CatalogEntry.TargetPlatform.Should().Be("lark");
+            captured.CatalogEntry.ChannelAddress.Platform.Should().Be("lark");
+            captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot");
+            captured.CatalogEntry.ChannelAddress.ConversationId.Should().Be("oc_conversation");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("oc_chat");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+            captured.CatalogEntry.ChannelAddress.Fallback.Should().NotBeNull();
+            captured.CatalogEntry.ChannelAddress.Fallback!.AddressId.Should().Be("on_union");
+            captured.CatalogEntry.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
+#pragma warning disable CS0612 // verifies new writes leave deprecated command fields empty
+            captured.CatalogEntry.LarkReceiveId.Should().BeEmpty();
+            captured.CatalogEntry.LarkReceiveIdType.Should().BeEmpty();
+            captured.CatalogEntry.LarkReceiveIdFallback.Should().BeEmpty();
+            captured.CatalogEntry.LarkReceiveIdTypeFallback.Should().BeEmpty();
+#pragma warning restore CS0612
+            captured.CatalogEntry.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+            captured.CatalogEntry.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
+            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
+                Arg.Any<string>(),
+                Arg.Any<InitializeSkillRunnerCommand>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
 
             var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
@@ -847,9 +852,9 @@ public sealed class ScheduledAgentCreatorToolTests
             preflight.Authorization.Parameter.Should().Be("full-secret-key");
 
             var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
-                captured.OutboundConfig.NyxApiKeyReference.Ref,
+                agentKey.SecretReference.Ref,
                 CredentialSecretPurposes.ScheduledInvocationAgentKey,
-                captured.OutboundConfig.NyxApiKeyReference.OwnerScopeKey,
+                agentKey.SecretReference.OwnerScopeKey,
                 "key-created",
                 "scheduled-agent-creator-test"));
             resolved.Secret.Should().Be("full-secret-key");
@@ -864,13 +869,22 @@ public sealed class ScheduledAgentCreatorToolTests
         // "exactly one of delay_seconds or run_at_utc" guard counted the present-but-null key
         // as provided and rejected every reminder. A JSON null must be treated as unset.
         var harness = CreateHarness();
-        InitializeSkillRunnerCommand? capturedNullRunAt = null;
-        harness.SkillRunnerPort.InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Do<InitializeSkillRunnerCommand>(value => capturedNullRunAt = value),
-                Arg.Any<bool>(),
+        ScheduledWorkflowAgentCreateRequest? capturedNullRunAt = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => capturedNullRunAt = value),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
 
         await WithToolContext(async () =>
         {
@@ -886,9 +900,10 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             capturedNullRunAt.Should().NotBeNull();
-            capturedNullRunAt!.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
-            capturedNullRunAt.OneShotRunAt.Should().NotBeNull();
-            capturedNullRunAt.OneShotMessage.Should().Be("Send my daily report");
+            capturedNullRunAt!.Schedule.ScheduleMode.Should().Be(WorkflowScheduleMode.OneShotAtUtc);
+            capturedNullRunAt.Schedule.OneShotFireAt.Should().NotBeNull();
+            capturedNullRunAt.Schedule.Prompt.Should().Be("Send my daily report");
+            capturedNullRunAt.Schedule.CronExpression.Should().BeEmpty();
         });
     }
 
@@ -896,13 +911,22 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_OneShotWithBlankRunAt_ShouldTreatBlankAsUnsetAndSucceed()
     {
         var harness = CreateHarness();
-        InitializeSkillRunnerCommand? capturedBlankRunAt = null;
-        harness.SkillRunnerPort.InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Do<InitializeSkillRunnerCommand>(value => capturedBlankRunAt = value),
-                Arg.Any<bool>(),
+        ScheduledWorkflowAgentCreateRequest? capturedBlankRunAt = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => capturedBlankRunAt = value),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
 
         await WithToolContext(async () =>
         {
@@ -918,9 +942,10 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             capturedBlankRunAt.Should().NotBeNull();
-            capturedBlankRunAt!.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
-            capturedBlankRunAt.OneShotRunAt.Should().NotBeNull();
-            capturedBlankRunAt.OneShotMessage.Should().Be("Remind me to join the meeting");
+            capturedBlankRunAt!.Schedule.ScheduleMode.Should().Be(WorkflowScheduleMode.OneShotAtUtc);
+            capturedBlankRunAt.Schedule.OneShotFireAt.Should().NotBeNull();
+            capturedBlankRunAt.Schedule.Prompt.Should().Be("Remind me to join the meeting");
+            capturedBlankRunAt.Schedule.CronExpression.Should().BeEmpty();
         });
     }
 
@@ -929,13 +954,22 @@ public sealed class ScheduledAgentCreatorToolTests
     {
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(handler: handler);
-        InitializeSkillRunnerCommand? captured = null;
-        harness.SkillRunnerPort.InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Do<InitializeSkillRunnerCommand>(value => captured = value),
-                Arg.Any<bool>(),
+        ScheduledWorkflowAgentCreateRequest? captured = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
 
         await WithToolContext(async () =>
         {
@@ -952,16 +986,14 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
             captured.Should().NotBeNull();
-            captured!.ScheduleMode.Should().Be(SkillRunnerScheduleMode.OneShot);
-            captured.SkillName.Should().BeEmpty();
-            captured.TemplateName.Should().Be("Report reminder");
-            captured.SkillRef.Should().BeNull();
-            captured.SkillContent.Should().BeEmpty();
-            captured.OneShotMessage.Should().Be("Submit the report");
-            captured.OneShotRunAt.Should().NotBeNull();
-            captured.ScheduleCron.Should().BeEmpty();
-            captured.ScheduleTimezone.Should().Be(SkillRunnerDefaults.DefaultTimezone);
-            captured.ExecutionPrompt.Should().Be("Send the configured one-shot reminder message exactly as written.");
+            captured!.Schedule.ScheduleMode.Should().Be(WorkflowScheduleMode.OneShotAtUtc);
+            captured.Schedule.WorkflowName.Should().Be(ScheduledWorkflowAgentDefaults.DefaultWorkflowName);
+            captured.Schedule.DisplayName.Should().Be("Report reminder");
+            captured.Schedule.Prompt.Should().Be("Submit the report");
+            captured.Schedule.OneShotFireAt.Should().NotBeNull();
+            captured.Schedule.CronExpression.Should().BeEmpty();
+            captured.Schedule.Timezone.Should().Be(ScheduledWorkflowAgentDefaults.DefaultTimezone);
+            captured.CatalogEntry.AgentType.Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
 
             handler.Requests.Should().NotContain(request =>
                 request.Method == HttpMethod.Get &&
@@ -1041,12 +1073,10 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_WhenInitializeFails_ShouldBestEffortDeleteIssuedKey()
     {
         var harness = CreateHarness();
-        harness.SkillRunnerPort.InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
+        harness.CreationPort.CreateAsync(
+                Arg.Any<ScheduledWorkflowAgentCreateRequest>(),
                 Arg.Any<CancellationToken>())
-            .Returns<Task>(_ => throw new InvalidOperationException("dispatch failed"));
+            .Returns<Task<ScheduledWorkflowAgentCreationReceipt>>(_ => throw new InvalidOperationException("dispatch failed"));
 
         await WithToolContext(async () =>
         {
@@ -1113,6 +1143,22 @@ public sealed class ScheduledAgentCreatorToolTests
                 Arg.Any<bool>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+        var creationPort = Substitute.For<IScheduledWorkflowAgentCreationPort>();
+        creationPort.CreateAsync(
+                Arg.Any<ScheduledWorkflowAgentCreateRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
 
         var resolver = Substitute.For<ICallerScopeResolver>();
         var resolvedScope = callerScopeUnavailable
@@ -1126,6 +1172,7 @@ public sealed class ScheduledAgentCreatorToolTests
         var services = new ServiceCollection();
         services.AddSingleton<INyxIdApiClientFactory>(nyxClientFactory);
         services.AddSingleton(skillRunnerPort);
+        services.AddSingleton(creationPort);
         services.AddSingleton(resolver);
         services.AddSingleton(queryPort);
         services.AddSingleton(options ?? new ScheduledAgentCreatorOptions());
@@ -1137,12 +1184,12 @@ public sealed class ScheduledAgentCreatorToolTests
 
         var provider = services.BuildServiceProvider();
         var tool = new ScheduledAgentCreatorTool(
-            provider.GetRequiredService<ISkillRunnerCommandPort>(),
+            provider.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
             provider.GetRequiredService<ScheduledAgentApiKeyIssuer>());
 
-        return new CreatorHarness(tool, handler, skillRunnerPort, queryPort);
+        return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort);
     }
 
     private const string DefaultServiceListJson = """
@@ -1241,6 +1288,7 @@ public sealed class ScheduledAgentCreatorToolTests
         ScheduledAgentCreatorTool Tool,
         RoutingJsonHandler Handler,
         ISkillRunnerCommandPort SkillRunnerPort,
+        IScheduledWorkflowAgentCreationPort CreationPort,
         IUserAgentCatalogQueryPort CatalogQueryPort);
 
     private sealed class TestNyxIdApiClientFactory : INyxIdApiClientFactory

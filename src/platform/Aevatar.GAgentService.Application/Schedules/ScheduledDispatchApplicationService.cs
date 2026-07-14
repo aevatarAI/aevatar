@@ -406,14 +406,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         if (requireScheduleId && string.IsNullOrWhiteSpace(scheduleId))
             throw new ArgumentException("Schedule id is required.", nameof(configuration));
 
+        var scheduleMode = NormalizeScheduleMode(configuration.ScheduleMode);
         return configuration with
         {
             ScheduleId = scheduleId,
             DisplayName = NormalizeOptional(configuration.DisplayName),
             Target = NormalizeTarget(configuration.Target),
-            CronExpression = NormalizeRequired(configuration.CronExpression, nameof(configuration.CronExpression)),
+            CronExpression = scheduleMode == ScheduledDispatchScheduleMode.RecurringCron
+                ? NormalizeRequired(configuration.CronExpression, nameof(configuration.CronExpression))
+                : string.Empty,
             Timezone = ScheduledDispatchCalculator.NormalizeTimezone(configuration.Timezone),
             Headers = NormalizeHeaders(configuration.Headers),
+            ScheduleMode = scheduleMode,
+            OneShotFireAt = NormalizeOneShotFireAt(scheduleMode, configuration.OneShotFireAt),
         };
     }
 
@@ -618,10 +623,31 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
     private static void ValidateSchedule(ScheduledDispatchConfiguration configuration)
     {
+        if (configuration.ScheduleMode == ScheduledDispatchScheduleMode.OneShotAtUtc)
+        {
+            if (!configuration.OneShotFireAt.HasValue)
+                throw new ArgumentException("One-shot fire time is required.", nameof(configuration));
+            if (configuration.OneShotFireAt.Value <= DateTimeOffset.UtcNow)
+                throw new ArgumentException("One-shot fire time must be in the future.", nameof(configuration));
+            return;
+        }
+
         var validation = ScheduledDispatchCalculator.Validate(configuration.CronExpression, configuration.Timezone);
         if (!validation.Succeeded)
             throw new ArgumentException(validation.Error, nameof(configuration));
     }
+
+    private static ScheduledDispatchScheduleMode NormalizeScheduleMode(ScheduledDispatchScheduleMode mode) =>
+        mode == ScheduledDispatchScheduleMode.OneShotAtUtc
+            ? ScheduledDispatchScheduleMode.OneShotAtUtc
+            : ScheduledDispatchScheduleMode.RecurringCron;
+
+    private static DateTimeOffset? NormalizeOneShotFireAt(
+        ScheduledDispatchScheduleMode mode,
+        DateTimeOffset? fireAt) =>
+        mode == ScheduledDispatchScheduleMode.OneShotAtUtc
+            ? fireAt?.ToUniversalTime()
+            : null;
 
     private static string BuildScheduleCommandId(string scheduleId) =>
         $"schedule-{scheduleId}-trigger";

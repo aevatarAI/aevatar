@@ -333,6 +333,54 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpsertAsync_PartialChannelAddressUpsert_PreservesExistingAddressFields()
+    {
+        var scope = OwnerScope.ForNyxIdNative("user-1");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-address",
+            ConversationId = "oc_chat_original",
+            TargetPlatform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                "lark",
+                "api-lark-bot",
+                "oc_chat_original",
+                "oc_chat_original",
+                "chat_id",
+                "ou_user_original",
+                "open_id"),
+            OwnerScope = scope,
+        });
+
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-address",
+            ConversationId = "oc_chat_new",
+            NyxProviderSlug = "api-lark-bot-2",
+            ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                "lark",
+                "api-lark-bot-2",
+                "oc_chat_new",
+                "oc_chat_new",
+                string.Empty,
+                null,
+                null),
+            OwnerScope = scope,
+        });
+
+        var entry = _agent.State.Entries.Should().ContainSingle().Subject;
+        entry.ChannelAddress.Platform.Should().Be("lark");
+        entry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-2");
+        entry.ChannelAddress.ConversationId.Should().Be("oc_chat_new");
+        entry.ChannelAddress.Primary.AddressId.Should().Be("oc_chat_new");
+        entry.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+        entry.ChannelAddress.Fallback.Should().NotBeNull();
+        entry.ChannelAddress.Fallback!.AddressId.Should().Be("ou_user_original");
+        entry.ChannelAddress.Fallback.AddressType.Should().Be("open_id");
+    }
+
+    [Fact]
     public async Task HandleUpsertAsync_PartialUpsertWithDefaultOutputFormat_PreservesExistingFormat()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand

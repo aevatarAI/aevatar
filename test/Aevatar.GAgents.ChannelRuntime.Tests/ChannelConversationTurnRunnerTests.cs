@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -2405,6 +2406,7 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
             .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
             .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
+            .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())
@@ -4505,6 +4507,7 @@ public sealed class ChannelConversationTurnRunnerTests
             .AddSingleton(queryPort)
             .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
             .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
+            .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())

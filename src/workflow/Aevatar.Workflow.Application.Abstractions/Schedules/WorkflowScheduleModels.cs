@@ -1,4 +1,12 @@
+using Aevatar.Foundation.Abstractions.Credentials;
+
 namespace Aevatar.Workflow.Application.Abstractions.Schedules;
+
+public enum WorkflowScheduleMode
+{
+    RecurringCron = 0,
+    OneShotAtUtc = 1,
+}
 
 public sealed record WorkflowScheduleConfiguration(
     string ScheduleId,
@@ -16,7 +24,9 @@ public sealed record WorkflowScheduleConfiguration(
     string? ServiceId = null,
     string? RevisionId = null,
     WorkflowScheduleAuth? Auth = null,
-    WorkflowScheduleMutationContext? MutationContext = null);
+    WorkflowScheduleMutationContext? MutationContext = null,
+    WorkflowScheduleMode ScheduleMode = WorkflowScheduleMode.RecurringCron,
+    DateTimeOffset? OneShotFireAt = null);
 
 public sealed record WorkflowScheduleMutationContext(
     string? AuthenticatedScopeId = null,
@@ -38,9 +48,15 @@ public sealed record WorkflowScheduleScopeOwnerNyxIdCredentialSource(
     string Scope,
     WorkflowScheduleNyxIdSubjectRef? OwnerSubject = null);
 
+public sealed record WorkflowScheduleAgentKeyCredentialReference(
+    SecretReference SecretReference,
+    string ApiKeyId,
+    long KeyExpiresAtUnixMs);
+
 public sealed record WorkflowScheduleAuth(
     WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null,
-    WorkflowScheduleScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null);
+    WorkflowScheduleScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null,
+    WorkflowScheduleAgentKeyCredentialReference? ScheduledInvocationAgentKey = null);
 
 public sealed record WorkflowScheduleSummary(
     string ScheduleId,
@@ -63,7 +79,10 @@ public sealed record WorkflowScheduleSummary(
     string ScopeId,
     string ScheduleActorId,
     string TargetActorId,
-    string? Prompt = null);
+    string? Prompt = null,
+    WorkflowScheduleMode ScheduleMode = WorkflowScheduleMode.RecurringCron,
+    DateTimeOffset? OneShotFireAt = null,
+    bool Completed = false);
 
 public sealed record WorkflowScheduleFireRecord(
     DateTimeOffset ScheduledFireAt,
