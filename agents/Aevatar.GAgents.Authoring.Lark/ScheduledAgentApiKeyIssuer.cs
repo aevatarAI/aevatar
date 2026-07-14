@@ -47,8 +47,11 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
         ArgumentNullException.ThrowIfNull(serviceSlugs);
 
-        var ownerLlmRouteSlug = await ResolveOwnerLlmRouteServiceSlugAsync(scopeId, ct);
-        var slugs = RequiredSlugs(serviceSlugs, ownerLlmRouteSlug).Distinct(StringComparer.Ordinal).ToArray();
+        var ownerLlmRoute = await ResolveOwnerLlmRouteServiceSlugAsync(scopeId, ct);
+        if (ownerLlmRoute.Failure is not null)
+            return ownerLlmRoute.Failure;
+
+        var slugs = RequiredSlugs(serviceSlugs, ownerLlmRoute.ServiceSlug).Distinct(StringComparer.Ordinal).ToArray();
         if (slugs.Length == 0)
             return ScheduledAgentApiKeyIssueResult.Failed("missing_required_service_slugs");
 
@@ -80,20 +83,35 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             }, CreateKeyJsonOptions),
             ct);
 
-        var issuedKey = ExtractIssuedKey(response, keyExpiresAtUtc.ToUnixTimeMilliseconds());
-        if (!issuedKey.Success)
-            return issuedKey;
+        var extractedKey = ExtractIssuedKey(response, keyExpiresAtUtc.ToUnixTimeMilliseconds());
+        if (extractedKey.Failure is not null)
+            return extractedKey.Failure;
 
         if (string.IsNullOrWhiteSpace(skillName))
-            return issuedKey;
+        {
+            return ScheduledAgentApiKeyIssueResult.Succeeded(
+                extractedKey.ApiKeyId!,
+                extractedKey.FullKey!,
+                extractedKey.KeyExpiresAtUnixMs);
+        }
 
         var ornnSlug = GetOrnnServiceSlug();
-        var preflight = await PreflightSkillFetchAsync(client, issuedKey.FullKey!, ornnSlug, skillName, ct);
+        var preflight = await PreflightSkillFetchAsync(
+            client,
+            extractedKey.FullKey!,
+            ornnSlug,
+            skillName,
+            ct);
         if (preflight.Success)
-            return issuedKey;
+        {
+            return ScheduledAgentApiKeyIssueResult.Succeeded(
+                extractedKey.ApiKeyId!,
+                extractedKey.FullKey!,
+                extractedKey.KeyExpiresAtUnixMs);
+        }
 
-        await TryRevokeAsync(token, issuedKey.ApiKeyId ?? string.Empty, CancellationToken.None);
-        return ScheduledAgentApiKeyIssueResult.Failed(
+        return ScheduledAgentApiKeyIssueResult.FailedAfterIssue(
+            extractedKey.ApiKeyId!,
             preflight.Error ?? "scheduled_skill_preflight_failed",
             preflight.Detail,
             preflight.Hint,
@@ -134,30 +152,6 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             ClassifyRevocationFailure(status));
     }
 
-    public async Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(apiKeyId))
-            return;
-
-        try
-        {
-            var result = await RevokeAsync(token, apiKeyId, ct);
-            if (!result.Completed)
-            {
-                _logger?.LogWarning(
-                    "Scheduled agent API key rollback remains pending: apiKeyId={ApiKeyId} status={Status} failureKind={FailureKind} error={Error}",
-                    apiKeyId,
-                    result.HttpStatus,
-                    result.FailureKind,
-                    result.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogWarning(ex, "Scheduled agent API key rollback failed: apiKeyId={ApiKeyId}", apiKeyId);
-        }
-    }
-
     private static UserAgentApiKeyRevocationFailureKind ClassifyRevocationFailure(int? status) =>
         status switch
         {
@@ -196,10 +190,12 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             yield return ownerLlmRouteSlug;
     }
 
-    private async Task<string?> ResolveOwnerLlmRouteServiceSlugAsync(string? scopeId, CancellationToken ct)
+    private async Task<OwnerLlmRouteResolution> ResolveOwnerLlmRouteServiceSlugAsync(
+        string? scopeId,
+        CancellationToken ct)
     {
         if (_ownerLlmConfigSource is null || string.IsNullOrWhiteSpace(scopeId))
-            return null;
+            return OwnerLlmRouteResolution.Succeeded(null);
 
         OwnerLlmConfig config;
         try
@@ -212,18 +208,18 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         }
         catch (Exception ex)
         {
-            // Mirror OwnerLlmConfigApplier's swallow-and-log policy: a flaky user-config
-            // projection must not fail agent creation. The key is minted without the LLM-route
-            // grant (identical to pre-fix behavior) so the misconfiguration, if any, surfaces at
-            // run time rather than blocking creation on a transient lookup error.
             _logger?.LogWarning(
                 ex,
-                "Scheduled agent key issuance could not load owner LLM config for scope {ScopeId}; minting key without an LLM-route grant",
+                "Scheduled agent key issuance could not load owner LLM config for scope {ScopeId}; key creation is blocked",
                 scopeId);
-            return null;
+            return OwnerLlmRouteResolution.Failed(
+                ScheduledAgentApiKeyIssueResult.Failed(
+                    "owner_llm_config_unavailable",
+                    ex.Message,
+                    "Retry after the owner LLM route configuration is available."));
         }
 
-        return ExtractProxyServiceSlug(config.PreferredLlmRoute);
+        return OwnerLlmRouteResolution.Succeeded(ExtractProxyServiceSlug(config.PreferredLlmRoute));
     }
 
     /// <summary>
@@ -432,7 +428,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         return ServiceOwner.ForOrg(orgId, ReadString(source, "org_name"), reachable);
     }
 
-    private static ScheduledAgentApiKeyIssueResult ExtractIssuedKey(string response, long keyExpiresAtUnixMs)
+    private static ScheduledAgentApiKeyExtraction ExtractIssuedKey(string response, long keyExpiresAtUnixMs)
     {
         // NyxID's 400 reason (e.g. "UserService '<id>' not found or not owned by user") is carried
         // in the adapter error envelope's status/body. Surface it instead of collapsing every
@@ -449,7 +445,8 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
                 403 => "The caller cannot create an API key under the resolved owner. For org-owned services you must be an admin of that organization.",
                 _ => "Inspect the NyxID response detail, fix the offending service, then recreate the scheduled agent.",
             };
-            return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_failed", detail, hint, status);
+            return ScheduledAgentApiKeyExtraction.Failed(
+                ScheduledAgentApiKeyIssueResult.Failed("api_key_create_failed", detail, hint, status));
         }
 
         try
@@ -459,16 +456,42 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             var id = ReadString(root, "id");
             var fullKey = ReadString(root, "full_key");
             if (string.IsNullOrWhiteSpace(id))
-                return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_id");
+            {
+                return ScheduledAgentApiKeyExtraction.Failed(
+                    ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_id"));
+            }
             if (string.IsNullOrWhiteSpace(fullKey))
-                return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_full_key");
+            {
+                return ScheduledAgentApiKeyExtraction.Failed(
+                    ScheduledAgentApiKeyIssueResult.Failed("api_key_create_missing_full_key"));
+            }
 
-            return ScheduledAgentApiKeyIssueResult.Succeeded(id.Trim(), fullKey.Trim(), keyExpiresAtUnixMs);
+            return ScheduledAgentApiKeyExtraction.Succeeded(
+                id.Trim(),
+                fullKey.Trim(),
+                keyExpiresAtUnixMs);
         }
         catch (JsonException)
         {
-            return ScheduledAgentApiKeyIssueResult.Failed("api_key_create_invalid_json");
+            return ScheduledAgentApiKeyExtraction.Failed(
+                ScheduledAgentApiKeyIssueResult.Failed("api_key_create_invalid_json"));
         }
+    }
+
+    private sealed record ScheduledAgentApiKeyExtraction(
+        string? ApiKeyId,
+        string? FullKey,
+        long KeyExpiresAtUnixMs,
+        ScheduledAgentApiKeyIssueResult? Failure)
+    {
+        public static ScheduledAgentApiKeyExtraction Succeeded(
+            string apiKeyId,
+            string fullKey,
+            long keyExpiresAtUnixMs) =>
+            new(apiKeyId, fullKey, keyExpiresAtUnixMs, null);
+
+        public static ScheduledAgentApiKeyExtraction Failed(ScheduledAgentApiKeyIssueResult failure) =>
+            new(null, null, 0, failure);
     }
 
     private static IEnumerable<JsonElement> EnumerateServiceItems(JsonElement root)
@@ -590,6 +613,17 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
     {
         public static ScheduledAgentServiceResolution Failed(string error, string? detail = null, string? hint = null) =>
             new([], null, error, detail, hint);
+    }
+
+    private sealed record OwnerLlmRouteResolution(
+        string? ServiceSlug,
+        ScheduledAgentApiKeyIssueResult? Failure)
+    {
+        public static OwnerLlmRouteResolution Succeeded(string? serviceSlug) =>
+            new(serviceSlug, null);
+
+        public static OwnerLlmRouteResolution Failed(ScheduledAgentApiKeyIssueResult failure) =>
+            new(null, failure);
     }
 
     private sealed record ResolvedService(string Id, ServiceOwner Owner);

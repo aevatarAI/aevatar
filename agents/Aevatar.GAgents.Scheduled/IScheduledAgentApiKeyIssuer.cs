@@ -12,7 +12,6 @@ public interface IScheduledAgentApiKeyIssuer
 
     Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct);
 
-    Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct);
 }
 
 public sealed record ScheduledAgentServiceSlugs(

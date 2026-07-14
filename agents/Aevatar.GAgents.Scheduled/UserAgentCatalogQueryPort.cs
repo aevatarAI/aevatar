@@ -206,7 +206,7 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
     {
         ArgumentNullException.ThrowIfNull(caller);
 
-        var entries = new List<UserAgentApiKeyRevocationReadModelEntry>();
+        var documentsByIdentity = new Dictionary<RevocationDocumentIdentity, UserAgentApiKeyRevocationDocument>();
         string? cursor = null;
         do
         {
@@ -227,16 +227,23 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
                     continue;
                 }
 
-                entries.Add(ToRevocationEntry(document));
-                if (entries.Count >= MaxCallerCatalogEntries)
-                    return entries;
+                var identity = RevocationDocumentIdentity.From(document);
+                if (documentsByIdentity.TryGetValue(identity, out var existingDocument))
+                {
+                    if (ShouldReplaceRevocationDocument(existingDocument, document))
+                        documentsByIdentity[identity] = document;
+                    continue;
+                }
+
+                if (documentsByIdentity.Count < MaxCallerCatalogEntries)
+                    documentsByIdentity.Add(identity, document);
             }
 
             cursor = page.NextCursor;
         }
         while (!string.IsNullOrEmpty(cursor));
 
-        return entries;
+        return documentsByIdentity.Values.Select(ToRevocationEntry).ToArray();
     }
 
     public async Task<long?> GetStateVersionForCallerAsync(string agentId, OwnerScope caller, CancellationToken ct = default)
@@ -451,14 +458,47 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             AgentId = document.AgentId ?? string.Empty,
             ApiKeyId = document.ApiKeyId ?? string.Empty,
             OwnerScope = document.OwnerScope?.Clone(),
+            NyxApiKeyReference = document.NyxApiKeyReference?.Clone(),
             RequestedAt = document.RequestedAtUtc?.Clone(),
             AttemptCount = document.AttemptCount,
             LastAttemptAt = document.LastAttemptAtUtc?.Clone(),
             LastHttpStatus = document.LastHttpStatus,
             LastError = document.LastError ?? string.Empty,
             FailureKind = document.FailureKind,
+            NyxIdTrack = document.NyxIdTrack?.Clone(),
+            VaultTrack = document.VaultTrack?.Clone(),
+            VaultRevocationDescriptor = document.VaultRevocationDescriptor?.Clone(),
+            SecretSubjectId = document.SecretSubjectId ?? string.Empty,
+            RepairReason = document.RepairReason ?? string.Empty,
+            RequestedBySubjectId = document.RequestedBySubjectId ?? string.Empty,
+            RepairRequestedAtUnixMs = document.RepairRequestedAtUnixMs,
             CatalogAuthorityStateVersion = document.StateVersion,
             CatalogLastEventId = document.LastEventId ?? string.Empty,
         };
+
+    private static bool ShouldReplaceRevocationDocument(
+        UserAgentApiKeyRevocationDocument existing,
+        UserAgentApiKeyRevocationDocument candidate)
+    {
+        if (candidate.StateVersion != existing.StateVersion)
+            return candidate.StateVersion > existing.StateVersion;
+
+        return IsCanonicalRevocationDocument(candidate) && !IsCanonicalRevocationDocument(existing);
+    }
+
+    private static bool IsCanonicalRevocationDocument(UserAgentApiKeyRevocationDocument document) =>
+        document.Id.StartsWith("scr1_", StringComparison.Ordinal);
+
+    private readonly record struct RevocationDocumentIdentity(
+        string AgentId,
+        string ApiKeyId,
+        string SecretReference)
+    {
+        public static RevocationDocumentIdentity From(UserAgentApiKeyRevocationDocument document) =>
+            new(
+                document.AgentId.Trim(),
+                document.ApiKeyId.Trim(),
+                ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(document));
+    }
 
 }

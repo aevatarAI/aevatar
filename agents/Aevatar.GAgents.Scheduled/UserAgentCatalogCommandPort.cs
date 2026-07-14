@@ -71,7 +71,8 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
     //   New principle: Command ports dispatch accepted commands; projection activation is owned by committed-state hooks, explicit observation binders, startup activators, or background materializers.
     public async Task TombstoneAsync(
         string agentId,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string bearerToken = "")
     {
         if (string.IsNullOrWhiteSpace(agentId))
             throw new ArgumentException("agentId is required.", nameof(agentId));
@@ -82,7 +83,11 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand { AgentId = agentId }),
+            Payload = Any.Pack(new UserAgentCatalogTombstoneCommand
+            {
+                AgentId = agentId,
+                BearerToken = bearerToken?.Trim() ?? string.Empty,
+            }),
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherActorId, UserAgentCatalogGAgent.WellKnownId),
         };
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
@@ -102,6 +107,40 @@ internal sealed class UserAgentCatalogCommandPort : IUserAgentCatalogCommandPort
 
         var envelope = BuildEnvelope(command);
         await _actorDispatchPort.DispatchAsync(UserAgentCatalogGAgent.WellKnownId, envelope, ct);
+    }
+
+    public async Task RequestCredentialRevocationAsync(
+        ScheduledAgentCredentialRevocationIntent intent,
+        CancellationToken ct = default,
+        string bearerToken = "")
+    {
+        ArgumentNullException.ThrowIfNull(intent);
+        await EnsureCatalogActorAsync(ct);
+        await _actorDispatchPort.DispatchAsync(
+            UserAgentCatalogGAgent.WellKnownId,
+            BuildEnvelope(new UserAgentCatalogRequestCredentialRevocationCommand
+            {
+                Intent = intent.Clone(),
+                BearerToken = bearerToken?.Trim() ?? string.Empty,
+            }),
+            ct);
+    }
+
+    public async Task RetryCredentialRevocationsAsync(
+        OwnerScope ownerScope,
+        string bearerToken,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(ownerScope);
+        await EnsureCatalogActorAsync(ct);
+        await _actorDispatchPort.DispatchAsync(
+            UserAgentCatalogGAgent.WellKnownId,
+            BuildEnvelope(new UserAgentCatalogRetryCredentialRevocationsCommand
+            {
+                OwnerScope = ownerScope.Clone(),
+                BearerToken = bearerToken?.Trim() ?? string.Empty,
+            }),
+            ct);
     }
 
     public async Task ShareAsync(
