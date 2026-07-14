@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Studio.Application.Authorization;
 using FluentAssertions;
 using NSubstitute;
 using Xunit;
@@ -98,21 +99,18 @@ public sealed class ScheduledCredentialVaultContractTests
         var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
         issuer.IssueAsync(
                 Arg.Any<string>(),
-                Arg.Any<ScheduledAgentServiceSlugs>(),
+                Arg.Any<ScheduledInvocationAuthorizationPlan>(),
                 Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string?>(),
                 Arg.Any<CancellationToken>())
             .Returns(ScheduledAgentApiKeyIssueResult.Failed("issue_failed"));
         var lifecycle = new ScheduledAgentCredentialLifecycle(vault, commandPort, issuer);
 
         var result = await lifecycle.ProvisionAsync(
             "token",
-            new ScheduledAgentServiceSlugs("service", null, [], false),
+            AuthorizationPlan(),
+            "scheduled-agent-a",
             "agent-a",
             Owner(),
-            "skill-a",
-            "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
             "owner-a",
             "test");
@@ -133,21 +131,18 @@ public sealed class ScheduledCredentialVaultContractTests
         var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
         issuer.IssueAsync(
                 Arg.Any<string>(),
-                Arg.Any<ScheduledAgentServiceSlugs>(),
+                Arg.Any<ScheduledInvocationAuthorizationPlan>(),
                 Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string?>(),
                 Arg.Any<CancellationToken>())
             .Returns(ScheduledAgentApiKeyIssueResult.FailedAfterIssue("key-a", "preflight_failed"));
         var lifecycle = new ScheduledAgentCredentialLifecycle(vault, commandPort, issuer);
 
         var result = await lifecycle.ProvisionAsync(
             "token",
-            new ScheduledAgentServiceSlugs("service", null, [], false),
+            AuthorizationPlan(),
+            "scheduled-agent-a",
             "agent-a",
             Owner(),
-            "skill-a",
-            "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
             "owner-a",
             "test");
@@ -175,21 +170,18 @@ public sealed class ScheduledCredentialVaultContractTests
         var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
         issuer.IssueAsync(
                 Arg.Any<string>(),
-                Arg.Any<ScheduledAgentServiceSlugs>(),
+                Arg.Any<ScheduledInvocationAuthorizationPlan>(),
                 Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string?>(),
                 Arg.Any<CancellationToken>())
             .Returns(ScheduledAgentApiKeyIssueResult.Succeeded("key-a", "raw-secret"));
         var lifecycle = new ScheduledAgentCredentialLifecycle(vault, commandPort, issuer);
 
         Func<Task> act = () => lifecycle.ProvisionAsync(
             "token",
-            new ScheduledAgentServiceSlugs("service", null, [], false),
+            AuthorizationPlan(),
+            "scheduled-agent-a",
             "agent-a",
             Owner(),
-            "skill-a",
-            "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
             "owner-a",
             "test");
@@ -220,21 +212,18 @@ public sealed class ScheduledCredentialVaultContractTests
         var issuer = Substitute.For<IScheduledAgentApiKeyIssuer>();
         issuer.IssueAsync(
                 Arg.Any<string>(),
-                Arg.Any<ScheduledAgentServiceSlugs>(),
+                Arg.Any<ScheduledInvocationAuthorizationPlan>(),
                 Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string?>(),
                 Arg.Any<CancellationToken>())
             .Returns(ScheduledAgentApiKeyIssueResult.Succeeded("key-a", "raw-secret"));
         var lifecycle = new ScheduledAgentCredentialLifecycle(vault, commandPort, issuer);
 
         var result = await lifecycle.ProvisionAsync(
             "token",
-            new ScheduledAgentServiceSlugs("service", null, [], false),
+            AuthorizationPlan(),
+            "scheduled-agent-a",
             "agent-a",
             Owner(),
-            "skill-a",
-            "scope-a",
             CredentialSecretPurposes.ScheduledInvocationAgentKey,
             "owner-a",
             "test");
@@ -482,4 +471,9 @@ public sealed class ScheduledCredentialVaultContractTests
     };
 
     private static OwnerScope Owner() => OwnerScope.ForNyxIdNative("user-a");
+
+    private static ScheduledInvocationAuthorizationPlan AuthorizationPlan() => new()
+    {
+        PermissionDigest = "permission-digest-a",
+    };
 }

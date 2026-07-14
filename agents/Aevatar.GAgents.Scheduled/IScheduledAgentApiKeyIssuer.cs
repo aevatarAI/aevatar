@@ -6,15 +6,6 @@ public interface IScheduledAgentApiKeyIssuer
 {
     Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
         string token,
-        ScheduledAgentServiceSlugs serviceSlugs,
-        string agentId,
-        string skillName,
-        string? scopeId,
-        CancellationToken ct) =>
-        Task.FromResult(ScheduledAgentApiKeyIssueResult.Failed("typed_authorization_plan_required"));
-
-    Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
-        string token,
         ScheduledInvocationAuthorizationPlan plan,
         string credentialName,
         CancellationToken ct) =>
@@ -23,12 +14,6 @@ public interface IScheduledAgentApiKeyIssuer
     Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct);
 
 }
-
-public sealed record ScheduledAgentServiceSlugs(
-    string PrimaryOutboundSlug,
-    string? FailureNotificationSlug,
-    IReadOnlyList<string> RequiredServiceSlugs,
-    bool RequiresOrnnService = true);
 
 public sealed record ScheduledAgentServiceRequirements(
     string PrimaryOutboundSlug,

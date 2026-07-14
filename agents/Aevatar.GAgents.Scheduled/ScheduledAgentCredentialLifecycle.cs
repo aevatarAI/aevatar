@@ -25,18 +25,6 @@ public interface IScheduledAgentCredentialLifecycle
         string auditReason,
         CancellationToken ct = default);
 
-    Task<ScheduledAgentCredentialProvisionResult> ProvisionAsync(
-        string token,
-        ScheduledAgentServiceSlugs serviceSlugs,
-        string agentId,
-        OwnerScope ownerScope,
-        string skillName,
-        string? scopeId,
-        string purpose,
-        string ownerScopeKey,
-        string auditReason,
-        CancellationToken ct = default);
-
     Task RequestRevocationAsync(
         string token,
         string agentId,
@@ -77,23 +65,6 @@ public sealed class ScheduledAgentCredentialLifecycle
     {
         ArgumentNullException.ThrowIfNull(plan);
         var issuedKey = await _apiKeyIssuer.IssueAsync(token, plan, credentialName, ct);
-        return await CompleteProvisionAsync(
-            token, issuedKey, agentId, ownerScope, purpose, ownerScopeKey, auditReason, ct);
-    }
-
-    public async Task<ScheduledAgentCredentialProvisionResult> ProvisionAsync(
-        string token,
-        ScheduledAgentServiceSlugs serviceSlugs,
-        string agentId,
-        OwnerScope ownerScope,
-        string skillName,
-        string? scopeId,
-        string purpose,
-        string ownerScopeKey,
-        string auditReason,
-        CancellationToken ct = default)
-    {
-        var issuedKey = await _apiKeyIssuer.IssueAsync(token, serviceSlugs, agentId, skillName, scopeId, ct);
         return await CompleteProvisionAsync(
             token, issuedKey, agentId, ownerScope, purpose, ownerScopeKey, auditReason, ct);
     }

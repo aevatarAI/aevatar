@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.Studio.Application.Authorization;
 using Aevatar.Studio.Projection.Orchestration;
@@ -76,6 +77,154 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
         refreshed.Invalidated.Should().BeFalse();
         refreshed.InvalidationReason.Should().BeEmpty();
         refreshed.ContentDigest.Should().Be("digest-2");
+    }
+
+    [Fact]
+    public async Task HandleObserved_WithValidCatalog_ShouldCommitAndUpdateAuthoritativeState()
+    {
+        var (agent, eventSourcing) = NewAgent();
+
+        await agent.HandleObserved(Observed(ActorOwner(), "digest-1"));
+
+        eventSourcing.ConfirmCallCount.Should().Be(1);
+        eventSourcing.RaisedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<NyxIdCatalogSnapshotObservedEvent>();
+        agent.State.Owner.Should().BeEquivalentTo(ActorOwner());
+        agent.State.ContentDigest.Should().Be("digest-1");
+        agent.State.Services.Should().ContainSingle().Which.UserServiceId.Should().Be("svc-1");
+    }
+
+    [Theory]
+    [InlineData("authority")]
+    [InlineData("owner-kind")]
+    [InlineData("subject")]
+    public async Task HandleObserved_WithIncompleteOwner_ShouldRejectWithoutCommit(string missingField)
+    {
+        var owner = ActorOwner();
+        if (missingField == "authority")
+            owner.Authority = string.Empty;
+        else if (missingField == "owner-kind")
+            owner.OwnerKind = NyxIdCatalogSnapshotOwnerKind.Unspecified;
+        else
+            owner.OwnerSubject = string.Empty;
+        var (agent, eventSourcing) = NewAgent();
+
+        var action = () => agent.HandleObserved(Observed(owner, "digest-1"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("catalog owner identity is incomplete.");
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleObserved_WithNonIncreasingFreshnessInterval_ShouldRejectWithoutCommit()
+    {
+        var evt = Observed(ActorOwner(), "digest-1");
+        evt.FreshUntil = evt.ObservedAt;
+        var (agent, eventSourcing) = NewAgent();
+
+        var action = () => agent.HandleObserved(evt);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("catalog freshness interval is invalid.");
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleObserved_WithBlankDigest_ShouldRejectWithoutCommit()
+    {
+        var (agent, eventSourcing) = NewAgent();
+
+        var action = () => agent.HandleObserved(Observed(ActorOwner(), " "));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("catalog content digest is required.");
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleObserved_WhenOwnerChanges_ShouldRejectWithoutSecondCommit()
+    {
+        var (agent, eventSourcing) = NewAgent();
+        await agent.HandleObserved(Observed(ActorOwner(), "digest-1"));
+        var differentOwner = ActorOwner();
+        differentOwner.OwnerSubject = "user-b";
+
+        var action = () => agent.HandleObserved(Observed(differentOwner, "digest-2"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("catalog snapshot owner cannot change.");
+        eventSourcing.ConfirmCallCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("service-id")]
+    [InlineData("node-grants")]
+    public async Task HandleObserved_WithIncompleteServiceFacts_ShouldRejectWithoutCommit(string missingFact)
+    {
+        var evt = Observed(ActorOwner(), "digest-1");
+        if (missingFact == "service-id")
+            evt.Services[0].UserServiceId = string.Empty;
+        else
+            evt.Services[0].Nodes.Clear();
+        var (agent, eventSourcing) = NewAgent();
+
+        var action = () => agent.HandleObserved(evt);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("catalog services require exact service and node facts.");
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("refresh")]
+    [InlineData("invalidate")]
+    public async Task OwnerBoundHandlers_WithMismatchedOwner_ShouldRejectWithoutSecondCommit(string handler)
+    {
+        var (agent, eventSourcing) = NewAgent();
+        await agent.HandleObserved(Observed(ActorOwner(), "digest-1"));
+        var differentOwner = ActorOwner();
+        differentOwner.OwnerSubject = "user-b";
+
+        Func<Task> action = handler == "refresh"
+            ? () => agent.HandleRefreshFailed(new NyxIdCatalogSnapshotRefreshFailedEvent
+            {
+                Owner = differentOwner,
+                FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                FailureCode = "provider_unavailable",
+            })
+            : () => agent.HandleInvalidated(new NyxIdCatalogSnapshotInvalidatedEvent
+            {
+                Owner = differentOwner,
+                InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                Reason = "credential_revoked",
+            });
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("catalog snapshot owner mismatch.");
+        eventSourcing.ConfirmCallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleInvalidated_WithSameReasonTwice_ShouldNotCommitSecondInvalidation()
+    {
+        var (agent, eventSourcing) = NewAgent();
+        var owner = ActorOwner();
+        await agent.HandleObserved(Observed(owner, "digest-1"));
+        var invalidated = new NyxIdCatalogSnapshotInvalidatedEvent
+        {
+            Owner = owner,
+            InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+            Reason = "credential_revoked",
+        };
+
+        await agent.HandleInvalidated(invalidated);
+        await agent.HandleInvalidated(invalidated.Clone());
+
+        eventSourcing.ConfirmCallCount.Should().Be(2);
+        eventSourcing.RaisedEvents.OfType<NyxIdCatalogSnapshotInvalidatedEvent>().Should().ContainSingle();
+        agent.State.Invalidated.Should().BeTrue();
+        agent.State.InvalidationReason.Should().Be("credential_revoked");
     }
 
     [Fact]
@@ -232,6 +381,14 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
         return (NyxIdCatalogSnapshotState)method.Invoke(agent, [state, evt])!;
     }
 
+    private static (NyxIdCatalogSnapshotGAgent Agent, RecordingEventSourcing EventSourcing) NewAgent()
+    {
+        var agent = new NyxIdCatalogSnapshotGAgent();
+        var eventSourcing = new RecordingEventSourcing(agent);
+        agent.EventSourcing = eventSourcing;
+        return (agent, eventSourcing);
+    }
+
     private static StudioMaterializationContext Context() => new()
     {
         RootActorId = "nyx-catalog-alpha",
@@ -279,6 +436,35 @@ public sealed class NyxIdCatalogSnapshotLifecycleTests
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class RecordingEventSourcing(NyxIdCatalogSnapshotGAgent agent)
+        : IEventSourcingBehavior<NyxIdCatalogSnapshotState>
+    {
+        public List<IMessage> RaisedEvents { get; } = [];
+        public int ConfirmCallCount { get; private set; }
+        public long CurrentVersion => ConfirmCallCount;
+
+        public void RaiseEvent<TEvent>(TEvent evt) where TEvent : IMessage => RaisedEvents.Add(evt);
+
+        public Task<EventStoreCommitResult> ConfirmEventsAsync(CancellationToken ct = default)
+        {
+            ConfirmCallCount++;
+            return Task.FromResult(new EventStoreCommitResult());
+        }
+
+        public Task PersistSnapshotAsync(
+            NyxIdCatalogSnapshotState currentState,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<NyxIdCatalogSnapshotState?> ReplayAsync(
+            string agentId,
+            CancellationToken ct = default) => Task.FromResult<NyxIdCatalogSnapshotState?>(new());
+
+        public void DiscardPendingEvents() => RaisedEvents.Clear();
+
+        public NyxIdCatalogSnapshotState TransitionState(NyxIdCatalogSnapshotState current, IMessage evt) =>
+            Transition(agent, current, evt);
     }
 
     private sealed class FilteringReader(IReadOnlyList<NyxIdCatalogSnapshotCurrentStateDocument> documents)
