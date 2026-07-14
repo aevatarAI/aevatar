@@ -752,9 +752,21 @@ const zhCNMessages = {
   'teams.automations.error.description':
     '刷新页面，或等定时任务服务可用后再试。',
   'teams.automations.error.title': '自动化加载失败',
+  'teams.automations.form.agentKeyConsent':
+    'I consent to Aevatar creating an automation-dedicated Agent Key for this schedule.',
+  'teams.automations.form.agentKeyExpiry': 'Expires {time}',
+  'teams.automations.form.agentKeyManaged': 'Aevatar managed',
+  'teams.automations.form.agentKeyMode': 'Credential mode · {mode}',
+  'teams.automations.form.agentKeyNoRawKey':
+    'Browser never receives the raw Agent Key',
+  'teams.automations.form.agentKeyPlan':
+    'Automation dedicated Agent Key',
   'teams.automations.form.cadence': '节奏',
   'teams.automations.form.cadenceAria': '自动化节奏',
+  'teams.automations.form.close': 'Close',
   'teams.automations.form.create': '创建自动化',
+  'teams.automations.form.createWithConsent':
+    'Create with Agent Key consent',
   'teams.automations.form.cron': 'Cron 表达式',
   'teams.automations.form.cronAria': 'Cron 表达式',
   'teams.automations.form.cronFiveFieldHint':
@@ -772,11 +784,19 @@ const zhCNMessages = {
   'teams.automations.form.identityReady': '目标为该成员的已发布服务。',
   'teams.automations.form.member': '成员',
   'teams.automations.form.memberAria': '自动化成员',
+  'teams.automations.form.nodeGrants': 'Node grants',
+  'teams.automations.form.permissionDigest':
+    'Permission digest · {permissionDigest}',
+  'teams.automations.form.planChanged':
+    'The authorization plan changed. Refresh the review before creating.',
+  'teams.automations.form.policyVersion':
+    'Policy version · {policyVersion}',
   'teams.automations.form.preset.custom': '自定义 Cron',
   'teams.automations.form.preset.dailyMorning': '每天 · 09:00',
   'teams.automations.form.preset.hourly': '每小时',
   'teams.automations.form.preset.weekdaysMorning': '工作日 · 09:00',
   'teams.automations.form.preset.weeklyMonday': '周一 · 09:00',
+  'teams.automations.form.preparingReview': 'Preparing review',
   'teams.automations.form.preview': '预览后续运行',
   'teams.automations.form.previewEmpty': '先预览节奏，确认后续触发。',
   'teams.automations.form.previewHint': '保存前通过定时任务服务预览。',
@@ -785,8 +805,20 @@ const zhCNMessages = {
   'teams.automations.form.promptLimit': '选填，最多 {maxLength} 个字符。',
   'teams.automations.form.promptPlaceholder':
     '汇总升级工单、受阻账号和后续负责人。',
+  'teams.automations.form.refreshReview': 'Refresh review',
+  'teams.automations.form.reviewErrorBody':
+    'The mock contract could not prepare the review. Keep the draft and try again.',
+  'teams.automations.form.reviewErrorTitle':
+    'Permission review needs attention',
+  'teams.automations.form.reviewPermissions': 'Review permissions',
+  'teams.automations.form.reviewPlaceholder':
+    'Review is prepared after the draft cadence and target are ready.',
   'teams.automations.form.save': '保存修改',
   'teams.automations.form.scheduleReadsAs': '计划解读为',
+  'teams.automations.form.section.permissionReview':
+    '4. Review Agent Key consent',
+  'teams.automations.form.section.permissionReviewHint':
+    'Browser login authorization only confirms this consent. Automation uses a dedicated Agent Key managed by Aevatar.',
   'teams.automations.form.section.schedule': '3. 运行节奏',
   'teams.automations.form.section.scheduleHint':
     '选择常用节奏，或切换到自定义 Cron 配置高级计划。',
@@ -796,6 +828,7 @@ const zhCNMessages = {
   'teams.automations.form.section.work': '2. 要执行的任务',
   'teams.automations.form.section.workHint':
     '给自动化命名，可选填写每次触发时发送给成员的 Prompt。',
+  'teams.automations.form.serviceGrants': 'Service grants',
   'teams.automations.form.timezone': '时区',
   'teams.automations.form.timezoneAria': '时区',
   'teams.automations.form.title': '新建成员自动化',
@@ -804,6 +837,10 @@ const zhCNMessages = {
   'teams.automations.member.unknown': '未知成员',
   'teams.automations.member.workflowOnly':
     '只有 Workflow 成员可以添加周期任务。',
+  'teams.automations.messages.consentRequired':
+    'Review and consent to the automation-dedicated Agent Key before creating.',
+  'teams.automations.messages.createAccepted':
+    'Automation creation request accepted.',
   'teams.automations.messages.createFailed': '自动化未创建：{message}',
   'teams.automations.messages.createSuccess': '自动化已创建。',
   'teams.automations.messages.cronRequired': '请先填写 Cron 表达式。',
@@ -813,6 +850,8 @@ const zhCNMessages = {
   'teams.automations.messages.previewFailed': '预览失败：{message}',
   'teams.automations.messages.promptTooLong':
     '周期 Prompt 最多 {maxLength} 个字符。',
+  'teams.automations.messages.reviewFailed':
+    'Permission review could not be prepared: {message}',
   'teams.automations.messages.runNowFailed': '立即运行请求失败：{message}',
   'teams.automations.messages.runNowSuccess': '已请求立即运行。',
   'teams.automations.messages.serviceIdentityLoading': '服务身份仍在加载中。',
