@@ -1955,12 +1955,19 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   )}
                 />
                 {schedule.lastError ? (
-                  <Typography.Text
-                    ellipsis
-                    style={{ color: token.colorError, fontSize: 12 }}
-                  >
-                    {schedule.lastError}
-                  </Typography.Text>
+                  <Tooltip placement="topLeft" title={schedule.lastError}>
+                    <Typography.Text
+                      ellipsis
+                      style={{
+                        color: token.colorError,
+                        display: "block",
+                        fontSize: 12,
+                        maxWidth: "100%",
+                      }}
+                    >
+                      {schedule.lastError}
+                    </Typography.Text>
+                  </Tooltip>
                 ) : null}
               </div>
               <div
@@ -2004,16 +2011,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   border: `1px solid ${token.colorBorderSecondary}`,
                 }}
               >
-                {canViewRuns
-                  ? renderAutomationActionButton({
-                      icon: <HistoryOutlined />,
-                      label: intl.formatMessage({
-                        id: "teams.automations.actions.viewRuns",
-                        defaultMessage: "View runs",
-                      }),
-                      onClick: () => openScheduleRuns(member, scheduleId),
-                    })
-                  : null}
                 {renderAutomationActionButton({
                   icon: <EditOutlined />,
                   label: intl.formatMessage({
@@ -2055,6 +2052,16 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                     statusMutation.variables === scheduleId,
                   onClick: () => statusMutation.mutate(scheduleId),
                 })}
+                {canViewRuns
+                  ? renderAutomationActionButton({
+                      icon: <HistoryOutlined />,
+                      label: intl.formatMessage({
+                        id: "teams.automations.actions.viewRuns",
+                        defaultMessage: "View runs",
+                      }),
+                      onClick: () => openScheduleRuns(member, scheduleId),
+                    })
+                  : null}
                 {renderAutomationActionButton({
                   danger: true,
                   icon: <DeleteOutlined />,

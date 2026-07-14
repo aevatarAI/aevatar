@@ -1562,7 +1562,7 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByRole("link", { name: "调试工作流" })).toBeNull();
     expect(screen.queryByRole("button", { name: "移出团队" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Test member" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "View runs" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "查看运行" })).toBeNull();
     expect(screen.queryByText("参与者结构")).toBeNull();
     expect(screen.queryByText("运行时参与者身份")).toBeNull();
     expect(screen.queryByRole("button", { name: "打开 Services" })).toBeNull();
@@ -2474,7 +2474,13 @@ describe("TeamDetailPage", () => {
       within(automationActions as HTMLElement).getByLabelText("立即运行"),
     ).toBeTruthy();
     expect(within(automationActions as HTMLElement).getByLabelText("暂停")).toBeTruthy();
+    expect(within(automationActions as HTMLElement).getByLabelText("查看运行")).toBeTruthy();
     expect(within(automationActions as HTMLElement).getByLabelText("删除")).toBeTruthy();
+    expect(
+      within(automationActions as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["编辑", "立即运行", "暂停", "查看运行", "删除"]);
     const responsiveRules = collectRenderedStyleText();
     expect(responsiveRules).toContain("@media (max-width: 900px)");
     expect(responsiveRules).toContain(
@@ -2490,7 +2496,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Workflow chat · chat").length).toBeGreaterThan(0);
     expect(screen.getAllByText("通过已发布服务运行").length).toBeGreaterThan(0);
-    fireEvent.click(await screen.findByRole("button", { name: "View runs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看运行" }));
     expect(window.location.pathname).toBe(
       "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/runs",
     );
