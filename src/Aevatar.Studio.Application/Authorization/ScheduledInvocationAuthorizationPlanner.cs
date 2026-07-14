@@ -8,15 +8,10 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 {
     public const string PolicyVersion = "scheduled-invocation-auth/v1";
     private readonly INyxIdCatalogSnapshotQueryPort _snapshotQueryPort;
-    private readonly IScheduledInvocationMemberQueryPort? _memberQueryPort;
-    private readonly IScheduledInvocationWorkflowQueryPort? _workflowQueryPort;
-    private readonly IScheduledInvocationConnectorQueryPort? _connectorQueryPort;
-    private readonly IScheduledInvocationOwnerLLMQueryPort? _ownerLLMQueryPort;
-
-    public ScheduledInvocationAuthorizationPlanner(INyxIdCatalogSnapshotQueryPort snapshotQueryPort)
-    {
-        _snapshotQueryPort = snapshotQueryPort;
-    }
+    private readonly IScheduledInvocationMemberQueryPort _memberQueryPort;
+    private readonly IScheduledInvocationWorkflowQueryPort _workflowQueryPort;
+    private readonly IScheduledInvocationConnectorQueryPort _connectorQueryPort;
+    private readonly IScheduledInvocationOwnerLLMQueryPort _ownerLLMQueryPort;
 
     public ScheduledInvocationAuthorizationPlanner(
         INyxIdCatalogSnapshotQueryPort snapshotQueryPort,
@@ -25,11 +20,11 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         IScheduledInvocationConnectorQueryPort connectorQueryPort,
         IScheduledInvocationOwnerLLMQueryPort ownerLLMQueryPort)
     {
-        _snapshotQueryPort = snapshotQueryPort;
-        _memberQueryPort = memberQueryPort;
-        _workflowQueryPort = workflowQueryPort;
-        _connectorQueryPort = connectorQueryPort;
-        _ownerLLMQueryPort = ownerLLMQueryPort;
+        _snapshotQueryPort = snapshotQueryPort ?? throw new ArgumentNullException(nameof(snapshotQueryPort));
+        _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
+        _workflowQueryPort = workflowQueryPort ?? throw new ArgumentNullException(nameof(workflowQueryPort));
+        _connectorQueryPort = connectorQueryPort ?? throw new ArgumentNullException(nameof(connectorQueryPort));
+        _ownerLLMQueryPort = ownerLLMQueryPort ?? throw new ArgumentNullException(nameof(ownerLLMQueryPort));
     }
 
     public async Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
@@ -44,7 +39,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return await PlanWithAuthorityAsync(request, request.Authority.Clone(), null, ct);
 
         var target = request.InvocationTarget.Studio;
-        var member = await _memberQueryPort!.GetAsync(target.ScopeId, target.MemberId, ct);
+        var member = await _memberQueryPort.GetAsync(target.ScopeId, target.MemberId, ct);
         if (member is null)
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "member_current_state_not_found");
         if (!string.Equals(member.PublishedServiceId, target.PublishedServiceId, StringComparison.Ordinal) ||
@@ -53,13 +48,13 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotStale, "member_current_state_stale");
         }
 
-        var workflow = await _workflowQueryPort!.GetAsync(member.WorkflowId, ct);
+        var workflow = await _workflowQueryPort.GetAsync(member.WorkflowId, ct);
         if (workflow is null)
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "workflow_current_state_not_found");
-        var connector = await _connectorQueryPort!.GetAsync(target.ScopeId, ct);
+        var connector = await _connectorQueryPort.GetAsync(target.ScopeId, ct);
         if (connector is null)
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "connector_current_state_not_found");
-        var ownerLLM = await _ownerLLMQueryPort!.GetAsync(target.ScopeId, ct);
+        var ownerLLM = await _ownerLLMQueryPort.GetAsync(target.ScopeId, ct);
         if (ownerLLM is null)
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "owner_llm_current_state_not_found");
 
@@ -87,44 +82,15 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         if (snapshot.FreshUntilUtc <= request.EvaluatedAtUtc)
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotStale, "nyxid_catalog_snapshot_stale");
 
-        var services = snapshot.Services.ToDictionary(static service => service.UserServiceId, StringComparer.Ordinal);
-        var requiredServiceIds = workflowDependencies?.NyxIdServiceIds.ToList() ?? request.RequiredNyxIdServiceIds.ToList();
-        foreach (var slug in (workflowDependencies?.NyxIdServiceSlugs ?? request.RequiredNyxIdServiceSlugs)
-                     .Where(static value => !string.IsNullOrWhiteSpace(value))
-                     .Select(static value => value.Trim())
-                     .Distinct(StringComparer.Ordinal))
-        {
-            var matches = snapshot.Services
-                .Where(service => string.Equals(service.ServiceSlug, slug, StringComparison.Ordinal))
-                .Select(static service => service.UserServiceId)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            if (matches.Length != 1)
-                return Failed(ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, $"nyxid_service_slug_not_unique:{slug}");
-            requiredServiceIds.Add(matches[0]);
-        }
-        var selected = new List<NyxIdServiceGrant>();
-        foreach (var serviceId in requiredServiceIds
-                     .Where(static id => !string.IsNullOrWhiteSpace(id))
-                     .Select(static id => id.Trim())
-                     .Distinct(StringComparer.Ordinal)
-                     .Order(StringComparer.Ordinal))
-        {
-            if (!services.TryGetValue(serviceId, out var service))
-                return Failed(ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, $"nyxid_service_not_found:{serviceId}");
-            if (snapshot.UnreachableServiceIds?.Contains(serviceId) == true)
-                return Failed(ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, $"nyxid_service_unreachable:{serviceId}");
-            if (!service.NodeGrantsNotRequired && service.NodeGrants.Count == 0)
-                return Failed(ScheduledInvocationAuthorizationFailureCode.NodeGrantMissing, $"nyxid_node_grant_missing:{serviceId}");
-
-            selected.Add(Normalize(service));
-        }
-
         var serviceGrantsNotRequired = workflowDependencies == null
             ? request.ServiceGrantsNotRequired
             : workflowDependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.NotRequiredNoExternalService;
         if (workflowDependencies?.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Unspecified)
             return Failed(ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, "workflow_service_grant_policy_missing");
+        var grantResolution = ResolveServiceGrants(request, workflowDependencies, snapshot);
+        if (grantResolution.Failure is not null)
+            return grantResolution.Failure;
+        var selected = grantResolution.Grants;
         if (selected.Count == 0 && !serviceGrantsNotRequired)
             return Failed(ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, "nyxid_service_grants_empty");
 
@@ -159,6 +125,52 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         plan.NyxIdServiceGrants.Add(selected);
         plan.PermissionDigest = ComputeDigest(plan);
         return ScheduledInvocationAuthorizationPlanResult.Succeeded(plan);
+    }
+
+    private static ServiceGrantResolution ResolveServiceGrants(
+        ScheduledInvocationAuthorizationRequest request,
+        WorkflowAuthorizationDependencies? workflowDependencies,
+        NyxIdCatalogSnapshot snapshot)
+    {
+        var services = snapshot.Services.ToDictionary(static service => service.UserServiceId, StringComparer.Ordinal);
+        var requiredServiceIds = workflowDependencies?.NyxIdServiceIds.ToList() ?? request.RequiredNyxIdServiceIds.ToList();
+        foreach (var slug in (workflowDependencies?.NyxIdServiceSlugs ?? request.RequiredNyxIdServiceSlugs)
+                     .Where(static value => !string.IsNullOrWhiteSpace(value))
+                     .Select(static value => value.Trim())
+                     .Distinct(StringComparer.Ordinal))
+        {
+            var matches = snapshot.Services
+                .Where(service => string.Equals(service.ServiceSlug, slug, StringComparison.Ordinal))
+                .Select(static service => service.UserServiceId)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (matches.Length != 1)
+                return ServiceGrantResolution.Failed(ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, $"nyxid_service_slug_not_unique:{slug}");
+            requiredServiceIds.Add(matches[0]);
+        }
+
+        var selected = new List<NyxIdServiceGrant>();
+        foreach (var serviceId in requiredServiceIds.Where(static id => !string.IsNullOrWhiteSpace(id))
+                     .Select(static id => id.Trim()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
+        {
+            if (!services.TryGetValue(serviceId, out var service))
+                return ServiceGrantResolution.Failed(ScheduledInvocationAuthorizationFailureCode.ServiceNotFound, $"nyxid_service_not_found:{serviceId}");
+            if (snapshot.UnreachableServiceIds?.Contains(serviceId) == true)
+                return ServiceGrantResolution.Failed(ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, $"nyxid_service_unreachable:{serviceId}");
+            if (!service.NodeGrantsNotRequired && service.NodeGrants.Count == 0)
+                return ServiceGrantResolution.Failed(ScheduledInvocationAuthorizationFailureCode.NodeGrantMissing, $"nyxid_node_grant_missing:{serviceId}");
+            selected.Add(Normalize(service));
+        }
+
+        return new ServiceGrantResolution(selected, null);
+    }
+
+    private sealed record ServiceGrantResolution(
+        IReadOnlyList<NyxIdServiceGrant> Grants,
+        ScheduledInvocationAuthorizationPlanResult? Failure)
+    {
+        public static ServiceGrantResolution Failed(ScheduledInvocationAuthorizationFailureCode code, string detail) =>
+            new([], ScheduledInvocationAuthorizationPlanResult.Failed(code, detail));
     }
 
     private static ScheduledInvocationAuthorizationPlanResult? ValidateContext(

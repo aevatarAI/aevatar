@@ -318,7 +318,61 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             RevisionId = descriptor.RevisionId ?? string.Empty,
             Caller = descriptor.Caller?.Clone(),
             Auth = CreateAuthState(descriptor.Auth),
+            AuthorizationFact = CreateAuthorizationFactState(descriptor.AuthorizationFact),
         };
+    }
+
+    private static ScheduledInvocationAuthorizationFactState? CreateAuthorizationFactState(
+        ScheduledInvocationAuthorizationFact? fact)
+    {
+        if (fact == null)
+            return null;
+
+        var state = new ScheduledInvocationAuthorizationFactState
+        {
+            PermissionDigest = fact.PermissionDigest,
+            PolicyVersion = fact.PolicyVersion,
+            Owner = new ScheduledInvocationAuthorizationOwnerState
+            {
+                Authority = fact.Owner.Authority,
+                OwnerKind = fact.Owner.OwnerKind,
+                OwnerSubject = fact.Owner.OwnerSubject,
+            },
+            Scopes = fact.Scopes,
+            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.ExpiresAt),
+            ServiceGrantsNotRequired = fact.ServiceGrantsNotRequired,
+            Disclosure = new ScheduledInvocationAuthorizationDisclosureState
+            {
+                DedicatedToSchedule = fact.Disclosure.DedicatedToSchedule,
+                SecretManagedByAevatar = fact.Disclosure.SecretManagedByAevatar,
+                BrowserReceivesRawKey = fact.Disclosure.BrowserReceivesRawKey,
+                DeleteRevokesCredential = fact.Disclosure.DeleteRevokesCredential,
+                PauseResumeRevokesCredential = fact.Disclosure.PauseResumeRevokesCredential,
+            },
+            Authority = new ScheduledInvocationAuthorizationAuthorityState
+            {
+                MemberStateVersion = fact.Authority.MemberStateVersion,
+                WorkflowStateVersion = fact.Authority.WorkflowStateVersion,
+                ConnectorStateVersion = fact.Authority.ConnectorStateVersion,
+                OwnerLlmStateVersion = fact.Authority.OwnerLlmStateVersion,
+                CatalogStateVersion = fact.Authority.CatalogStateVersion,
+                CatalogObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogObservedAt),
+                CatalogFreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogFreshUntil),
+                CatalogExternalRevision = fact.Authority.CatalogExternalRevision,
+                CatalogContentDigest = fact.Authority.CatalogContentDigest,
+            },
+        };
+        state.ServiceGrants.Add(fact.ServiceGrants.Select(static grant =>
+        {
+            var item = new ScheduledInvocationAuthorizationServiceGrantState
+            {
+                ServiceId = grant.ServiceId,
+                NodeGrantsNotRequired = grant.NodeGrantsNotRequired,
+            };
+            item.NodeIds.Add(grant.NodeIds);
+            return item;
+        }));
+        return state;
     }
 
     private static ScheduledServiceInvocationAuthState? CreateAuthState(ScheduledServiceInvocationAuth? auth)

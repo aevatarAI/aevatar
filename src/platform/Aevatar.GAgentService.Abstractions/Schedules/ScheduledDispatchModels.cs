@@ -35,7 +35,47 @@ public sealed record ScheduledServiceInvocationTargetDescriptor(
     Google.Protobuf.WellKnownTypes.Any Payload,
     string? RevisionId = null,
     ServiceInvocationCaller? Caller = null,
-    ScheduledServiceInvocationAuth? Auth = null);
+    ScheduledServiceInvocationAuth? Auth = null,
+    ScheduledInvocationAuthorizationFact? AuthorizationFact = null);
+
+public sealed record ScheduledInvocationAuthorizationFact(
+    string PermissionDigest,
+    string PolicyVersion,
+    ScheduledInvocationAuthorizationOwner Owner,
+    IReadOnlyList<ScheduledInvocationAuthorizationServiceGrant> ServiceGrants,
+    string Scopes,
+    DateTimeOffset ExpiresAt,
+    bool ServiceGrantsNotRequired,
+    ScheduledInvocationAuthorizationDisclosure Disclosure,
+    ScheduledInvocationAuthorizationAuthority Authority);
+
+public sealed record ScheduledInvocationAuthorizationOwner(
+    string Authority,
+    string OwnerKind,
+    string OwnerSubject);
+
+public sealed record ScheduledInvocationAuthorizationServiceGrant(
+    string ServiceId,
+    IReadOnlyList<string> NodeIds,
+    bool NodeGrantsNotRequired);
+
+public sealed record ScheduledInvocationAuthorizationDisclosure(
+    bool DedicatedToSchedule,
+    bool SecretManagedByAevatar,
+    bool BrowserReceivesRawKey,
+    bool DeleteRevokesCredential,
+    bool PauseResumeRevokesCredential);
+
+public sealed record ScheduledInvocationAuthorizationAuthority(
+    long MemberStateVersion,
+    long WorkflowStateVersion,
+    long ConnectorStateVersion,
+    long OwnerLlmStateVersion,
+    long CatalogStateVersion,
+    DateTimeOffset CatalogObservedAt,
+    DateTimeOffset CatalogFreshUntil,
+    string CatalogExternalRevision,
+    string CatalogContentDigest);
 
 public sealed record ScheduledServiceInvocationNyxIdSubjectRef(
     string Platform,
@@ -388,7 +428,8 @@ public sealed record ScheduledServiceInvocationDispatchRequest(
     ScheduledServiceInvocationAuth? Auth = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     bool ProjectNyxIdAccessTokenToWorkflowCallerCredential = false,
-    string? ScheduleId = null);
+    string? ScheduleId = null,
+    ScheduledInvocationAuthorizationFact? AuthorizationFact = null);
 
 public interface IScheduledServiceInvocationDispatchPort
 {

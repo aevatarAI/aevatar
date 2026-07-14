@@ -94,6 +94,9 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
         if (bindingId is null && !string.Equals(subjectPlatform, "nyxid", StringComparison.Ordinal))
             return ErrorJson("authenticated_owner_context_unavailable", "A verified NyxID binding is required to authorize a Team schedule.");
         bindingId ??= $"nyxid:{nyxUserId}";
+        var provisioningBearerToken = Normalize(AgentToolRequestContext.NyxIdAccessToken);
+        if (provisioningBearerToken is null)
+            return ErrorJson("caller_credential_unavailable", "A current NyxID credential is required to create the schedule credential.");
 
         ScheduleStudioMemberWorkflowArguments? args;
         try
@@ -146,6 +149,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
         {
             Prompt = Normalize(args.Prompt),
             DisplayName = Normalize(args.DisplayName),
+            ProvisioningBearerToken = provisioningBearerToken,
         };
 
         try

@@ -47,8 +47,7 @@ internal static class StudioHostingServiceCollectionExtensions
             configuration,
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<NyxIdLlmCatalogCacheOptions>>(),
             sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CachedNyxIdLlmCatalogPort>>(),
-            sp.GetRequiredService<Aevatar.Studio.Application.Authorization.INyxIdCatalogSnapshotCommandPort>()));
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<CachedNyxIdLlmCatalogPort>>()));
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);

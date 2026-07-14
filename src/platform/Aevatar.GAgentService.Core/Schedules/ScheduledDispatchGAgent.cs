@@ -501,7 +501,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
                     ProjectNyxIdAccessTokenToWorkflowCallerCredential:
                         State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
-                    ScheduleId: ResolveScheduleId()),
+                    ScheduleId: ResolveScheduleId(),
+                    AuthorizationFact: ToRuntimeAuthorizationFact(State.Target?.ServiceInvocation?.AuthorizationFact)),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
@@ -1238,7 +1239,46 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
             Caller = serviceInvocation.Caller?.Clone(),
             Auth = NormalizeServiceInvocationAuth(serviceInvocation.Auth),
+            AuthorizationFact = serviceInvocation.AuthorizationFact?.Clone(),
         };
+    }
+
+    private static ScheduledInvocationAuthorizationFact? ToRuntimeAuthorizationFact(
+        ScheduledInvocationAuthorizationFactState? fact)
+    {
+        if (fact == null)
+            return null;
+
+        return new ScheduledInvocationAuthorizationFact(
+            fact.PermissionDigest,
+            fact.PolicyVersion,
+            new ScheduledInvocationAuthorizationOwner(
+                fact.Owner?.Authority ?? string.Empty,
+                fact.Owner?.OwnerKind ?? string.Empty,
+                fact.Owner?.OwnerSubject ?? string.Empty),
+            fact.ServiceGrants.Select(static grant => new ScheduledInvocationAuthorizationServiceGrant(
+                grant.ServiceId,
+                grant.NodeIds.ToArray(),
+                grant.NodeGrantsNotRequired)).ToArray(),
+            fact.Scopes,
+            fact.ExpiresAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+            fact.ServiceGrantsNotRequired,
+            new ScheduledInvocationAuthorizationDisclosure(
+                fact.Disclosure?.DedicatedToSchedule ?? false,
+                fact.Disclosure?.SecretManagedByAevatar ?? false,
+                fact.Disclosure?.BrowserReceivesRawKey ?? false,
+                fact.Disclosure?.DeleteRevokesCredential ?? false,
+                fact.Disclosure?.PauseResumeRevokesCredential ?? false),
+            new ScheduledInvocationAuthorizationAuthority(
+                fact.Authority?.MemberStateVersion ?? 0,
+                fact.Authority?.WorkflowStateVersion ?? 0,
+                fact.Authority?.ConnectorStateVersion ?? 0,
+                fact.Authority?.OwnerLlmStateVersion ?? 0,
+                fact.Authority?.CatalogStateVersion ?? 0,
+                fact.Authority?.CatalogObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+                fact.Authority?.CatalogFreshUntil?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+                fact.Authority?.CatalogExternalRevision ?? string.Empty,
+                fact.Authority?.CatalogContentDigest ?? string.Empty));
     }
 
     private static EventEnvelope NormalizeTriggerEnvelope(EventEnvelope triggerEnvelope)

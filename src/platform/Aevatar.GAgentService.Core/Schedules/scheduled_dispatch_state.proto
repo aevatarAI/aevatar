@@ -116,6 +116,56 @@ message ScheduledServiceInvocationTargetState
   string revision_id = 4;
   aevatar.gagentservice.ServiceInvocationCaller caller = 5;
   ScheduledServiceInvocationAuthState auth = 6;
+  ScheduledInvocationAuthorizationFactState authorization_fact = 7;
+}
+
+message ScheduledInvocationAuthorizationFactState
+{
+  string permission_digest = 1;
+  string policy_version = 2;
+  ScheduledInvocationAuthorizationOwnerState owner = 3;
+  repeated ScheduledInvocationAuthorizationServiceGrantState service_grants = 4;
+  string scopes = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  bool service_grants_not_required = 7;
+  ScheduledInvocationAuthorizationDisclosureState disclosure = 8;
+  ScheduledInvocationAuthorizationAuthorityState authority = 9;
+}
+
+message ScheduledInvocationAuthorizationOwnerState
+{
+  string authority = 1;
+  string owner_kind = 2;
+  string owner_subject = 3;
+}
+
+message ScheduledInvocationAuthorizationServiceGrantState
+{
+  string service_id = 1;
+  repeated string node_ids = 2;
+  bool node_grants_not_required = 3;
+}
+
+message ScheduledInvocationAuthorizationDisclosureState
+{
+  bool dedicated_to_schedule = 1;
+  bool secret_managed_by_aevatar = 2;
+  bool browser_receives_raw_key = 3;
+  bool delete_revokes_credential = 4;
+  bool pause_resume_revokes_credential = 5;
+}
+
+message ScheduledInvocationAuthorizationAuthorityState
+{
+  int64 member_state_version = 1;
+  int64 workflow_state_version = 2;
+  int64 connector_state_version = 3;
+  int64 owner_llm_state_version = 4;
+  int64 catalog_state_version = 5;
+  google.protobuf.Timestamp catalog_observed_at = 6;
+  google.protobuf.Timestamp catalog_fresh_until = 7;
+  string catalog_external_revision = 8;
+  string catalog_content_digest = 9;
 }
 
 message ScheduledServiceInvocationAuthState

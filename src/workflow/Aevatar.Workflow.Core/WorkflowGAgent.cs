@@ -130,6 +130,12 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         return dependencies;
     }
 
+    internal WorkflowAuthorizationDependencies? EvaluateAuthorizationDependencies(string workflowYaml)
+    {
+        var compilation = EvaluateWorkflowCompilation(workflowYaml);
+        return compilation.Compiled ? BuildAuthorizationDependencies(compilation.Workflow!) : null;
+    }
+
     private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)
     {
         foreach (var step in steps)

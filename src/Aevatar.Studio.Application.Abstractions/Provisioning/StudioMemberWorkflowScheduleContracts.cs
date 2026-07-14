@@ -18,6 +18,8 @@ public sealed record StudioMemberWorkflowScheduleRequest(
 
     public string CallerSubjectExternalUserId => AuthenticatedOwner.SubjectExternalUserId;
 
+    public string? ProvisioningBearerToken { get; init; }
+
 }
 
 public sealed record StudioMemberWorkflowAuthorizationResult(

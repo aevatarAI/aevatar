@@ -493,6 +493,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 Payload = invocation.Payload.Clone(),
                 Caller = invocation.Caller?.Clone(),
                 Auth = NormalizeServiceInvocationAuth(invocation.Auth),
+                AuthorizationFact = invocation.AuthorizationFact,
             },
         };
     }

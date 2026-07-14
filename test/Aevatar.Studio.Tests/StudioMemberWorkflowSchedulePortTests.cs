@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Studio.Application.Authorization;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -57,10 +58,21 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("run digest");
         chat.ScopeId.Should().Be("scope-1");
+        invocation.AuthorizationFact.Should().NotBeNull();
+        var fact = invocation.AuthorizationFact!;
+        fact.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
+        fact.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+        fact.ServiceGrants.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ScheduledInvocationAuthorizationServiceGrant("nyx-service-alpha", ["nyx-node-alpha"], false));
+        fact.Authority.Should().BeEquivalentTo(new Aevatar.GAgentService.Abstractions.Schedules.ScheduledInvocationAuthorizationAuthority(
+            3, 5, 7, 11, 13,
+            DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
+            DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
+            "catalog-revision-alpha", "catalog-digest-alpha"));
     }
 
     [Fact]
-    public async Task EnsureAsync_ThreadsCallerSubjectRefIntoDispatchAuth()
+    public async Task EnsureAsync_UsesMaterializedScheduledCredentialAndKeepsCallerMutationContext()
     {
         var scheduleService = new RecordingScheduleService();
         var sut = NewPort(scheduleService);
@@ -73,12 +85,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().NotBeNull();
-        auth.SenderNyxId!.Subject.Platform.Should().Be("Lark");
-        auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
-        auth.SenderNyxId.Subject.ExternalUserId.Should().Be("sender-alpha");
-        auth.SenderNyxId.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
-        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.Sender);
+        auth!.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-alpha");
+        auth.ScheduledInvocationAgentKey.SecretReference.Ref.Should().Be("secret-alpha");
+        auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should()
+            .Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
+        auth.SenderNyxId.Should().BeNull();
         auth.Durable.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
         scheduleService.MutationContext.Should().BeEquivalentTo(new ScheduledDispatchMutationContext(
@@ -129,6 +141,23 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("authorization_plan_changed");
         scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenScheduleAdmissionFails_ShouldRevokeMaterializedCredential()
+    {
+        var scheduleService = new RecordingScheduleService { EnsureException = new InvalidOperationException("admission-failed") };
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(scheduleService, materializer: materializer);
+
+        var action = () => ScheduleAsync(port, Request("scope-1", "member-1"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("admission-failed");
+        materializer.MaterializeCallCount.Should().Be(1);
+        materializer.RevokeCallCount.Should().Be(1);
+        materializer.BearerToken.Should().Be("bearer-alpha");
+        materializer.Plan!.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
+        materializer.OwnerScope!.NyxUserId.Should().Be("nyx-owner-alpha");
     }
 
     [Fact]
@@ -249,17 +278,22 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     OwnerSubject = "nyx-owner-alpha",
                 },
                 SubjectPlatform = "lark",
+                SubjectTenant = "tenant-alpha",
                 SubjectExternalUserId = "sender-alpha",
                 VerifiedBindingId = "binding-alpha",
             },
-            CredentialExpiresAtUtc: DateTimeOffset.Parse("2026-08-01T00:00:00Z"));
+            CredentialExpiresAtUtc: DateTimeOffset.Parse("2026-08-01T00:00:00Z"))
+        {
+            ProvisioningBearerToken = "bearer-alpha",
+        };
 
     private static StudioMemberWorkflowSchedulePort NewPort(
         RecordingScheduleService schedule,
         RecordingMemberService? memberService = null,
-        IScheduledInvocationAuthorizationPlanner? planner = null) =>
+        IScheduledInvocationAuthorizationPlanner? planner = null,
+        IStudioScheduledCredentialMaterializer? materializer = null) =>
         new(memberService ?? new RecordingMemberService { Detail = CreateWorkflowMemberDetail() }, schedule,
-            planner ?? new RecordingAuthorizationPlanner());
+            planner ?? new RecordingAuthorizationPlanner(), materializer ?? new RecordingCredentialMaterializer());
 
     private static async Task<StudioMemberWorkflowScheduleResult> ScheduleAsync(
         StudioMemberWorkflowSchedulePort port,
@@ -377,10 +411,49 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public const string Digest = "permission-digest-alpha";
         public List<ScheduledInvocationAuthorizationRequest> Requests { get; } = [];
         public ScheduledInvocationAuthorizationPlanResult Result { get; init; } =
-            ScheduledInvocationAuthorizationPlanResult.Succeeded(new ScheduledInvocationAuthorizationPlan
+            ScheduledInvocationAuthorizationPlanResult.Succeeded(CreatePlan());
+
+        private static ScheduledInvocationAuthorizationPlan CreatePlan()
+        {
+            var plan = new ScheduledInvocationAuthorizationPlan
             {
                 PermissionDigest = Digest,
-            });
+                Owner = new NyxIdCatalogOwnerIdentity
+                {
+                    Authority = "https://nyx.example.com",
+                    OwnerKind = NyxIdCatalogOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                CredentialPolicy = new ScheduledInvocationCredentialPolicy
+                {
+                    Scopes = "read proxy",
+                    ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+                    PolicyVersion = "scheduled-invocation-auth/v1",
+                },
+                Disclosure = new Aevatar.Studio.Application.Authorization.ScheduledInvocationAuthorizationDisclosure
+                {
+                    DedicatedToSchedule = true,
+                    SecretManagedByAevatar = true,
+                    DeleteRevokesCredential = true,
+                },
+                Authority = new Aevatar.Studio.Application.Authorization.ScheduledInvocationAuthorizationAuthority
+                {
+                    MemberStateVersion = 3,
+                    WorkflowStateVersion = 5,
+                    ConnectorStateVersion = 7,
+                    OwnerLlmStateVersion = 11,
+                    CatalogStateVersion = 13,
+                    CatalogObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
+                    CatalogFreshUntil = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
+                    CatalogExternalRevision = "catalog-revision-alpha",
+                    CatalogContentDigest = "catalog-digest-alpha",
+                },
+            };
+            var grant = new NyxIdServiceGrant { UserServiceId = "nyx-service-alpha" };
+            grant.NodeGrants.Add(new NyxIdNodeGrant { NodeId = "nyx-node-alpha", Primary = true });
+            plan.NyxIdServiceGrants.Add(grant);
+            return plan;
+        }
 
         public Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
             ScheduledInvocationAuthorizationRequest request,
@@ -391,10 +464,54 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         }
     }
 
+    private sealed class RecordingCredentialMaterializer : IStudioScheduledCredentialMaterializer
+    {
+        public int MaterializeCallCount { get; private set; }
+        public int RevokeCallCount { get; private set; }
+        public string? BearerToken { get; private set; }
+        public ScheduledInvocationAuthorizationPlan? Plan { get; private set; }
+        public Aevatar.Foundation.Abstractions.OwnerScope? OwnerScope { get; private set; }
+
+        public Task<StudioScheduledCredential> MaterializeAsync(
+            string bearerToken,
+            ScheduledInvocationAuthorizationPlan plan,
+            string scheduleId,
+            Aevatar.Foundation.Abstractions.OwnerScope ownerScope,
+            CancellationToken ct = default)
+        {
+            MaterializeCallCount++;
+            BearerToken = bearerToken;
+            Plan = plan;
+            OwnerScope = ownerScope;
+            return Task.FromResult(new StudioScheduledCredential(
+                "key-alpha",
+                new SecretReference
+                {
+                    Ref = "secret-alpha",
+                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    OwnerScopeKey = $"schedule:{scheduleId}",
+                    ExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-31T00:00:00Z").ToUnixTimeMilliseconds(),
+                },
+                DateTimeOffset.Parse("2026-07-31T00:00:00Z")));
+        }
+
+        public Task RevokeAsync(
+            string bearerToken,
+            string scheduleId,
+            Aevatar.Foundation.Abstractions.OwnerScope ownerScope,
+            StudioScheduledCredential credential,
+            CancellationToken ct = default)
+        {
+            RevokeCallCount++;
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class RecordingScheduleService : IScheduledDispatchApplicationService
     {
         public int EnsureCallCount { get; private set; }
         public int TombstonedAttempts { get; init; }
+        public Exception? EnsureException { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public ScheduledDispatchMutationContext? MutationContext { get; private set; }
         public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
@@ -409,6 +526,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             Configurations.Add(configuration);
             if (EnsureCallCount <= TombstonedAttempts)
                 throw new ScheduledDispatchNotFoundException(configuration.ScheduleId);
+            if (EnsureException is not null)
+                throw EnsureException;
 
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 configuration.ScheduleId,

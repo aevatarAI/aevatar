@@ -937,8 +937,12 @@ public sealed class ScheduledAgentCreatorToolTests
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
             provider.GetRequiredService<IScheduledAgentCredentialLifecycle>(),
-            new ScheduledInvocationAuthorizationPlanner(new FixedSnapshotQueryPort(
-                snapshotUnavailable ? null : snapshot ?? CreateSnapshot(DefaultGrants))),
+            new ScheduledInvocationAuthorizationPlanner(
+                new FixedSnapshotQueryPort(snapshotUnavailable ? null : snapshot ?? CreateSnapshot(DefaultGrants)),
+                Substitute.For<IScheduledInvocationMemberQueryPort>(),
+                Substitute.For<IScheduledInvocationWorkflowQueryPort>(),
+                Substitute.For<IScheduledInvocationConnectorQueryPort>(),
+                Substitute.For<IScheduledInvocationOwnerLLMQueryPort>()),
             provider.GetRequiredService<ScheduledAgentCreatorOptions>());
 
         return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort, catalogCommandPort);

@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Studio.Application.Authorization;
+using Aevatar.Studio.Application.Provisioning;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -35,6 +36,7 @@ public static class AuthoringServiceCollectionExtensions
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
         services.TryAddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
         services.TryAddSingleton<IScheduledAgentCredentialLifecycle, ScheduledAgentCredentialLifecycle>();
+        services.TryAddSingleton<IStudioScheduledCredentialMaterializer, StudioScheduledCredentialMaterializer>();
         if (!services.Any(IsAgentBuilderToolSourceRegistration))
             services.Add(ServiceDescriptor.Singleton(typeof(IAgentToolSource), AgentToolSourceFactory));
 

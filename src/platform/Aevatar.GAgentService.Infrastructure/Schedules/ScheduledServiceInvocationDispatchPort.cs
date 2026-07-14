@@ -53,6 +53,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         ArgumentNullException.ThrowIfNull(dispatch);
         ArgumentNullException.ThrowIfNull(dispatch.Request);
+        ValidateAuthorizationFact(dispatch);
 
         var prepared = await BuildInvocationRequestAsync(dispatch, ct);
         try
@@ -79,6 +80,40 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 prepared.DurableCallerCredential,
                 "scheduled-workflow-dispatch-failed");
             throw;
+        }
+    }
+
+    private void ValidateAuthorizationFact(ScheduledServiceInvocationDispatchRequest dispatch)
+    {
+        var fact = dispatch.AuthorizationFact;
+        if (fact == null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(fact.PermissionDigest) ||
+            string.IsNullOrWhiteSpace(fact.PolicyVersion) ||
+            string.IsNullOrWhiteSpace(fact.Owner.Authority) ||
+            string.IsNullOrWhiteSpace(fact.Owner.OwnerSubject) ||
+            string.IsNullOrWhiteSpace(fact.Scopes) ||
+            fact.ExpiresAt <= _timeProvider.GetUtcNow() ||
+            fact.Authority.CatalogFreshUntil <= _timeProvider.GetUtcNow() ||
+            fact.Authority.CatalogStateVersion <= 0 ||
+            fact.ServiceGrants.Any(static grant =>
+                string.IsNullOrWhiteSpace(grant.ServiceId) ||
+                !grant.NodeGrantsNotRequired && grant.NodeIds.Count == 0) ||
+            fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
+            !fact.Disclosure.DedicatedToSchedule ||
+            !fact.Disclosure.SecretManagedByAevatar ||
+            fact.Disclosure.BrowserReceivesRawKey)
+        {
+            throw new InvalidOperationException("Scheduled invocation authorization fact is missing, stale, or malformed.");
+        }
+
+        if (dispatch.Auth?.Source is not ScheduledInvocationAgentKeyCredentialReference agentKey ||
+            agentKey.KeyExpiresAtUnixMs <= 0 ||
+            DateTimeOffset.FromUnixTimeMilliseconds(agentKey.KeyExpiresAtUnixMs) > fact.ExpiresAt)
+        {
+            throw new InvalidOperationException(
+                "Scheduled invocation authorization fact requires a constrained scheduled agent key.");
         }
     }
 

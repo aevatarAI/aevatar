@@ -9,6 +9,8 @@ using Aevatar.Studio.Application.Authorization;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Google.Protobuf.WellKnownTypes;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -21,15 +23,18 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private readonly IStudioMemberService _memberService;
     private readonly IScheduledDispatchApplicationService _scheduleService;
     private readonly IScheduledInvocationAuthorizationPlanner _authorizationPlanner;
+    private readonly IStudioScheduledCredentialMaterializer _credentialMaterializer;
 
     public StudioMemberWorkflowSchedulePort(
         IStudioMemberService memberService,
         IScheduledDispatchApplicationService scheduleService,
-        IScheduledInvocationAuthorizationPlanner authorizationPlanner)
+        IScheduledInvocationAuthorizationPlanner authorizationPlanner,
+        IStudioScheduledCredentialMaterializer credentialMaterializer)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
         _authorizationPlanner = authorizationPlanner ?? throw new ArgumentNullException(nameof(authorizationPlanner));
+        _credentialMaterializer = credentialMaterializer ?? throw new ArgumentNullException(nameof(credentialMaterializer));
     }
 
     public async Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
@@ -75,19 +80,38 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var scheduleTimezone = NormalizeRequired(request.ScheduleTimezone, nameof(request.ScheduleTimezone));
         var publishedServiceId = resolved.PublishedServiceId;
         var callerSubject = BuildCallerSubject(request);
+        var scheduleId = BuildScheduleId(scopeId, memberId);
+        var ownerScope = BuildOwnerScope(request);
+        var bearerToken = NormalizeRequired(request.ProvisioningBearerToken, nameof(request.ProvisioningBearerToken));
+        var credential = await _credentialMaterializer.MaterializeAsync(
+            bearerToken, current.Plan, scheduleId, ownerScope, ct);
 
-        var schedule = await EnsureScheduleAsync(
-            BuildScheduleId(scopeId, memberId),
+        ScheduledDispatchMutationReceipt schedule;
+        try
+        {
+            EnsureCredentialMatchesPlan(credential, current.Plan);
+            schedule = await EnsureScheduleAsync(
+            scheduleId,
             request.DisplayName,
             scopeId,
             memberId,
             publishedServiceId,
             NormalizeOptional(request.Prompt) ?? string.Empty,
-            BuildScheduleAuth(callerSubject),
+            BuildScheduleAuth(credential),
+            ToScheduleAuthorizationFact(current.Plan),
             new ScheduledDispatchMutationContext(scopeId, callerSubject),
             scheduleCron,
             scheduleTimezone,
             ct);
+            if (!schedule.Accepted)
+                throw new InvalidOperationException("scheduled_dispatch_rejected");
+        }
+        catch
+        {
+            await _credentialMaterializer.RevokeAsync(
+                bearerToken, scheduleId, ownerScope, credential, CancellationToken.None);
+            throw;
+        }
 
         return new StudioMemberWorkflowScheduleResult(
             Success: schedule.Accepted,
@@ -125,7 +149,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 WorkflowRevision = workflowRevision,
             },
         };
-        var authority = new ScheduledInvocationAuthorizationAuthority();
+        var authority = new Aevatar.Studio.Application.Authorization.ScheduledInvocationAuthorizationAuthority();
         return new ResolvedStudioAuthorizationRequest(
             scopeId,
             memberId,
@@ -150,6 +174,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string publishedServiceId,
         string prompt,
         ScheduledServiceInvocationAuth auth,
+        ScheduledInvocationAuthorizationFact authorizationFact,
         ScheduledDispatchMutationContext mutationContext,
         string cronExpression,
         string timezone,
@@ -169,6 +194,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                         publishedServiceId,
                         prompt,
                         auth,
+                        authorizationFact,
                         cronExpression,
                         timezone),
                     mutationContext,
@@ -228,6 +254,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string publishedServiceId,
         string prompt,
         ScheduledServiceInvocationAuth auth,
+        ScheduledInvocationAuthorizationFact authorizationFact,
         string cronExpression,
         string timezone) =>
         new(
@@ -249,18 +276,75 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                         Prompt = prompt,
                         ScopeId = scopeId,
                     }),
-                    Auth: auth)),
+                    Auth: auth,
+                    AuthorizationFact: authorizationFact)),
             CronExpression: cronExpression,
             Timezone: timezone,
             Enabled: true,
             Headers: new Dictionary<string, string>(StringComparer.Ordinal),
             ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
 
-    private static ScheduledServiceInvocationAuth BuildScheduleAuth(
-        ScheduledServiceInvocationNyxIdSubjectRef callerSubject) =>
-        new(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
-            callerSubject,
-            Scope: ProvisionWorkflowCallerCredential.DefaultScope));
+    private static ScheduledInvocationAuthorizationFact ToScheduleAuthorizationFact(
+        ScheduledInvocationAuthorizationPlan plan) => new(
+        plan.PermissionDigest,
+        plan.CredentialPolicy.PolicyVersion,
+        new ScheduledInvocationAuthorizationOwner(
+            plan.Owner.Authority,
+            plan.Owner.OwnerKind.ToString(),
+            plan.Owner.OwnerSubject),
+        plan.NyxIdServiceGrants.Select(static grant => new ScheduledInvocationAuthorizationServiceGrant(
+            grant.UserServiceId,
+            grant.NodeGrants.Select(static node => node.NodeId).ToArray(),
+            grant.NodeGrantsNotRequired)).ToArray(),
+        plan.CredentialPolicy.Scopes,
+        plan.CredentialPolicy.ExpiresAt.ToDateTimeOffset(),
+        plan.CredentialPolicy.ServiceGrantsNotRequired,
+        new Aevatar.GAgentService.Abstractions.Schedules.ScheduledInvocationAuthorizationDisclosure(
+            plan.Disclosure.DedicatedToSchedule,
+            plan.Disclosure.SecretManagedByAevatar,
+            plan.Disclosure.BrowserReceivesRawKey,
+            plan.Disclosure.DeleteRevokesCredential,
+            plan.Disclosure.PauseResumeRevokesCredential),
+        new Aevatar.GAgentService.Abstractions.Schedules.ScheduledInvocationAuthorizationAuthority(
+            plan.Authority.MemberStateVersion,
+            plan.Authority.WorkflowStateVersion,
+            plan.Authority.ConnectorStateVersion,
+            plan.Authority.OwnerLlmStateVersion,
+            plan.Authority.CatalogStateVersion,
+            plan.Authority.CatalogObservedAt.ToDateTimeOffset(),
+            plan.Authority.CatalogFreshUntil.ToDateTimeOffset(),
+            plan.Authority.CatalogExternalRevision,
+            plan.Authority.CatalogContentDigest));
+
+    private static ScheduledServiceInvocationAuth BuildScheduleAuth(StudioScheduledCredential credential) =>
+        new(new ScheduledInvocationAgentKeyCredentialReference(
+            credential.SecretReference.Clone(),
+            credential.ApiKeyId,
+            credential.ExpiresAtUtc.ToUnixTimeMilliseconds()));
+
+    private static void EnsureCredentialMatchesPlan(
+        StudioScheduledCredential credential,
+        ScheduledInvocationAuthorizationPlan plan)
+    {
+        if (credential.ExpiresAtUtc <= DateTimeOffset.UtcNow ||
+            credential.ExpiresAtUtc > plan.CredentialPolicy.ExpiresAt.ToDateTimeOffset())
+            throw new InvalidOperationException("scheduled_credential_expiry_mismatch");
+        if (!string.Equals(credential.SecretReference.Purpose,
+                CredentialSecretPurposes.ScheduledInvocationAgentKey, StringComparison.Ordinal))
+            throw new InvalidOperationException("scheduled_credential_purpose_mismatch");
+    }
+
+    private static OwnerScope BuildOwnerScope(StudioMemberWorkflowScheduleRequest request)
+    {
+        var owner = request.AuthenticatedOwner;
+        return string.Equals(owner.SubjectPlatform, OwnerScope.NyxIdPlatform, StringComparison.Ordinal)
+            ? OwnerScope.ForNyxIdNative(owner.Owner.OwnerSubject)
+            : OwnerScope.ForChannel(
+                owner.Owner.OwnerSubject,
+                owner.SubjectPlatform.Trim().ToLowerInvariant(),
+                NormalizeRequired(owner.SubjectTenant, nameof(owner.SubjectTenant)),
+                owner.SubjectExternalUserId);
+    }
 
     private static ScheduledServiceInvocationNyxIdSubjectRef BuildCallerSubject(
         StudioMemberWorkflowScheduleRequest request) =>

@@ -1351,7 +1351,12 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     private static IScheduledInvocationAuthorizationPlanner CreatePlanner() =>
-        new ScheduledInvocationAuthorizationPlanner(new DeliveryTargetSnapshotQueryPort());
+        new ScheduledInvocationAuthorizationPlanner(
+            new DeliveryTargetSnapshotQueryPort(),
+            Substitute.For<IScheduledInvocationMemberQueryPort>(),
+            Substitute.For<IScheduledInvocationWorkflowQueryPort>(),
+            Substitute.For<IScheduledInvocationConnectorQueryPort>(),
+            Substitute.For<IScheduledInvocationOwnerLLMQueryPort>());
 
     private sealed class DeliveryTargetSnapshotQueryPort : INyxIdCatalogSnapshotQueryPort
     {
