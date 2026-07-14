@@ -8,8 +8,7 @@ public interface IScheduledAgentApiKeyIssuer
         string token,
         ScheduledInvocationAuthorizationPlan plan,
         string credentialName,
-        CancellationToken ct) =>
-        Task.FromResult(ScheduledAgentApiKeyIssueResult.Failed("typed_authorization_plan_not_supported"));
+        CancellationToken ct);
 
     Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct);
 

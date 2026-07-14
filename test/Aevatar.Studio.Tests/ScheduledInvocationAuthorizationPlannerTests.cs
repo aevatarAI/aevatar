@@ -25,8 +25,44 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Plan.NyxIdServiceGrants.Single().UserServiceId.Should().Be("us-connector");
         result.Plan.NyxIdServiceGrants.Single().NodeGrants.Select(static node => node.NodeId)
             .Should().Equal("node-primary", "node-fallback");
-        result.Plan.PermissionDigest.Should().NotContain("svc-alpha");
         result.Plan.Disclosure.BrowserReceivesRawKey.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ComputeDigest_IsStableAndIncludesEveryPermissionBearingField()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00Z");
+        var owner = Owner("subject-personal");
+        var snapshot = new NyxIdCatalogSnapshot(
+            owner, 17, now.AddMinutes(-1), now.AddMinutes(14), "etag-1", "catalog-digest-1",
+            [Service("us-connector", ("node-primary", true))]);
+        var result = await new ScheduledInvocationAuthorizationPlanner(new StubSnapshotQueryPort(snapshot))
+            .PlanAsync(Request(owner, now));
+        var plan = result.Plan!;
+        var baseline = ScheduledInvocationAuthorizationPlanner.ComputeDigest(plan);
+
+        ScheduledInvocationAuthorizationPlanner.ComputeDigest(plan.Clone()).Should().Be(baseline);
+
+        var changedServiceGrant = plan.Clone();
+        changedServiceGrant.NyxIdServiceGrants[0].UserServiceId = "us-different";
+        var changedNodeGrant = plan.Clone();
+        changedNodeGrant.NyxIdServiceGrants[0].NodeGrants[0].NodeId = "node-different";
+        var changedOwner = plan.Clone();
+        changedOwner.Owner.OwnerSubject = "subject-different";
+        var changedCredentialPolicy = plan.Clone();
+        changedCredentialPolicy.CredentialPolicy.Scopes = "read";
+        var changedAuthorityVersion = plan.Clone();
+        changedAuthorityVersion.Authority.MemberStateVersion++;
+
+        new[]
+        {
+            changedServiceGrant,
+            changedNodeGrant,
+            changedOwner,
+            changedCredentialPolicy,
+            changedAuthorityVersion,
+        }.Select(ScheduledInvocationAuthorizationPlanner.ComputeDigest)
+            .Should().OnlyContain(digest => digest != baseline);
     }
 
     [Fact]

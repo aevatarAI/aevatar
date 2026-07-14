@@ -407,6 +407,33 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenPreflightFails_ShouldReturnFailureAndNotCreateSchedule()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+                "nyxid_catalog_snapshot_stale"),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.SnapshotStale));
+        ErrorMessage(output).Should().Be("nyxid_catalog_snapshot_stale");
+        schedulePort.CreateCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
@@ -814,17 +841,20 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         private const string PermissionDigest = "permission-digest-alpha";
         public StudioMemberWorkflowScheduleRequest? LastRequest { get; private set; }
+        public int CreateCallCount { get; private set; }
+        public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
+            new(
+                true,
+                new ScheduledInvocationAuthorizationPlan { PermissionDigest = PermissionDigest },
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty);
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
             StudioMemberWorkflowScheduleRequest request,
             CancellationToken ct = default)
         {
             LastRequest = request;
-            return Task.FromResult(new StudioMemberWorkflowAuthorizationResult(
-                true,
-                new ScheduledInvocationAuthorizationPlan { PermissionDigest = PermissionDigest },
-                ScheduledInvocationAuthorizationFailureCode.Unspecified,
-                string.Empty));
+            return Task.FromResult(PreflightResult);
         }
 
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
@@ -843,6 +873,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest)
         {
+            CreateCallCount++;
             if (!string.Equals(confirmedPermissionDigest, PermissionDigest, StringComparison.Ordinal))
                 throw new InvalidOperationException("authorization_plan_changed");
             LastRequest = request;
