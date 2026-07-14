@@ -61,6 +61,24 @@ public sealed class MainnetScheduledAgentCredentialRepairAdminEndpointsTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenIdentityResolutionIsCanceled_PropagatesCancellation()
+    {
+        var authorizer = Substitute.For<IPlatformAdminAuthorizer>();
+        authorizer.ResolveCallerAsync("token", Arg.Any<CancellationToken>())
+            .Returns<Task<PlatformCaller>>(_ => throw new OperationCanceledException("identity canceled"));
+
+        var handle = () => ScheduledAgentCredentialRepairAdminEndpoints.HandleAsync(
+            Context("token"),
+            ValidRequest(),
+            authorizer,
+            Substitute.For<IUserAgentCatalogCredentialRepairPort>(),
+            CancellationToken.None);
+
+        await handle.Should().ThrowAsync<OperationCanceledException>()
+            .WithMessage("identity canceled");
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenCallerIsNotElevated_ReturnsForbidden()
     {
         var authorizer = ElevatedAuthorizer(isElevated: false);

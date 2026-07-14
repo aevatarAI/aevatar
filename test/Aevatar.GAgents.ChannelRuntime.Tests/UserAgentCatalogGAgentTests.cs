@@ -286,6 +286,109 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleTombstoneAsync_WithExistingExactRevocation_ReusesFactAfterTombstoneCommit()
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-exact");
+        var reference = CompleteReference("sec-exact", "key-exact");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-exact",
+            ApiKeyId = "key-exact",
+            NyxApiKeyReference = reference,
+            OwnerScope = owner,
+        });
+        await _agent.HandleRequestCredentialRevocationAsync(
+            new UserAgentCatalogRequestCredentialRevocationCommand
+            {
+                Intent = RevocationIntent("agent-exact", "key-exact", owner, "sec-exact"),
+            });
+        var originalFact = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject.Clone();
+        _credentialRevocationExecutor.ClearReceivedCalls();
+        var tombstoneCommittedBeforeExecution = false;
+        _credentialRevocationExecutor.ExecutePendingAsync(
+                "bearer-exact",
+                Arg.Any<UserAgentApiKeyRevocation>(),
+                Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                var events = await _store.GetEventsAsync(_agent.Id);
+                tombstoneCommittedBeforeExecution = events.Last().EventData
+                    .Is(UserAgentCatalogTombstonedEvent.Descriptor);
+            });
+
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand
+        {
+            AgentId = "agent-exact",
+            BearerToken = "bearer-exact",
+        });
+
+        tombstoneCommittedBeforeExecution.Should().BeTrue();
+        _agent.State.Entries.Should().ContainSingle().Which.Tombstoned.Should().BeTrue();
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(originalFact);
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        persisted.Count(item => item.EventData.Is(UserAgentCatalogApiKeyRevocationRequestedEvent.Descriptor))
+            .Should().Be(1);
+        persisted.Select(static item => item.EventData.TypeUrl).Should().ContainInOrder(
+            "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogUpsertedEvent",
+            "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogApiKeyRevocationRequestedEvent",
+            "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogTombstonedEvent");
+        await _credentialRevocationExecutor.Received(1).ExecutePendingAsync(
+            "bearer-exact",
+            Arg.Is<UserAgentApiKeyRevocation>(revocation =>
+                revocation.AgentId == originalFact.AgentId &&
+                revocation.ApiKeyId == originalFact.ApiKeyId &&
+                revocation.NyxApiKeyReference.Ref == originalFact.NyxApiKeyReference.Ref &&
+                revocation.RequestedAtUnixMs == originalFact.RequestedAtUnixMs),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleTombstoneAsync_WithAliasedRevocation_PreservesOriginalFactWithoutExecution()
+    {
+        var owner = OwnerScope.ForNyxIdNative("user-alias-tombstone");
+        await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
+        {
+            AgentId = "agent-alias-tombstone",
+            ApiKeyId = "key-alias-tombstone",
+            NyxApiKeyReference = CompleteReference("sec-current", "key-alias-tombstone"),
+            OwnerScope = owner,
+        });
+        await _agent.HandleRequestCredentialRevocationAsync(
+            new UserAgentCatalogRequestCredentialRevocationCommand
+            {
+                Intent = RevocationIntent(
+                    "agent-alias-tombstone",
+                    "key-alias-tombstone",
+                    owner,
+                    "sec-prior"),
+            });
+        var originalFact = _agent.State.PendingApiKeyRevocations.Should().ContainSingle().Subject.Clone();
+        _credentialRevocationExecutor.ClearReceivedCalls();
+
+        await _agent.HandleTombstoneAsync(new UserAgentCatalogTombstoneCommand
+        {
+            AgentId = "agent-alias-tombstone",
+            BearerToken = "bearer-alias",
+        });
+
+        _agent.State.Entries.Should().ContainSingle().Which.Tombstoned.Should().BeTrue();
+        _agent.State.PendingApiKeyRevocations.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(originalFact);
+        var persisted = await _store.GetEventsAsync(_agent.Id);
+        persisted.Count(item => item.EventData.Is(UserAgentCatalogApiKeyRevocationRequestedEvent.Descriptor))
+            .Should().Be(1);
+        persisted.Select(static item => item.EventData.TypeUrl).Should().ContainInOrder(
+            "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogUpsertedEvent",
+            "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogApiKeyRevocationRequestedEvent",
+            "type.googleapis.com/aevatar.gagents.scheduled.UserAgentCatalogTombstonedEvent");
+        await _credentialRevocationExecutor.DidNotReceive().ExecutePendingAsync(
+            Arg.Any<string>(),
+            Arg.Any<UserAgentApiKeyRevocation>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleRecordApiKeyRevocationAttemptAsync_ClearsOnlyAfterBothTracksComplete()
     {
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand

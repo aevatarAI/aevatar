@@ -7,6 +7,8 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Aevatar.GAgents.Scheduled;
@@ -723,7 +725,7 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public async Task RevocationReadModelKeyMigration_RekeysLegacyDocumentIdempotently()
+    public async Task RevocationReadModelKeyMigration_StartAsyncRekeysLegacyDocumentIdempotently()
     {
         var legacyDocument = new UserAgentApiKeyRevocationDocument
         {
@@ -745,18 +747,28 @@ public sealed class UserAgentCatalogProjectorTests
             "key-legacy",
             "sec-legacy");
 
-        var first = await service.MigrateAsync(CancellationToken.None);
-        var second = await service.MigrateAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+        var rerun = await service.MigrateAsync(CancellationToken.None);
 
-        first.MigratedCount.Should().Be(1);
-        first.MaxStateVersion.Should().Be(7);
-        second.MigratedCount.Should().Be(0);
-        second.MaxStateVersion.Should().BeNull();
+        rerun.MigratedCount.Should().Be(0);
+        rerun.MaxStateVersion.Should().BeNull();
         store.Documents.Should().ContainSingle();
         store.Documents.Should().ContainKey(canonicalId);
         store.Documents.Should().NotContainKey("agent-legacy");
         store.Documents[canonicalId].StateVersion.Should().Be(7);
         store.Documents[canonicalId].LastEventId.Should().Be("evt-legacy");
+    }
+
+    [Fact]
+    public void AddScheduledAgents_RegistersRevocationReadModelKeyMigrationHostedService()
+    {
+        var services = new ServiceCollection();
+
+        services.AddScheduledAgents();
+
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType == typeof(UserAgentApiKeyRevocationReadModelKeyMigrationService));
     }
 
     [Fact]
