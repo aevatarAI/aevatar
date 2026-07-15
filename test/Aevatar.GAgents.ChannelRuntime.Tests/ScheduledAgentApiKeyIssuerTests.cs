@@ -1,8 +1,7 @@
+using Aevatar.GAgents.Scheduled;
 using System.Net;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.GAgents.Authoring.Lark;
-using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Xunit;
 

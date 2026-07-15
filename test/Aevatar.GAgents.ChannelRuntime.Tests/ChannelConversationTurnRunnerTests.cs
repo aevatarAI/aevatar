@@ -365,9 +365,8 @@ public sealed class ChannelConversationTurnRunnerTests
         toolContext.Caller.ResponseId.Should().Be("msg-sched-1");
         toolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
         // The inbound bot's provider slug is also exposed as the default OUTBOUND delivery provider,
-        // so scheduled_agent_creator resolves one without manual config (was failing with
-        // lark_outbound_provider_slug_unavailable).
-        toolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.LarkOutboundProxySlug)
+        // so scheduled_agent_creator resolves one without manual config.
+        toolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.OutboundProviderSlug)
             .WhoseValue.Should().Be("api-lark-bot");
     }
 

@@ -7,7 +7,6 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
-using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity;
@@ -18,6 +17,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -1886,12 +1886,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(inboundEvent.NyxProviderSlug))
         {
             metadata[ChannelMetadataKeys.InboundChannelBotProxySlug] = inboundEvent.NyxProviderSlug;
+            metadata[ChannelMetadataKeys.OutboundProviderSlug] = inboundEvent.NyxProviderSlug;
             // The inbound bot is also the default OUTBOUND delivery provider for a chat-triggered
             // scheduled task: the scheduled run replies via the same Lark bot that received the
             // message, so scheduled_agent_creator can resolve a provider without manual Studio/Web
-            // config (was failing with lark_outbound_provider_slug_unavailable). A distinct outbound
-            // provider remains expressible explicitly via agent_delivery_targets.
-            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = inboundEvent.NyxProviderSlug;
+            // config. A distinct outbound provider remains expressible explicitly via
+            // agent_delivery_targets.
         }
 
         var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
@@ -1909,6 +1909,22 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var larkChatId = NormalizeOptional(activity?.TransportExtras?.NyxLarkChatId);
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
+
+        var deliveryAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressId);
+        if (!string.IsNullOrWhiteSpace(deliveryAddressId))
+            metadata[ChannelMetadataKeys.DeliveryAddressId] = deliveryAddressId;
+
+        var deliveryAddressType = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressType);
+        if (!string.IsNullOrWhiteSpace(deliveryAddressType))
+            metadata[ChannelMetadataKeys.DeliveryAddressType] = deliveryAddressType;
+
+        var deliveryFallbackAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryFallbackAddressId);
+        if (!string.IsNullOrWhiteSpace(deliveryFallbackAddressId))
+            metadata[ChannelMetadataKeys.DeliveryFallbackAddressId] = deliveryFallbackAddressId;
+
+        var deliveryFallbackAddressType = NormalizeOptional(activity?.TransportExtras?.DeliveryFallbackAddressType);
+        if (!string.IsNullOrWhiteSpace(deliveryFallbackAddressType))
+            metadata[ChannelMetadataKeys.DeliveryFallbackAddressType] = deliveryFallbackAddressType;
 
         var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUserId))

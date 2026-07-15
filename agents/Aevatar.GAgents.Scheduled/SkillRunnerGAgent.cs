@@ -1883,7 +1883,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         };
         AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveId, State.OutboundConfig?.LarkReceiveId);
         AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveIdType, State.OutboundConfig?.LarkReceiveIdType);
-        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkOutboundProxySlug, State.OutboundConfig?.NyxProviderSlug);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.OutboundProviderSlug, State.OutboundConfig?.NyxProviderSlug);
 
         return metadata;
     }

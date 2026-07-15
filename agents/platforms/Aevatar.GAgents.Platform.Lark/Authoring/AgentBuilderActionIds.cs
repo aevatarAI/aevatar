@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Platform.Lark;
 
 /// <summary>
 /// Single source of truth for the <c>agent_builder_action</c> identifiers wired between the

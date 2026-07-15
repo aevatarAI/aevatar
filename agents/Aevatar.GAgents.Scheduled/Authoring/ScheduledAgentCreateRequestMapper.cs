@@ -5,13 +5,13 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
-using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Scheduled;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Scheduled;
 
 internal sealed class ScheduledAgentCreateRequestMapper
 {
+    private const string ScheduledAgentNyxProviderSlugHeader = "scheduled_agent.nyx_provider_slug";
+
     internal static readonly TimeSpan MinimumOneShotDelay = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan MaximumOneShotDelay = TimeSpan.FromDays(366);
 
@@ -122,22 +122,15 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (conversationId is null)
             return ScheduledAgentCreatePlanResult.Failed("conversation_id_unavailable");
 
-        var primarySlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.LarkOutboundProxySlug));
+        var contextOutboundSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.OutboundProviderSlug));
+        var primarySlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ScheduledAgentNyxProviderSlugHeader))
+            ?? contextOutboundSlug;
         if (primarySlug is null)
-            return ScheduledAgentCreatePlanResult.Failed("lark_outbound_provider_slug_unavailable");
+            return ScheduledAgentCreatePlanResult.Failed("channel_outbound_provider_slug_unavailable");
 
-        var target = LarkConversationTargets.BuildFromInboundWithFallback(
-            AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.ChatType),
-            conversationId,
-            AgentToolRequestContext.ChannelSenderId,
-            AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.LarkUnionId),
-            AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.LarkChatId));
-
-        if (string.IsNullOrWhiteSpace(target.Primary.ReceiveId) ||
-            string.IsNullOrWhiteSpace(target.Primary.ReceiveIdType))
-        {
-            return ScheduledAgentCreatePlanResult.Failed("lark_receive_target_unavailable");
-        }
+        var target = BuildChannelTarget(conversationId, primarySlug);
+        if (string.IsNullOrWhiteSpace(target.PrimaryAddressId))
+            return ScheduledAgentCreatePlanResult.Failed("channel_delivery_address_unavailable");
 
         var failureSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.InboundChannelBotProxySlug));
         if (string.Equals(failureSlug, primarySlug, StringComparison.Ordinal))
@@ -168,7 +161,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 ConversationId: conversationId,
                 PrimaryOutboundSlug: primarySlug,
                 FailureNotificationSlug: failureSlug,
-                ReceiveTarget: target,
+                ChannelTarget: target,
                 Caller: caller.Clone()),
             ServiceSlugs: new ScheduledAgentServiceSlugs(
                 primarySlug,
@@ -216,11 +209,37 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ErrorJson: null);
     }
 
+    private static ScheduledAgentChannelTarget BuildChannelTarget(
+        string conversationId,
+        string primarySlug)
+    {
+        var platform = Normalize(AgentToolRequestContext.ChannelPlatform)
+            ?? Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.Platform))
+            ?? string.Empty;
+        var primaryAddressId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryAddressId))
+            ?? Normalize(AgentToolRequestContext.ChannelDeliveryTargetId)
+            ?? Normalize(conversationId)
+            ?? string.Empty;
+        var primaryAddressType = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryAddressType))
+            ?? string.Empty;
+        var fallbackAddressId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryFallbackAddressId));
+        var fallbackAddressType = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.DeliveryFallbackAddressType));
+
+        return new ScheduledAgentChannelTarget(
+            Platform: platform,
+            ProviderSlug: primarySlug,
+            ConversationId: conversationId,
+            PrimaryAddressId: primaryAddressId,
+            PrimaryAddressType: primaryAddressType,
+            FallbackAddressId: fallbackAddressId,
+            FallbackAddressType: fallbackAddressType);
+    }
+
     internal static string BuildScheduledNyxApiKeyOwnerScopeKey(
         OwnerScope caller,
         string scopeId,
         string conversationId,
-        string receiveId)
+        string primaryAddressId)
     {
         var platform = Normalize(caller.Platform) ?? OwnerScope.NyxIdPlatform;
         var nyxUserId = Normalize(caller.NyxUserId) ?? string.Empty;
@@ -235,7 +254,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             Escape(senderId),
             Escape(Normalize(scopeId) ?? string.Empty),
             Escape(Normalize(conversationId) ?? string.Empty),
-            Escape(Normalize(receiveId) ?? string.Empty));
+            Escape(Normalize(primaryAddressId) ?? string.Empty));
     }
 
     private static string Escape(string value) =>
@@ -378,7 +397,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ["scheduled_agent.conversation_id"] = request.ConversationId,
             ["scheduled_agent.output_format"] = request.OutputFormat.ToString(),
             ["scheduled_agent.api_key_id"] = issuedKey.ApiKeyId ?? string.Empty,
-            ["scheduled_agent.nyx_provider_slug"] = request.PrimaryOutboundSlug,
+            [ScheduledAgentNyxProviderSlugHeader] = request.PrimaryOutboundSlug,
         };
 
         if (!string.IsNullOrWhiteSpace(request.Model))
@@ -410,15 +429,15 @@ internal sealed class ScheduledAgentCreateRequestMapper
             ApiKeyId = issuedKey.ApiKeyId ?? string.Empty,
             ScheduleCron = request.ScheduleCron,
             ScheduleTimezone = request.ScheduleTimezone,
-            TargetPlatform = "lark",
+            TargetPlatform = request.ChannelTarget.Platform,
             ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
-                "lark",
-                request.PrimaryOutboundSlug,
+                request.ChannelTarget.Platform,
+                request.ChannelTarget.ProviderSlug,
                 request.ConversationId,
-                request.ReceiveTarget.Primary.ReceiveId,
-                request.ReceiveTarget.Primary.ReceiveIdType,
-                request.ReceiveTarget.Fallback?.ReceiveId,
-                request.ReceiveTarget.Fallback?.ReceiveIdType),
+                request.ChannelTarget.PrimaryAddressId,
+                request.ChannelTarget.PrimaryAddressType,
+                request.ChannelTarget.FallbackAddressId,
+                request.ChannelTarget.FallbackAddressType),
             OwnerScope = request.Caller.Clone(),
             OutputFormat = request.OutputFormat,
         };
@@ -720,5 +739,14 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     string ConversationId,
     string PrimaryOutboundSlug,
     string? FailureNotificationSlug,
-    LarkReceiveTargetWithFallback ReceiveTarget,
+    ScheduledAgentChannelTarget ChannelTarget,
     OwnerScope Caller);
+
+internal sealed record ScheduledAgentChannelTarget(
+    string Platform,
+    string ProviderSlug,
+    string ConversationId,
+    string PrimaryAddressId,
+    string PrimaryAddressType,
+    string? FallbackAddressId,
+    string? FallbackAddressType);

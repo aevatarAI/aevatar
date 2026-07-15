@@ -6,7 +6,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Scheduled;
 
 public sealed class ScheduledAgentCreatorTool : IAgentTool
 {
@@ -197,7 +197,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
                     plan.Request.Caller,
                     plan.Request.ScopeId,
                     plan.Request.ConversationId,
-                    plan.Request.ReceiveTarget.Primary.ReceiveId),
+                    plan.Request.ChannelTarget.PrimaryAddressId),
                 "scheduled-agent-create",
                 ct);
         }

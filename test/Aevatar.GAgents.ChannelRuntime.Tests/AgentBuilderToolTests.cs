@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Scheduled;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -18,8 +19,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Aevatar.GAgents.Authoring.Lark;
-using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -1727,7 +1726,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task AddLarkAgentAuthoring_WhenCalledTwice_ShouldResolveSingleToolSource_AndDiscoverRegisteredTools()
+    public async Task AddScheduledAgents_WhenCalledTwice_ShouldResolveSingleToolSource_AndDiscoverRegisteredTools()
     {
         var handler = new RoutingJsonHandler();
         var nyxClient = new NyxIdApiClient(
@@ -1756,8 +1755,8 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton<LarkMessageComposer>();
         services.AddSingleton(callerScopeResolver);
 
-        services.AddLarkAgentAuthoring();
-        services.AddLarkAgentAuthoring();
+        services.AddScheduledAgents();
+        services.AddScheduledAgents();
 
         await using var provider = services.BuildServiceProvider();
         var source = provider.GetServices<IAgentToolSource>().Should().ContainSingle().Subject;

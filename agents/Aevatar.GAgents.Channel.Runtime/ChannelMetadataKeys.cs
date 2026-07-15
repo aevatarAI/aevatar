@@ -22,6 +22,20 @@ public static class ChannelMetadataKeys
     public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
     /// <summary>
+    /// Provider slug used for outbound delivery back to the current channel. This is the generic
+    /// channel-delivery counterpart to platform-specific provider metadata such as
+    /// <see cref="LarkOutboundProxySlug"/>.
+    /// </summary>
+    public const string OutboundProviderSlug = "channel.outbound.provider_slug";
+    /// <summary>Provider-interpreted primary outbound address for the current channel turn.</summary>
+    public const string DeliveryAddressId = "channel.delivery.address_id";
+    /// <summary>Provider-interpreted type for <see cref="DeliveryAddressId"/>.</summary>
+    public const string DeliveryAddressType = "channel.delivery.address_type";
+    /// <summary>Optional provider-interpreted fallback outbound address for the current channel turn.</summary>
+    public const string DeliveryFallbackAddressId = "channel.delivery.fallback_address_id";
+    /// <summary>Provider-interpreted type for <see cref="DeliveryFallbackAddressId"/>.</summary>
+    public const string DeliveryFallbackAddressType = "channel.delivery.fallback_address_type";
+    /// <summary>
     /// Everyone @-mentioned in the inbound message, as a readable list of <c>name &lt;canonical_id&gt;</c>
     /// entries (on Lark the canonical id is the mentioned party's <c>open_id</c>), in the order their
     /// <c>@_user_N</c> placeholders appear in the message text. Surfaced into the agent's

@@ -228,7 +228,7 @@ sequenceDiagram
 **运行中的 `SkillRunnerGAgent` 不在执行期调 `UserAgentDeliveryTargetReader`** —— 它自己的 event-sourced `State.OutboundConfig`（`HandleInitializeAsync` 时从 command 拷贝）已带 `NyxApiKey`、`NyxProviderSlug`、`ConversationId`、`LarkReceiveId`、`LarkReceiveIdType` + fallback。
 
 - `UserAgentCatalogGAgent`（单一知名 actor `scheduled.user-agent-catalog`）是「成员关系权威」：存每个 agent 的路由 + Nyx 凭证。投影成 `UserAgentCatalogDocument` / `UserAgentCatalogNyxCredentialDocument`，支撑 `/agents`、`/agent-status` 查询和 `UserAgentDeliveryTargetReader`。
-- `UserAgentDeliveryTargetReader`（`UserAgentDeliveryTargetReader.cs:38`）只给「runner 外部的出站组件」用 —— 具体是 `FeishuCardHumanInteractionPort`（`agents/Aevatar.GAgents.Authoring.Lark/`）。CI 门禁 `agent_tool_delivery_target_reader_guard.sh` 禁止 `IAgentTool` 依赖它。
+- `UserAgentDeliveryTargetReader` (`UserAgentDeliveryTargetReader.cs:38`) is only for outbound components outside the runner. Generic authoring tools now live under `agents/Aevatar.GAgents.Scheduled/Authoring`, while Lark card/action mapping lives under `agents/platforms/Aevatar.GAgents.Platform.Lark/Authoring`; CI guard `agent_tool_delivery_target_reader_guard.sh` forbids `IAgentTool` dependencies on this reader.
 - 总结：**catalog 是创建/查询时的真相源；runner 在执行期用自己的 state 快照**。
 
 ### 2.4 执行技能：Prompt vs Workflow

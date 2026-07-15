@@ -27,7 +27,6 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
@@ -254,7 +253,6 @@ public static class MainnetHostBuilderExtensions
         // neither side has to depend on Studio.Application — the host is the natural composition
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
-        builder.Services.AddLarkAgentAuthoring();
         builder.Services.AddSkillBackedHumanInteractionDelivery();
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();

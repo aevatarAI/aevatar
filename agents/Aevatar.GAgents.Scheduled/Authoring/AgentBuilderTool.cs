@@ -9,7 +9,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.Authoring.Lark;
+namespace Aevatar.GAgents.Scheduled;
 
 public sealed class AgentBuilderTool : IAgentTool
 {

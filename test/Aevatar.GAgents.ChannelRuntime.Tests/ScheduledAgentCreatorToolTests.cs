@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Scheduled;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -8,9 +9,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
-using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Scheduled;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -287,7 +286,7 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
-            document.RootElement.GetProperty("detail").GetString().Should().Be("lark_outbound_provider_slug_unavailable");
+            document.RootElement.GetProperty("detail").GetString().Should().Be("channel_outbound_provider_slug_unavailable");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
@@ -295,7 +294,6 @@ public sealed class ScheduledAgentCreatorToolTests
     [Theory]
     [InlineData("missing_scope", "scope_id_unavailable")]
     [InlineData("missing_conversation", "conversation_id_unavailable")]
-    [InlineData("missing_receive_target", "lark_receive_target_unavailable")]
     public async Task ExecuteAsync_WhenTrustedContextIncomplete_ShouldFailClosedBeforeKeyCreation(
         string caseName,
         string expectedDetail)
@@ -843,11 +841,9 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.ChannelAddress.Platform.Should().Be("lark");
             captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot");
             captured.CatalogEntry.ChannelAddress.ConversationId.Should().Be("oc_conversation");
-            captured.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("oc_chat");
-            captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
-            captured.CatalogEntry.ChannelAddress.Fallback.Should().NotBeNull();
-            captured.CatalogEntry.ChannelAddress.Fallback!.AddressId.Should().Be("on_union");
-            captured.CatalogEntry.ChannelAddress.Fallback.AddressType.Should().Be("union_id");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("on_union");
+            captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().Be("union_id");
+            captured.CatalogEntry.ChannelAddress.Fallback.Should().BeNull();
 #pragma warning disable CS0612 // verifies new writes leave deprecated command fields empty
             captured.CatalogEntry.LarkReceiveId.Should().BeEmpty();
             captured.CatalogEntry.LarkReceiveIdType.Should().BeEmpty();
@@ -890,6 +886,94 @@ public sealed class ScheduledAgentCreatorToolTests
                 "scheduled-agent-creator-test"));
             resolved.Secret.Should().Be("full-secret-key");
         });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenInvokedFromScheduledRun_ShouldPreserveExistingOutboundSlug()
+    {
+        var handler = CreateSuccessHandler(serviceListJson: """
+            {
+              "keys": [
+                {"id":"svc-ornn","slug":"ornn-api"},
+                {"id":"svc-scheduled-lark","slug":"api-lark-bot-scheduled"},
+                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
+              ]
+            }
+            """);
+        var harness = CreateHarness(handler: handler);
+        ScheduledWorkflowAgentCreateRequest? captured = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
+        var metadata = new Dictionary<string, string>(BaseExternalMetadata(), StringComparer.Ordinal);
+        metadata[ChannelMetadataKeys.OutboundProviderSlug] = "api-lark-bot-current";
+        metadata["scheduled_agent.nyx_provider_slug"] = "api-lark-bot-scheduled";
+
+        await WithToolContext(CreateToolContext(externalMetadata: metadata), async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            captured.Should().NotBeNull();
+            captured!.Schedule.Headers["scheduled_agent.nyx_provider_slug"].Should().Be("api-lark-bot-scheduled");
+            captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot-scheduled");
+            captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-scheduled");
+
+            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-ornn", "svc-scheduled-lark", "svc-lark-failure");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenDeliveryAddressTypeMissing_ShouldNotStoreChatTypeAsAddressType()
+    {
+        var harness = CreateHarness();
+        ScheduledWorkflowAgentCreateRequest? captured = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
+
+        await WithToolContext(
+            CreateToolContext(
+                channelDeliveryTargetId: "delivery-target-1",
+                externalMetadata: BaseExternalMetadata(includeUnionId: false)),
+            async () =>
+            {
+                var result = await harness.Tool.ExecuteAsync(BaseArgs);
+
+                using var document = JsonDocument.Parse(result);
+                document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+                captured.Should().NotBeNull();
+                captured!.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("delivery-target-1");
+                captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().BeEmpty();
+            });
     }
 
     [Fact]
@@ -1299,9 +1383,6 @@ public sealed class ScheduledAgentCreatorToolTests
             "missing_scope" => CreateToolContext(callerScopeId: null, channelRegistrationScopeId: null),
             "missing_conversation" => CreateToolContext(
                 externalMetadata: BaseExternalMetadata(includeConversationId: false)),
-            "missing_receive_target" => CreateToolContext(
-                channelSenderId: null,
-                externalMetadata: BaseExternalMetadata(includeChatId: false, includeUnionId: false)),
             _ => throw new ArgumentOutOfRangeException(nameof(caseName), caseName, null),
         };
 
@@ -1309,12 +1390,13 @@ public sealed class ScheduledAgentCreatorToolTests
         string? callerScopeId = "scope-bot-1",
         string? channelRegistrationScopeId = "scope-bot-1",
         string? channelSenderId = "ou_sender",
+        string? channelDeliveryTargetId = null,
         IReadOnlyDictionary<string, string>? externalMetadata = null) =>
         AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials("session-token", "session-token", null),
             Caller = new AgentToolCallerContext(callerScopeId, null, "message-1"),
-            Channel = new AgentToolChannelContext("lark", channelSenderId, channelRegistrationScopeId, "message-1", "om_1"),
+            Channel = new AgentToolChannelContext("lark", channelSenderId, channelRegistrationScopeId, "message-1", "om_1", channelDeliveryTargetId),
             ExternalMetadata = externalMetadata ?? BaseExternalMetadata(),
         };
 
@@ -1336,7 +1418,12 @@ public sealed class ScheduledAgentCreatorToolTests
         if (includeUnionId)
             metadata[ChannelMetadataKeys.LarkUnionId] = "on_union";
         if (includeOutboundSlug)
-            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = "api-lark-bot";
+            metadata[ChannelMetadataKeys.OutboundProviderSlug] = "api-lark-bot";
+        if (includeUnionId)
+        {
+            metadata[ChannelMetadataKeys.DeliveryAddressId] = "on_union";
+            metadata[ChannelMetadataKeys.DeliveryAddressType] = "union_id";
+        }
         return metadata;
     }
 
