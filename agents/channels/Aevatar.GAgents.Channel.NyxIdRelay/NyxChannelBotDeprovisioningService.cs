@@ -122,9 +122,10 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
     }
 
     /// <summary>
-    /// Invokes a NyxID delete and classifies the result. The client never throws on non-2xx —
-    /// <see cref="NyxIdApiClient.DeleteAsync"/> returns an <c>{"error":true,"status":...}</c>
-    /// envelope — so success is "no error envelope" OR "error envelope whose status is 404"
+    /// Invokes a NyxID delete and classifies the result. Successful NyxID deletes return
+    /// <c>204 No Content</c>, which <see cref="NyxIdApiClient.DeleteAsync"/> represents as an empty
+    /// string. Non-2xx responses become <c>{"error":true,"status":...}</c> envelopes, so success
+    /// is "empty response", "no error envelope", or "error envelope whose status is 404"
     /// (already gone / idempotent re-delete). <see cref="OperationCanceledException"/> is a
     /// control-flow signal and is allowed to propagate.
     /// </summary>
@@ -135,7 +136,8 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
     {
         var response = await delete();
 
-        if (!NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+        if (string.IsNullOrWhiteSpace(response) ||
+            !NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
             return true;
 
         if (TryGetErrorStatus(response, out var status) && status == 404)
