@@ -213,7 +213,7 @@ public sealed class RegistrationQueryPortTests
                         Channel = ChannelId.From("lark"),
                         ConversationKey = "lark:tenant:thread",
                     },
-                    LarkMessageId = "om_1",
+                    ProviderMessageId = "om_1",
                     RequestId = "request-1",
                 },
             }));
@@ -224,7 +224,7 @@ public sealed class RegistrationQueryPortTests
         result.Should().NotBeNull();
         result!.ActorId.Should().Be("conversation-1");
         result.LastSuccessfulDelivery.Should().NotBeNull();
-        result.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_1");
+        result.LastSuccessfulDelivery!.ProviderMessageId.Should().Be("om_1");
         await reader.Received(1).GetAsync("conversation-1", Arg.Any<CancellationToken>());
         await reader.DidNotReceive().QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>());
     }

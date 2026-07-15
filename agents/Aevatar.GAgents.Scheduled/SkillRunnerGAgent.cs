@@ -936,7 +936,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.Succeeded,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: streamingState.PlatformMessageId,
+                providerMessageId: streamingState.PlatformMessageId,
                 cardId: string.Empty,
                 ct);
         }
@@ -976,7 +976,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.Succeeded,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: ResolvePlatformMessageId(receipt),
+                providerMessageId: ResolvePlatformMessageId(receipt),
                 cardId: string.Empty,
                 ct);
             return true;
@@ -988,7 +988,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.FailedPreSend,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
+                providerMessageId: string.Empty,
                 cardId: string.Empty,
                 ct);
             Logger.LogWarning(
@@ -1004,7 +1004,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.FailedPreSend,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
+                providerMessageId: string.Empty,
                 cardId: string.Empty,
                 ct);
             Logger.LogWarning(
@@ -1440,7 +1440,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 signal.Status,
                 string.IsNullOrWhiteSpace(signal.RequestId) ? requestId : signal.RequestId,
                 signal.SourceEventId,
-                signal.LarkMessageId,
+                signal.ProviderMessageId,
                 signal.CardId,
                 ct);
         }
@@ -1451,7 +1451,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         DeliveryStatus status,
         string? requestId,
         string? sourceEventId,
-        string? larkMessageId,
+        string? providerMessageId,
         string? cardId,
         CancellationToken ct) =>
         PersistDomainEventAsync(new DeliveryProducedEvent
@@ -1461,7 +1461,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(),
             Status = status,
-            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(providerMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(requestId) ?? string.Empty,
             SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
@@ -1471,17 +1471,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private DeliveryTarget BuildDeliveryTarget()
     {
         var outbound = State.OutboundConfig;
-        var receiveId = NormalizeOptional(outbound?.LarkReceiveId)
-                        ?? NormalizeOptional(outbound?.ConversationId)
-                        ?? string.Empty;
-        var receiveIdType = NormalizeOptional(outbound?.LarkReceiveIdType) ?? string.Empty;
+        var channelAddress = ResolveChannelAddress(outbound);
+        var address = channelAddress.Primary;
         return new DeliveryTarget
         {
             Channel = ChannelId.From(ResolveOutboundPlatform(outbound)),
             ConversationKey = outbound?.ConversationId ?? string.Empty,
             Platform = ResolveOutboundPlatform(outbound),
-            ReceiveId = receiveId,
-            ReceiveIdType = receiveIdType,
+            AddressId = address.AddressId,
+            AddressType = address.AddressType,
             ConversationId = outbound?.ConversationId ?? string.Empty,
         };
     }
@@ -1575,15 +1573,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private static string BuildLongOutputDocumentDecisionPrompt(string output) =>
         $"""
-        The scheduled skill output below is too long for one Lark message.
+        The scheduled skill output below is too long for one channel message.
 
-        Decide whether the full content should be delivered as a Lark cloud document.
+        Decide whether the full content should be delivered as a cloud document.
         If yes, call the {LarkDocxCreateToolName} tool exactly once with:
         - title: a concise title for this report
         - markdown_text: the complete output exactly as provided
         - visibility: readable
 
-        If the tool result reports success=true with document_url, answer with one short user-facing Lark message that includes the document URL.
+        If the tool result reports success=true with document_url, answer with one short user-facing message that includes the document URL.
         If you do not call the tool, if the tool fails, or if there is no document_url, answer with DOCX_FALLBACK.
         Do not summarize, omit, or rewrite the report body in the final message.
 
@@ -1755,7 +1753,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.FailedPreSend,
                 requestId: deliveryRequestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
+                providerMessageId: string.Empty,
                 cardId: string.Empty,
                 ct);
             throw;
@@ -1766,7 +1764,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             DeliveryStatus.Succeeded,
             requestId: deliveryRequestId,
             sourceEventId: string.Empty,
-            larkMessageId: ResolvePlatformMessageId(receipt),
+            providerMessageId: ResolvePlatformMessageId(receipt),
             cardId: string.Empty,
             ct);
     }
@@ -1802,6 +1800,21 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         var normalized = value?.Trim();
         return string.IsNullOrEmpty(normalized) ? null : normalized;
+    }
+
+    private static ChannelDeliveryAddress ResolveChannelAddress(SkillRunnerOutboundConfig? outbound)
+    {
+        var address = outbound?.ChannelAddress;
+        return UserAgentCatalogChannelAddress.FromParts(
+            NormalizeOptional(address?.Platform) ?? ResolveOutboundPlatform(outbound),
+            NormalizeOptional(address?.ProviderSlug) ?? NormalizeOptional(outbound?.NyxProviderSlug),
+            NormalizeOptional(address?.ConversationId) ?? NormalizeOptional(outbound?.ConversationId),
+#pragma warning disable CS0612 // deprecated fields are read only as a channel_address compatibility bridge
+            NormalizeOptional(address?.Primary?.AddressId) ?? NormalizeOptional(outbound?.LarkReceiveId) ?? NormalizeOptional(outbound?.ConversationId),
+            NormalizeOptional(address?.Primary?.AddressType) ?? NormalizeOptional(outbound?.LarkReceiveIdType),
+            NormalizeOptional(address?.Fallback?.AddressId) ?? NormalizeOptional(outbound?.LarkReceiveIdFallback),
+            NormalizeOptional(address?.Fallback?.AddressType) ?? NormalizeOptional(outbound?.LarkReceiveIdTypeFallback));
+#pragma warning restore CS0612
     }
 
     private static string ResolveOutboundPlatform(SkillRunnerOutboundConfig? outbound)
@@ -1881,8 +1894,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
-        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveId, State.OutboundConfig?.LarkReceiveId);
-        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveIdType, State.OutboundConfig?.LarkReceiveIdType);
+        var channelAddress = ResolveChannelAddress(State.OutboundConfig);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryAddressId, channelAddress.Primary.AddressId);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryAddressType, channelAddress.Primary.AddressType);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryFallbackAddressId, channelAddress.Fallback?.AddressId);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryFallbackAddressType, channelAddress.Fallback?.AddressType);
         AddIfNotEmpty(metadata, ChannelMetadataKeys.OutboundProviderSlug, State.OutboundConfig?.NyxProviderSlug);
 
         return metadata;
@@ -1967,6 +1983,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     {
         var ownerScope = State.OutboundConfig?.OwnerScope;
         var targetPlatform = ResolveOutboundPlatform(State.OutboundConfig);
+        var channelAddress = ResolveChannelAddress(State.OutboundConfig);
 
         var command = new UserAgentCatalogUpsertCommand
         {
@@ -1986,10 +2003,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 targetPlatform,
                 State.OutboundConfig?.NyxProviderSlug,
                 State.OutboundConfig?.ConversationId,
-                State.OutboundConfig?.LarkReceiveId,
-                State.OutboundConfig?.LarkReceiveIdType,
-                State.OutboundConfig?.LarkReceiveIdFallback,
-                State.OutboundConfig?.LarkReceiveIdTypeFallback),
+                channelAddress.Primary.AddressId,
+                channelAddress.Primary.AddressType,
+                channelAddress.Fallback?.AddressId,
+                channelAddress.Fallback?.AddressType),
             OutputFormat = State.OutboundConfig?.OutputFormat ?? SkillRunnerOutputFormat.Auto,
         };
 

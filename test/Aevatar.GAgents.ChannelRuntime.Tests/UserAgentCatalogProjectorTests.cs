@@ -284,7 +284,7 @@ public sealed class UserAgentCatalogProjectorTests
                     Channel = ChannelId.From("lark"),
                     ConversationKey = "oc_chat_1",
                 },
-                LarkMessageId = "om_success",
+                ProviderMessageId = "om_success",
                 RequestId = "request-success",
                 ProducedAtVersion = 3,
             },
@@ -323,7 +323,7 @@ public sealed class UserAgentCatalogProjectorTests
         document.RecentDeliveries.Select(delivery => delivery.RequestId)
             .Should().Equal("request-failed", "request-success");
         document.LastSuccessfulDelivery.Should().NotBeNull();
-        document.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_success");
+        document.LastSuccessfulDelivery!.ProviderMessageId.Should().Be("om_success");
     }
 
     [Fact]

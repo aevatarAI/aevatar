@@ -844,7 +844,7 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.ChannelAddress.Primary.AddressId.Should().Be("on_union");
             captured.CatalogEntry.ChannelAddress.Primary.AddressType.Should().Be("union_id");
             captured.CatalogEntry.ChannelAddress.Fallback.Should().BeNull();
-#pragma warning disable CS0612 // verifies new writes leave deprecated command fields empty
+#pragma warning disable CS0612 // verifies new writes leave deprecated delivery fields empty
             captured.CatalogEntry.LarkReceiveId.Should().BeEmpty();
             captured.CatalogEntry.LarkReceiveIdType.Should().BeEmpty();
             captured.CatalogEntry.LarkReceiveIdFallback.Should().BeEmpty();
