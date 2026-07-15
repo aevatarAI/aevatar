@@ -88,13 +88,6 @@ public static class AgentToolExecutionContextMapper
                     AgentToolExecutionContext.Normalize(caller.ScopeId) ?? mapped.Caller.ScopeId,
                     AgentToolExecutionContext.Normalize(caller.OwnerSubject) ?? mapped.Caller.OwnerSubject,
                     AgentToolExecutionContext.Normalize(caller.ResponseId) ?? mapped.Caller.ResponseId),
-            Credentials = caller?.Credentials == null
-                ? mapped.Credentials
-                : mapped.Credentials with
-                {
-                    CredentialRef = AgentToolExecutionContext.Normalize(caller.Credentials.NyxIdBearer)
-                        ?? mapped.Credentials.CredentialRef,
-                },
             Routing = request.RoutingContext ?? mapped.Routing,
             ExternalMetadata = StripOwnedControlKeys(request.Metadata),
         };

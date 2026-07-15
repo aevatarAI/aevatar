@@ -645,8 +645,14 @@ public static class ServiceCollectionExtensions
                 var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
                 var logger = sp.GetService<ILogger<ReloadableLLMProviderFactory>>();
                 var loggerFactory = sp.GetService<ILoggerFactory>();
+                var credentialProviders = sp.GetServices<ICredentialProvider>().ToArray();
                 return new ReloadableLLMProviderFactory(
-                    () => BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, loggerFactory),
+                    () => BuildLlmProviderFactory(
+                        configuration,
+                        options,
+                        secretsStoreAccessor,
+                        loggerFactory,
+                        credentialProviders),
                     versionProvider,
                     logger);
             });
@@ -656,7 +662,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILLMProviderFactory>(sp =>
         {
             var secretsStoreAccessor = CreateSecretsStoreAccessor(options, sp);
-            return BuildLlmProviderFactory(configuration, options, secretsStoreAccessor, sp.GetService<ILoggerFactory>());
+            return BuildLlmProviderFactory(
+                configuration,
+                options,
+                secretsStoreAccessor,
+                sp.GetService<ILoggerFactory>(),
+                sp.GetServices<ICredentialProvider>());
         });
     }
 
@@ -664,7 +675,8 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         AevatarAIFeatureOptions options,
         Func<IAevatarSecretsStore> secretsStoreAccessor,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IEnumerable<ICredentialProvider>? credentialProviders = null)
     {
         var secrets = secretsStoreAccessor();
         var configuredProviders = ReadConfiguredProviders(secrets, configuration, options);
@@ -709,7 +721,7 @@ public static class ServiceCollectionExtensions
         var standardProviders = configuredProviders
             .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
             .ToList();
-        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, loggerFactory);
+        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, loggerFactory, credentialProviders);
         if (standardProviders.Count == 0)
             return nyxIdFactory;
 
@@ -823,7 +835,8 @@ public static class ServiceCollectionExtensions
     private static NyxIdLLMProviderFactory BuildNyxIdFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
         string defaultName,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        IEnumerable<ICredentialProvider>? credentialProviders = null)
     {
         var factory = new NyxIdLLMProviderFactory();
         // Without an explicit logger the provider chain (NyxIdLLMProvider and the
@@ -844,11 +857,12 @@ public static class ServiceCollectionExtensions
                 provider.Name,
                 provider.Model,
                 provider.Endpoint,
-                // NyxID gateway token comes exclusively from per-request metadata
-                // (the caller's Bearer token). No local secrets fallback.
+                // NyxID gateway token is resolved from per-request credential context.
+                // Local provider secrets must not become a NyxID gateway fallback.
                 static () => null,
                 provider.DefaultRoutePreference,
-                providerLogger);
+                providerLogger,
+                credentialProviders);
         }
 
         factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));

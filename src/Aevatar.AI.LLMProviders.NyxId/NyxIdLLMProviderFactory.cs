@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.LLMProviders.NyxId;
@@ -17,10 +18,11 @@ public sealed class NyxIdLLMProviderFactory : ILLMProviderFactory
         string gatewayEndpoint,
         Func<string?> accessTokenAccessor,
         string? defaultRoutePreference = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IEnumerable<ICredentialProvider>? credentialProviders = null)
     {
         var provider = new NyxIdLLMProvider(
-            name, defaultModel, gatewayEndpoint, accessTokenAccessor, defaultRoutePreference, logger);
+            name, defaultModel, gatewayEndpoint, accessTokenAccessor, defaultRoutePreference, logger, credentialProviders);
         ImmutableInterlocked.AddOrUpdate(ref _providers, provider.Name, provider, (_, _) => provider);
         if (string.IsNullOrWhiteSpace(Volatile.Read(ref _defaultName)))
             Volatile.Write(ref _defaultName, provider.Name);

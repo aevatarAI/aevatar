@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -43,6 +44,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private readonly string _defaultRoutePreference;
     private readonly Uri _authorityBase;
     private readonly Func<string?> _accessTokenAccessor;
+    private readonly IReadOnlyList<ICredentialProvider> _credentialProviders;
     private readonly ILogger _logger;
 
     public NyxIdLLMProvider(
@@ -51,7 +53,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         string nyxEndpoint,
         Func<string?> accessTokenAccessor,
         string? defaultRoutePreference = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IEnumerable<ICredentialProvider>? credentialProviders = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Provider name is required.", nameof(name));
@@ -70,6 +73,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         _defaultRoutePreference = NormalizeRoutePreference(defaultRoutePreference);
         _authorityBase = ResolveAuthorityBase(_defaultNyxEndpoint);
         _accessTokenAccessor = accessTokenAccessor ?? throw new ArgumentNullException(nameof(accessTokenAccessor));
+        _credentialProviders = credentialProviders?.ToArray() ?? [];
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -261,11 +265,10 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         return trimmed.Length > 200 ? trimmed[..200] + "…" : trimmed;
     }
 
-    internal Task<NyxIdResolvedRoute> ResolveRouteAsync(LLMRequest request, CancellationToken ct = default)
+    internal async Task<NyxIdResolvedRoute> ResolveRouteAsync(LLMRequest request, CancellationToken ct = default)
     {
-        _ = ct;
         var normalizedRequest = NormalizeRequest(request);
-        var (accessToken, tokenSource) = ResolveAccessTokenWithSource(normalizedRequest);
+        var (accessToken, tokenSource) = await ResolveAccessTokenWithSourceAsync(normalizedRequest, ct);
         var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
         var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
 
@@ -278,7 +281,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             tokenSource,
             accessToken.Length);
 
-        return Task.FromResult(route);
+        return route;
     }
 
     private NyxIdResolvedRoute ResolvePreferredRoute(
@@ -391,27 +394,39 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                 : _defaultModel;
     }
 
-    private string ResolveAccessToken(LLMRequest request)
+    private async Task<(string Token, string Source)> ResolveAccessTokenWithSourceAsync(
+        LLMRequest request,
+        CancellationToken ct)
     {
-        var (token, _) = ResolveAccessTokenWithSource(request);
-        return token;
-    }
+        var credentialRef = request.LlmControl?.CredentialRef?.Trim();
+        if (!string.IsNullOrWhiteSpace(credentialRef))
+        {
+            var resolved = await ResolveCredentialRefAsync(credentialRef, ct);
+            if (!string.IsNullOrWhiteSpace(resolved))
+                return (resolved, "llm-control-credential-ref");
+        }
 
-    private (string Token, string Source) ResolveAccessTokenWithSource(LLMRequest request)
-    {
         var typedToken = request.CallerContext?.Credentials?.NyxIdBearer?.Trim();
         if (!string.IsNullOrWhiteSpace(typedToken))
             return (typedToken, "caller-typed");
-
-        var controlToken = request.LlmControl?.CredentialRef?.Trim();
-        if (!string.IsNullOrWhiteSpace(controlToken))
-            return (controlToken, "llm-control");
 
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
             return (configuredToken, "host-accessor");
 
         throw new NyxIdAuthenticationRequiredException(Name);
+    }
+
+    private async Task<string?> ResolveCredentialRefAsync(string credentialRef, CancellationToken ct)
+    {
+        foreach (var credentialProvider in _credentialProviders)
+        {
+            var credential = await credentialProvider.ResolveAsync(credentialRef, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(credential))
+                return credential.Trim();
+        }
+
+        return null;
     }
 
     private static string? ResolveRoutePreference(LLMRequest request) =>

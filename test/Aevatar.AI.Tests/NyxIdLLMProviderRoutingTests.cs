@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.LLMProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -93,13 +94,29 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
-    public async Task ResolveRouteAsync_ShouldUseAccessTokenFromMetadata()
+    public async Task ResolveRouteAsync_ShouldResolveAccessTokenFromCredentialRef()
     {
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(CreateRequest());
 
         route.AccessToken.Should().Be("test-token");
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ShouldNotUseCredentialRefAsAccessToken()
+    {
+        var provider = CreateProvider();
+        var request = new LLMRequest
+        {
+            Messages = [ChatMessage.User("hi")],
+            Model = "claude-3-7-sonnet",
+            LlmControl = CreateControl(credentialRef: "missing-ref"),
+        };
+
+        var act = () => provider.ResolveRouteAsync(request);
+
+        await act.Should().ThrowAsync<NyxIdAuthenticationRequiredException>();
     }
 
     [Fact]
@@ -124,7 +141,7 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
-    public async Task ResolveRouteAsync_ShouldUseAccessTokenFromToolContextCredentials()
+    public async Task ResolveRouteAsync_ShouldResolveAccessTokenFromLlmControlCredentialRef()
     {
         var provider = CreateProvider();
 
@@ -132,7 +149,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            LlmControl = CreateControl(accessToken: "tool-context-bearer"),
+            LlmControl = CreateControl(credentialRef: "cred:tool-context"),
         };
 
         var route = await provider.ResolveRouteAsync(request);
@@ -141,18 +158,18 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
-    public async Task ResolveRouteAsync_ShouldPreferCallerContextCredentialsOverMetadata()
+    public async Task ResolveRouteAsync_ShouldPreferCredentialRefOverCallerContextCredentials()
     {
-        // Resolution priority: typed CallerContext.Credentials wins over the legacy
-        // Metadata-keyed bearer. Locks in the migration direction set by
-        // project_responses_llm_metadata_bearer_excluded.md.
+        // Resolution priority: LLM control carries an opaque credential reference;
+        // the NyxID provider materializes it at the adapter edge before falling back
+        // to provider-native caller bearer input.
         var provider = CreateProvider();
 
         var request = new LLMRequest
         {
             Messages = [ChatMessage.User("hi")],
             Model = "claude-3-7-sonnet",
-            LlmControl = CreateControl(accessToken: "metadata-bearer"),
+            LlmControl = CreateControl(credentialRef: "cred:control"),
             CallerContext = new LLMRequestCallerContext(
                 "scope-1",
                 "owner-1",
@@ -162,7 +179,7 @@ public sealed class NyxIdLLMProviderRoutingTests
 
         var route = await provider.ResolveRouteAsync(request);
 
-        route.AccessToken.Should().Be("typed-bearer");
+        route.AccessToken.Should().Be("control-token");
     }
 
     [Fact]
@@ -377,7 +394,11 @@ public sealed class NyxIdLLMProviderRoutingTests
             name: "nyxid",
             defaultModel: "gpt-5.4",
             nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
-            accessTokenAccessor: static () => null);
+            accessTokenAccessor: static () => null,
+            credentialProviders: [new StubCredentialProvider(
+                ("cred:default", "test-token"),
+                ("cred:tool-context", "tool-context-bearer"),
+                ("cred:control", "control-token"))]);
 
     private static NyxIdLLMProvider CreateProviderWithDefaultRoute(string defaultRoutePreference) =>
         new(
@@ -385,7 +406,8 @@ public sealed class NyxIdLLMProviderRoutingTests
             defaultModel: "gpt-5.5",
             nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
             accessTokenAccessor: static () => null,
-            defaultRoutePreference: defaultRoutePreference);
+            defaultRoutePreference: defaultRoutePreference,
+            credentialProviders: [new StubCredentialProvider(("cred:default", "test-token"))]);
 
     private static LLMRequest CreateRequest(string? routePreference = null) =>
         new()
@@ -396,15 +418,29 @@ public sealed class NyxIdLLMProviderRoutingTests
         };
 
     private static LLMControlContext CreateControl(
-        string accessToken = "test-token",
+        string credentialRef = "cred:default",
         string? modelOverride = null,
         string? routePreference = null) =>
         new(
-            CredentialRef: accessToken,
+            CredentialRef: credentialRef,
             OrganizationCredentialRef: null,
             SenderCredentialRef: null,
             ModelOverride: modelOverride,
             NyxIdRoutePreference: routePreference,
             MaxToolRoundsOverride: null,
             UserMemoryPrompt: null);
+
+    private sealed class StubCredentialProvider(params (string Ref, string Token)[] credentials) : ICredentialProvider
+    {
+        private readonly Dictionary<string, string> _credentials = credentials.ToDictionary(
+            credential => credential.Ref,
+            credential => credential.Token,
+            StringComparer.Ordinal);
+
+        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(_credentials.GetValueOrDefault(credentialRef));
+        }
+    }
 }

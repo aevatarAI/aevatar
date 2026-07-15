@@ -52,7 +52,7 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Caller.ScopeId.Should().Be("typed-scope");
         context.Caller.OwnerSubject.Should().Be("typed-owner");
         context.Caller.ResponseId.Should().Be("typed-response");
-        context.Credentials.CredentialRef.Should().Be("typed-access");
+        context.Credentials.CredentialRef.Should().BeNull();
         context.Credentials.OrganizationCredentialRef.Should().BeNull();
         context.Routing.ModelOverride.Should().Be("typed-model");
         context.Routing.NyxIdRoutePreference.Should().Be("typed-route");
