@@ -22,7 +22,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     private const string OAuthAuthority = "https://nyx-ui.test";
     private const string RequiredLlmServiceSlug = "chrono-llm-public";
     private const string RequiredOrnnServiceSlug = "ornn-api";
-    private const string RequiredSandboxServiceSlug = "chrono-sandbox-service";
+    private const string RequiredSandboxServiceSlug = "chrono-sandbox";
     private const string RequiredAevatarResource = $"{OAuthAuthority}/api/v1/proxy/s/aevatar";
     private const string RequiredLlmResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredLlmServiceSlug}";
     private const string RequiredOrnnResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredOrnnServiceSlug}";

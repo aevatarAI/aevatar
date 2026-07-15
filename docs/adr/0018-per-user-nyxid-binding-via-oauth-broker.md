@@ -8,13 +8,13 @@ owner: eanzhao
 
 ## Update 2026-07-15 - 完整 service grant 与 binding 原地授权审阅
 
-生产 Lark bot 暴露出一条 resource contract 断裂:sender 在 `/init` 前可以回复;`/init` 后 runtime 改用 sender binding token,调用默认 `chrono-llm-public`、Ornn `ornn-api` 与 Sandbox `chrono-sandbox-service` route 时被 NyxID 以 `api_key_scope_forbidden` 拒绝.线上 token 的 `allowed_service_ids` 只有 `aevatar`,没有实际被调用的 LLM、Ornn 与 Sandbox service.
+生产 Lark bot 暴露出一条 resource contract 断裂:sender 在 `/init` 前可以回复;`/init` 后 runtime 改用 sender binding token,调用默认 `chrono-llm-public`、Ornn `ornn-api` 与 Sandbox `chrono-sandbox` route 时被 NyxID 以 `api_key_scope_forbidden` 拒绝.线上 token 的 `allowed_service_ids` 只有 `aevatar`,没有实际被调用的 LLM、Ornn 与 Sandbox service.
 
 根因是 `/oauth/authorize`、authorization-code exchange 和 broker token-exchange 三处都只发送了 `resource=.../aevatar`,而 runtime 把同一个 sender capability 用于 Aevatar capability、默认 LLM route、Ornn skill API 与 Sandbox code execution. NyxID 按 RFC 8707 正确地把 binding 和短期 token 收窄到所请求的 resource;因此这不是 proxy fallback 问题,也不能通过静默改用 bot owner 身份修复.
 
 最终 resource contract 调整为:
 
-- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 分别从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 和 `Aevatar:NyxId:SandboxServiceSlug` 注入实际 slug;Sandbox 未配置时使用 tool provider 的默认值 `chrono-sandbox-service`.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
+- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 分别从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 和 `Aevatar:NyxId:SandboxServiceSlug` 注入实际 slug;Sandbox 未配置时使用 tool provider 的默认值 `chrono-sandbox`.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
 - `/oauth/authorize`、authorization-code exchange、broker token-exchange 必须发送顺序一致的重复 `resource` 参数. `/api/auth/nyxid/config` 必须向 Studio 浏览器返回同一集合,禁止 authorize 与 finalize 使用不同 contract.
 - broker 收到短期 access token 后必须验证 `resources` claim 覆盖整个必需集合. 只含 `aevatar` 的 token 不再视为可用 sender capability.
 - NyxID binding grant 是服务授权的唯一事实源;aevatar 只持有 opaque `binding_id`. 已绑定 sender 再次 `/init` 时,aevatar 仅把 `SHA-256(binding_id)` 放入浏览器可见的 `binding_grant_id`,同时把同一哈希封入 HMAC state 作为 callback 预期值;raw binding credential 不离开服务端.

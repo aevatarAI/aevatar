@@ -5,7 +5,7 @@ public sealed class NyxIdToolOptions
 {
     public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
     public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
-    public const string DefaultSandboxServiceSlug = "chrono-sandbox-service";
+    public const string DefaultSandboxServiceSlug = "chrono-sandbox";
 
     /// <summary>
     /// The single default NyxID base URL (the identity/OIDC authority AND the proxy host — the
