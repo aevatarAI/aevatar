@@ -936,7 +936,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.Succeeded,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: streamingState.PlatformMessageId,
+                providerMessageId: streamingState.PlatformMessageId,
                 cardId: string.Empty,
                 ct);
         }
@@ -976,7 +976,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.Succeeded,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: ResolvePlatformMessageId(receipt),
+                providerMessageId: ResolvePlatformMessageId(receipt),
                 cardId: string.Empty,
                 ct);
             return true;
@@ -988,7 +988,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.FailedPreSend,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
+                providerMessageId: string.Empty,
                 cardId: string.Empty,
                 ct);
             Logger.LogWarning(
@@ -1004,7 +1004,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.FailedPreSend,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
+                providerMessageId: string.Empty,
                 cardId: string.Empty,
                 ct);
             Logger.LogWarning(
@@ -1440,7 +1440,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 signal.Status,
                 string.IsNullOrWhiteSpace(signal.RequestId) ? requestId : signal.RequestId,
                 signal.SourceEventId,
-                signal.LarkMessageId,
+                signal.ProviderMessageId,
                 signal.CardId,
                 ct);
         }
@@ -1451,7 +1451,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         DeliveryStatus status,
         string? requestId,
         string? sourceEventId,
-        string? larkMessageId,
+        string? providerMessageId,
         string? cardId,
         CancellationToken ct) =>
         PersistDomainEventAsync(new DeliveryProducedEvent
@@ -1461,7 +1461,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(),
             Status = status,
-            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(providerMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(requestId) ?? string.Empty,
             SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
@@ -1478,8 +1478,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             Channel = ChannelId.From(ResolveOutboundPlatform(outbound)),
             ConversationKey = outbound?.ConversationId ?? string.Empty,
             Platform = ResolveOutboundPlatform(outbound),
-            ReceiveId = address.AddressId,
-            ReceiveIdType = address.AddressType,
+            AddressId = address.AddressId,
+            AddressType = address.AddressType,
             ConversationId = outbound?.ConversationId ?? string.Empty,
         };
     }
@@ -1753,7 +1753,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.FailedPreSend,
                 requestId: deliveryRequestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
+                providerMessageId: string.Empty,
                 cardId: string.Empty,
                 ct);
             throw;
@@ -1764,7 +1764,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             DeliveryStatus.Succeeded,
             requestId: deliveryRequestId,
             sourceEventId: string.Empty,
-            larkMessageId: ResolvePlatformMessageId(receipt),
+            providerMessageId: ResolvePlatformMessageId(receipt),
             cardId: string.Empty,
             ct);
     }
@@ -1809,10 +1809,12 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             NormalizeOptional(address?.Platform) ?? ResolveOutboundPlatform(outbound),
             NormalizeOptional(address?.ProviderSlug) ?? NormalizeOptional(outbound?.NyxProviderSlug),
             NormalizeOptional(address?.ConversationId) ?? NormalizeOptional(outbound?.ConversationId),
-            NormalizeOptional(address?.Primary?.AddressId) ?? NormalizeOptional(outbound?.ConversationId),
-            NormalizeOptional(address?.Primary?.AddressType),
-            NormalizeOptional(address?.Fallback?.AddressId),
-            NormalizeOptional(address?.Fallback?.AddressType));
+#pragma warning disable CS0612 // deprecated fields are read only as a channel_address compatibility bridge
+            NormalizeOptional(address?.Primary?.AddressId) ?? NormalizeOptional(outbound?.LarkReceiveId) ?? NormalizeOptional(outbound?.ConversationId),
+            NormalizeOptional(address?.Primary?.AddressType) ?? NormalizeOptional(outbound?.LarkReceiveIdType),
+            NormalizeOptional(address?.Fallback?.AddressId) ?? NormalizeOptional(outbound?.LarkReceiveIdFallback),
+            NormalizeOptional(address?.Fallback?.AddressType) ?? NormalizeOptional(outbound?.LarkReceiveIdTypeFallback));
+#pragma warning restore CS0612
     }
 
     private static string ResolveOutboundPlatform(SkillRunnerOutboundConfig? outbound)

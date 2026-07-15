@@ -99,11 +99,17 @@ public sealed class UserAgentCatalogProjector
         document.OutputFormat = entry.OutputFormat;
         document.SharingGrant = entry.SharingGrant?.Clone();
         document.TargetPlatform = entry.TargetPlatform ?? string.Empty;
+#pragma warning disable CS0612 // deprecated entry fields are read only as a channel_address compatibility bridge
         document.ChannelAddress = UserAgentCatalogChannelAddress.ToProto(
             entry.ChannelAddress,
             entry.TargetPlatform,
             entry.NyxProviderSlug,
-            entry.ConversationId);
+            entry.ConversationId,
+            entry.LarkReceiveId,
+            entry.LarkReceiveIdType,
+            entry.LarkReceiveIdFallback,
+            entry.LarkReceiveIdTypeFallback);
+#pragma warning restore CS0612
 
         // Project owner_scope verbatim from the upserted entry. Per issue #466 the entry
         // is the authoritative source for ownership; the projector materializes it for

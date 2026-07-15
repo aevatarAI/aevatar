@@ -100,7 +100,17 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                 existing?.ChannelAddress,
                 command.TargetPlatform,
                 command.NyxProviderSlug,
-                command.ConversationId),
+                command.ConversationId,
+#pragma warning disable CS0612 // deprecated fields are read only as a channel_address compatibility bridge
+                command.LarkReceiveId,
+                command.LarkReceiveIdType,
+                command.LarkReceiveIdFallback,
+                command.LarkReceiveIdTypeFallback,
+                existing?.LarkReceiveId,
+                existing?.LarkReceiveIdType,
+                existing?.LarkReceiveIdFallback,
+                existing?.LarkReceiveIdTypeFallback),
+#pragma warning restore CS0612
             OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
                 ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
                 : command.OutputFormat,

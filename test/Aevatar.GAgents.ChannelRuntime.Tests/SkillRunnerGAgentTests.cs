@@ -1378,10 +1378,47 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var delivery = await ReadSingleDeliveryProducedEventAsync(_store, "skill-runner-test");
         delivery.DeliveryKind.Should().Be(DeliveryKind.TextMessage);
         delivery.Status.Should().Be(DeliveryStatus.Succeeded);
-        delivery.LarkMessageId.Should().Be("om_1");
-        delivery.Target.ReceiveId.Should().Be("ou_user_1");
+        delivery.ProviderMessageId.Should().Be("om_1");
+        delivery.Target.AddressId.Should().Be("ou_user_1");
         _agent.State.LastSuccessfulDelivery.Should().NotBeNull();
-        _agent.State.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_1");
+        _agent.State.LastSuccessfulDelivery!.ProviderMessageId.Should().Be("om_1");
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldReadLegacyLarkAddressWireFields_WhenChannelAddressIsMissing()
+    {
+        var store = new InMemoryEventStore();
+        using var provider = BuildServiceProvider(store);
+        const string actorId = "skill-runner-legacy-address-state";
+#pragma warning disable CS0612 // legacy fields simulate state serialized before channel_address existed
+        await AppendLegacyInitializedEventAsync(
+            store,
+            actorId,
+            new SkillRunnerOutboundConfig
+            {
+                ConversationId = "oc_chat_legacy",
+                NyxProviderSlug = "api-lark-bot",
+                NyxApiKey = "nyx-api-key",
+                LarkReceiveId = "ou_user_1",
+                LarkReceiveIdType = "open_id",
+            });
+#pragma warning restore CS0612
+        var agent = CreateAgent(actorId, provider);
+        await agent.ActivateAsync();
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_legacy_address"}}""");
+        AttachNyxIdApiClient(agent, handler);
+
+        await InvokeSendOutputAsync(agent, "legacy address report body");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=open_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_user_1");
+        var delivery = await ReadSingleDeliveryProducedEventAsync(store, actorId);
+        delivery.Target.AddressId.Should().Be("ou_user_1");
+        delivery.Target.AddressType.Should().Be("open_id");
     }
 
     [Fact]
@@ -1881,9 +1918,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         deliveries.Should().ContainSingle(delivery =>
             delivery.DeliveryKind == DeliveryKind.StreamingCard &&
             delivery.Status == DeliveryStatus.Succeeded &&
-            delivery.LarkMessageId == "om_card");
+            delivery.ProviderMessageId == "om_card");
         agent.State.LastSuccessfulDelivery.Should().NotBeNull();
-        agent.State.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_card");
+        agent.State.LastSuccessfulDelivery!.ProviderMessageId.Should().Be("om_card");
     }
 
     [Fact]
@@ -1955,7 +1992,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         deliveries.Should().Contain(delivery =>
             delivery.DeliveryKind == DeliveryKind.TextMessage &&
             delivery.Status == DeliveryStatus.Succeeded &&
-            delivery.LarkMessageId == "om_failure");
+            delivery.ProviderMessageId == "om_failure");
     }
 
     [Fact]
@@ -3252,7 +3289,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                     string.IsNullOrWhiteSpace(request.ProviderSlugOverride)
                         ? outbound.NyxProviderSlug
                         : request.ProviderSlugOverride.Trim(),
-                    outbound.ConversationId),
+                    outbound.ConversationId,
+#pragma warning disable CS0612 // deprecated fields simulate state serialized before channel_address existed
+                    outbound.LarkReceiveId,
+                    outbound.LarkReceiveIdType,
+                    outbound.LarkReceiveIdFallback,
+                    outbound.LarkReceiveIdTypeFallback),
+#pragma warning restore CS0612
                 OutputFormat: outbound.OutputFormat,
                 TemplateName: string.Empty,
                 AgentType: string.Empty);

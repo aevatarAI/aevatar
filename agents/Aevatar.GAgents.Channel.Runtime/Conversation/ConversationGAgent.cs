@@ -953,7 +953,7 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 commandId,
                 sourceEventId: evt.CorrelationId,
-                larkMessageId: result.OutboundDelivery?.ReplyMessageId,
+                providerMessageId: result.OutboundDelivery?.ReplyMessageId,
                 cardId: string.Empty);
             await PersistReplyReadyEventsWithLocalRetryAsync(
                 evt.CorrelationId,
@@ -999,7 +999,7 @@ public sealed partial class ConversationGAgent :
             evt.CorrelationId,
             commandId,
             sourceEventId: evt.CorrelationId,
-            larkMessageId: string.Empty,
+            providerMessageId: string.Empty,
             cardId: string.Empty);
         await PersistReplyReadyEventsWithLocalRetryAsync(
             evt.CorrelationId,
@@ -1085,7 +1085,7 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 commandId,
                 sourceEventId: evt.CorrelationId,
-                larkMessageId: completed.SentActivityId,
+                providerMessageId: completed.SentActivityId,
                 cardId: string.Empty,
                 conversation: completed.Conversation);
             await PersistReplyReadyEventsWithLocalRetryAsync(
@@ -1113,7 +1113,7 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 commandId,
                 sourceEventId: evt.CorrelationId,
-                larkMessageId: completed.SentActivityId,
+                providerMessageId: completed.SentActivityId,
                 cardId: string.Empty,
                 conversation: completed.Conversation);
             await PersistReplyReadyEventsWithLocalRetryAsync(
@@ -2095,7 +2095,7 @@ public sealed partial class ConversationGAgent :
             evt.CorrelationId,
             commandId,
             sourceEventId: evt.CorrelationId,
-            larkMessageId: delivered.ChannelMessageId,
+            providerMessageId: delivered.ChannelMessageId,
             cardId: string.Empty,
             conversation: completed.Conversation);
         deliveryProduced.ProducedAtVersion = NextCommittedVersion(1);
@@ -2162,7 +2162,7 @@ public sealed partial class ConversationGAgent :
                 turnId: cmd.CorrelationId,
                 requestId: cmd.CommandId,
                 sourceEventId: cmd.CausationId,
-                larkMessageId: result.OutboundDelivery?.ReplyMessageId,
+                providerMessageId: result.OutboundDelivery?.ReplyMessageId,
                 cardId: string.Empty,
                 conversation: cmd.Conversation);
             await PersistDomainEventsAsync([deliveryProduced, completed]);
@@ -2519,7 +2519,7 @@ public sealed partial class ConversationGAgent :
         string? turnId,
         string? requestId,
         string? sourceEventId,
-        string? larkMessageId,
+        string? providerMessageId,
         string? cardId,
         ConversationReference? conversation = null)
     {
@@ -2531,7 +2531,7 @@ public sealed partial class ConversationGAgent :
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(activity, resolvedConversation),
             Status = status,
-            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(providerMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(requestId) ?? string.Empty,
             SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
@@ -2550,17 +2550,17 @@ public sealed partial class ConversationGAgent :
             Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
             ConversationKey = conversation?.CanonicalKey ?? string.Empty,
             Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
-            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+            AddressId = NormalizeOptional(extras?.NyxLarkChatId) ??
                         NormalizeOptional(extras?.NyxLarkUnionId) ??
                         NormalizeOptional(outbound?.ReplyMessageId) ??
                         string.Empty,
-            ReceiveIdType = ResolveReceiveIdType(extras),
+            AddressType = ResolveAddressType(extras),
             ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
             ReplyMessageId = outbound?.ReplyMessageId ?? string.Empty,
         };
     }
 
-    private static string ResolveReceiveIdType(TransportExtras? extras)
+    private static string ResolveAddressType(TransportExtras? extras)
     {
         if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
             return "chat_id";
@@ -3542,7 +3542,7 @@ public sealed partial class ConversationGAgent :
             DeliveryKind = produced.DeliveryKind,
             Status = produced.Status,
             Target = produced.Target?.Clone() ?? new DeliveryTarget(),
-            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            ProviderMessageId = produced.ProviderMessageId ?? string.Empty,
             CardId = produced.CardId ?? string.Empty,
             RequestId = produced.RequestId ?? string.Empty,
             SourceEventId = produced.SourceEventId ?? string.Empty,

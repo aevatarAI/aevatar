@@ -61,11 +61,17 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         if (string.IsNullOrWhiteSpace(nyxApiKey))
             return null;
 
+#pragma warning disable CS0612 // deprecated document fields are read only as a channel_address compatibility bridge
         var channelAddress = UserAgentCatalogChannelAddress.ToModel(
             document.ChannelAddress,
             ResolveDeliveryPlatform(document),
             document.NyxProviderSlug,
-            document.ConversationId);
+            document.ConversationId,
+            document.LarkReceiveId,
+            document.LarkReceiveIdType,
+            document.LarkReceiveIdFallback,
+            document.LarkReceiveIdTypeFallback);
+#pragma warning restore CS0612
 
         return new UserAgentDeliveryTarget(
             AgentId: document.Id ?? string.Empty,

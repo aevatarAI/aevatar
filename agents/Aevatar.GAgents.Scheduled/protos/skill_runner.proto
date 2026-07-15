@@ -108,9 +108,6 @@ message SkillRunnerCronOccurrenceTerminalRecord {
 }
 
 message SkillRunnerOutboundConfig {
-  reserved 7, 8, 9, 10;
-  reserved "lark_receive_id", "lark_receive_id_type", "lark_receive_id_fallback", "lark_receive_id_type_fallback";
-
   string conversation_id = 1;
   string nyx_provider_slug = 2;
   string nyx_api_key = 3 [deprecated = true];
@@ -119,6 +116,12 @@ message SkillRunnerOutboundConfig {
   string api_key_id = 5;
   // Deprecated: superseded by owner_scope.platform. Issue #466.
   string platform = 6 [deprecated = true];
+  // Deprecated compatibility bridge for state serialized before channel_address.
+  // New writes must leave these empty and use channel_address instead.
+  string lark_receive_id = 7 [deprecated = true];
+  string lark_receive_id_type = 8 [deprecated = true];
+  string lark_receive_id_fallback = 9 [deprecated = true];
+  string lark_receive_id_type_fallback = 10 [deprecated = true];
   // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
   // for new agents; the deprecated scattered fields remain for legacy state.
   aevatar.OwnerScope owner_scope = 11;

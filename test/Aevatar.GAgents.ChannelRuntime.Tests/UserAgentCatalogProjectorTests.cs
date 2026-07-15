@@ -136,7 +136,7 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WithChannelAddress_PreservesGenericDeliveryAddress()
+    public async Task ProjectAsync_WithLegacyLarkAddressFields_MapsToChannelAddress()
     {
         var state = new UserAgentCatalogState
         {
@@ -150,14 +150,12 @@ public sealed class UserAgentCatalogProjectorTests
                     AgentType = "skill_runner",
                     TemplateName = "summary",
                     TargetPlatform = "lark",
-                    ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
-                        "lark",
-                        "api-lark-bot",
-                        "oc_dm_chat_1",
-                        "oc_dm_chat_1",
-                        "chat_id",
-                        "on_user_1",
-                        "union_id"),
+#pragma warning disable CS0612 // legacy fields simulate state persisted before channel_address existed
+                    LarkReceiveId = "oc_dm_chat_1",
+                    LarkReceiveIdType = "chat_id",
+                    LarkReceiveIdFallback = "on_user_1",
+                    LarkReceiveIdTypeFallback = "union_id",
+#pragma warning restore CS0612
                 },
             },
         };
@@ -286,7 +284,7 @@ public sealed class UserAgentCatalogProjectorTests
                     Channel = ChannelId.From("lark"),
                     ConversationKey = "oc_chat_1",
                 },
-                LarkMessageId = "om_success",
+                ProviderMessageId = "om_success",
                 RequestId = "request-success",
                 ProducedAtVersion = 3,
             },
@@ -325,7 +323,7 @@ public sealed class UserAgentCatalogProjectorTests
         document.RecentDeliveries.Select(delivery => delivery.RequestId)
             .Should().Equal("request-failed", "request-success");
         document.LastSuccessfulDelivery.Should().NotBeNull();
-        document.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_success");
+        document.LastSuccessfulDelivery!.ProviderMessageId.Should().Be("om_success");
     }
 
     [Fact]
