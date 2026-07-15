@@ -102,8 +102,16 @@ public sealed class ChannelRuntimeSourceRegressionTests
             "generic scheduled authoring must work without referencing any Lark package");
         source.Should().NotContain("LarkConversationTargets",
             "Lark receive-target inference belongs to the Lark adapter boundary");
-        outboundMetadataSource.Should().NotContain("ChannelMetadataKeys.LarkOutboundProxySlug",
-            "generic scheduled/runtime paths must consume normalized outbound provider metadata, not Lark fallback keys");
+        foreach (var token in new[]
+                 {
+                     "ChannelMetadataKeys.LarkOutboundProxySlug",
+                     "channel.lark.outbound_proxy_slug",
+                     "lark_outbound_provider_slug_unavailable",
+                 })
+        {
+            outboundMetadataSource.Should().NotContain(token,
+                "generic scheduled/runtime paths must consume normalized outbound provider metadata, not Lark fallback keys");
+        }
     }
 
     [Fact]
