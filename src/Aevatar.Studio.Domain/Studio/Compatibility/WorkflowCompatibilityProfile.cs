@@ -11,6 +11,8 @@ public sealed class WorkflowCompatibilityProfile
 
     public required string Version { get; init; }
 
+    public required ImmutableArray<string> RootFieldOrder { get; init; }
+
     public required ImmutableHashSet<string> AllowedRootFields { get; init; }
 
     public required ImmutableHashSet<string> AllowedConfigurationFields { get; init; }
@@ -99,9 +101,12 @@ public sealed class WorkflowCompatibilityProfile
     public bool ShouldMirrorTimeoutMsToParameters(string? canonicalType) =>
         ToCanonicalType(canonicalType) is "wait_signal" or "connector_call" or "llm_call" or "human_input" or "human_approval";
 
+    public string FormatRootFields() => string.Join(", ", RootFieldOrder);
+
     private static WorkflowCompatibilityProfile CreateAevatarV1()
     {
         var comparer = StringComparer.OrdinalIgnoreCase;
+        var rootFieldOrder = ImmutableArray.Create("name", "description", "configuration", "roles", "steps");
         var rootParameterFields = ImmutableHashSet.Create(
             comparer,
             "workers",
@@ -163,7 +168,8 @@ public sealed class WorkflowCompatibilityProfile
         return new WorkflowCompatibilityProfile
         {
             Version = "aevatar.workflow.v1",
-            AllowedRootFields = ImmutableHashSet.Create(comparer, "name", "description", "configuration", "roles", "steps"),
+            RootFieldOrder = rootFieldOrder,
+            AllowedRootFields = ImmutableHashSet.CreateRange(comparer, rootFieldOrder),
             AllowedConfigurationFields = ImmutableHashSet.Create(comparer, "closed_world_mode"),
             AllowedRoleFields = ImmutableHashSet.Create(
                 comparer,
