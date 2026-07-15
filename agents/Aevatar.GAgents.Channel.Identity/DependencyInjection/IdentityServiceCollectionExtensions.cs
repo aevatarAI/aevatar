@@ -19,6 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.DependencyInjection;
 
@@ -189,7 +190,9 @@ public static class IdentityServiceCollectionExtensions
         // resolved HttpClient + HttpMessageHandler inside the singleton and
         // silently defeated the 2-min handler rotation, so long-running
         // silos would never pick up DNS / TLS-cert changes.
-        services.AddOptions<NyxIdBrokerOptions>();
+        services.AddOptions<NyxIdBrokerOptions>().ValidateOnStart();
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, NyxIdBrokerOptionsValidator>());
         services.TryAddSingleton<StateTokenCodec>();
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();

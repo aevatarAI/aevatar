@@ -61,18 +61,29 @@ public static class AevatarOAuthClientResources
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceSlug);
         var normalized = serviceSlug.Trim();
-        if (normalized[0] == '-'
-            || normalized[^1] == '-'
-            || normalized.Any(static character =>
-                !(character is >= 'a' and <= 'z'
-                  || character is >= '0' and <= '9'
-                  || character == '-')))
+        if (!IsValidServiceSlug(normalized))
         {
             throw new ArgumentException(
-                "NyxID service slug must contain only lowercase ASCII letters, digits, and inner hyphens.",
+                "NyxID service slug must be 1-80 lowercase ASCII letters or digits separated by single hyphens.",
                 nameof(serviceSlug));
         }
 
         return normalized;
+    }
+
+    internal static bool IsValidServiceSlug(string? serviceSlug)
+    {
+        if (string.IsNullOrWhiteSpace(serviceSlug))
+            return false;
+
+        var normalized = serviceSlug.Trim();
+        return normalized.Length <= 80
+               && normalized[0] != '-'
+               && normalized[^1] != '-'
+               && !normalized.Contains("--", StringComparison.Ordinal)
+               && normalized.All(static character =>
+                   character is >= 'a' and <= 'z'
+                   || character is >= '0' and <= '9'
+                   || character == '-');
     }
 }

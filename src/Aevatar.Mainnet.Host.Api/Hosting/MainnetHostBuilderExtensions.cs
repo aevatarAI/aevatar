@@ -66,6 +66,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -176,6 +177,8 @@ public static class MainnetHostBuilderExtensions
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
         });
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, MainnetNyxIdResourcePolicyValidator>());
         builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
         {
             // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.

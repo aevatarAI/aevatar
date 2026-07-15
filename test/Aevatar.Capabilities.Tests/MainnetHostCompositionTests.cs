@@ -190,6 +190,73 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_WithInvalidAdditionalNyxIdServiceSlug_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:AdditionalRequiredServiceSlugs:0"] = "Invalid/Service",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*AdditionalRequiredServiceSlugs[0]*1-80 character NyxID service slug*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithLlmResourcePolicyDrift_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:DefaultRoute"] = "llm-provider-route",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.RequiredLlmServiceSlug = "drifted-authorization-route");
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*RequiredLlmServiceSlug*llm-provider-route*Aevatar:NyxId:DefaultRoute*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutOrnnProviderResource_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.AdditionalRequiredServiceSlugs = ["other-service"]);
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage($"*AdditionalRequiredServiceSlugs*{OrnnOptions.DefaultNyxIdSlug}*Aevatar:Ornn:NyxIdSlug*");
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_WhenVoiceRealtimeConfigured_ShouldMapPolicyAwareWhipOfferEndpoint()
     {
         using var home = new TemporaryAevatarHomeScope();

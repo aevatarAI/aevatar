@@ -197,6 +197,62 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task BindingFlow_UsesTheSameRequiredResourcesFromAuthorizeThroughBindingExchange()
+    {
+        const string bindingId = "bnd-e2e-user";
+        var accessToken = CreateAccessToken(RequiredResources);
+        var handler = new SequenceHandler(
+            JsonSerializer.Serialize(new
+            {
+                binding_id = bindingId,
+                access_token = "authorization-code-access-token",
+                refresh_token = "refresh-token",
+                token_type = "Bearer",
+                expires_in = 300,
+                scope = AevatarOAuthClientScopes.AuthorizationScope,
+            }),
+            JsonSerializer.Serialize(new
+            {
+                access_token = accessToken,
+                token_type = "Bearer",
+                expires_in = 300,
+                scope = AevatarOAuthClientScopes.Proxy,
+            }));
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        var challenge = await broker.StartExternalBindingAsync(SampleSubject());
+        var authorizeQuery = QueryHelpers.ParseQuery(new Uri(challenge.AuthorizeUrl).Query);
+        var decodedState = await broker.TryDecodeStateTokenAsync(
+            authorizeQuery["state"].Should().ContainSingle().Which);
+        var codeExchange = await broker.ExchangeAuthorizationCodeAsync(
+            "authorization-code",
+            decodedState.PkceVerifier!);
+        var handle = await broker.IssueShortLivedByBindingIdAsync(
+            SampleSubject(),
+            codeExchange.BindingId!,
+            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
+
+        authorizeQuery["resource"].Should().Equal(RequiredResources);
+        codeExchange.BindingId.Should().Be(bindingId);
+        handle.AccessToken.Should().Be(accessToken);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests.Should().OnlyContain(request =>
+            request.Uri == $"{OAuthAuthority}/oauth/token");
+
+        var authorizationCodeForm = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
+        authorizationCodeForm["grant_type"].Should().ContainSingle().Which.Should().Be("authorization_code");
+        authorizationCodeForm["resource"].Should().Equal(RequiredResources);
+
+        var bindingExchangeForm = QueryHelpers.ParseQuery($"?{handler.Requests[1].Body}");
+        bindingExchangeForm["grant_type"].Should().ContainSingle().Which.Should()
+            .Be("urn:ietf:params:oauth:grant-type:token-exchange");
+        bindingExchangeForm["subject_token"].Should().ContainSingle().Which.Should().Be(bindingId);
+        bindingExchangeForm["resource"].Should().Equal(RequiredResources);
+    }
+
+    [Fact]
     public async Task StartExternalBindingAsync_UsesCanonicalScope_WhenOptionsScopeAddsExtraScopes()
     {
         var expectedRedirectUri = NyxIdRedirectUriResolver.Resolve();
@@ -423,6 +479,27 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             return new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_body),
+            };
+        }
+    }
+
+    private sealed class SequenceHandler(params string[] responseBodies) : HttpMessageHandler
+    {
+        private readonly Queue<string> _responseBodies = new(responseBodies);
+
+        public List<(string? Uri, string? Body)> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var body = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            Requests.Add((request.RequestUri?.ToString(), body));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responseBodies.Dequeue()),
             };
         }
     }
