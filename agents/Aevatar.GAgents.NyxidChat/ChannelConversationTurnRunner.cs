@@ -1890,9 +1890,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             // The inbound bot is also the default OUTBOUND delivery provider for a chat-triggered
             // scheduled task: the scheduled run replies via the same Lark bot that received the
             // message, so scheduled_agent_creator can resolve a provider without manual Studio/Web
-            // config. A distinct outbound
-            // provider remains expressible explicitly via agent_delivery_targets.
-            metadata[ChannelMetadataKeys.LarkOutboundProxySlug] = inboundEvent.NyxProviderSlug;
+            // config. A distinct outbound provider remains expressible explicitly via
+            // agent_delivery_targets.
         }
 
         var platformMessageId = NormalizeOptional(activity?.TransportExtras?.NyxPlatformMessageId);
@@ -1911,24 +1910,21 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(larkChatId))
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
 
-        if (IsLarkPlatform(inboundEvent.Platform))
-        {
-            var target = LarkConversationTargets.BuildFromInboundWithFallback(
-                inboundEvent.ChatType,
-                inboundEvent.ConversationId,
-                inboundEvent.SenderId,
-                larkUnionId,
-                larkChatId);
+        var deliveryAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressId);
+        if (!string.IsNullOrWhiteSpace(deliveryAddressId))
+            metadata[ChannelMetadataKeys.DeliveryAddressId] = deliveryAddressId;
 
-            if (!string.IsNullOrWhiteSpace(target.Primary.ReceiveId))
-                metadata[ChannelMetadataKeys.DeliveryAddressId] = target.Primary.ReceiveId;
-            if (!string.IsNullOrWhiteSpace(target.Primary.ReceiveIdType))
-                metadata[ChannelMetadataKeys.DeliveryAddressType] = target.Primary.ReceiveIdType;
-            if (!string.IsNullOrWhiteSpace(target.Fallback?.ReceiveId))
-                metadata[ChannelMetadataKeys.DeliveryFallbackAddressId] = target.Fallback.Value.ReceiveId;
-            if (!string.IsNullOrWhiteSpace(target.Fallback?.ReceiveIdType))
-                metadata[ChannelMetadataKeys.DeliveryFallbackAddressType] = target.Fallback.Value.ReceiveIdType;
-        }
+        var deliveryAddressType = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressType);
+        if (!string.IsNullOrWhiteSpace(deliveryAddressType))
+            metadata[ChannelMetadataKeys.DeliveryAddressType] = deliveryAddressType;
+
+        var deliveryFallbackAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryFallbackAddressId);
+        if (!string.IsNullOrWhiteSpace(deliveryFallbackAddressId))
+            metadata[ChannelMetadataKeys.DeliveryFallbackAddressId] = deliveryFallbackAddressId;
+
+        var deliveryFallbackAddressType = NormalizeOptional(activity?.TransportExtras?.DeliveryFallbackAddressType);
+        if (!string.IsNullOrWhiteSpace(deliveryFallbackAddressType))
+            metadata[ChannelMetadataKeys.DeliveryFallbackAddressType] = deliveryFallbackAddressType;
 
         var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
