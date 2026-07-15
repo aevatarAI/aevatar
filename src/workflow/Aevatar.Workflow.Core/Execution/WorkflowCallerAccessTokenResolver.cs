@@ -11,6 +11,8 @@ internal static class WorkflowCallerAccessTokenResolver
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(credential);
+        if (WorkflowCallerCredentialTokens.ParseOptional(credential.BearerToken).IsValid)
+            return credential;
         if (credential.NyxIdAuthority == null)
             return credential;
         if (provider == null)
