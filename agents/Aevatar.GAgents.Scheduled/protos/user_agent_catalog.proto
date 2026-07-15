@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
 import "Credentials/credential_secret_references.proto";
+import "channel_delivery_address.proto";
 import "skill_runner.proto";
 
 // Refactor (iter91/cluster-091-owner-scope-foundation):
@@ -15,20 +16,10 @@ import "skill_runner.proto";
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───
 
-message ChannelDeliveryAddressEndpoint {
-  string address_id = 1;
-  string address_type = 2;
-}
-
-message ChannelDeliveryAddress {
-  string platform = 1;
-  string provider_slug = 2;
-  string conversation_id = 3;
-  ChannelDeliveryAddressEndpoint primary = 4;
-  ChannelDeliveryAddressEndpoint fallback = 5;
-}
-
 message UserAgentCatalogEntry {
+  reserved 22, 23, 24, 25;
+  reserved "lark_receive_id", "lark_receive_id_type", "lark_receive_id_fallback", "lark_receive_id_type_fallback";
+
   string agent_id = 1;
   // Deprecated: read-only legacy fallback; new writes leave empty and rely on
   // owner_scope.platform. Kept on the wire so legacy state without owner_scope
@@ -59,12 +50,6 @@ message UserAgentCatalogEntry {
   reserved 16, 17, 18, 19, 20;
   reserved "status", "last_run_at", "next_run_at", "error_count", "last_error";
   int64 tombstone_state_version = 21;
-  // Deprecated compatibility bridge for state serialized before channel_address.
-  // New writes leave these empty and map reads into channel_address.
-  string lark_receive_id = 22 [deprecated = true];
-  string lark_receive_id_type = 23 [deprecated = true];
-  string lark_receive_id_fallback = 24 [deprecated = true];
-  string lark_receive_id_type_fallback = 25 [deprecated = true];
   // Caller scope captured at create time. New writes always populate this;
   // the deprecated platform/owner_nyx_user_id fields are kept readable for
   // legacy state (issue #466 migration plan).
@@ -159,6 +144,9 @@ message ScheduledAgentSharingGrant {
 }
 
 message UserAgentCatalogUpsertCommand {
+  reserved 14, 15, 16, 17;
+  reserved "lark_receive_id", "lark_receive_id_type", "lark_receive_id_fallback", "lark_receive_id_type_fallback";
+
   string agent_id = 1;
   // Deprecated: superseded by owner_scope.platform. Issue #466.
   string platform = 2 [deprecated = true];
@@ -175,12 +163,6 @@ message UserAgentCatalogUpsertCommand {
   string schedule_timezone = 12;
   reserved 13;
   reserved "status";
-  // Deprecated compatibility bridge for command envelopes emitted before
-  // channel_address. New callers must set channel_address instead.
-  string lark_receive_id = 14 [deprecated = true];
-  string lark_receive_id_type = 15 [deprecated = true];
-  string lark_receive_id_fallback = 16 [deprecated = true];
-  string lark_receive_id_type_fallback = 17 [deprecated = true];
   // Caller scope captured at create time. Required for new writes.
   aevatar.OwnerScope owner_scope = 18;
   SkillRunnerOutputFormat output_format = 19;
@@ -330,6 +312,9 @@ message UserAgentCatalogUnsharedEvent {
 }
 
 message UserAgentCatalogDocument {
+  reserved 24, 25, 26, 27;
+  reserved "lark_receive_id", "lark_receive_id_type", "lark_receive_id_fallback", "lark_receive_id_type_fallback";
+
   string id = 1;
   // Deprecated: superseded by owner_scope.platform. Kept for legacy reads.
   string platform = 2 [deprecated = true];
@@ -353,13 +338,6 @@ message UserAgentCatalogDocument {
   string schedule_timezone = 18;
   reserved 19, 20, 21, 22, 23;
   reserved "status", "last_run_at_utc", "next_run_at_utc", "error_count", "last_error";
-  // Deprecated compatibility bridge for documents materialized before
-  // channel_address. New projections leave these empty and map reads into
-  // channel_address.
-  string lark_receive_id = 24 [deprecated = true];
-  string lark_receive_id_type = 25 [deprecated = true];
-  string lark_receive_id_fallback = 26 [deprecated = true];
-  string lark_receive_id_type_fallback = 27 [deprecated = true];
   // Caller scope materialized from the upserted entry. New rows always carry
   // this; legacy rows may have only owner_nyx_user_id+platform set, in which
   // case the caller-scoped query port lazily synthesizes owner_scope on read

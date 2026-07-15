@@ -432,17 +432,11 @@ public sealed class UserAgentCatalogQueryPort : IUserAgentCatalogQueryPort
             CreatedAt = document.CreatedAtUtc,
             UpdatedAt = document.UpdatedAtUtc,
             Tombstoned = document.Tombstoned,
-#pragma warning disable CS0612 // deprecated document fields are read only as a channel_address compatibility bridge
             ChannelAddress = UserAgentCatalogChannelAddress.ToModel(
                 document.ChannelAddress,
                 document.TargetPlatform,
                 document.NyxProviderSlug,
-                document.ConversationId,
-                document.LarkReceiveId,
-                document.LarkReceiveIdType,
-                document.LarkReceiveIdFallback,
-                document.LarkReceiveIdTypeFallback),
-#pragma warning restore CS0612
+                document.ConversationId),
             OutputFormat = document.OutputFormat,
             OwnerScope = documentScope,
             SharingGrant = document.SharingGrant?.Clone(),

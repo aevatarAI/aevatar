@@ -222,14 +222,10 @@ internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunne
             NyxProviderSlug: outbound.NyxProviderSlug,
             NyxApiKey: outbound.NyxApiKey,
             ChannelAddress: UserAgentCatalogChannelAddress.ToModel(
-                null,
+                outbound.ChannelAddress,
                 ResolvePlatform(outbound),
                 outbound.NyxProviderSlug,
-                outbound.ConversationId,
-                outbound.LarkReceiveId,
-                outbound.LarkReceiveIdType,
-                outbound.LarkReceiveIdFallback,
-                outbound.LarkReceiveIdTypeFallback),
+                outbound.ConversationId),
             OutputFormat: outbound.OutputFormat,
             TemplateName: string.Empty,
             AgentType: string.Empty);

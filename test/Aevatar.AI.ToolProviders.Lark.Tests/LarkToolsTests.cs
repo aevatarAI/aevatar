@@ -62,8 +62,8 @@ public class LarkToolsTests
             "token-123",
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["channel.lark.receive_id"] = "oc_chat_1",
-                ["channel.lark.receive_id_type"] = "chat_id",
+                ["channel.delivery.address_id"] = "oc_chat_1",
+                ["channel.delivery.address_type"] = "chat_id",
             });
 
         var result = await tool.ExecuteAsync(

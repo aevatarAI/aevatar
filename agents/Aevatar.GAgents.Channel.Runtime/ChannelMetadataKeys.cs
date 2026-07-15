@@ -23,8 +23,7 @@ public static class ChannelMetadataKeys
     public const string ChatType = "channel.chat_type";
     /// <summary>
     /// Provider slug used for outbound delivery back to the current channel. This is the generic
-    /// channel-delivery counterpart to platform-specific provider metadata such as
-    /// <see cref="LarkOutboundProxySlug"/>.
+    /// channel-delivery route selected by the inbound adapter.
     /// </summary>
     public const string OutboundProviderSlug = "channel.outbound.provider_slug";
     /// <summary>Provider-interpreted primary outbound address for the current channel turn.</summary>
@@ -77,26 +76,6 @@ public static class ChannelMetadataKeys
     /// Distinct from card-action operator identity.
     /// </summary>
     public const string LarkSubjectEmployeeId = "channel.lark.subject_employee_id";
-    /// <summary>
-    /// Authoritative outbound Lark <c>receive_id</c> for the current workflow run, captured at
-    /// agent-create time. Propagated via <c>WorkflowChatRunRequest.Metadata</c> so workflow
-    /// modules can surface their result back into the same chat without having to look up the
-    /// catalog at execution time.
-    /// </summary>
-    public const string LarkReceiveId = "channel.lark.receive_id";
-    /// <summary>Companion to <see cref="LarkReceiveId"/> — its <c>receive_id_type</c>.</summary>
-    public const string LarkReceiveIdType = "channel.lark.receive_id_type";
-    /// <summary>
-    /// NyxID outbound proxy slug used to deliver Lark messages from inside a workflow run
-    /// (default <c>api-lark-bot</c>). The <c>outbound</c> qualifier is deliberate — this is
-    /// specifically the routing target for Lark <em>send</em> calls (e.g.
-    /// <c>open-apis/im/v1/messages</c>) initiated by the workflow runtime, not a generic Lark
-    /// API field. PR #461 review item #4 flagged the original name (<c>channel.lark.proxy_slug</c>)
-    /// as ambiguous between "Lark API surface" and "NyxID provider routing" — the
-    /// <c>outbound_proxy_slug</c> form makes the routing-side semantics explicit.
-    /// </summary>
-    public const string LarkOutboundProxySlug = "channel.lark.outbound_proxy_slug";
-
     /// <summary>
     /// NyxID provider slug of the inbound channel-bot that received this turn's webhook
     /// event. Equivalent to <c>ChannelInboundEvent.NyxProviderSlug</c>, surfaced as request

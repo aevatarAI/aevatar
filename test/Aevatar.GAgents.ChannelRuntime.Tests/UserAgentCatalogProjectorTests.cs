@@ -136,7 +136,7 @@ public sealed class UserAgentCatalogProjectorTests
     }
 
     [Fact]
-    public async Task ProjectAsync_WithLegacyLarkAddressFields_MapsToChannelAddress()
+    public async Task ProjectAsync_WithChannelAddress_PreservesGenericDeliveryAddress()
     {
         var state = new UserAgentCatalogState
         {
@@ -150,12 +150,14 @@ public sealed class UserAgentCatalogProjectorTests
                     AgentType = "skill_runner",
                     TemplateName = "summary",
                     TargetPlatform = "lark",
-#pragma warning disable CS0612 // legacy fields simulate state persisted before channel_address existed
-                    LarkReceiveId = "oc_dm_chat_1",
-                    LarkReceiveIdType = "chat_id",
-                    LarkReceiveIdFallback = "on_user_1",
-                    LarkReceiveIdTypeFallback = "union_id",
-#pragma warning restore CS0612
+                    ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                        "lark",
+                        "api-lark-bot",
+                        "oc_dm_chat_1",
+                        "oc_dm_chat_1",
+                        "chat_id",
+                        "on_user_1",
+                        "union_id"),
                 },
             },
         };

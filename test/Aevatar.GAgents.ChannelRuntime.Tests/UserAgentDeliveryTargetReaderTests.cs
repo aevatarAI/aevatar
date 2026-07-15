@@ -64,7 +64,6 @@ public sealed class UserAgentDeliveryTargetReaderTests
             "live-key",
             "test"));
 
-#pragma warning disable CS0612 // legacy fields simulate a document materialized before channel_address existed
         documentReader.GetAsync("agent-legacy-address", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogDocument
             {
@@ -73,12 +72,15 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 ConversationId = "oc_chat_legacy",
                 NyxProviderSlug = "api-lark-bot",
                 ApiKeyId = "key-legacy",
-                LarkReceiveId = "oc_dm_chat_1",
-                LarkReceiveIdType = "chat_id",
-                LarkReceiveIdFallback = "on_user_1",
-                LarkReceiveIdTypeFallback = "union_id",
+                ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                    "lark",
+                    "api-lark-bot",
+                    "oc_chat_legacy",
+                    "oc_dm_chat_1",
+                    "chat_id",
+                    "on_user_1",
+                    "union_id"),
             });
-#pragma warning restore CS0612
         credentialReader.GetAsync("agent-legacy-address", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
             {
