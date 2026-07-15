@@ -15,11 +15,18 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
+    private readonly string? _sandboxServiceSlug;
 
-    public NyxIdCodeExecuteTool(NyxIdApiClient client, ILogger? logger = null)
+    public NyxIdCodeExecuteTool(
+        NyxIdApiClient client,
+        ILogger? logger = null,
+        string? sandboxServiceSlug = NyxIdToolOptions.DefaultSandboxServiceSlug)
     {
         _client = client;
         _logger = logger ?? NullLogger.Instance;
+        _sandboxServiceSlug = string.IsNullOrWhiteSpace(sandboxServiceSlug)
+            ? null
+            : sandboxServiceSlug.Trim();
     }
 
     public string Name => "code_execute";
@@ -68,8 +75,10 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         if (string.IsNullOrWhiteSpace(language) || string.IsNullOrWhiteSpace(code))
             return """{"error":"Both 'language' and 'code' are required."}""";
 
-        // Resolve sandbox slug: context → API discovery → known slugs → give up
+        // A connected-service selection wins when present. Otherwise use the
+        // host-owned route that the OAuth binding requested as a resource.
         var slug = ResolveSandboxSlugFromContext()
+                   ?? _sandboxServiceSlug
                    ?? await DiscoverSandboxSlugAsync(token, ct);
 
         // Last resort: try well-known sandbox slugs directly
@@ -158,8 +167,8 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
     }
 
     /// <summary>
-    /// Fallback: call DiscoverProxyServices API to find a sandbox service.
-    /// Used when the connected services context is missing or doesn't contain a sandbox entry.
+    /// Fallback for hosts that explicitly leave the configured sandbox slug empty:
+    /// call DiscoverProxyServices API to find a sandbox service.
     /// </summary>
     private async Task<string?> DiscoverSandboxSlugAsync(string token, CancellationToken ct)
     {
@@ -203,7 +212,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
     /// If the proxy returns a non-error response, the slug is valid.
     /// </summary>
     private static readonly string[] KnownSandboxSlugs =
-        ["chrono-sandbox-service", "chrono-sandbox", "sandbox"];
+        [NyxIdToolOptions.DefaultSandboxServiceSlug, "chrono-sandbox", "sandbox"];
 
     private async Task<string?> ProbeKnownSandboxSlugsAsync(string token, CancellationToken ct)
     {

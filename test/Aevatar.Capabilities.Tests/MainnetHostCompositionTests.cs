@@ -99,8 +99,11 @@ public sealed class MainnetHostCompositionTests
 
         var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
         brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
-        brokerOptions.AdditionalRequiredServiceSlugs.Should().ContainSingle()
-            .Which.Should().Be(OrnnOptions.DefaultNyxIdSlug);
+        brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
+            OrnnOptions.DefaultNyxIdSlug,
+            NyxIdToolOptions.DefaultSandboxServiceSlug);
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .SandboxServiceSlug.Should().Be(NyxIdToolOptions.DefaultSandboxServiceSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
@@ -246,7 +249,7 @@ public sealed class MainnetHostCompositionTests
             options.EnableCors = false;
         });
         builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
-            options.AdditionalRequiredServiceSlugs = ["other-service"]);
+            options.AdditionalRequiredServiceSlugs = [NyxIdToolOptions.DefaultSandboxServiceSlug]);
 
         using var app = builder.Build();
         var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
@@ -254,6 +257,29 @@ public sealed class MainnetHostCompositionTests
         act.Should()
             .Throw<OptionsValidationException>()
             .WithMessage($"*AdditionalRequiredServiceSlugs*{OrnnOptions.DefaultNyxIdSlug}*Aevatar:Ornn:NyxIdSlug*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutSandboxProviderResource_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.AdditionalRequiredServiceSlugs = [OrnnOptions.DefaultNyxIdSlug]);
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage(
+                $"*AdditionalRequiredServiceSlugs*{NyxIdToolOptions.DefaultSandboxServiceSlug}*" +
+                "Aevatar:NyxId:SandboxServiceSlug*");
     }
 
     [Fact]
