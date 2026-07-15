@@ -2481,7 +2481,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         docxToolContext.Routing.MaxToolRoundsOverride.Should().Be(2);
         docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveId, "oc_chat_1");
         docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveIdType, "chat_id");
-        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkOutboundProxySlug, "api-lark-bot");
+        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.OutboundProviderSlug, "api-lark-bot");
         provider.Requests[2].Messages.Any(message =>
             message.Role == "tool" &&
             message.Content is not null &&

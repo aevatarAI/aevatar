@@ -91,9 +91,9 @@ public sealed class ChannelRuntimeSourceRegressionTests
     }
 
     [Fact]
-    public void Scheduled_authoring_tools_must_not_depend_on_lark_platform_adapter()
+    public void Scheduled_package_must_not_depend_on_lark_platform_adapter_or_lark_outbound_proxy_metadata()
     {
-        var source = ReadRepositorySources("agents/Aevatar.GAgents.Scheduled/Authoring") +
+        var source = ReadRepositorySources("agents/Aevatar.GAgents.Scheduled") +
                      ReadRepositoryFile("agents/Aevatar.GAgents.Scheduled/Aevatar.GAgents.Scheduled.csproj");
         source.Should().NotContain("Aevatar.GAgents.Platform.Lark",
             "generic scheduled authoring must work without referencing the Lark platform package");
@@ -102,7 +102,7 @@ public sealed class ChannelRuntimeSourceRegressionTests
         source.Should().NotContain("LarkConversationTargets",
             "Lark receive-target inference belongs to the Lark adapter boundary");
         source.Should().NotContain("ChannelMetadataKeys.LarkOutboundProxySlug",
-            "generic scheduled authoring must consume normalized outbound provider metadata, not Lark fallback keys");
+            "generic scheduled runtime must consume normalized outbound provider metadata, not Lark fallback keys");
     }
 
     [Fact]
