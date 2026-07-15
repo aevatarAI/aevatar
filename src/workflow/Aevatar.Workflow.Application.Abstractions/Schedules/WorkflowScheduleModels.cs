@@ -149,6 +149,11 @@ public interface IWorkflowScheduleApplicationService
         string reason,
         CancellationToken ct = default);
 
+    Task<WorkflowScheduleMutationReceipt> DeleteAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default);
+
     Task<WorkflowScheduleDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default);

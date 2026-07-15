@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -19,7 +20,7 @@ public sealed class AgentBuilderTool : IAgentTool
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
-    private readonly IScheduledDispatchApplicationService _scheduledDispatchService;
+    private readonly IWorkflowScheduleApplicationService _workflowScheduleService;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ILogger<AgentBuilderTool>? _logger;
@@ -31,7 +32,7 @@ public sealed class AgentBuilderTool : IAgentTool
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IScheduledDispatchApplicationService scheduledDispatchService,
+        IWorkflowScheduleApplicationService workflowScheduleService,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
         ILogger<AgentBuilderTool>? logger = null)
@@ -39,7 +40,7 @@ public sealed class AgentBuilderTool : IAgentTool
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
-        _scheduledDispatchService = scheduledDispatchService ?? throw new ArgumentNullException(nameof(scheduledDispatchService));
+        _workflowScheduleService = workflowScheduleService ?? throw new ArgumentNullException(nameof(workflowScheduleService));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _logger = logger;
@@ -128,12 +129,12 @@ public sealed class AgentBuilderTool : IAgentTool
         {
             "list_agents" => await ListAgentsAsync(_queryPort, _executionQueryPort, caller, ct),
             "agent_status" => await GetAgentStatusAsync(args, _queryPort, _executionQueryPort, caller, ct),
-            "run_agent" => await RunAgentAsync(args, _queryPort, _skillRunnerPort, _scheduledDispatchService, caller, ct),
+            "run_agent" => await RunAgentAsync(args, _queryPort, _skillRunnerPort, _workflowScheduleService, caller, ct),
             "share_agent" => await ShareAgentAsync(args, _queryPort, _catalogCommandPort, caller, ct),
             "unshare_agent" => await UnshareAgentAsync(args, _queryPort, _catalogCommandPort, caller, ct),
-            "disable_agent" => await DisableAgentAsync(args, _queryPort, _skillRunnerPort, _scheduledDispatchService, caller, ct),
-            "enable_agent" => await EnableAgentAsync(args, _queryPort, _skillRunnerPort, _scheduledDispatchService, caller, ct),
-            "delete_agent" => await DeleteAgentAsync(args, _queryPort, _executionQueryPort, _catalogCommandPort, _skillRunnerPort, _scheduledDispatchService, token, caller, ct),
+            "disable_agent" => await DisableAgentAsync(args, _queryPort, _skillRunnerPort, _workflowScheduleService, caller, ct),
+            "enable_agent" => await EnableAgentAsync(args, _queryPort, _skillRunnerPort, _workflowScheduleService, caller, ct),
+            "delete_agent" => await DeleteAgentAsync(args, _queryPort, _executionQueryPort, _catalogCommandPort, _skillRunnerPort, _workflowScheduleService, token, caller, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
     }
@@ -229,7 +230,7 @@ public sealed class AgentBuilderTool : IAgentTool
         ISkillRunnerExecutionQueryPort executionQueryPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IScheduledDispatchApplicationService scheduledDispatchService,
+        IWorkflowScheduleApplicationService workflowScheduleService,
         string token,
         OwnerScope caller,
         CancellationToken ct)
@@ -255,13 +256,13 @@ public sealed class AgentBuilderTool : IAgentTool
 
         if (IsScheduledWorkflowAgent(entry.AgentType))
         {
-            await scheduledDispatchService.DeleteAsync(entry.AgentId, "delete_agent", ct);
+            await workflowScheduleService.DeleteAsync(entry.AgentId, "delete_agent", ct);
         }
         else
         {
             var disableResult = await TryDispatchLifecycleAsync(
                 entry, "delete_agent", LifecycleAction.Disable, revisionFeedback: null,
-                skillRunnerPort, scheduledDispatchService, ct);
+                skillRunnerPort, workflowScheduleService, ct);
             if (disableResult.error != null)
                 return disableResult.error;
         }
@@ -288,7 +289,7 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IScheduledDispatchApplicationService scheduledDispatchService,
+        IWorkflowScheduleApplicationService workflowScheduleService,
         OwnerScope caller,
         CancellationToken ct)
     {
@@ -313,7 +314,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // SkillRunnerExternalTriggerRejectedEvent(unknown_source) while the tool reported
         // "accepted" (prod 2026-06-11). Admission stays reserved for genuine external
         // sources (webhook endpoint), which carry their own delivery dedup needs.
-        var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, scheduledDispatchService, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, workflowScheduleService, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -332,7 +333,7 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IScheduledDispatchApplicationService scheduledDispatchService,
+        IWorkflowScheduleApplicationService workflowScheduleService,
         OwnerScope caller,
         CancellationToken ct)
     {
@@ -343,7 +344,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // Refactor (iter1/cluster-002):
         //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
         //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
-        var dispatch = await TryDispatchLifecycleAsync(entry.value!, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, scheduledDispatchService, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value!, "disable_agent", LifecycleAction.Disable, null, skillRunnerPort, workflowScheduleService, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -354,7 +355,7 @@ public sealed class AgentBuilderTool : IAgentTool
         BuilderArgs args,
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IScheduledDispatchApplicationService scheduledDispatchService,
+        IWorkflowScheduleApplicationService workflowScheduleService,
         OwnerScope caller,
         CancellationToken ct)
     {
@@ -365,7 +366,7 @@ public sealed class AgentBuilderTool : IAgentTool
         // Refactor (iter1/cluster-002):
         //   Old pattern: Captured readmodel version, dispatched lifecycle, then delayed-looped for projected status.
         //   New principle: Lifecycle commands return accepted; freshness is observed by follow-up query or push event.
-        var dispatch = await TryDispatchLifecycleAsync(entry.value!, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, scheduledDispatchService, ct);
+        var dispatch = await TryDispatchLifecycleAsync(entry.value!, "enable_agent", LifecycleAction.Enable, null, skillRunnerPort, workflowScheduleService, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -587,7 +588,7 @@ public sealed class AgentBuilderTool : IAgentTool
         LifecycleAction action,
         string? revisionFeedback,
         ISkillRunnerCommandPort skillRunnerPort,
-        IScheduledDispatchApplicationService scheduledDispatchService,
+        IWorkflowScheduleApplicationService workflowScheduleService,
         CancellationToken ct)
     {
         if (IsSkillRunnerAgent(entry.AgentType))
@@ -615,13 +616,13 @@ public sealed class AgentBuilderTool : IAgentTool
             switch (action)
             {
                 case LifecycleAction.Run:
-                    await scheduledDispatchService.RunNowAsync(entry.AgentId, ct);
+                    await workflowScheduleService.RunNowAsync(entry.AgentId, ct);
                     break;
                 case LifecycleAction.Disable:
-                    await scheduledDispatchService.DisableAsync(entry.AgentId, reason, ct);
+                    await workflowScheduleService.DisableAsync(entry.AgentId, reason, ct);
                     break;
                 case LifecycleAction.Enable:
-                    await scheduledDispatchService.EnableAsync(entry.AgentId, reason, ct);
+                    await workflowScheduleService.EnableAsync(entry.AgentId, reason, ct);
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(action), action, null);

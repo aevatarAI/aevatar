@@ -18,6 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -195,7 +196,7 @@ public static class ScheduledServiceCollectionExtensions
             sp.GetRequiredService<IUserAgentCatalogQueryPort>(),
             sp.GetRequiredService<ISkillRunnerExecutionQueryPort>(),
             sp.GetRequiredService<ISkillRunnerCommandPort>(),
-            sp.GetRequiredService<IScheduledDispatchApplicationService>(),
+            sp.GetRequiredService<IWorkflowScheduleApplicationService>(),
             sp.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             sp.GetRequiredService<IUserAgentCatalogCommandPort>(),
             sp.GetRequiredService<ICallerScopeResolver>(),

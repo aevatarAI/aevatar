@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -14,7 +15,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly IUserAgentCatalogQueryPort _queryPort;
     private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
     private readonly ISkillRunnerCommandPort _skillRunnerPort;
-    private readonly IScheduledDispatchApplicationService _scheduledDispatchService;
+    private readonly IWorkflowScheduleApplicationService _workflowScheduleService;
     private readonly IScheduledWorkflowAgentCreationPort _scheduledWorkflowAgentCreationPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
@@ -27,7 +28,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         IUserAgentCatalogQueryPort queryPort,
         ISkillRunnerExecutionQueryPort executionQueryPort,
         ISkillRunnerCommandPort skillRunnerPort,
-        IScheduledDispatchApplicationService scheduledDispatchService,
+        IWorkflowScheduleApplicationService workflowScheduleService,
         IScheduledWorkflowAgentCreationPort scheduledWorkflowAgentCreationPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
         ICallerScopeResolver callerScopeResolver,
@@ -39,7 +40,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
         _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
-        _scheduledDispatchService = scheduledDispatchService ?? throw new ArgumentNullException(nameof(scheduledDispatchService));
+        _workflowScheduleService = workflowScheduleService ?? throw new ArgumentNullException(nameof(workflowScheduleService));
         _scheduledWorkflowAgentCreationPort = scheduledWorkflowAgentCreationPort ?? throw new ArgumentNullException(nameof(scheduledWorkflowAgentCreationPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
@@ -59,7 +60,7 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _queryPort,
                 _executionQueryPort,
                 _skillRunnerPort,
-                _scheduledDispatchService,
+                _workflowScheduleService,
                 _catalogCommandPort,
                 _callerScopeResolver,
                 _toolLogger),

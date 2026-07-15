@@ -20,6 +20,7 @@ using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
@@ -2238,7 +2239,7 @@ public sealed class ConversationReplyGeneratorTests
             Substitute.For<IUserAgentCatalogQueryPort>(),
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
             Substitute.For<ISkillRunnerCommandPort>(),
-            Substitute.For<IScheduledDispatchApplicationService>(),
+            Substitute.For<IWorkflowScheduleApplicationService>(),
             Substitute.For<IScheduledWorkflowAgentCreationPort>(),
             catalogCommandPort,
             Substitute.For<ICallerScopeResolver>(),
