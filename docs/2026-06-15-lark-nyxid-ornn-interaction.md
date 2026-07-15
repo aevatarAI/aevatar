@@ -64,7 +64,7 @@ sequenceDiagram
         opt LLM 决定调工具
             EX->>OR: ornn_search_skills / use_skill<br/>(经 NyxID proxy /proxy/s/ornn-api)
             opt 技能要求执行代码
-                EX->>OR: code_execute<br/>(经 NyxID proxy /proxy/s/chrono-sandbox-service)
+                EX->>OR: code_execute<br/>(经 NyxID proxy /proxy/s/chrono-sandbox)
             end
             OR-->>EX: 技能体 / 沙箱结果
             EX->>AR: AgentRunNextToolStepRequestedEvent
@@ -120,7 +120,7 @@ LLM 流式返回里若带 `tool_calls`，executor 解析出 `effectiveToolCalls`
 |---|---|---|---|
 | `ornn_search_skills` | `OrnnSearchSkillsTool` (`src/Aevatar.AI.ToolProviders.Ornn/`) | `/api/v1/proxy/s/ornn-api/skill-search` | `../chrono-ornn/ornn-api/src/domains/skills/search` |
 | `use_skill` | `OrnnSkillClient.GetSkillJsonAsync` | `/api/v1/proxy/s/ornn-api/skills/{id}/json` | `../chrono-ornn/ornn-api/src/domains/skills/crud` |
-| `code_execute` | `NyxIdCodeExecuteTool` (`src/Aevatar.AI.ToolProviders.NyxId/Tools/`) | `/api/v1/proxy/s/chrono-sandbox-service/execute` | chrono-sandbox（Ornn 也用同一沙箱） |
+| `code_execute` | `NyxIdCodeExecuteTool` (`src/Aevatar.AI.ToolProviders.NyxId/Tools/`) | `/api/v1/proxy/s/chrono-sandbox/execute` | chrono-sandbox（Ornn 也用同一沙箱） |
 
 工具结果以 tool message 回灌给下一轮 LLM，直到模型给出无 `tool_calls` 的最终文本。
 
@@ -297,7 +297,7 @@ flowchart LR
         direction TB
         LLM["NyxID LLM 网关<br/>/llm/gateway/v1/chat/completions"]
         OR["chrono-ornn<br/>/proxy/s/ornn-api"]
-        SB["chrono-sandbox<br/>/proxy/s/chrono-sandbox-service"]
+        SB["chrono-sandbox<br/>/proxy/s/chrono-sandbox"]
     end
     subgraph Out["出站方向"]
         direction LR
