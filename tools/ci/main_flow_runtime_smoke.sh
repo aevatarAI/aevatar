@@ -355,24 +355,44 @@ request_json GET "/api/scopes/${scope_id}/workflows?includeSource=true" "" "200"
 request_json POST "/api/schedules/preview" "${preview_body}" "200" "${preview_response}"
 request_json POST "/api/scopes/${scope_id}/provision-workflow" "${provision_body}" "202" "${provision_response}"
 
-schedule_id="$(python3 - "${provision_response}" <<'PY'
+provision_fields="$(python3 - "${provision_response}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     data = json.load(handle)
+print(data.get("bindingStatus") or "")
 print(data.get("scheduleId") or "")
 PY
 )"
-if [[ -z "${schedule_id}" ]]; then
-  echo "Provisioning response did not include scheduleId." >&2
-  python3 -m json.tool "${provision_response}" >&2 2>/dev/null || cat "${provision_response}" >&2
-  exit 1
-fi
+binding_status="$(printf '%s\n' "${provision_fields}" | sed -n '1p')"
+schedule_id="$(printf '%s\n' "${provision_fields}" | sed -n '2p')"
 
-wait_for_status_code "/api/schedules/${schedule_id}" "200" "${schedule_readmodel_response}"
-assert_json_field "${schedule_readmodel_response}" "schedule.scheduleId" "${schedule_id}"
+case "${binding_status}" in
+  bound)
+    if [[ -z "${schedule_id}" ]]; then
+      echo "Bound provisioning response did not include scheduleId." >&2
+      python3 -m json.tool "${provision_response}" >&2 2>/dev/null || cat "${provision_response}" >&2
+      exit 1
+    fi
 
-request_json POST "/api/schedules/${schedule_id}:run-now" "{}" "202" "${run_now_response}"
+    wait_for_status_code "/api/schedules/${schedule_id}" "200" "${schedule_readmodel_response}"
+    assert_json_field "${schedule_readmodel_response}" "schedule.scheduleId" "${schedule_id}"
+
+    request_json POST "/api/schedules/${schedule_id}:run-now" "{}" "202" "${run_now_response}"
+    ;;
+  pending)
+    if [[ -n "${schedule_id}" ]]; then
+      echo "Pending provisioning response unexpectedly included scheduleId." >&2
+      python3 -m json.tool "${provision_response}" >&2 2>/dev/null || cat "${provision_response}" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Provisioning response returned terminal binding status '${binding_status}'." >&2
+    python3 -m json.tool "${provision_response}" >&2 2>/dev/null || cat "${provision_response}" >&2
+    exit 1
+    ;;
+esac
 
 print_key_logs
 if grep -qE "Duplicate workflow definition name|Unhandled exception|Application startup exception" "${log_file}"; then
