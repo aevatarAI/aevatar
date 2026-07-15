@@ -7,6 +7,7 @@ describe('NyxID runtime config', () => {
     process.env = {
       ...originalEnv,
     };
+    delete process.env.NYXID_DEFAULT_SERVICE_SLUGS;
     window.history.replaceState({}, '', '/login');
   });
 
@@ -23,6 +24,7 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: `${window.location.origin}/auth/callback`,
       scope: '',
+      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
       configurationError: undefined,
     });
   });
@@ -36,6 +38,7 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: 'http://localhost:5173/auth/callback',
       scope: '',
+      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
       configurationError: undefined,
     });
   });
@@ -52,6 +55,7 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: `${window.location.origin}/auth/callback`,
       scope: '',
+      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
       configurationError: undefined,
     });
   });
@@ -65,8 +69,38 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: '',
       scope: '',
+      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
       configurationError:
         'NYXID_REDIRECT_URI must be a valid http(s) URL or a root-relative path such as /auth/callback.',
     });
+  });
+
+  it('normalizes configured default services and removes duplicates', () => {
+    process.env.NYXID_DEFAULT_SERVICE_SLUGS = '" aevatar, ornn-api,chrono-sandbox,ornn-api "';
+
+    expect(getNyxIDRuntimeConfig().defaultServiceSlugs).toEqual([
+      'aevatar',
+      'ornn-api',
+      'chrono-sandbox',
+    ]);
+  });
+
+  it('allows default service requests to be disabled explicitly', () => {
+    process.env.NYXID_DEFAULT_SERVICE_SLUGS = '';
+
+    expect(getNyxIDRuntimeConfig().defaultServiceSlugs).toEqual([]);
+  });
+
+  it('disables NyxID auth when a configured default service slug is invalid', () => {
+    process.env.NYXID_DEFAULT_SERVICE_SLUGS = 'aevatar,Chrono Sandbox';
+
+    expect(getNyxIDRuntimeConfig()).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        defaultServiceSlugs: [],
+        configurationError:
+          "NYXID_DEFAULT_SERVICE_SLUGS contains invalid service slug 'Chrono Sandbox'. Use comma-separated lowercase letters, numbers, and hyphens.",
+      }),
+    );
   });
 });
