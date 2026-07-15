@@ -405,9 +405,13 @@ public sealed class AgentBuilderTool : IAgentTool
         CancellationToken ct)
     {
         var entries = await queryPort.QueryVisibleByCallerAsync(caller, ct);
+        var skillRunnerAgentIds = entries
+            .Where(static entry => IsSkillRunnerAgent(entry.AgentType))
+            .Select(static entry => entry.AgentId)
+            .ToArray();
         var executions = await TryQueryExecutionsByAgentIdsAsync(
             executionQueryPort,
-            entries.Select(static entry => entry.AgentId).ToArray(),
+            skillRunnerAgentIds,
             ct);
         return entries
             .Select(entry => MergeExecution(entry, executions.GetValueOrDefault(entry.AgentId)))
@@ -477,6 +481,9 @@ public sealed class AgentBuilderTool : IAgentTool
         if (entry is null)
             return null;
 
+        if (!IsSkillRunnerAgent(entry.AgentType))
+            return entry;
+
         return MergeExecution(entry, await TryGetExecutionAsync(executionQueryPort, entry.AgentId, ct));
     }
 
@@ -485,6 +492,9 @@ public sealed class AgentBuilderTool : IAgentTool
         IReadOnlyCollection<string> agentIds,
         CancellationToken ct)
     {
+        if (agentIds.Count == 0)
+            return new Dictionary<string, SkillRunnerExecutionDocument>(StringComparer.Ordinal);
+
         try
         {
             return await executionQueryPort.QueryByAgentIdsAsync(agentIds, ct);
@@ -524,7 +534,7 @@ public sealed class AgentBuilderTool : IAgentTool
     // Refactor (iter94/cluster-094a):
     //   Old: UserAgentCatalogQueryPort joined catalog and runner execution readmodels, creating a stable cross-authority view inside a query port.
     //   New: /agents and /agent-status compose catalog + SkillRunner execution rows at the AgentBuilder consumer boundary.
-    //   This is presentation response assembly only. It must not be reused as an
+    //   This is presentation response assembly for SkillRunner rows only. It must not be reused as an
     //   internal lifecycle command admission source or promoted into an aggregate
     //   query contract; command admission uses catalog authority only, while runner
     //   execution state remains runner-owned and observable through readmodels.
@@ -534,7 +544,7 @@ public sealed class AgentBuilderTool : IAgentTool
     {
         ArgumentNullException.ThrowIfNull(catalog);
 
-        if (execution is null)
+        if (execution is null || !IsSkillRunnerAgent(catalog.AgentType))
             return catalog;
 
         return new UserAgentCatalogReadModelEntry

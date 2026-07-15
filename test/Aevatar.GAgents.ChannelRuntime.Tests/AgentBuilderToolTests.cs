@@ -1040,6 +1040,101 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ScheduledWorkflowStatus_DoesNotReadOrMergeSkillRunnerExecution()
+    {
+        var scheduledWorkflowEntry = new UserAgentCatalogReadModelEntry
+        {
+            AgentId = "scheduled-workflow-status",
+            AgentType = ScheduledWorkflowAgentDefaults.AgentType,
+            TemplateName = "workflow-summary",
+            Status = SkillRunnerDefaults.StatusDisabled,
+            ScheduleCron = "0 9 * * *",
+            ScheduleTimezone = "UTC",
+            ErrorCount = 0,
+        };
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.QueryVisibleByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>([scheduledWorkflowEntry]));
+        queryPort.GetVisibleForCallerAsync("scheduled-workflow-status", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(scheduledWorkflowEntry));
+
+        var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
+        executionQueryPort.GetAsync("scheduled-workflow-status", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<SkillRunnerExecutionDocument?>(new SkillRunnerExecutionDocument
+            {
+                Id = "scheduled-workflow-status",
+                Status = SkillRunnerDefaults.StatusError,
+                ErrorCount = 9,
+                LastError = "stale runner state",
+                ScheduleMode = SkillRunnerScheduleMode.OneShot,
+            }));
+        executionQueryPort.QueryByAgentIdsAsync(
+                Arg.Is<IReadOnlyCollection<string>>(ids => ids.Contains("scheduled-workflow-status")),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyDictionary<string, SkillRunnerExecutionDocument>>(
+                new Dictionary<string, SkillRunnerExecutionDocument>(StringComparer.Ordinal)
+                {
+                    ["scheduled-workflow-status"] = new()
+                    {
+                        Id = "scheduled-workflow-status",
+                        Status = SkillRunnerDefaults.StatusError,
+                        ErrorCount = 9,
+                        LastError = "stale runner state",
+                        ScheduleMode = SkillRunnerScheduleMode.OneShot,
+                    },
+                }));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(executionQueryPort);
+        services.AddSingleton(Substitute.For<ISkillRunnerCommandPort>());
+        services.AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>());
+        services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var listResult = await tool.ExecuteAsync("""{"action":"list_agents"}""");
+            var statusResult = await tool.ExecuteAsync("""{"action":"agent_status","agent_id":"scheduled-workflow-status"}""");
+
+            using var listDocument = JsonDocument.Parse(listResult);
+            var listedAgent = listDocument.RootElement.GetProperty("agents").EnumerateArray().Should().ContainSingle().Subject;
+            listedAgent.GetProperty("agent_id").GetString().Should().Be("scheduled-workflow-status");
+            listedAgent.GetProperty("agent_type").GetString().Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
+            listedAgent.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
+            listedAgent.GetProperty("schedule_mode").GetString().Should().Be("cron");
+            listedAgent.GetProperty("error_count").GetInt32().Should().Be(0);
+
+            using var statusDocument = JsonDocument.Parse(statusResult);
+            statusDocument.RootElement.GetProperty("agent_id").GetString().Should().Be("scheduled-workflow-status");
+            statusDocument.RootElement.GetProperty("agent_type").GetString().Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
+            statusDocument.RootElement.GetProperty("status").GetString().Should().Be(SkillRunnerDefaults.StatusDisabled);
+            statusDocument.RootElement.GetProperty("schedule_mode").GetString().Should().Be("cron");
+            statusDocument.RootElement.GetProperty("error_count").GetInt32().Should().Be(0);
+            statusDocument.RootElement.GetProperty("last_error").GetString().Should().BeEmpty();
+
+            await executionQueryPort.DidNotReceive().QueryByAgentIdsAsync(
+                Arg.Any<IReadOnlyCollection<string>>(),
+                Arg.Any<CancellationToken>());
+            await executionQueryPort.DidNotReceive().GetAsync(
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ListAgents_JoinsCatalogAndExecutionAtToolBoundary()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
