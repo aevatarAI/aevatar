@@ -125,7 +125,7 @@ public class AgentToolVoiceCatalogTests
 
         definitions.Should().ContainSingle().Which.Name.Should().Be("door.open");
         var captured = source.CapturedContexts.Should().ContainSingle().Which;
-        captured.Credentials.AccessToken.Should().Be("caller-token-456");
+        captured.Credentials.CredentialRef.Should().Be("caller-token-456");
         captured.Caller.ScopeId.Should().Be("caller-scope-1");
         captured.Caller.OwnerSubject.Should().Be("owner-subject-1");
         captured.Caller.ResponseId.Should().Be("response-1");
@@ -237,7 +237,7 @@ public class AgentToolVoiceCatalogTests
         {
             _ = ct;
             DiscoverCalls++;
-            var token = AgentToolRequestContext.AccessToken;
+            var token = AgentToolRequestContext.CredentialRef;
             CapturedNyxIdAccessTokens.Add(token);
             IAgentTool tool = string.IsNullOrWhiteSpace(token)
                 ? new FakeAgentTool("anonymous.only", "anonymous", "{}")
@@ -255,7 +255,7 @@ public class AgentToolVoiceCatalogTests
         {
             _ = ct;
             DiscoverCalls++;
-            var token = AgentToolRequestContext.AccessToken;
+            var token = AgentToolRequestContext.CredentialRef;
             CapturedNyxIdAccessTokens.Add(token);
             return Task.FromResult<IReadOnlyList<IAgentTool>>(
             [

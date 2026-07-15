@@ -85,13 +85,13 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
         auth!.SenderIdentity.Should().NotBeNull();
-        auth.SenderNyxId!.Subject.Platform.Should().Be("Lark");
-        auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
-        auth.SenderNyxId.Subject.ExternalUserId.Should().Be("owner-1");
-        auth.SenderNyxId.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
-        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationIdentityCredentialRole.Sender);
+        auth.SenderIdentity!.Subject.Platform.Should().Be("Lark");
+        auth.SenderIdentity.Subject.Tenant.Should().Be("tenant-1");
+        auth.SenderIdentity.Subject.ExternalUserId.Should().Be("owner-1");
+        auth.SenderIdentity.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
+        auth.Identity!.Role.Should().Be(ScheduledServiceInvocationIdentityCredentialRole.Sender);
         auth.Durable.Should().BeNull();
-        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.ScopeOwnerIdentity.Should().BeNull();
         scheduleService.MutationContext.Should().BeEquivalentTo(new ScheduledDispatchMutationContext(
             "scope-1",
             new ScheduledServiceInvocationIdentitySubject("Lark", "tenant-1", "owner-1")));

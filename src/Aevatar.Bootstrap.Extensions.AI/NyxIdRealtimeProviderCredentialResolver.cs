@@ -62,7 +62,7 @@ public sealed class NyxIdRealtimeProviderCredentialResolver : IRealtimeProviderC
 
         // Primary source is AgentToolRequestContext (set on same-call chat paths); actor-side
         // voice reconnects carry only a typed credential_ref on the session key.
-        var callerToken = AgentToolRequestContext.AccessToken;
+        var callerToken = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(callerToken) &&
             IsUsableCredentialRef(sessionKey.ToolContext) &&
             _credentialProviders.Count > 0)

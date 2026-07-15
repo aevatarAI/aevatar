@@ -881,7 +881,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
             {
-                Credentials = AgentToolCredentials.Empty with { AccessToken = token },
+                Credentials = AgentToolCredentials.Empty with { CredentialRef = token },
             });
             decision = await port.DecideAsync(
                     new RemoteToolApprovalDecision(requestId, payload.Approved),
@@ -2402,7 +2402,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 SenderBinding = new AgentToolSenderBindingContext(
                     senderBinding.BindingId,
-                    NyxUserId: null,
+                    SenderIdentity: null,
                     SenderTenant: senderTenant),
             }).ToPayload();
             var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
@@ -2410,8 +2410,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 var currentControl = LLMControlContextMapper.FromPayload(request.LlmControl);
                 request.LlmControl = new LLMControlContext(
-                    currentControl.NyxIdAccessToken,
-                    currentControl.NyxIdOrgToken,
+                    currentControl.CredentialRef,
+                    currentControl.OrganizationCredentialRef,
                     senderAccessToken.Trim(),
                     currentControl.ModelOverride,
                     currentControl.NyxIdRoutePreference,

@@ -97,9 +97,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
                         {
                             Credentials = new AgentToolCredentialsPayload
                             {
-                                AccessToken = "tool-owner-secret",
-                                OrganizationToken = "tool-org-secret",
-                                SenderAccessToken = "tool-sender-secret",
+                                CredentialRef = "tool-owner-secret",
+                                OrganizationCredentialRef = "tool-org-secret",
+                                SenderCredentialRef = "tool-sender-secret",
                             },
                             Routing = new LLMRequestRoutingContextPayload
                             {
@@ -111,9 +111,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
                         },
                         LlmControl = new LLMControlContextPayload
                         {
-                            NyxIdAccessToken = "owner-secret",
-                            NyxIdOrgToken = "org-secret",
-                            SenderNyxIdAccessToken = "sender-secret",
+                            CredentialRef = "owner-secret",
+                            OrganizationCredentialRef = "org-secret",
+                            SenderCredentialRef = "sender-secret",
                             ModelOverride = "sonnet",
                             NyxIdRoutePreference = "low-latency",
                             MaxToolRoundsOverride = 3,
@@ -135,18 +135,18 @@ public sealed class ScheduledDispatchServiceInvocationTests
         persistedChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         persistedChat.Metadata.Should().Contain("trace", "kept");
         persistedChat.LlmControl.Should().NotBeNull();
-        persistedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        persistedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
-        persistedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        persistedChat.LlmControl.CredentialRef.Should().BeEmpty();
+        persistedChat.LlmControl.OrganizationCredentialRef.Should().BeEmpty();
+        persistedChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         persistedChat.ConnectorHttpAuthorization.Should().BeEmpty();
         persistedChat.CallerDurableCredential.Should().BeNull();
         persistedChat.LlmControl.ModelOverride.Should().Be("sonnet");
         persistedChat.LlmControl.NyxIdRoutePreference.Should().Be("low-latency");
         persistedChat.LlmControl.MaxToolRoundsOverride.Should().Be(3);
         persistedChat.LlmControl.UserMemoryPrompt.Should().Be("remember preferences");
-        persistedChat.ToolContext.Credentials.AccessToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.OrganizationToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.SenderAccessToken.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.CredentialRef.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.OrganizationCredentialRef.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.SenderCredentialRef.Should().BeEmpty();
         persistedChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
         persistedChat.ToolContext.Routing.NyxIdRoutePreference.Should().Be("tool-route");
         persistedChat.ToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
@@ -155,11 +155,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
         descriptorChat.ConnectorHttpAuthorization.Should().BeEmpty();
         descriptorChat.Headers.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         descriptorChat.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
-        descriptorChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        descriptorChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         descriptorChat.ConnectorHttpAuthorization.Should().BeEmpty();
         descriptorChat.CallerDurableCredential.Should().BeNull();
         descriptorChat.LlmControl.ModelOverride.Should().Be("sonnet");
-        descriptorChat.ToolContext.Credentials.SenderAccessToken.Should().BeEmpty();
+        descriptorChat.ToolContext.Credentials.SenderCredentialRef.Should().BeEmpty();
         descriptorChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
     }
 
@@ -182,9 +182,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
                         {
                             Credentials = new AgentToolCredentialsPayload
                             {
-                                AccessToken = "owner-secret",
-                                OrganizationToken = "org-secret",
-                                SenderAccessToken = "sender-secret",
+                                CredentialRef = "owner-secret",
+                                OrganizationCredentialRef = "org-secret",
+                                SenderCredentialRef = "sender-secret",
                             },
                             Routing = new LLMRequestRoutingContextPayload
                             {
@@ -202,9 +202,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var request = prepared.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
         var persistedChat = request.Payload.Unpack<ChatRequestEvent>();
         persistedChat.LlmControl.Should().BeNull();
-        persistedChat.ToolContext.Credentials.AccessToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.OrganizationToken.Should().BeEmpty();
-        persistedChat.ToolContext.Credentials.SenderAccessToken.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.CredentialRef.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.OrganizationCredentialRef.Should().BeEmpty();
+        persistedChat.ToolContext.Credentials.SenderCredentialRef.Should().BeEmpty();
         persistedChat.ToolContext.Routing.ModelOverride.Should().Be("opus");
     }
 
@@ -341,9 +341,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
         exchangedSource.Role.Should().Be(ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner);
         exchangedSource.Scope.Should().Be("proxy");
         var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("owner-token");
-        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("owner-token");
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.LlmControl.CredentialRef.Should().Be("owner-token");
+        invokedChat.LlmControl.OrganizationCredentialRef.Should().Be("owner-token");
+        invokedChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
     }
 
@@ -422,7 +422,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var invoked = invocationPort.Requests.Should().ContainSingle().Which;
         invoked.Should().NotBeSameAs(original);
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         invokedChat.LlmControl.ModelOverride.Should().Be("sonnet");
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
         invokedChat.CallerDurableCredential.Should().NotBeNull();
@@ -442,7 +442,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.Metadata.Should().NotContainValue("Bearer sender-token-1");
         vault.StoreRequests.Should().BeEmpty();
         var originalChat = original.Payload.Unpack<ChatRequestEvent>();
-        originalChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        originalChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         originalChat.LlmControl.ModelOverride.Should().Be("sonnet");
         originalChat.ConnectorHttpAuthorization.Should().Be("Bearer stored-token");
         originalChat.Metadata.Should().Contain("trace", "kept");
@@ -491,7 +491,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var invoked = invocationPort.Requests.Should().ContainSingle().Which;
         invoked.Should().NotBeSameAs(original);
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token-2");
+        invokedChat.LlmControl.SenderCredentialRef.Should().Be("sender-token-2");
         invokedChat.LlmControl.ModelOverride.Should().Be("opus");
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
         invokedChat.Metadata.Should().Contain("trace", "kept");
@@ -500,7 +500,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.Metadata.Should().NotContainValue("sender-token-2");
         invokedChat.Metadata.Should().NotContainValue("Bearer sender-token-2");
         var originalChat = original.Payload.Unpack<ChatRequestEvent>();
-        originalChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        originalChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         originalChat.LlmControl.ModelOverride.Should().Be("opus");
         originalChat.ConnectorHttpAuthorization.Should().BeEmpty();
         originalChat.Metadata.Should().Contain("trace", "kept");
@@ -548,9 +548,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be(reference.OwnerScopeKey);
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("key-schedule");
         invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
-        invokedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        invokedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.LlmControl.CredentialRef.Should().BeEmpty();
+        invokedChat.LlmControl.OrganizationCredentialRef.Should().BeEmpty();
+        invokedChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
     }
 
@@ -664,8 +664,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
 
         var invokedChat = invocationPort.Requests.Should().ContainSingle().Which.Payload.Unpack<ChatRequestEvent>();
         invokedChat.CallerDurableCredential.Should().BeNull();
-        invokedChat.LlmControl.NyxIdAccessToken.Should().Be("agent-key-token");
-        invokedChat.LlmControl.NyxIdOrgToken.Should().Be("agent-key-token");
+        invokedChat.LlmControl.CredentialRef.Should().Be("agent-key-token");
+        invokedChat.LlmControl.OrganizationCredentialRef.Should().Be("agent-key-token");
     }
 
     [Fact]
@@ -860,7 +860,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         store.Secret.Should().Be("durable-run-key");
         var invoked = invocationPort.Requests.Should().ContainSingle().Which;
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        invokedChat.LlmControl.SenderCredentialRef.Should().BeEmpty();
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
         invokedChat.CallerDurableCredential.Should().NotBeNull();
         invokedChat.CallerDurableCredential.Purpose.Should().Be(CredentialSecretPurposes.WorkflowCallerDurableBearerToken);
@@ -903,12 +903,12 @@ public sealed class ScheduledDispatchServiceInvocationTests
         secretVault.StoreRequests.Should().BeEmpty();
         var invoked = invocationPort.Requests.Should().ContainSingle().Which;
         var invokedChat = invoked.Payload.Unpack<ChatRequestEvent>();
-        invokedChat.LlmControl.SenderNyxIdAccessToken.Should().Be("durable-run-key");
-        invokedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        invokedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
+        invokedChat.LlmControl.SenderCredentialRef.Should().Be("durable-run-key");
+        invokedChat.LlmControl.CredentialRef.Should().BeEmpty();
+        invokedChat.LlmControl.OrganizationCredentialRef.Should().BeEmpty();
         invokedChat.LlmControl.ModelOverride.Should().Be("opus");
         invokedChat.CallerDurableCredential.Should().BeNull();
-        original.Payload.Unpack<ChatRequestEvent>().LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        original.Payload.Unpack<ChatRequestEvent>().LlmControl.SenderCredentialRef.Should().BeEmpty();
     }
 
     [Theory]

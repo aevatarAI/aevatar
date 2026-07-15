@@ -17,9 +17,9 @@ public static class AgentToolRequestContext
         set => s_context.Value = value;
     }
 
-    public static string? AccessToken => s_context.Value?.Credentials.AccessToken;
-    public static string? OrganizationToken => s_context.Value?.Credentials.OrganizationToken;
-    public static string? SenderAccessToken => s_context.Value?.Credentials.SenderAccessToken;
+    public static string? CredentialRef => s_context.Value?.Credentials.CredentialRef;
+    public static string? OrganizationCredentialRef => s_context.Value?.Credentials.OrganizationCredentialRef;
+    public static string? SenderCredentialRef => s_context.Value?.Credentials.SenderCredentialRef;
     public static string? ScopeId => s_context.Value?.Caller.ScopeId;
     public static string? OwnerSubject => s_context.Value?.Caller.OwnerSubject;
     public static string? ResponseId => s_context.Value?.Caller.ResponseId;
@@ -27,7 +27,7 @@ public static class AgentToolRequestContext
     public static string? CallId => s_context.Value?.Request.CallId;
     public static string? IdempotencyKey => s_context.Value?.Request.IdempotencyKey;
     public static string? SenderBindingId => s_context.Value?.SenderBinding.BindingId;
-    public static string? SenderNyxUserId => s_context.Value?.SenderBinding.NyxUserId;
+    public static string? SenderIdentity => s_context.Value?.SenderBinding.SenderIdentity;
     public static string? ModelOverride => s_context.Value?.Routing.ModelOverride;
     public static string? NyxIdRoutePreference => s_context.Value?.Routing.NyxIdRoutePreference;
     public static int? MaxToolRoundsOverride => s_context.Value?.Routing.MaxToolRoundsOverride;

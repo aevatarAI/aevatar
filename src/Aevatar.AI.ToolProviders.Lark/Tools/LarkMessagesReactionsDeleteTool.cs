@@ -22,7 +22,7 @@ public sealed class LarkMessagesReactionsDeleteTool : AgentToolBase<LarkMessages
 
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
             return LarkProxyResponseParser.Serialize(new { success = false, error = "No NyxID access token available. User must be authenticated." });
 

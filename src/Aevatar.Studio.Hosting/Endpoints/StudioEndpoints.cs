@@ -1265,8 +1265,8 @@ internal static class StudioEndpoints
         {
             llmControl = llmControl with
             {
-                NyxIdAccessToken = bearerToken,
-                NyxIdOrgToken = bearerToken,
+                CredentialRef = bearerToken,
+                OrganizationCredentialRef = bearerToken,
             };
         }
 

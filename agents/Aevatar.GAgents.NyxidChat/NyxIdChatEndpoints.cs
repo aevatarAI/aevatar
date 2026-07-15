@@ -259,9 +259,9 @@ public static partial class NyxIdChatEndpoints
         CancellationToken ct)
     {
         var control = new LLMControlContext(
-            NyxIdAccessToken: accessToken,
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: accessToken,
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
             MaxToolRoundsOverride: null,

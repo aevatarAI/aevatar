@@ -29,7 +29,7 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///   schedule's recurrence);</item>
 ///   <item>because the schedule kind is <see cref="ScheduledDispatchScheduleKind.Workflow"/>,
 ///   the dispatch projects a freshly re-minted caller NyxID token onto the run's
-///   <c>ChatRequestEvent</c> (<c>LlmControl.SenderNyxIdAccessToken</c>), so the
+///   <c>ChatRequestEvent</c> (<c>LlmControl.SenderCredentialRef</c>), so the
 ///   run's LLM calls authenticate — the one thing a direct
 ///   <c>IServiceInvocationPort.InvokeAsync</c> could not provide.</item>
 /// </list>

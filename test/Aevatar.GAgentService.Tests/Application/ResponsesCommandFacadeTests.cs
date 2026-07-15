@@ -54,7 +54,7 @@ public sealed class ResponsesCommandFacadeTests
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("owner-1");
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
-        toolContext.Credentials.AccessToken.Should().Be("token");
+        toolContext.Credentials.CredentialRef.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 
@@ -612,7 +612,7 @@ public sealed class ResponsesCommandFacadeTests
         result.StreamPlan.LlmRequest.Metadata.Should().NotContainKey("scope_id");
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.ResponseId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
-        result.StreamPlan.LlmRequest.ToolContext.Credentials.AccessToken.Should().Be("token");
+        result.StreamPlan.LlmRequest.ToolContext.Credentials.CredentialRef.Should().Be("token");
         result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }
 

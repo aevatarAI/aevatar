@@ -125,9 +125,9 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             successContext,
             CancellationToken.None);
         scopedControl.Should().Be(new LLMControlContext(
-            NyxIdAccessToken: null,
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: null,
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: "user-model",
             NyxIdRoutePreference: "/preferred-route",
             MaxToolRoundsOverride: null,

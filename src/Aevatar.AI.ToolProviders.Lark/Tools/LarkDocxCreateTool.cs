@@ -46,7 +46,7 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
         out ValidatedDocxCreateRequest request,
         out string? error)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         request = default;
         if (string.IsNullOrWhiteSpace(token))
         {

@@ -1106,7 +1106,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     {
         var effective = new Dictionary<string, string>(metadata, StringComparer.Ordinal);
         var effectiveControl = llmControl ?? LLMControlContext.Empty;
-        effectiveControl = effectiveControl with { SenderNyxIdAccessToken = null };
+        effectiveControl = effectiveControl with { SenderCredentialRef = null };
         var effectiveToolContext = toolContext;
         Dictionary<string, string>? ownerFallback = null;
         LLMControlContext? ownerFallbackControl = null;
@@ -1126,10 +1126,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if (!string.IsNullOrWhiteSpace(senderBindingId))
         {
             var ownerSnapshot = CreateOwnerFallbackSnapshot(effective);
-            ownerFallbackControl = effectiveControl with { SenderNyxIdAccessToken = null };
+            ownerFallbackControl = effectiveControl with { SenderCredentialRef = null };
             ownerFallbackToolContext = ClearSenderBinding(effectiveToolContext);
             ownerFallback = ownerSnapshot;
-            var senderToken = llmControl?.SenderNyxIdAccessToken?.Trim();
+            var senderToken = llmControl?.SenderCredentialRef?.Trim();
 
             if (_preferencesStore is not null)
             {
@@ -1165,9 +1165,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             {
                 effectiveControl = effectiveControl with
                 {
-                    NyxIdAccessToken = senderToken,
-                    NyxIdOrgToken = senderToken,
-                    SenderNyxIdAccessToken = senderToken,
+                    CredentialRef = senderToken,
+                    OrganizationCredentialRef = senderToken,
+                    SenderCredentialRef = senderToken,
                 };
             }
         }
@@ -1368,7 +1368,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         prompt = AppendSystemSkillOverlay(
             prompt,
             ResolveChannelPlatform(toolContext, metadata),
-            toolContext.Credentials.AccessToken);
+            toolContext.Credentials.CredentialRef);
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
         if (!string.IsNullOrWhiteSpace(channelContext))

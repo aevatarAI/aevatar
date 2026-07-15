@@ -294,8 +294,8 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         var control = command.LlmControl ?? LLMControlContext.Empty;
         var effectiveControl = control with
         {
-            NyxIdAccessToken = string.IsNullOrWhiteSpace(command.AccessToken)
-                ? control.NyxIdAccessToken
+            CredentialRef = string.IsNullOrWhiteSpace(command.AccessToken)
+                ? control.CredentialRef
                 : command.AccessToken.Trim(),
         };
         chatRequest.LlmControl = effectiveControl.ToPayload();

@@ -554,21 +554,21 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             var control = projectWorkflowCallerCredential
                 ? existingControl with
                 {
-                    NyxIdAccessToken = null,
-                    NyxIdOrgToken = null,
-                    SenderNyxIdAccessToken = null,
+                    CredentialRef = null,
+                    OrganizationCredentialRef = null,
+                    SenderCredentialRef = null,
                 }
                 : existingControl with
                 {
-                    NyxIdAccessToken = ownerCredential
+                    CredentialRef = ownerCredential
                         ? token
-                        : existingControl.NyxIdAccessToken,
-                    NyxIdOrgToken = ownerCredential
+                        : existingControl.CredentialRef,
+                    OrganizationCredentialRef = ownerCredential
                         ? token
-                        : existingControl.NyxIdOrgToken,
-                    SenderNyxIdAccessToken = IsSenderCredential(credential.Role)
+                        : existingControl.OrganizationCredentialRef,
+                    SenderCredentialRef = IsSenderCredential(credential.Role)
                         ? token
-                        : existingControl.SenderNyxIdAccessToken,
+                        : existingControl.SenderCredentialRef,
                 };
             chatRequest.LlmControl = control.ToPayload();
             if (projectWorkflowCallerCredential)
@@ -595,8 +595,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (request.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
             return false;
 
-        return !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdAccessToken) ||
-               !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdOrgToken);
+        return !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.CredentialRef) ||
+               !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.OrganizationCredentialRef);
     }
 
     private static bool HasSenderLlmToken(ServiceInvocationRequest request)
@@ -604,7 +604,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (request.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
             return false;
 
-        return !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.SenderNyxIdAccessToken);
+        return !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.SenderCredentialRef);
     }
 
     private static string FormatServiceKey(ServiceIdentity? identity) =>

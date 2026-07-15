@@ -87,7 +87,7 @@ public sealed class LarkResourceGrantTool : AgentToolBase<LarkResourceGrantTool.
 
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
             return Error("No NyxID access token available. User must be authenticated.");
 

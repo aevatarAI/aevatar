@@ -172,11 +172,11 @@ public class WorkflowRoleGAgent(
             ToolContext = AgentToolExecutionContextMapper.ToPayload(toolContext),
             LlmControl = new LLMControlContextPayload
             {
-                NyxIdAccessToken = toolContext.Credentials.AccessToken ?? string.Empty,
+                CredentialRef = toolContext.Credentials.CredentialRef ?? string.Empty,
                 ModelOverride = intent.Model ?? string.Empty,
                 NyxIdRoutePreference = toolContext.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,
-                SenderNyxIdAccessToken = intent.SenderNyxIdAccessToken ?? string.Empty,
+                SenderCredentialRef = intent.SenderNyxIdAccessToken ?? string.Empty,
             },
         };
         if (intent.HasMaxToolRounds)

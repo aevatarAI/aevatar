@@ -646,7 +646,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         // leaves the bot-owner LLM path intact.
         control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
 
-        var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
+        var ownerFallbackControl = control with { SenderCredentialRef = null };
         var ownerFallbackToolContext = ClearSenderBinding(toolContext);
 
         control = OverlayActivityUserToken(request, control);
@@ -702,7 +702,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 return control;
             }
 
-            return control with { SenderNyxIdAccessToken = accessToken };
+            return control with { SenderCredentialRef = accessToken };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -766,16 +766,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         var control = stepControl with
         {
-            NyxIdAccessToken = requestControl.NyxIdAccessToken,
-            NyxIdOrgToken = requestControl.NyxIdOrgToken,
-            SenderNyxIdAccessToken = requestControl.SenderNyxIdAccessToken,
+            CredentialRef = requestControl.CredentialRef,
+            OrganizationCredentialRef = requestControl.OrganizationCredentialRef,
+            SenderCredentialRef = requestControl.SenderCredentialRef,
         };
         var toolContext = planToolContext with
         {
             Credentials = new AgentToolCredentials(
-                requestControl.NyxIdAccessToken,
-                requestControl.NyxIdOrgToken,
-                requestControl.SenderNyxIdAccessToken),
+                requestControl.CredentialRef,
+                requestControl.OrganizationCredentialRef,
+                requestControl.SenderCredentialRef),
         };
         return (control, toolContext);
     }
@@ -787,8 +787,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             return control;
         return control with
         {
-            NyxIdAccessToken = userAccessToken,
-            NyxIdOrgToken = userAccessToken,
+            CredentialRef = userAccessToken,
+            OrganizationCredentialRef = userAccessToken,
         };
     }
 
@@ -848,8 +848,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         NeedsLlmReplyEvent request,
         LLMControlContext control)
     {
-        var token = NormalizeOptional(control.NyxIdAccessToken)
-                    ?? NormalizeOptional(control.NyxIdOrgToken)
+        var token = NormalizeOptional(control.CredentialRef)
+                    ?? NormalizeOptional(control.OrganizationCredentialRef)
                     ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
         return new ChatAttachmentInputContext(
             request.RecentAttachmentActivities.Select(entry => entry.Clone()).ToArray(),
@@ -946,13 +946,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         context with
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
-            Credentials = context.Credentials with { SenderAccessToken = null },
+            Credentials = context.Credentials with { SenderCredentialRef = null },
         };
 
     private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>
         control with
         {
-            SenderNyxIdAccessToken = null,
+            SenderCredentialRef = null,
             ModelOverride = null,
             NyxIdRoutePreference = null,
             MaxToolRoundsOverride = null,
@@ -997,9 +997,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     {
         var candidate = planFallback ?? LLMControlContext.Empty;
         return new LLMControlContext(
-            NormalizeOptional(ownerSnapshot.NyxIdAccessToken),
-            NormalizeOptional(ownerSnapshot.NyxIdOrgToken),
-            SenderNyxIdAccessToken: null,
+            NormalizeOptional(ownerSnapshot.CredentialRef),
+            NormalizeOptional(ownerSnapshot.OrganizationCredentialRef),
+            SenderCredentialRef: null,
             fallbackToServerDefaultRouting
                 ? null
                 : NormalizeOptional(candidate.ModelOverride) ?? NormalizeOptional(ownerSnapshot.ModelOverride),
@@ -1022,9 +1022,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
             Credentials = new AgentToolCredentials(
-                NormalizeOptional(ownerControl.NyxIdAccessToken),
-                NormalizeOptional(ownerControl.NyxIdOrgToken),
-                SenderAccessToken: null),
+                NormalizeOptional(ownerControl.CredentialRef),
+                NormalizeOptional(ownerControl.OrganizationCredentialRef),
+                SenderCredentialRef: null),
             Routing = new LLMRequestRoutingContext(
                 NormalizeOptional(ownerControl.ModelOverride),
                 NormalizeOptional(ownerControl.NyxIdRoutePreference),

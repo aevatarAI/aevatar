@@ -45,7 +45,7 @@ public sealed class NyxIdApprovalsToolTests
     private static AgentToolExecutionContext WithNyxIdAccessToken(string token) =>
         AgentToolExecutionContext.Empty with
         {
-            Credentials = AgentToolCredentials.Empty with { AccessToken = token },
+            Credentials = AgentToolCredentials.Empty with { CredentialRef = token },
         };
 
     private sealed class CaptureHandler(HttpResponseMessage response) : HttpMessageHandler

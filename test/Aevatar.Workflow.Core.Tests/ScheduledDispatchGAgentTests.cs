@@ -1144,7 +1144,7 @@ public sealed class ScheduledDispatchGAgentTests
         var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
         var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
         chatRequest.ConnectorHttpAuthorization.Should().BeEmpty();
-        chatRequest.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        chatRequest.LlmControl.SenderCredentialRef.Should().BeEmpty();
         chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
@@ -2568,16 +2568,16 @@ public sealed class ScheduledDispatchGAgentTests
             {
                 Credentials = new AgentToolCredentialsPayload
                 {
-                    AccessToken = "tool-owner-token",
-                    OrganizationToken = "tool-org-token",
-                    SenderAccessToken = "tool-sender-token",
+                    CredentialRef = "tool-owner-token",
+                    OrganizationCredentialRef = "tool-org-token",
+                    SenderCredentialRef = "tool-sender-token",
                 },
             },
             LlmControl = new LLMControlContextPayload
             {
-                NyxIdAccessToken = "owner-token",
-                NyxIdOrgToken = "org-token",
-                SenderNyxIdAccessToken = "sender-token",
+                CredentialRef = "owner-token",
+                OrganizationCredentialRef = "org-token",
+                SenderCredentialRef = "sender-token",
                 ModelOverride = "sonnet",
             },
         };
@@ -2590,13 +2590,13 @@ public sealed class ScheduledDispatchGAgentTests
         chatRequest.Headers.Should().Contain("client", "kept");
         chatRequest.Metadata.Should().NotContainKey(ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey);
         chatRequest.Metadata.Should().Contain("trace", "kept");
-        chatRequest.LlmControl.NyxIdAccessToken.Should().BeEmpty();
-        chatRequest.LlmControl.NyxIdOrgToken.Should().BeEmpty();
-        chatRequest.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
+        chatRequest.LlmControl.CredentialRef.Should().BeEmpty();
+        chatRequest.LlmControl.OrganizationCredentialRef.Should().BeEmpty();
+        chatRequest.LlmControl.SenderCredentialRef.Should().BeEmpty();
         chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
-        chatRequest.ToolContext.Credentials.AccessToken.Should().BeEmpty();
-        chatRequest.ToolContext.Credentials.OrganizationToken.Should().BeEmpty();
-        chatRequest.ToolContext.Credentials.SenderAccessToken.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.CredentialRef.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.OrganizationCredentialRef.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.SenderCredentialRef.Should().BeEmpty();
     }
 
     private static ScheduledDispatchTargetState CreateWorkflowServiceInvocationTarget(

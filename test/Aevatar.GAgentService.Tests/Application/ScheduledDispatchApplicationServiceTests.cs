@@ -451,7 +451,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             {
                 LlmControl = new LLMControlContextPayload
                 {
-                    SenderNyxIdAccessToken = "sender-token",
+                    SenderCredentialRef = "sender-token",
                 },
             })));
         var headerCredential = () => service.CreateAsync(CreateEnvelopeConfiguration("schedule-header-credential") with

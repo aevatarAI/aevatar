@@ -59,7 +59,7 @@ message ChatRequestEvent  {
   AgentToolExecutionContextPayload tool_context = 8;
   // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
   TelegramBridgeRequest telegram = 9;
-  // Narrow LLM-control carrier. Model routing, NyxID credentials and tool-round limits
+  // Narrow LLM-control carrier. Model routing, credential references and tool-round limits
   // belong here, not in metadata or tool_context.
   LLMControlContextPayload llm_control = 10;
   // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
@@ -69,9 +69,9 @@ message ChatRequestEvent  {
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
 message LLMControlContextPayload {
-  string nyx_id_access_token = 1;
-  string nyx_id_org_token = 2;
-  string sender_nyx_id_access_token = 3;
+  string credential_ref = 1;
+  string organization_credential_ref = 2;
+  string sender_credential_ref = 3;
   string model_override = 4;
   string nyx_id_route_preference = 5;
   optional int32 max_tool_rounds_override = 6;
@@ -165,9 +165,9 @@ message AgentToolRequestIdentityPayload {
 }
 
 message AgentToolCredentialsPayload {
-  string access_token = 1;
-  string organization_token = 2;
-  string sender_access_token = 3;
+  string credential_ref = 1;
+  string organization_credential_ref = 2;
+  string sender_credential_ref = 3;
 }
 
 message AgentToolCallerContextPayload {
@@ -199,7 +199,7 @@ message ChannelWorkflowResultDeliveryCredential {
 
 message AgentToolSenderBindingContextPayload {
   string binding_id = 1;
-  string nyx_user_id = 2;
+  string sender_identity = 2;
   // External-subject tenant for the bound sender (e.g. Lark open_tenant_id).
   // Identity fact (not a credential), so it survives the transient-credential
   // strip and crosses the deferred-run boundary. Lets the deferred reply run

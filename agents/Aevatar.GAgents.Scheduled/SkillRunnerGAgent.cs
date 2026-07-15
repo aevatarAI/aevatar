@@ -1902,9 +1902,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task<LLMControlContext> BuildExecutionLlmControlAsync(string nyxApiKey, CancellationToken ct)
     {
         var control = new LLMControlContext(
-            NyxIdAccessToken: nyxApiKey,
-            NyxIdOrgToken: nyxApiKey,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: nyxApiKey,
+            OrganizationCredentialRef: nyxApiKey,
+            SenderCredentialRef: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
             MaxToolRoundsOverride: null,

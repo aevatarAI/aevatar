@@ -1473,24 +1473,24 @@ public sealed class AgentRunGAgentTests
         runtime.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         runtime.State.ProducedReplyText.Should().Be("clean reply");
         providerFactory.Requests.Should().ContainSingle();
-        providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().NotBeNullOrEmpty(
+        providerFactory.Requests[0].LlmControl!.CredentialRef.Should().NotBeNullOrEmpty(
             "the executor re-supplies a live credential from the transient request even though the persisted state is stripped");
 
         // The persisted per-step waterline carries no bearer token in any of the four sub-messages.
         var persisted = runtime.State.GenerationStep;
         persisted.Should().NotBeNull();
-        (persisted!.LlmControl?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.LlmControl?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
-        (persisted.LlmControl?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.ToolContext?.Credentials?.AccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.ToolContext?.Credentials?.OrganizationToken ?? string.Empty).Should().BeEmpty();
-        (persisted.ToolContext?.Credentials?.SenderAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackLlmControl?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackLlmControl?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackLlmControl?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackToolContext?.Credentials?.AccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackToolContext?.Credentials?.OrganizationToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackToolContext?.Credentials?.SenderAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted!.LlmControl?.CredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.LlmControl?.OrganizationCredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.LlmControl?.SenderCredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.CredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.OrganizationCredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.SenderCredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackLlmControl?.CredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackLlmControl?.OrganizationCredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackLlmControl?.SenderCredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.CredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.OrganizationCredentialRef ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.SenderCredentialRef ?? string.Empty).Should().BeEmpty();
 
         // Belt-and-suspenders: no inbound token value survives anywhere in the committed state bytes.
         var persistedText = System.Text.Encoding.UTF8.GetString(persisted.ToByteArray());
@@ -1623,13 +1623,13 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[0].Tools.Should().NotBeNull();
         providerFactory.Requests[0].ToolContext!.SenderBinding.BindingId.Should().Be("bnd-user-1");
-        providerFactory.Requests[0].LlmControl!.NyxIdAccessToken.Should().Be("sender-runtime-token");
+        providerFactory.Requests[0].LlmControl!.CredentialRef.Should().Be("sender-runtime-token");
 
         providerFactory.Requests[1].Tools.Should().BeNull();
         providerFactory.Requests[1].ToolContext!.SenderBinding.BindingId.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Credentials.SenderAccessToken.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.SenderNyxIdAccessToken.Should().BeNull();
-        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
+        providerFactory.Requests[1].ToolContext!.Credentials.SenderCredentialRef.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.SenderCredentialRef.Should().BeNull();
+        providerFactory.Requests[1].LlmControl!.CredentialRef.Should().Be("owner-token");
         providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
         providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().BeNull();
         providerFactory.Requests[1].ToolContext!.Routing.ModelOverride.Should().BeNull();
@@ -1665,7 +1665,7 @@ public sealed class AgentRunGAgentTests
             LlmControl = new LLMControlContext(
                 "owner-token",
                 "owner-token",
-                SenderNyxIdAccessToken: null,
+                SenderCredentialRef: null,
                 "gpt-5.5",
                 "/api/v1/proxy/s/chrono-llm",
                 40,
@@ -1681,7 +1681,7 @@ public sealed class AgentRunGAgentTests
         // history — it no longer strips to a no-tools server-default route. This is the fix for the
         // "no Lark context / no tools" apology on big-history conversations: the retry must still be
         // able to do the task.
-        providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
+        providerFactory.Requests[1].LlmControl!.CredentialRef.Should().Be("owner-token");
         providerFactory.Requests[1].LlmControl!.ModelOverride.Should().Be("gpt-5.5");
         providerFactory.Requests[1].LlmControl!.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
         providerFactory.Requests[1].Tools.Should().BeEquivalentTo(providerFactory.Requests[0].Tools);
@@ -1752,9 +1752,9 @@ public sealed class AgentRunGAgentTests
                 SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
             }).ToPayload(),
             LlmControl = new LLMControlContext(
-                NyxIdAccessToken: null,
-                NyxIdOrgToken: null,
-                SenderNyxIdAccessToken: "sender-session-jwt",
+                CredentialRef: null,
+                OrganizationCredentialRef: null,
+                SenderCredentialRef: "sender-session-jwt",
                 ModelOverride: null,
                 NyxIdRoutePreference: null,
                 MaxToolRoundsOverride: null,
@@ -1776,10 +1776,10 @@ public sealed class AgentRunGAgentTests
         request.LlmControl!.ModelOverride.Should().Be("sender-model");
         request.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
         request.LlmControl.MaxToolRoundsOverride.Should().Be(7);
-        request.LlmControl.NyxIdAccessToken.Should().Be("sender-session-jwt");
+        request.LlmControl.CredentialRef.Should().Be("sender-session-jwt");
         request.ToolContext!.Routing.ModelOverride.Should().Be("sender-model");
         request.ToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
-        request.ToolContext.Credentials.AccessToken.Should().Be("sender-session-jwt");
+        request.ToolContext.Credentials.CredentialRef.Should().Be("sender-session-jwt");
     }
 
     [Fact]
@@ -1824,9 +1824,9 @@ public sealed class AgentRunGAgentTests
                 SenderBinding = new AgentToolSenderBindingContext("bnd-user-1"),
             }).ToPayload(),
             LlmControl = new LLMControlContext(
-                NyxIdAccessToken: "owner-token",
-                NyxIdOrgToken: "owner-token",
-                SenderNyxIdAccessToken: "sender-session-jwt",
+                CredentialRef: "owner-token",
+                OrganizationCredentialRef: "owner-token",
+                SenderCredentialRef: "sender-session-jwt",
                 ModelOverride: null,
                 NyxIdRoutePreference: null,
                 MaxToolRoundsOverride: 6,
@@ -1854,13 +1854,13 @@ public sealed class AgentRunGAgentTests
         for (var round = 0; round < providerFactory.Requests.Count; round++)
         {
             var roundRequest = providerFactory.Requests[round];
-            roundRequest.LlmControl!.SenderNyxIdAccessToken.Should().Be(
+            roundRequest.LlmControl!.SenderCredentialRef.Should().Be(
                 "sender-session-jwt", $"round {round} must carry the re-supplied sender token");
-            roundRequest.LlmControl!.NyxIdAccessToken.Should().Be(
+            roundRequest.LlmControl!.CredentialRef.Should().Be(
                 "sender-session-jwt", $"round {round} must keep the sender as the LLM credential (no owner drift)");
-            roundRequest.ToolContext!.Credentials.SenderAccessToken.Should().Be(
+            roundRequest.ToolContext!.Credentials.SenderCredentialRef.Should().Be(
                 "sender-session-jwt", $"round {round} tool credentials must carry the sender token");
-            roundRequest.ToolContext!.Credentials.AccessToken.Should().NotBeNullOrEmpty(
+            roundRequest.ToolContext!.Credentials.CredentialRef.Should().NotBeNullOrEmpty(
                 $"round {round} tool credentials must not be stripped");
         }
     }
@@ -3328,8 +3328,8 @@ public sealed class AgentRunGAgentTests
         capturedControl!.ModelOverride.Should().Be("gpt-4o-bot-owner");
         capturedControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/anthropic-via-bot-owner");
         capturedControl.MaxToolRoundsOverride.Should().Be(11);
-        capturedControl.NyxIdAccessToken.Should().Be("bot-owner-session-jwt");
-        capturedControl.NyxIdOrgToken.Should().Be("bot-owner-session-jwt");
+        capturedControl.CredentialRef.Should().Be("bot-owner-session-jwt");
+        capturedControl.OrganizationCredentialRef.Should().Be("bot-owner-session-jwt");
     }
 
     [Fact]
@@ -3374,8 +3374,8 @@ public sealed class AgentRunGAgentTests
         });
 
         capturedControl.Should().NotBeNull();
-        capturedControl!.NyxIdAccessToken.Should().Be("bot-owner-session-jwt");
-        capturedControl.NyxIdOrgToken.Should().Be("bot-owner-session-jwt");
+        capturedControl!.CredentialRef.Should().Be("bot-owner-session-jwt");
+        capturedControl.OrganizationCredentialRef.Should().Be("bot-owner-session-jwt");
     }
 
     private static AgentRunGAgent CreateRunAgent(
@@ -3536,9 +3536,9 @@ public sealed class AgentRunGAgentTests
         string? route = null,
         int? rounds = null) =>
         new(
-            NyxIdAccessToken: null,
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: null,
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: model,
             NyxIdRoutePreference: route,
             MaxToolRoundsOverride: rounds,
@@ -4116,8 +4116,8 @@ public sealed class AgentRunGAgentTests
             {
                 control = control with
                 {
-                    NyxIdAccessToken = userAccessToken,
-                    NyxIdOrgToken = userAccessToken,
+                    CredentialRef = userAccessToken,
+                    OrganizationCredentialRef = userAccessToken,
                 };
             }
 

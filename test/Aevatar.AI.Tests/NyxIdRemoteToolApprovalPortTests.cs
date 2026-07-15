@@ -201,7 +201,7 @@ public sealed class NyxIdRemoteToolApprovalPortTests
     private static AgentToolExecutionContext WithNyxIdAccessToken(string token) =>
         AgentToolExecutionContext.Empty with
         {
-            Credentials = AgentToolCredentials.Empty with { AccessToken = token },
+            Credentials = AgentToolCredentials.Empty with { CredentialRef = token },
         };
 
     private static NyxIdRemoteToolApprovalPort CreatePort(CaptureHandler handler)

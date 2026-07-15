@@ -92,8 +92,8 @@ public static class AgentToolExecutionContextMapper
                 ? mapped.Credentials
                 : mapped.Credentials with
                 {
-                    AccessToken = AgentToolExecutionContext.Normalize(caller.Credentials.NyxIdBearer)
-                        ?? mapped.Credentials.AccessToken,
+                    CredentialRef = AgentToolExecutionContext.Normalize(caller.Credentials.NyxIdBearer)
+                        ?? mapped.Credentials.CredentialRef,
                 },
             Routing = request.RoutingContext ?? mapped.Routing,
             ExternalMetadata = StripOwnedControlKeys(request.Metadata),
@@ -135,9 +135,9 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
                 AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey)),
             new AgentToolCredentials(
-                AgentToolExecutionContext.Normalize(payload.Credentials?.AccessToken),
-                AgentToolExecutionContext.Normalize(payload.Credentials?.OrganizationToken),
-                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderAccessToken)),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.CredentialRef),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.OrganizationCredentialRef),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderCredentialRef)),
             new AgentToolCallerContext(
                 AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
                 AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
@@ -153,7 +153,7 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Channel?.BotRegistrationId)),
             new AgentToolSenderBindingContext(
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId),
-                AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
+                AgentToolExecutionContext.Normalize(payload.SenderBinding?.SenderIdentity),
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.SenderTenant)),
             new LLMRequestRoutingContext(
                 AgentToolExecutionContext.Normalize(payload.Routing?.ModelOverride),
@@ -183,9 +183,9 @@ public static class AgentToolExecutionContextMapper
             },
             Credentials = new AgentToolCredentialsPayload
             {
-                AccessToken = context.Credentials.AccessToken ?? string.Empty,
-                OrganizationToken = context.Credentials.OrganizationToken ?? string.Empty,
-                SenderAccessToken = context.Credentials.SenderAccessToken ?? string.Empty,
+                CredentialRef = context.Credentials.CredentialRef ?? string.Empty,
+                OrganizationCredentialRef = context.Credentials.OrganizationCredentialRef ?? string.Empty,
+                SenderCredentialRef = context.Credentials.SenderCredentialRef ?? string.Empty,
             },
             Caller = new AgentToolCallerContextPayload
             {
@@ -207,7 +207,7 @@ public static class AgentToolExecutionContextMapper
             SenderBinding = new AgentToolSenderBindingContextPayload
             {
                 BindingId = context.SenderBinding.BindingId ?? string.Empty,
-                NyxUserId = context.SenderBinding.NyxUserId ?? string.Empty,
+                SenderIdentity = context.SenderBinding.SenderIdentity ?? string.Empty,
                 SenderTenant = context.SenderBinding.SenderTenant ?? string.Empty,
             },
             Routing = new LLMRequestRoutingContextPayload

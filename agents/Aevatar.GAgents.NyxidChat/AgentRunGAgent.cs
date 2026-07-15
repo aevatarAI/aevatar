@@ -1125,8 +1125,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return fallbackControl;
         return fallbackControl with
         {
-            NyxIdAccessToken = NormalizeOptional(inboundControl.NyxIdAccessToken),
-            NyxIdOrgToken = NormalizeOptional(inboundControl.NyxIdOrgToken),
+            CredentialRef = NormalizeOptional(inboundControl.CredentialRef),
+            OrganizationCredentialRef = NormalizeOptional(inboundControl.OrganizationCredentialRef),
         };
     }
 
@@ -1150,8 +1150,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     }
 
     private static bool HasAnyOwnerFallbackControl(LLMControlContext control) =>
-        !string.IsNullOrWhiteSpace(control.NyxIdAccessToken) ||
-        !string.IsNullOrWhiteSpace(control.NyxIdOrgToken) ||
+        !string.IsNullOrWhiteSpace(control.CredentialRef) ||
+        !string.IsNullOrWhiteSpace(control.OrganizationCredentialRef) ||
         !string.IsNullOrWhiteSpace(control.ModelOverride) ||
         !string.IsNullOrWhiteSpace(control.NyxIdRoutePreference) ||
         control.MaxToolRoundsOverride.HasValue ||
@@ -1160,8 +1160,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private static bool HasAnyOwnerFallbackToolContext(AgentToolExecutionContext context) =>
         !string.IsNullOrWhiteSpace(context.Request.RequestId) ||
         !string.IsNullOrWhiteSpace(context.Request.CallId) ||
-        !string.IsNullOrWhiteSpace(context.Credentials.AccessToken) ||
-        !string.IsNullOrWhiteSpace(context.Credentials.OrganizationToken) ||
+        !string.IsNullOrWhiteSpace(context.Credentials.CredentialRef) ||
+        !string.IsNullOrWhiteSpace(context.Credentials.OrganizationCredentialRef) ||
         !string.IsNullOrWhiteSpace(context.Caller.ScopeId) ||
         !string.IsNullOrWhiteSpace(context.Caller.OwnerSubject) ||
         !string.IsNullOrWhiteSpace(context.Caller.ResponseId) ||
@@ -1175,7 +1175,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         !string.IsNullOrWhiteSpace(context.Routing.NyxIdRoutePreference) ||
         context.Routing.MaxToolRoundsOverride.HasValue ||
         !string.IsNullOrWhiteSpace(context.Routing.UserMemoryPrompt) ||
-        !string.IsNullOrWhiteSpace(context.SenderBinding.NyxUserId) ||
+        !string.IsNullOrWhiteSpace(context.SenderBinding.SenderIdentity) ||
         !string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson) ||
         context.SkillRecovery != AgentSkillRecoveryContext.Empty ||
         context.ExternalMetadata.Count > 0;
@@ -1184,7 +1184,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         context with
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
-            Credentials = context.Credentials with { SenderAccessToken = null },
+            Credentials = context.Credentials with { SenderCredentialRef = null },
             Routing = context.Routing with
             {
                 ModelOverride = null,
@@ -1196,7 +1196,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>
         control with
         {
-            SenderNyxIdAccessToken = null,
+            SenderCredentialRef = null,
             ModelOverride = null,
             NyxIdRoutePreference = null,
             MaxToolRoundsOverride = null,

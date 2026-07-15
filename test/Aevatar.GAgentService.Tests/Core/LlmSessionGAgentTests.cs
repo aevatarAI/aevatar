@@ -1826,7 +1826,7 @@ public sealed class LlmSessionGAgentTests
             request.ToolContext.Should().NotBeNull();
             request.ToolContext!.Request.RequestId.Should().Be("resp_1");
             request.ToolContext.Request.CallId.Should().BeNull();
-            request.ToolContext.Credentials.AccessToken.Should().Be("token-1");
+            request.ToolContext.Credentials.CredentialRef.Should().Be("token-1");
             request.ToolContext.Caller.ScopeId.Should().Be("user-1");
             request.ToolContext.Caller.OwnerSubject.Should().Be("user-1");
             request.ToolContext.Caller.ResponseId.Should().Be("resp_1");
@@ -1839,7 +1839,7 @@ public sealed class LlmSessionGAgentTests
             context.Should().NotBeNull();
             context!.Request.RequestId.Should().Be("resp_1");
             context.Request.CallId.Should().BeNull();
-            context.Credentials.AccessToken.Should().Be("token-1");
+            context.Credentials.CredentialRef.Should().Be("token-1");
             context.Caller.ScopeId.Should().Be("user-1");
             context.Caller.OwnerSubject.Should().Be("user-1");
             context.Caller.ResponseId.Should().Be("resp_1");
@@ -1952,7 +1952,7 @@ public sealed class LlmSessionGAgentTests
         llmRequest.CallerContext.ResponseId.Should().Be("typed-response");
         llmRequest.CallerContext.Credentials.NyxIdBearer.Should().Be("typed-token");
         llmRequest.LlmControl.Should().NotBeNull();
-        llmRequest.LlmControl!.NyxIdAccessToken.Should().Be("typed-token");
+        llmRequest.LlmControl!.CredentialRef.Should().Be("typed-token");
         llmRequest.LlmControl.NyxIdRoutePreference.Should().Be("typed-route");
     }
 
@@ -1984,7 +1984,7 @@ public sealed class LlmSessionGAgentTests
         llmRequest.ToolContext!.Request.RequestId.Should().Be("resp_1");
         llmRequest.ToolContext.Caller.ScopeId.Should().Be("user-1");
         llmRequest.ToolContext.Caller.OwnerSubject.Should().Be("user-1");
-        llmRequest.ToolContext.Credentials.AccessToken.Should().Be("token-1");
+        llmRequest.ToolContext.Credentials.CredentialRef.Should().Be("token-1");
         llmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("legacy-route");
     }
 

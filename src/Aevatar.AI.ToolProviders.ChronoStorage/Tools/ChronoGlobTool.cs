@@ -37,7 +37,7 @@ public sealed class ChronoGlobTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
             return "Error: No NyxID access token available. User must be authenticated.";
 

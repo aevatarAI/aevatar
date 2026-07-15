@@ -3,9 +3,9 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.Abstractions.LLMProviders;
 
 public sealed record LLMControlContext(
-    string? NyxIdAccessToken,
-    string? NyxIdOrgToken,
-    string? SenderNyxIdAccessToken,
+    string? CredentialRef,
+    string? OrganizationCredentialRef,
+    string? SenderCredentialRef,
     string? ModelOverride,
     string? NyxIdRoutePreference,
     int? MaxToolRoundsOverride,
@@ -20,9 +20,10 @@ public sealed record LLMControlContext(
         {
             Credentials = context.Credentials with
             {
-                AccessToken = Normalize(NyxIdAccessToken) ?? context.Credentials.AccessToken,
-                OrganizationToken = Normalize(NyxIdOrgToken) ?? context.Credentials.OrganizationToken,
-                SenderAccessToken = Normalize(SenderNyxIdAccessToken) ?? context.Credentials.SenderAccessToken,
+                CredentialRef = Normalize(CredentialRef) ?? context.Credentials.CredentialRef,
+                OrganizationCredentialRef =
+                    Normalize(OrganizationCredentialRef) ?? context.Credentials.OrganizationCredentialRef,
+                SenderCredentialRef = Normalize(SenderCredentialRef) ?? context.Credentials.SenderCredentialRef,
             },
             Routing = context.Routing with
             {

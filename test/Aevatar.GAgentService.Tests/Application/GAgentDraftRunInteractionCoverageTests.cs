@@ -397,7 +397,7 @@ public sealed class GAgentDraftRunInteractionCoverageTests
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
         payload.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdRoutePreference);
         var llmControl = LLMControlContextMapper.FromPayload(payload.LlmControl);
-        llmControl.NyxIdAccessToken.Should().Be("token");
+        llmControl.CredentialRef.Should().Be("token");
         llmControl.ModelOverride.Should().Be("model-x");
         llmControl.NyxIdRoutePreference.Should().Be("/route");
         payload.InputParts.Should().HaveCount(2);

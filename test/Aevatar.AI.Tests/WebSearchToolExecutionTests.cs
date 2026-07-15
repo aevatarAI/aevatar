@@ -149,7 +149,7 @@ public sealed class WebSearchToolExecutionTests
         {
             Credentials = AgentToolCredentials.Empty with
             {
-                AccessToken = accessToken,
+                CredentialRef = accessToken,
             },
         };
 

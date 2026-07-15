@@ -400,9 +400,9 @@ public sealed class NyxIdLLMProviderRoutingTests
         string? modelOverride = null,
         string? routePreference = null) =>
         new(
-            NyxIdAccessToken: accessToken,
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: accessToken,
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: modelOverride,
             NyxIdRoutePreference: routePreference,
             MaxToolRoundsOverride: null,

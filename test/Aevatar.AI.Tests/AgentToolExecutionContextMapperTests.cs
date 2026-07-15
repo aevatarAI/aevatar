@@ -52,8 +52,8 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Caller.ScopeId.Should().Be("typed-scope");
         context.Caller.OwnerSubject.Should().Be("typed-owner");
         context.Caller.ResponseId.Should().Be("typed-response");
-        context.Credentials.AccessToken.Should().Be("typed-access");
-        context.Credentials.OrganizationToken.Should().BeNull();
+        context.Credentials.CredentialRef.Should().Be("typed-access");
+        context.Credentials.OrganizationCredentialRef.Should().BeNull();
         context.Routing.ModelOverride.Should().Be("typed-model");
         context.Routing.NyxIdRoutePreference.Should().Be("typed-route");
         context.Routing.MaxToolRoundsOverride.Should().Be(9);
@@ -90,7 +90,7 @@ public sealed class AgentToolExecutionContextMapperTests
 
         var context = AgentToolExecutionContextMapper.FromRequest(request);
 
-        context.Credentials.AccessToken.Should().Be("typed-token");
+        context.Credentials.CredentialRef.Should().Be("typed-token");
         context.ExternalMetadata["channel.lark.operator_user_id"].Should().Be("lark-user-from-receive-flow");
         context.ExternalMetadata["channel.lark.operator_open_id"].Should().Be("ou_operator_1");
         context.ExternalMetadata["explicit"].Should().Be("from-tool-context");
@@ -123,8 +123,8 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Request.RequestId.Should().BeNull();
         context.Request.CallId.Should().BeNull();
         context.Caller.ScopeId.Should().BeNull();
-        context.Credentials.AccessToken.Should().BeNull();
-        context.Credentials.OrganizationToken.Should().BeNull();
+        context.Credentials.CredentialRef.Should().BeNull();
+        context.Credentials.OrganizationCredentialRef.Should().BeNull();
         context.Routing.ModelOverride.Should().BeNull();
         context.Routing.NyxIdRoutePreference.Should().BeNull();
         context.Routing.MaxToolRoundsOverride.Should().BeNull();
@@ -162,7 +162,7 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Should().NotBeSameAs(typedContext);
         context.Request.RequestId.Should().Be("typed-request");
         context.Request.CallId.Should().Be("typed-call");
-        context.Credentials.AccessToken.Should().Be("typed-token");
+        context.Credentials.CredentialRef.Should().Be("typed-token");
         context.ExternalMetadata["typed-note"].Should().Be("kept");
         context.ExternalMetadata["external-trace"].Should().Be("trace-1");
         context.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.RequestId);
@@ -247,9 +247,9 @@ public sealed class AgentToolExecutionContextMapperTests
         context.Caller.ScopeId.Should().BeNull();
         context.Caller.OwnerSubject.Should().BeNull();
         context.Caller.ResponseId.Should().BeNull();
-        context.Credentials.AccessToken.Should().BeNull();
-        context.Credentials.OrganizationToken.Should().BeNull();
-        context.Credentials.SenderAccessToken.Should().BeNull();
+        context.Credentials.CredentialRef.Should().BeNull();
+        context.Credentials.OrganizationCredentialRef.Should().BeNull();
+        context.Credentials.SenderCredentialRef.Should().BeNull();
         context.Channel.Platform.Should().BeNull();
         context.Channel.SenderId.Should().BeNull();
         context.Channel.RegistrationScopeId.Should().BeNull();
@@ -322,9 +322,9 @@ public sealed class AgentToolExecutionContextMapperTests
 
         copy.Request.RequestId.Should().Be("request-1");
         copy.Request.CallId.Should().Be("call-1");
-        copy.Credentials.AccessToken.Should().Be("access-1");
-        copy.Credentials.OrganizationToken.Should().Be("org-1");
-        copy.Credentials.SenderAccessToken.Should().Be("sender-access-1");
+        copy.Credentials.CredentialRef.Should().Be("access-1");
+        copy.Credentials.OrganizationCredentialRef.Should().Be("org-1");
+        copy.Credentials.SenderCredentialRef.Should().Be("sender-access-1");
         copy.Caller.ScopeId.Should().Be("scope-1");
         copy.Caller.OwnerSubject.Should().Be("owner-1");
         copy.Caller.ResponseId.Should().Be("response-1");
@@ -337,7 +337,7 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Channel.WorkflowResultDeliveryCredential.Should().Be(ChannelWorkflowResultDeliveryCredentialTestData.Create("roundtrip"));
         copy.Channel.BotRegistrationId.Should().Be("bot-reg-1");
         copy.SenderBinding.BindingId.Should().Be("binding-1");
-        copy.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
+        copy.SenderBinding.SenderIdentity.Should().Be("nyx-user-1");
         copy.SenderBinding.SenderTenant.Should().Be("ou_tenant_1");
         copy.Routing.ModelOverride.Should().Be("model-1");
         copy.Routing.NyxIdRoutePreference.Should().Be("route-1");
@@ -417,7 +417,7 @@ public sealed class AgentToolExecutionContextMapperTests
         thirdRound.Channel.WorkflowResultDeliveryCredential.Should().Be(ChannelWorkflowResultDeliveryCredentialTestData.Create("channel"));
         thirdRound.Channel.BotRegistrationId.Should().Be("bot-reg-1");
         thirdRound.SenderBinding.BindingId.Should().Be("binding-1");
-        thirdRound.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
+        thirdRound.SenderBinding.SenderIdentity.Should().Be("nyx-user-1");
         thirdRound.SenderBinding.SenderTenant.Should().Be("tenant-1");
         thirdRound.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         thirdRound.ExternalMetadata.Should().BeEmpty();

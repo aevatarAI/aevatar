@@ -343,8 +343,8 @@ public sealed class AgentWorkflowToolSourceAdapterTests
 
         private void CaptureContext()
         {
-            ObservedAccessToken = AgentToolRequestContext.AccessToken;
-            ObservedOrgToken = AgentToolRequestContext.OrganizationToken;
+            ObservedAccessToken = AgentToolRequestContext.CredentialRef;
+            ObservedOrgToken = AgentToolRequestContext.OrganizationCredentialRef;
             ObservedScopeId = AgentToolRequestContext.ScopeId;
             ObservedCallId = AgentToolRequestContext.CallId;
             ObservedIdempotencyKey = AgentToolRequestContext.IdempotencyKey;

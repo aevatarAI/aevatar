@@ -49,7 +49,7 @@ public class RoleGAgentTests
                 AgentToolRequestContext.ScopeId.Should().Be("scope-1");
                 AgentToolRequestContext.OwnerSubject.Should().Be("owner-1");
                 AgentToolRequestContext.ResponseId.Should().Be("response-1");
-                AgentToolRequestContext.AccessToken.Should().BeNull();
+                AgentToolRequestContext.CredentialRef.Should().BeNull();
                 AgentToolRequestContext.ModelOverride.Should().Be("model-1");
                 AgentToolRequestContext.Current!.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
                 AgentToolRequestContext.Current.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);

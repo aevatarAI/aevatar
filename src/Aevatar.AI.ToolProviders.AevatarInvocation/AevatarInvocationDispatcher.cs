@@ -1688,9 +1688,9 @@ public sealed class AevatarInvocationDispatcher
         // New principle: typed ScopeId/ToolContext/LlmControl are authority.
         context ??= AgentToolExecutionContext.Empty;
         return new LLMControlContext(
-            context.Credentials.AccessToken,
-            context.Credentials.OrganizationToken,
-            context.Credentials.SenderAccessToken,
+            context.Credentials.CredentialRef,
+            context.Credentials.OrganizationCredentialRef,
+            context.Credentials.SenderCredentialRef,
             context.Routing.ModelOverride,
             context.Routing.NyxIdRoutePreference,
             context.Routing.MaxToolRoundsOverride,
@@ -1709,7 +1709,7 @@ public sealed class AevatarInvocationDispatcher
 
     private static WorkflowCallerCredentialResolution ResolveWorkflowCallerCredential(AgentToolExecutionContext? context)
     {
-        var parsed = WorkflowCallerCredentialTokens.ParseOptional(context?.Credentials.AccessToken);
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(context?.Credentials.CredentialRef);
         if (parsed.IsInvalid)
         {
             return WorkflowCallerCredentialResolution.Failed(Error(
@@ -1759,7 +1759,7 @@ public sealed class AevatarInvocationDispatcher
             return baseScope;
 
         var context = AgentToolRequestContext.Current;
-        var senderNyxUserId = Normalize(context?.SenderBinding.NyxUserId);
+        var senderNyxUserId = Normalize(context?.SenderBinding.SenderIdentity);
         if (senderNyxUserId == null)
             return baseScope;
 

@@ -362,7 +362,7 @@ public class StreamingToolExecutorTests
         var tools = new ToolManager();
         tools.Register(new DelegateAgentTool("meta-check", _ =>
         {
-            capturedToken = AgentToolRequestContext.AccessToken;
+            capturedToken = AgentToolRequestContext.CredentialRef;
             capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("auth_token");
             capturedCallId = AgentToolRequestContext.CallId;
             return "ok";
@@ -400,7 +400,7 @@ public class StreamingToolExecutorTests
         var tools = new ToolManager();
         tools.Register(new DelegateAgentTool("meta-check", _ =>
         {
-            capturedToken = AgentToolRequestContext.AccessToken;
+            capturedToken = AgentToolRequestContext.CredentialRef;
             capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("auth_token");
             capturedCallId = AgentToolRequestContext.CallId;
             return "ok";
@@ -437,7 +437,7 @@ public class StreamingToolExecutorTests
         var tools = new ToolManager();
         tools.Register(new DelegateAgentTool("meta-check", _ =>
         {
-            capturedToken = AgentToolRequestContext.AccessToken;
+            capturedToken = AgentToolRequestContext.CredentialRef;
             capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
             capturedCallId = AgentToolRequestContext.CallId;
             return "ok";

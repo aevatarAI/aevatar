@@ -571,7 +571,7 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
                 {
                     Credentials = AgentToolCredentials.Empty with
                     {
-                        AccessToken = " typed-access ",
+                        CredentialRef = " typed-access ",
                     },
                 Routing = LLMRequestRoutingContext.Empty with
                     {
@@ -633,7 +633,7 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
                 {
                     Credentials = AgentToolCredentials.Empty with
                     {
-                        AccessToken = " access-token ",
+                        CredentialRef = " access-token ",
                     },
                     Routing = LLMRequestRoutingContext.Empty with
                     {
@@ -714,7 +714,7 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
                 {
                     Credentials = AgentToolCredentials.Empty with
                     {
-                        AccessToken = "access-token",
+                        CredentialRef = "access-token",
                     },
                     Routing = LLMRequestRoutingContext.Empty with
                     {
@@ -828,7 +828,7 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
                 {
                     Credentials = AgentToolCredentials.Empty with
                     {
-                        AccessToken = "access-token",
+                        CredentialRef = "access-token",
                     },
                 }).ToPayload(),
             });
@@ -961,7 +961,7 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
                 {
                     Credentials = AgentToolCredentials.Empty with
                     {
-                        AccessToken = "access-token",
+                        CredentialRef = "access-token",
                     },
                 }).ToPayload(),
             });

@@ -108,7 +108,7 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
                 {
                     Credentials = new AgentToolCredentialsPayload
                     {
-                        SenderAccessToken = "sender-token",
+                        SenderCredentialRef = "sender-token",
                     },
                 },
             }));
@@ -133,7 +133,7 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
                         {
                             LlmControl = new LLMControlContextPayload
                             {
-                                SenderNyxIdAccessToken = "sender-token",
+                                SenderCredentialRef = "sender-token",
                             },
                         }))),
                 "0 9 * * *",

@@ -8,9 +8,9 @@ public static class LLMControlContextMapper
             return LLMControlContext.Empty;
 
         return new LLMControlContext(
-            LLMControlContext.Normalize(payload.NyxIdAccessToken),
-            LLMControlContext.Normalize(payload.NyxIdOrgToken),
-            LLMControlContext.Normalize(payload.SenderNyxIdAccessToken),
+            LLMControlContext.Normalize(payload.CredentialRef),
+            LLMControlContext.Normalize(payload.OrganizationCredentialRef),
+            LLMControlContext.Normalize(payload.SenderCredentialRef),
             LLMControlContext.Normalize(payload.ModelOverride),
             LLMControlContext.Normalize(payload.NyxIdRoutePreference),
             payload.HasMaxToolRoundsOverride ? payload.MaxToolRoundsOverride : null,
@@ -23,9 +23,9 @@ public static class LLMControlContextMapper
 
         var payload = new LLMControlContextPayload
         {
-            NyxIdAccessToken = context.NyxIdAccessToken ?? string.Empty,
-            NyxIdOrgToken = context.NyxIdOrgToken ?? string.Empty,
-            SenderNyxIdAccessToken = context.SenderNyxIdAccessToken ?? string.Empty,
+            CredentialRef = context.CredentialRef ?? string.Empty,
+            OrganizationCredentialRef = context.OrganizationCredentialRef ?? string.Empty,
+            SenderCredentialRef = context.SenderCredentialRef ?? string.Empty,
             ModelOverride = context.ModelOverride ?? string.Empty,
             NyxIdRoutePreference = context.NyxIdRoutePreference ?? string.Empty,
             UserMemoryPrompt = context.UserMemoryPrompt ?? string.Empty,

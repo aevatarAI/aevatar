@@ -253,11 +253,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 Prompt = "hello",
                 LlmControl = new LLMControlContextPayload
                 {
-                    NyxIdAccessToken = "owner-token",
+                    CredentialRef = "owner-token",
                     ModelOverride = "sonnet",
                     NyxIdRoutePreference = "chrono-llm-public",
                     UserMemoryPrompt = "memory",
-                    SenderNyxIdAccessToken = "sender-token",
+                    SenderCredentialRef = "sender-token",
                 },
             }),
         });
@@ -340,8 +340,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 ConnectorHttpAuthorization = "Bearer stale-schedule-token",
                 LlmControl = new LLMControlContextPayload
                 {
-                    NyxIdAccessToken = "owner-token",
-                    SenderNyxIdAccessToken = "sender-token",
+                    CredentialRef = "owner-token",
+                    SenderCredentialRef = "sender-token",
                 },
             }),
         });

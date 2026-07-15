@@ -3688,9 +3688,9 @@ const response = await fetch("{{invokePath}}", {
             return null;
 
         var control = new LLMControlContext(
-            NyxIdAccessToken: null,
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: null,
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
             MaxToolRoundsOverride: null,

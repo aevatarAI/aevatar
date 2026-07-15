@@ -464,9 +464,9 @@ public sealed class MessagesCommandFacade(
             Tools = toolClassification.EffectiveTools,
             ToolContext = toolContext,
             LlmControl = new LLMControlContext(
-                NyxIdAccessToken: null,
-                NyxIdOrgToken: null,
-                SenderNyxIdAccessToken: null,
+                CredentialRef: null,
+                OrganizationCredentialRef: null,
+                SenderCredentialRef: null,
                 ModelOverride: null,
                 NyxIdRoutePreference: resolvedRouteValue,
                 MaxToolRoundsOverride: null,

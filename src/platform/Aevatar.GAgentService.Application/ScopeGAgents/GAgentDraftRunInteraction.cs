@@ -435,9 +435,9 @@ internal sealed class GAgentDraftRunCommandEnvelopeFactory
         // New principle: command-level ToolContext and LlmControl are serialized directly into the event payload.
         chatRequest.ToolContext = (command.ToolContext ?? AgentToolExecutionContext.Empty).ToPayload();
         chatRequest.LlmControl = (command.LlmControl ?? new LLMControlContext(
-            NyxIdAccessToken: Normalize(command.NyxIdAccessToken),
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: Normalize(command.NyxIdAccessToken),
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: Normalize(command.ModelOverride),
             NyxIdRoutePreference: Normalize(command.PreferredLlmRoute),
             MaxToolRoundsOverride: null,

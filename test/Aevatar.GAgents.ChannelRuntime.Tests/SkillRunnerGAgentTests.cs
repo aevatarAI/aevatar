@@ -1791,7 +1791,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         control.ModelOverride.Should().Be("gpt-5.5");
         control.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
         control.MaxToolRoundsOverride.Should().Be(7);
-        control.NyxIdAccessToken.Should().Be("nyx-api-key");
+        control.CredentialRef.Should().Be("nyx-api-key");
         source.RequestedScopeIds.Should().ContainSingle().Which.Should().Be("scope-1");
     }
 
@@ -1808,7 +1808,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         control.ModelOverride.Should().BeNull();
         control.NyxIdRoutePreference.Should().BeNull();
         control.MaxToolRoundsOverride.Should().BeNull();
-        control.NyxIdAccessToken.Should().Be("nyx-api-key");
+        control.CredentialRef.Should().Be("nyx-api-key");
     }
 
     [Fact]
@@ -1833,8 +1833,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         var control = await InvokeBuildExecutionLlmControlAsync(agent);
 
-        control.NyxIdAccessToken.Should().Be("scheduled-agent-key");
-        control.NyxIdOrgToken.Should().Be("scheduled-agent-key");
+        control.CredentialRef.Should().Be("scheduled-agent-key");
+        control.OrganizationCredentialRef.Should().Be("scheduled-agent-key");
     }
 
     [Fact]
@@ -1999,7 +1999,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         request.ToolContext!.Request.RequestId.Should().NotBeNullOrWhiteSpace();
         request.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         request.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
-        request.ToolContext.Credentials.AccessToken.Should().Be("nyx-api-key");
+        request.ToolContext.Credentials.CredentialRef.Should().Be("nyx-api-key");
         request.ToolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.ConversationId);
         request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
     }

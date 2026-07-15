@@ -50,9 +50,9 @@ public sealed class ConversationReplyGeneratorTests
         string? token = null,
         string? senderToken = null) =>
         new(
-            NyxIdAccessToken: token,
-            NyxIdOrgToken: token,
-            SenderNyxIdAccessToken: senderToken,
+            CredentialRef: token,
+            OrganizationCredentialRef: token,
+            SenderCredentialRef: senderToken,
             ModelOverride: model,
             NyxIdRoutePreference: route,
             MaxToolRoundsOverride: rounds,
@@ -2138,8 +2138,8 @@ public sealed class ConversationReplyGeneratorTests
         toolContext.Channel.Platform.Should().BeNull();
         toolContext.Channel.SenderId.Should().BeNull();
         toolContext.Channel.MessageId.Should().BeNull();
-        toolContext.Credentials.AccessToken.Should().Be("typed-token");
-        toolContext.Credentials.OrganizationToken.Should().Be("typed-token");
+        toolContext.Credentials.CredentialRef.Should().Be("typed-token");
+        toolContext.Credentials.OrganizationCredentialRef.Should().Be("typed-token");
         toolContext.Routing.ModelOverride.Should().Be("typed-model");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("typed-route");
         toolContext.Routing.MaxToolRoundsOverride.Should().Be(6);
@@ -2349,9 +2349,9 @@ public sealed class ConversationReplyGeneratorTests
         senderToolContext.Routing.ModelOverride.Should().Be("sender-model");
         senderToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
         senderToolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
-        senderToolContext.Credentials.AccessToken.Should().Be("sender-token");
-        senderToolContext.Credentials.OrganizationToken.Should().Be("sender-token");
-        senderToolContext.Credentials.SenderAccessToken.Should().Be("sender-token");
+        senderToolContext.Credentials.CredentialRef.Should().Be("sender-token");
+        senderToolContext.Credentials.OrganizationCredentialRef.Should().Be("sender-token");
+        senderToolContext.Credentials.SenderCredentialRef.Should().Be("sender-token");
 
         var ownerRequest = providerFactory.Requests[1];
         ownerRequest.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
@@ -2359,10 +2359,10 @@ public sealed class ConversationReplyGeneratorTests
         ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
         ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
         ownerToolContext.Routing.MaxToolRoundsOverride.Should().Be(5);
-        ownerToolContext.Credentials.AccessToken.Should().Be("owner-token");
-        ownerToolContext.Credentials.OrganizationToken.Should().Be("owner-token");
+        ownerToolContext.Credentials.CredentialRef.Should().Be("owner-token");
+        ownerToolContext.Credentials.OrganizationCredentialRef.Should().Be("owner-token");
         ownerToolContext.SenderBinding.BindingId.Should().BeNull();
-        ownerToolContext.Credentials.SenderAccessToken.Should().BeNull();
+        ownerToolContext.Credentials.SenderCredentialRef.Should().BeNull();
     }
 
     [Fact]
@@ -2405,15 +2405,15 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().HaveCount(2);
         providerFactory.Requests[0].Tools.Should().NotBeNull();
         providerFactory.Requests[0].ToolContext!.Routing.ModelOverride.Should().Be("sender-model");
-        providerFactory.Requests[0].ToolContext!.Credentials.SenderAccessToken.Should().Be("sender-token");
+        providerFactory.Requests[0].ToolContext!.Credentials.SenderCredentialRef.Should().Be("sender-token");
 
         providerFactory.Requests[1].Tools.Should().BeNull();
         var ownerToolContext = providerFactory.Requests[1].ToolContext!;
         ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
         ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
-        ownerToolContext.Credentials.AccessToken.Should().Be("owner-token");
+        ownerToolContext.Credentials.CredentialRef.Should().Be("owner-token");
         ownerToolContext.SenderBinding.BindingId.Should().BeNull();
-        ownerToolContext.Credentials.SenderAccessToken.Should().BeNull();
+        ownerToolContext.Credentials.SenderCredentialRef.Should().BeNull();
     }
 
     [Fact]
@@ -2451,7 +2451,7 @@ public sealed class ConversationReplyGeneratorTests
         var ownerToolContext = providerFactory.Requests[1].ToolContext!;
         ownerToolContext.Routing.ModelOverride.Should().Be("owner-model");
         ownerToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
-        ownerToolContext.Credentials.AccessToken.Should().Be("owner-token");
+        ownerToolContext.Credentials.CredentialRef.Should().Be("owner-token");
         ownerToolContext.SenderBinding.BindingId.Should().BeNull();
     }
 
@@ -2490,10 +2490,10 @@ public sealed class ConversationReplyGeneratorTests
         requestToolContext.Routing.ModelOverride.Should().Be("sender-model");
         requestToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
         requestToolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
-        requestToolContext.Credentials.AccessToken.Should().Be("owner-token");
-        requestToolContext.Credentials.OrganizationToken.Should().Be("owner-token");
+        requestToolContext.Credentials.CredentialRef.Should().Be("owner-token");
+        requestToolContext.Credentials.OrganizationCredentialRef.Should().Be("owner-token");
         requestToolContext.SenderBinding.BindingId.Should().Be("bnd_sender");
-        requestToolContext.Credentials.SenderAccessToken.Should().BeNull();
+        requestToolContext.Credentials.SenderCredentialRef.Should().BeNull();
     }
 
     [Fact]
@@ -2525,9 +2525,9 @@ public sealed class ConversationReplyGeneratorTests
         var toolContext = providerFactory.Requests.Should().ContainSingle().Subject.ToolContext!;
         toolContext.Routing.ModelOverride.Should().Be("sender-model");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/owner");
-        toolContext.Credentials.AccessToken.Should().Be("sender-token");
-        toolContext.Credentials.OrganizationToken.Should().Be("sender-token");
-        toolContext.Credentials.SenderAccessToken.Should().Be("sender-token");
+        toolContext.Credentials.CredentialRef.Should().Be("sender-token");
+        toolContext.Credentials.OrganizationCredentialRef.Should().Be("sender-token");
+        toolContext.Credentials.SenderCredentialRef.Should().Be("sender-token");
         toolContext.SenderBinding.BindingId.Should().Be("bnd_sender");
     }
 

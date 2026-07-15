@@ -754,8 +754,8 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
 
         var llmControl = new LLMControlContext(
             Normalize(accessToken),
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             Normalize(participant.Model),
             Normalize(participant.RoutePreference),
             MaxToolRoundsOverride: null,

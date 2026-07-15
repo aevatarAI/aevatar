@@ -28,16 +28,16 @@ internal static class AgentRunReplyStepCredentials
     private static void ClearControlTokens(Aevatar.AI.Abstractions.LLMControlContextPayload? control)
     {
         if (control is null) return;
-        control.NyxIdAccessToken = string.Empty;
-        control.NyxIdOrgToken = string.Empty;
-        control.SenderNyxIdAccessToken = string.Empty;
+        control.CredentialRef = string.Empty;
+        control.OrganizationCredentialRef = string.Empty;
+        control.SenderCredentialRef = string.Empty;
     }
 
     private static void ClearCredentialTokens(Aevatar.AI.Abstractions.AgentToolCredentialsPayload? credentials)
     {
         if (credentials is null) return;
-        credentials.AccessToken = string.Empty;
-        credentials.OrganizationToken = string.Empty;
-        credentials.SenderAccessToken = string.Empty;
+        credentials.CredentialRef = string.Empty;
+        credentials.OrganizationCredentialRef = string.Empty;
+        credentials.SenderCredentialRef = string.Empty;
     }
 }

@@ -208,8 +208,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             invocationRequest.EndpointId ?? string.Empty,
             workflowRunActorId ?? string.Empty,
             !string.IsNullOrWhiteSpace(source.ConnectorHttpAuthorization),
-            !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdAccessToken) ||
-            !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken),
+            !string.IsNullOrWhiteSpace(source.LlmControl?.CredentialRef) ||
+            !string.IsNullOrWhiteSpace(source.LlmControl?.OrganizationCredentialRef),
             ResolveCallerCredentialSourceKind(callerCredential),
             !string.IsNullOrWhiteSpace(callerCredential.BearerToken));
 
@@ -249,7 +249,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ModelOverride = source.LlmControl?.ModelOverride ?? string.Empty,
             UserMemoryPrompt = source.LlmControl?.UserMemoryPrompt ?? string.Empty,
             RoutePreference = source.LlmControl?.NyxIdRoutePreference ?? string.Empty,
-            SenderNyxIdAccessToken = source.LlmControl?.SenderNyxIdAccessToken ?? string.Empty,
+            SenderNyxIdAccessToken = source.LlmControl?.SenderCredentialRef ?? string.Empty,
         };
         if (source.LlmControl?.HasMaxToolRoundsOverride == true)
             request.LlmControl.MaxToolRoundsOverride = source.LlmControl.MaxToolRoundsOverride;
@@ -287,8 +287,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             }
 
             if (!string.IsNullOrWhiteSpace(source.ConnectorHttpAuthorization) ||
-                !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdAccessToken) ||
-                !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken))
+                !string.IsNullOrWhiteSpace(source.LlmControl?.CredentialRef) ||
+                !string.IsNullOrWhiteSpace(source.LlmControl?.OrganizationCredentialRef))
             {
                 throw new InvalidOperationException(
                     "caller_durable_credential must not be combined with raw workflow caller credentials.");
@@ -317,7 +317,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 return connectorCredential;
         }
 
-        return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
+        return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.CredentialRef);
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredentialFromConnectorAuthorization(string? connectorHttpAuthorization)

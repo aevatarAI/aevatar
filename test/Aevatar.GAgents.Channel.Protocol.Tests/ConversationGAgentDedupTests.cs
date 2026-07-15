@@ -1603,9 +1603,9 @@ public sealed class ConversationGAgentDedupTests
 
         dispatcher.Dispatched.ShouldHaveSingleItem();
         var dispatchedContext = AgentToolExecutionContextMapper.FromPayload(dispatcher.Dispatched[0].ToolContext);
-        dispatchedContext.Credentials.AccessToken.ShouldBe(sentinelOwnerToken);
-        dispatchedContext.Credentials.OrganizationToken.ShouldBe(sentinelOrgToken);
-        dispatchedContext.Credentials.SenderAccessToken.ShouldBe(sentinelSenderToken);
+        dispatchedContext.Credentials.CredentialRef.ShouldBe(sentinelOwnerToken);
+        dispatchedContext.Credentials.OrganizationCredentialRef.ShouldBe(sentinelOrgToken);
+        dispatchedContext.Credentials.SenderCredentialRef.ShouldBe(sentinelSenderToken);
 
         var pending = agent.State.PendingLlmReplyRequests.Single();
         var persistedContext = AgentToolExecutionContextMapper.FromPayload(pending.ToolContext);

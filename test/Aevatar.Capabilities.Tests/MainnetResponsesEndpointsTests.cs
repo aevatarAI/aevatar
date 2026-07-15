@@ -3077,9 +3077,9 @@ public sealed class MainnetResponsesEndpointsTests
                 Tools = ToEffectiveTools(command.ToolSelection),
                 ToolContext = toolContext,
                 LlmControl = new LLMControlContext(
-                    NyxIdAccessToken: null,
-                    NyxIdOrgToken: null,
-                    SenderNyxIdAccessToken: null,
+                    CredentialRef: null,
+                    OrganizationCredentialRef: null,
+                    SenderCredentialRef: null,
                     ModelOverride: null,
                     NyxIdRoutePreference: string.IsNullOrWhiteSpace(command.RoutePreference) ? null : command.RoutePreference,
                     MaxToolRoundsOverride: null,

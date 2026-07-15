@@ -173,16 +173,16 @@ public static class ScheduledDispatchCredentialRequirementRequests
         if (!string.IsNullOrWhiteSpace(chatRequest.ConnectorHttpAuthorization))
             return new ScheduledDispatchPayloadCredentialSignal(true, nameof(ChatRequestEvent.ConnectorHttpAuthorization));
 
-        if (!string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdAccessToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.NyxIdOrgToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.SenderNyxIdAccessToken))
+        if (!string.IsNullOrWhiteSpace(chatRequest.LlmControl?.CredentialRef) ||
+            !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.OrganizationCredentialRef) ||
+            !string.IsNullOrWhiteSpace(chatRequest.LlmControl?.SenderCredentialRef))
         {
             return new ScheduledDispatchPayloadCredentialSignal(true, nameof(ChatRequestEvent.LlmControl));
         }
 
-        if (!string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.AccessToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.OrganizationToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderAccessToken))
+        if (!string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.CredentialRef) ||
+            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.OrganizationCredentialRef) ||
+            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderCredentialRef))
         {
             return new ScheduledDispatchPayloadCredentialSignal(true, "ToolContext.Credentials");
         }

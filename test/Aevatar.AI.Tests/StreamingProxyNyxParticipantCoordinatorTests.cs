@@ -55,7 +55,7 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         llmProvider.Requests.Should().OnlyContain(request => request.Metadata == null || request.Metadata.Count == 0);
         llmProvider.Requests.Should().OnlyContain(request =>
             request.LlmControl != null &&
-            request.LlmControl.NyxIdAccessToken == "test-token");
+            request.LlmControl.CredentialRef == "test-token");
         llmProvider.Requests.Should().OnlyContain(request =>
             request.LlmControl != null &&
             request.LlmControl.NyxIdRoutePreference != null &&

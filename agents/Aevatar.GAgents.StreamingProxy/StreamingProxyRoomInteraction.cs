@@ -258,9 +258,9 @@ internal sealed class StreamingProxyRoomChatCommandEnvelopeFactory
             ScopeId = command.ScopeId,
         };
         chatRequest.LlmControl = new LLMControlContext(
-            NyxIdAccessToken: Normalize(command.AccessToken),
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: Normalize(command.AccessToken),
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: Normalize(command.DefaultModel),
             NyxIdRoutePreference: Normalize(command.PreferredRoute),
             MaxToolRoundsOverride: null,

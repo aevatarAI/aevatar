@@ -107,7 +107,7 @@ public class AgentToolVoiceInvokerTests
 
         allowed.CapturedContext.Should().NotBeNull();
         var captured = allowed.CapturedContext!;
-        captured.Credentials.AccessToken.Should().Be("caller-token-456");
+        captured.Credentials.CredentialRef.Should().Be("caller-token-456");
         captured.Caller.ScopeId.Should().Be("caller-scope-1");
         captured.Caller.OwnerSubject.Should().Be("owner-subject-1");
         captured.Caller.ResponseId.Should().Be("response-1");
@@ -174,7 +174,7 @@ public class AgentToolVoiceInvokerTests
         {
             _ = argumentsJson;
             _ = ct;
-            CapturedNyxIdAccessToken = AgentToolRequestContext.AccessToken;
+            CapturedNyxIdAccessToken = AgentToolRequestContext.CredentialRef;
             CapturedContext = AgentToolRequestContext.Current;
             return Task.FromResult("{}");
         }

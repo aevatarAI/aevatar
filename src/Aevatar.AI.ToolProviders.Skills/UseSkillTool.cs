@@ -111,7 +111,7 @@ public sealed class UseSkillTool : IAgentTool
 
         if (_remoteFetcher != null)
         {
-            var token = AgentToolRequestContext.AccessToken;
+            var token = AgentToolRequestContext.CredentialRef;
             if (!string.IsNullOrWhiteSpace(token))
             {
                 try
@@ -218,7 +218,7 @@ public sealed class UseSkillTool : IAgentTool
                 Message: "Workflow mounting skipped because scope_id is missing from the request context.");
         }
 
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
         {
             return new SkillWorkflowMountResult(

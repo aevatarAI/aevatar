@@ -27,7 +27,7 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
         RemoteToolApprovalRequest request,
         CancellationToken ct)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException("NyxID authentication required for remote approval.");
 
@@ -57,7 +57,7 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
         RemoteToolApprovalStatusQuery query,
         CancellationToken ct)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException("NyxID authentication required for remote approval.");
 
@@ -72,7 +72,7 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
         RemoteToolApprovalDecision decision,
         CancellationToken ct)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
             throw new InvalidOperationException("NyxID authentication required for remote approval.");
 

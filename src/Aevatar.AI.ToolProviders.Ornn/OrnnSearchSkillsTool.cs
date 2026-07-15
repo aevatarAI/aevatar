@@ -51,7 +51,7 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.AccessToken;
+        var token = AgentToolRequestContext.CredentialRef;
         if (string.IsNullOrWhiteSpace(token))
         {
             return BuildStructuredResult(

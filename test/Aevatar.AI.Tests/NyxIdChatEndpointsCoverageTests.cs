@@ -1070,9 +1070,9 @@ public class NyxIdChatEndpointsCoverageTests
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.UserMemoryPrompt);
         command.LlmControl.Should().Be(new LLMControlContext(
-            NyxIdAccessToken: "valid-token",
-            NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: null,
+            CredentialRef: "valid-token",
+            OrganizationCredentialRef: null,
+            SenderCredentialRef: null,
             ModelOverride: "relay-model",
             NyxIdRoutePreference: "/relay-route",
             MaxToolRoundsOverride: 7,
@@ -1380,7 +1380,7 @@ public class NyxIdChatEndpointsCoverageTests
         request.Metadata.Should().NotContainKey("scope_id");
         request.Metadata["custom"].Should().Be("value");
         LLMControlContextMapper.FromPayload(request.LlmControl)
-            .NyxIdAccessToken.Should().Be("access-token");
+            .CredentialRef.Should().Be("access-token");
         emitted.Select(x => x.EventCase).Should().ContainInOrder(
             AGUIEvent.EventOneofCase.TextMessageContent,
             AGUIEvent.EventOneofCase.RunFinished);

@@ -55,12 +55,12 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         // The control passed to the generator (== BuildGenerationContext output)
         // must carry the freshly minted sender token.
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl!.SenderCredentialRef.Should().Be("fresh-sender-token");
 
         // And it must project into the resulting step-state tool credentials so
         // ToolCallCredentialPolicyMiddleware admits sender-credentialed tools.
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.Credentials.SenderAccessToken.Should().Be("fresh-sender-token");
+        toolContext.Credentials.SenderCredentialRef.Should().Be("fresh-sender-token");
 
         // The subject rebuilt from the tool context must match the bound sender
         // (platform lowercased, tenant carried as identity fact, sender id).
@@ -108,9 +108,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
 
         // Token must remain empty (no owner credential smuggled into the sender slot).
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl!.SenderCredentialRef.Should().BeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.Credentials.SenderAccessToken.Should().BeNull();
+        toolContext.Credentials.SenderCredentialRef.Should().BeNull();
 
         // Reconcile fires (best-effort, fire-and-forget) with the invalid_grant reason.
         // WaitAsync gives a deterministic one-shot timeout (throws TimeoutException if the
@@ -144,9 +144,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl!.SenderCredentialRef.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderAccessToken.Should().BeNull();
+            .Credentials.SenderCredentialRef.Should().BeNull();
 
         await reconciler.DidNotReceiveWithAnyArgs()
             .ReconcileRevokedAsync(default!, default!, default);
@@ -165,9 +165,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl!.SenderCredentialRef.Should().BeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.Credentials.SenderAccessToken.Should().BeNull();
+        toolContext.Credentials.SenderCredentialRef.Should().BeNull();
 
         await broker.DidNotReceiveWithAnyArgs()
             .IssueShortLivedByBindingIdAsync(default!, default!, default!, default);
@@ -188,9 +188,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl!.SenderCredentialRef.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderAccessToken.Should().BeNull();
+            .Credentials.SenderCredentialRef.Should().BeNull();
     }
 
     [Fact]
@@ -209,9 +209,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl!.SenderCredentialRef.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderAccessToken.Should().BeNull();
+            .Credentials.SenderCredentialRef.Should().BeNull();
         await broker.DidNotReceiveWithAnyArgs()
             .IssueShortLivedByBindingIdAsync(default!, default!, default!, default);
     }
@@ -237,12 +237,12 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl!.SenderCredentialRef.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderAccessToken.Should().BeNull();
-        AgentRunReplyStepMappers.LlmControlFromProto(state).SenderNyxIdAccessToken.Should().BeNull();
+            .Credentials.SenderCredentialRef.Should().BeNull();
+        AgentRunReplyStepMappers.LlmControlFromProto(state).SenderCredentialRef.Should().BeNull();
         LLMControlContextMapper.FromPayload(state.OwnerFallbackLlmControl)
-            .SenderNyxIdAccessToken.Should().BeNull();
+            .SenderCredentialRef.Should().BeNull();
     }
 
     [Fact]
@@ -300,9 +300,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
                 senderTenant: null,
                 botId: "api-key-1",
                 llmControl: new LLMControlContext(
-                    NyxIdAccessToken: null,
-                    NyxIdOrgToken: null,
-                    SenderNyxIdAccessToken: null,
+                    CredentialRef: null,
+                    OrganizationCredentialRef: null,
+                    SenderCredentialRef: null,
                     ModelOverride: "incoming-model",
                     NyxIdRoutePreference: "/api/v1/proxy/s/incoming",
                     MaxToolRoundsOverride: 3,
@@ -353,7 +353,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
                 PlatformMessageId: null),
             SenderBinding = senderBindingId is null
                 ? AgentToolSenderBindingContext.Empty
-                : new AgentToolSenderBindingContext(senderBindingId, NyxUserId: null, SenderTenant: senderTenant),
+                : new AgentToolSenderBindingContext(senderBindingId, SenderIdentity: null, SenderTenant: senderTenant),
         };
 
         var evt = new NeedsLlmReplyEvent

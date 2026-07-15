@@ -403,7 +403,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         if (!string.IsNullOrWhiteSpace(typedToken))
             return (typedToken, "caller-typed");
 
-        var controlToken = request.LlmControl?.NyxIdAccessToken?.Trim();
+        var controlToken = request.LlmControl?.CredentialRef?.Trim();
         if (!string.IsNullOrWhiteSpace(controlToken))
             return (controlToken, "llm-control");
 

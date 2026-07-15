@@ -30,8 +30,8 @@ internal static class WorkflowCallerCredentialToolContextMapper
         {
             Credentials = context.Credentials with
             {
-                AccessToken = token.NormalizedBearerToken,
-                OrganizationToken = token.NormalizedBearerToken,
+                CredentialRef = token.NormalizedBearerToken,
+                OrganizationCredentialRef = token.NormalizedBearerToken,
             },
         };
     }

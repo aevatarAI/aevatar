@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using FluentAssertions;
 
@@ -17,10 +18,17 @@ public sealed class AgentToolGenericAuthContractGuardTests
         var identifiers = ContractIdentifiers(
                 typeof(AgentToolCredentials),
                 typeof(AgentToolCredentialSource),
+                typeof(AgentToolSenderBindingContext),
                 typeof(AgentToolCredentialsPayload),
-                typeof(AgentToolCredentialSourcePayload))
+                typeof(AgentToolCredentialSourcePayload),
+                typeof(AgentToolSenderBindingContextPayload))
             .Concat(CredentialMemberIdentifiers(typeof(AgentToolRequestContext)))
+            .Concat(CredentialMemberIdentifiers(typeof(LLMControlContext)))
             .Concat(AgentToolCredentialsPayload.Descriptor.Fields.InFieldNumberOrder().Select(field => field.Name))
+            .Concat(AgentToolSenderBindingContextPayload.Descriptor.Fields.InFieldNumberOrder().Select(field => field.Name))
+            .Concat(LLMControlContextPayload.Descriptor.Fields.InFieldNumberOrder()
+                .Where(field => field.FieldNumber is >= 1 and <= 3)
+                .Select(field => field.Name))
             .Concat(credentialSourceDescriptor.Values.Select(value => value.Name));
 
         identifiers.Should().NotContain(
@@ -29,7 +37,17 @@ public sealed class AgentToolGenericAuthContractGuardTests
         AgentToolCredentialsPayload.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
             .Should()
-            .Equal("access_token", "organization_token", "sender_access_token");
+            .Equal("credential_ref", "organization_credential_ref", "sender_credential_ref");
+
+        LLMControlContextPayload.Descriptor.Fields.InFieldNumberOrder()
+            .Where(field => field.FieldNumber is >= 1 and <= 3)
+            .Select(field => field.Name)
+            .Should()
+            .Equal("credential_ref", "organization_credential_ref", "sender_credential_ref");
+
+        AgentToolSenderBindingContextPayload.Descriptor.FindFieldByName("sender_identity")
+            .Should()
+            .NotBeNull();
 
         credentialSourceDescriptor.Values
             .Select(value => value.Name)

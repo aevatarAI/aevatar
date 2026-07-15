@@ -51,8 +51,8 @@ public sealed class StreamingProxyGAgent : GAgentBase<StreamingProxyGAgentState>
             ScopeId = scopeId,
         };
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
-        if (!string.IsNullOrWhiteSpace(toolContext.Credentials.AccessToken))
-            lifecycleEvent.AccessToken = toolContext.Credentials.AccessToken;
+        if (!string.IsNullOrWhiteSpace(toolContext.Credentials.CredentialRef))
+            lifecycleEvent.AccessToken = toolContext.Credentials.CredentialRef;
         if (!string.IsNullOrWhiteSpace(toolContext.Routing.NyxIdRoutePreference))
             lifecycleEvent.PreferredRoute = toolContext.Routing.NyxIdRoutePreference;
         if (!string.IsNullOrWhiteSpace(toolContext.Routing.ModelOverride))

@@ -102,7 +102,7 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
                 ScopeId = scope.ScopeId,
                 OwnerSubject = scope.OwnerSubject,
                 ResponseId = scope.ResponseId,
-                NyxIdAccessToken = AgentToolRequestContext.AccessToken ?? string.Empty,
+                NyxIdAccessToken = AgentToolRequestContext.CredentialRef ?? string.Empty,
                 Fetch = input,
             };
         }
@@ -118,7 +118,7 @@ internal sealed class ResponsesAevatarToolProvider : IResponsesToolProvider, IAg
                 ScopeId = scope.ScopeId,
                 OwnerSubject = scope.OwnerSubject,
                 ResponseId = scope.ResponseId,
-                NyxIdAccessToken = AgentToolRequestContext.AccessToken ?? string.Empty,
+                NyxIdAccessToken = AgentToolRequestContext.CredentialRef ?? string.Empty,
                 Search = input,
             };
         }
