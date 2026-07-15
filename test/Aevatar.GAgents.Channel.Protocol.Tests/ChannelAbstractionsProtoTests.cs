@@ -254,8 +254,8 @@ public sealed class ChannelAbstractionsProtoTests
         AssertField<DeliveryTarget>("channel", 1, FieldType.Message);
         AssertField<DeliveryTarget>("conversation_key", 2, FieldType.String);
         AssertField<DeliveryTarget>("platform", 3, FieldType.String);
-        AssertField<DeliveryTarget>("receive_id", 4, FieldType.String);
-        AssertField<DeliveryTarget>("receive_id_type", 5, FieldType.String);
+        AssertField<DeliveryTarget>("address_id", 4, FieldType.String);
+        AssertField<DeliveryTarget>("address_type", 5, FieldType.String);
         AssertField<DeliveryTarget>("conversation_id", 6, FieldType.String);
         AssertField<DeliveryTarget>("reply_message_id", 7, FieldType.String);
 
