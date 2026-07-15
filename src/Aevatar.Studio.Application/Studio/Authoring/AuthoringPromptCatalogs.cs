@@ -1,6 +1,7 @@
 using System.Text;
 using Aevatar.Configuration;
 using Aevatar.Studio.Application.Scripts.Contracts;
+using Aevatar.Studio.Domain.Studio.Compatibility;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Application.Studio.Authoring;
@@ -12,10 +13,14 @@ public sealed class WorkflowAuthoringPromptCatalog
 {
     private const string SkillRelativePath = ".cursor/skills/aevatar-workflow-yaml/SKILL.md";
     private readonly ILogger<WorkflowAuthoringPromptCatalog> _logger;
+    private readonly WorkflowCompatibilityProfile _profile;
 
-    public WorkflowAuthoringPromptCatalog(ILogger<WorkflowAuthoringPromptCatalog> logger)
+    public WorkflowAuthoringPromptCatalog(
+        ILogger<WorkflowAuthoringPromptCatalog> logger,
+        WorkflowCompatibilityProfile? profile = null)
     {
         _logger = logger;
+        _profile = profile ?? WorkflowCompatibilityProfile.AevatarV1;
         SystemPrompt = BuildSystemPrompt(LoadSkillMarkdown());
     }
 
@@ -75,12 +80,14 @@ public sealed class WorkflowAuthoringPromptCatalog
         }
     }
 
-    private static string BuildSystemPrompt(string skillMarkdown)
+    private string BuildSystemPrompt(string skillMarkdown)
     {
         var builder = new StringBuilder();
         builder.AppendLine("You author and repair Aevatar workflow YAML for Studio Ask AI preview.");
         builder.AppendLine("Return workflow YAML only. Do not wrap it in markdown fences. Do not explain.");
         builder.AppendLine("The YAML must be accepted by the aevatar workflow editor.");
+        builder.AppendLine($"The only supported top-level fields are: {_profile.FormatRootFields()}.");
+        builder.AppendLine("Do not emit top-level fields from other workflow dialects, including version, inputs, outputs, triggers, on, env, or jobs.");
         builder.AppendLine("When current YAML is provided, treat the task as an edit and preserve unrelated sections.");
         builder.AppendLine("If validation feedback is provided, fix every listed issue before returning.");
         builder.AppendLine("Use snake_case keys and author parameters as strings unless the schema requires another shape.");
