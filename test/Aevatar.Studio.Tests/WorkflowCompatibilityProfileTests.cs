@@ -2,6 +2,8 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Infrastructure.Serialization;
+using Aevatar.Workflow.Abstractions.Workflows;
+using Aevatar.Workflow.Core.Primitives;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -13,15 +15,32 @@ public sealed class WorkflowCompatibilityProfileTests
     [Fact]
     public void AevatarV1_ShouldHaveExpectedVersion()
     {
-        _profile.Version.Should().Be("aevatar.workflow.v1");
+        _profile.Version.Should().Be(WorkflowYamlRootSchema.Version);
     }
 
     [Fact]
-    public void AevatarV1_ShouldOwnCanonicalRootFieldOrder()
+    public void AevatarV1_ShouldConsumeSharedRootSchema()
     {
-        _profile.RootFieldOrder.Should().Equal("name", "description", "configuration", "roles", "steps");
-        _profile.AllowedRootFields.Should().BeEquivalentTo(_profile.RootFieldOrder);
-        _profile.FormatRootFields().Should().Be("name, description, configuration, roles, steps");
+        _profile.RootFieldOrder.Should().Equal(WorkflowYamlRootSchema.AcceptedRootFieldOrder);
+        _profile.AuthorableRootFieldOrder.Should().Equal(WorkflowYamlRootSchema.AuthorableRootFieldOrder);
+        _profile.AllowedRootFields.Should().BeEquivalentTo(WorkflowYamlRootSchema.AcceptedRootFields);
+        _profile.FormatRootFields().Should().Be(WorkflowYamlRootSchema.FormatAuthorableRootFields());
+        _profile.FormatRejectedDialectRootFields().Should().Be(WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields());
+    }
+
+    [Theory]
+    [MemberData(nameof(SharedAcceptedRootFields))]
+    public void AevatarV1_ShouldKeepStudioValidationAndParserAlignedOnAcceptedRootFields(string rootField)
+    {
+        var yaml = BuildYamlWithRootField(rootField);
+
+        var studioParse = new YamlWorkflowDocumentService(_profile).Parse(yaml);
+        Action parserParse = () => new WorkflowParser().Parse(yaml);
+
+        studioParse.Findings.Should().NotContain(finding =>
+            string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase) &&
+            finding.Path == $"/{rootField}");
+        parserParse.Should().NotThrow();
     }
 
     [Theory]
@@ -36,6 +55,55 @@ public sealed class WorkflowCompatibilityProfileTests
     {
         _profile.AllowedRootFields.Should().NotContain(field);
     }
+
+    public static IEnumerable<object[]> SharedAcceptedRootFields() =>
+        WorkflowYamlRootSchema.AcceptedRootFieldOrder.Select(static field => new object[] { field });
+
+    private static string BuildYamlWithRootField(string rootField) =>
+        rootField switch
+        {
+            "name" => """
+                name: monitor
+                steps: []
+                """,
+            "description" => """
+                name: monitor
+                description: Test workflow
+                steps: []
+                """,
+            "when_to_use" => """
+                name: monitor
+                when_to_use: Use when monitoring is needed.
+                steps: []
+                """,
+            "configuration" => """
+                name: monitor
+                configuration:
+                  closed_world_mode: true
+                steps: []
+                """,
+            "roles" => """
+                name: monitor
+                roles:
+                  - id: analyst
+                    name: Analyst
+                steps: []
+                """,
+            "steps" => """
+                name: monitor
+                steps:
+                  - id: step_1
+                    type: llm_call
+                """,
+            "on_failure" => """
+                name: monitor
+                on_failure:
+                  action: fail
+                  max_attempts: 1
+                steps: []
+                """,
+            _ => throw new ArgumentOutOfRangeException(nameof(rootField), rootField, null),
+        };
 
     [Theory]
     [InlineData("llm", "llm_call")]

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions.Workflows;
 
 namespace Aevatar.Workflow.Application.Workflows;
 
@@ -86,7 +87,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// unreliable while a tool is visible).
     /// </para>
     /// </summary>
-    public static string BuiltInStudioYaml { get; } = """
+    public static string BuiltInStudioYaml { get; } = $$"""
         name: studio
         description: >
           Studio authoring surface: workflow-first, Observatory-delivered. Author a runnable workflow,
@@ -105,9 +106,10 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  `member_id`, or `team_id`.
               2. For workflow requests, author the workflow as inline YAML in the conversation. Keep it complete and runnable.
                  Workflow YAML schema (follow strictly, snake_case keys):
-                 - Top-level keys are EXACTLY: name (required), description, configuration, roles, steps.
-                   Do NOT use keys from other workflow dialects — no version, inputs, outputs, triggers,
-                   on, env or jobs. The parser rejects unknown keys and the bind fails.
+                 - Authorable top-level keys are EXACTLY: {{WorkflowYamlRootSchema.FormatAuthorableRootFields()}}.
+                   `name` is required.
+                   Do NOT use keys from other workflow dialects — no {{WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}}.
+                   The parser rejects unknown keys and the bind fails.
                  - roles: list of {id, name, system_prompt}; omit provider/model unless the user asks
                    for a specific one.
                  - steps: list of {id, type, target_role, parameters, next, branches}; step ids unique;

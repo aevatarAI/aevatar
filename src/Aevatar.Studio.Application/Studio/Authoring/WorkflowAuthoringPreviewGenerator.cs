@@ -297,7 +297,7 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     private IEnumerable<string> BuildAuthoringSchemaRules()
     {
         yield return $"Use only these top-level fields: {_profile.FormatRootFields()}.";
-        yield return "Do not emit top-level fields from other workflow dialects, including version, inputs, outputs, triggers, on, env, or jobs.";
+        yield return $"Do not emit top-level fields from other workflow dialects, including {_profile.FormatRejectedDialectRootFields()}.";
 
         foreach (var rule in BaseAuthoringSchemaRules)
             yield return rule;
