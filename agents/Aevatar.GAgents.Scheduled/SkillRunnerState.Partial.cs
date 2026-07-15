@@ -226,7 +226,7 @@ public sealed partial class SkillRunnerState
             DeliveryKind = produced.DeliveryKind,
             Status = produced.Status,
             Target = produced.Target?.Clone() ?? new DeliveryTarget(),
-            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            ProviderMessageId = produced.ProviderMessageId ?? string.Empty,
             CardId = produced.CardId ?? string.Empty,
             RequestId = produced.RequestId ?? string.Empty,
             SourceEventId = produced.SourceEventId ?? string.Empty,

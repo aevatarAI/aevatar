@@ -222,14 +222,16 @@ internal sealed class ChannelNativeSkillRunnerOutboundDeliveryPort : ISkillRunne
             NyxProviderSlug: outbound.NyxProviderSlug,
             NyxApiKey: outbound.NyxApiKey,
             ChannelAddress: UserAgentCatalogChannelAddress.ToModel(
-                null,
+                outbound.ChannelAddress,
                 ResolvePlatform(outbound),
                 outbound.NyxProviderSlug,
                 outbound.ConversationId,
+#pragma warning disable CS0612 // deprecated fields are read only as a channel_address compatibility bridge
                 outbound.LarkReceiveId,
                 outbound.LarkReceiveIdType,
                 outbound.LarkReceiveIdFallback,
                 outbound.LarkReceiveIdTypeFallback),
+#pragma warning restore CS0612
             OutputFormat: outbound.OutputFormat,
             TemplateName: string.Empty,
             AgentType: string.Empty);

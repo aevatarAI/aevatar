@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
 import "Credentials/credential_secret_references.proto";
+import "channel_delivery_address.proto";
 import "skill_runner.proto";
 
 // Refactor (iter91/cluster-091-owner-scope-foundation):
@@ -14,19 +15,6 @@ import "skill_runner.proto";
 //   New: fields below use canonical aevatar.OwnerScope from Foundation.Abstractions.
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───
-
-message ChannelDeliveryAddressEndpoint {
-  string address_id = 1;
-  string address_type = 2;
-}
-
-message ChannelDeliveryAddress {
-  string platform = 1;
-  string provider_slug = 2;
-  string conversation_id = 3;
-  ChannelDeliveryAddressEndpoint primary = 4;
-  ChannelDeliveryAddressEndpoint fallback = 5;
-}
 
 message UserAgentCatalogEntry {
   string agent_id = 1;
@@ -60,7 +48,7 @@ message UserAgentCatalogEntry {
   reserved "status", "last_run_at", "next_run_at", "error_count", "last_error";
   int64 tombstone_state_version = 21;
   // Deprecated compatibility bridge for state serialized before channel_address.
-  // New writes leave these empty and map reads into channel_address.
+  // New writes must leave these empty and map delivery through channel_address.
   string lark_receive_id = 22 [deprecated = true];
   string lark_receive_id_type = 23 [deprecated = true];
   string lark_receive_id_fallback = 24 [deprecated = true];

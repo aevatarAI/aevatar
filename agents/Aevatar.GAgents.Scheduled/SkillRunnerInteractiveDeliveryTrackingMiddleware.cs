@@ -10,7 +10,7 @@ internal sealed record SkillRunnerInteractiveDeliverySignal(
     DeliveryStatus Status,
     string RequestId,
     string SourceEventId,
-    string LarkMessageId,
+    string ProviderMessageId,
     string CardId);
 
 internal sealed class SkillRunnerInteractiveDeliverySignalCollector
@@ -52,7 +52,7 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
 
         if (!IsInteractiveDeliveryTool(context.ToolName, context.ArgumentsJson))
             return;
-        if (!TryReadSuccessfulToolResult(context.Result, out var larkMessageId, out var cardId))
+        if (!TryReadSuccessfulToolResult(context.Result, out var providerMessageId, out var cardId))
             return;
 
         _collector.Record(new SkillRunnerInteractiveDeliverySignal(
@@ -60,7 +60,7 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
             DeliveryStatus.Succeeded,
             NormalizeOptional(AgentToolRequestContext.RequestId) ?? string.Empty,
             NormalizeOptional(context.ToolCallId) ?? NormalizeOptional(AgentToolRequestContext.CallId) ?? string.Empty,
-            larkMessageId,
+            providerMessageId,
             cardId));
     }
 
@@ -94,9 +94,9 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
             : DeliveryKind.TextMessage;
     }
 
-    private static bool TryReadSuccessfulToolResult(string? resultJson, out string larkMessageId, out string cardId)
+    private static bool TryReadSuccessfulToolResult(string? resultJson, out string providerMessageId, out string cardId)
     {
-        larkMessageId = string.Empty;
+        providerMessageId = string.Empty;
         cardId = string.Empty;
         if (string.IsNullOrWhiteSpace(resultJson))
             return false;
@@ -113,7 +113,7 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
                 if (success.ValueKind != JsonValueKind.True)
                     return false;
 
-                ReadDeliveryIds(root, out larkMessageId, out cardId);
+                ReadDeliveryIds(root, out providerMessageId, out cardId);
                 return true;
             }
 
@@ -124,7 +124,7 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
                 if (value != 0)
                     return false;
 
-                ReadDeliveryIds(root, out larkMessageId, out cardId);
+                ReadDeliveryIds(root, out providerMessageId, out cardId);
                 return true;
             }
 
@@ -136,7 +136,7 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
                     string.Equals(statusValue, "sent", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(statusValue, "success", StringComparison.OrdinalIgnoreCase))
                 {
-                    ReadDeliveryIds(root, out larkMessageId, out cardId);
+                    ReadDeliveryIds(root, out providerMessageId, out cardId);
                     return true;
                 }
             }
@@ -149,14 +149,14 @@ internal sealed class SkillRunnerInteractiveDeliveryTrackingMiddleware : IToolCa
         return false;
     }
 
-    private static void ReadDeliveryIds(JsonElement root, out string larkMessageId, out string cardId)
+    private static void ReadDeliveryIds(JsonElement root, out string providerMessageId, out string cardId)
     {
-        larkMessageId = ReadFirstString(root, "message_id", "lark_message_id", "sent_activity_id", "reply_message_id");
+        providerMessageId = ReadFirstString(root, "message_id", "lark_message_id", "sent_activity_id", "reply_message_id");
         cardId = ReadFirstString(root, "card_id", "cardId");
         if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object)
         {
-            if (string.IsNullOrEmpty(larkMessageId))
-                larkMessageId = ReadFirstString(data, "message_id", "lark_message_id", "sent_activity_id", "reply_message_id");
+            if (string.IsNullOrEmpty(providerMessageId))
+                providerMessageId = ReadFirstString(data, "message_id", "lark_message_id", "sent_activity_id", "reply_message_id");
             if (string.IsNullOrEmpty(cardId))
                 cardId = ReadFirstString(data, "card_id", "cardId");
         }

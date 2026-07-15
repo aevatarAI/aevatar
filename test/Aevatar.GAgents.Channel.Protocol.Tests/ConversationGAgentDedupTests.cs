@@ -1076,22 +1076,22 @@ public sealed class ConversationGAgentDedupTests
         delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
         delivery.RequestId.ShouldBe("llm:corr-delivered");
         delivery.SourceEventId.ShouldBe("corr-delivered");
-        delivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        delivery.ProviderMessageId.ShouldBe("om_delivery_ok");
         delivery.CardId.ShouldBeEmpty();
         delivery.Target.Channel.Value.ShouldBe("slack");
         delivery.Target.ConversationKey.ShouldBe("conv:slack:C1");
         delivery.Target.Platform.ShouldBe("slack");
-        delivery.Target.ReceiveId.ShouldBeEmpty();
-        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.AddressId.ShouldBeEmpty();
+        delivery.Target.AddressType.ShouldBeEmpty();
         delivery.Target.ConversationId.ShouldBe("conv:slack:C1");
         delivery.Target.ReplyMessageId.ShouldBeEmpty();
         var recentDelivery = agent.State.RecentDeliveries.ShouldHaveSingleItem();
         recentDelivery.RequestId.ShouldBe("llm:corr-delivered");
         recentDelivery.Status.ShouldBe(DeliveryStatus.Succeeded);
-        recentDelivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        recentDelivery.ProviderMessageId.ShouldBe("om_delivery_ok");
         agent.State.LastSuccessfulDelivery.ShouldNotBeNull();
         agent.State.LastSuccessfulDelivery!.RequestId.ShouldBe("llm:corr-delivered");
-        agent.State.LastSuccessfulDelivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        agent.State.LastSuccessfulDelivery.ProviderMessageId.ShouldBe("om_delivery_ok");
     }
 
     [Fact]
@@ -1131,12 +1131,12 @@ public sealed class ConversationGAgentDedupTests
         delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
         delivery.RequestId.ShouldBe("llm:corr-delivery-failed");
         delivery.SourceEventId.ShouldBe("corr-delivery-failed");
-        delivery.LarkMessageId.ShouldBeEmpty();
+        delivery.ProviderMessageId.ShouldBeEmpty();
         delivery.Target.Channel.Value.ShouldBe("slack");
         delivery.Target.ConversationKey.ShouldBe("conv:slack:C1");
         delivery.Target.Platform.ShouldBe("slack");
-        delivery.Target.ReceiveId.ShouldBeEmpty();
-        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.AddressId.ShouldBeEmpty();
+        delivery.Target.AddressType.ShouldBeEmpty();
         delivery.Target.ConversationId.ShouldBe("conv:slack:C1");
         delivery.Target.ReplyMessageId.ShouldBeEmpty();
         events.Last().EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
@@ -1939,22 +1939,22 @@ public sealed class ConversationGAgentDedupTests
         delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
         delivery.RequestId.ShouldBe("llm:act-stream-sc");
         delivery.SourceEventId.ShouldBe("act-stream-sc");
-        delivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        delivery.ProviderMessageId.ShouldBe("nyx-relay-stream:om_stream");
         delivery.CardId.ShouldBeEmpty();
         delivery.Target.Channel.Value.ShouldBe("lark");
         delivery.Target.ConversationKey.ShouldBe("conv:lark:grp");
         delivery.Target.Platform.ShouldBe("lark");
-        delivery.Target.ReceiveId.ShouldBe("relay-msg-1");
-        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.AddressId.ShouldBe("relay-msg-1");
+        delivery.Target.AddressType.ShouldBeEmpty();
         delivery.Target.ConversationId.ShouldBe("conv:lark:grp");
         delivery.Target.ReplyMessageId.ShouldBe("relay-msg-1");
         var recentDelivery = agent.State.RecentDeliveries.ShouldHaveSingleItem();
         recentDelivery.RequestId.ShouldBe("llm:act-stream-sc");
         recentDelivery.Status.ShouldBe(DeliveryStatus.Succeeded);
-        recentDelivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        recentDelivery.ProviderMessageId.ShouldBe("nyx-relay-stream:om_stream");
         agent.State.LastSuccessfulDelivery.ShouldNotBeNull();
         agent.State.LastSuccessfulDelivery!.RequestId.ShouldBe("llm:act-stream-sc");
-        agent.State.LastSuccessfulDelivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        agent.State.LastSuccessfulDelivery.ProviderMessageId.ShouldBe("nyx-relay-stream:om_stream");
     }
 
     [Fact]

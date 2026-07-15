@@ -35,7 +35,7 @@ public sealed class SkillRunnerInteractiveDeliveryCollectorTests
             signal.Status.Should().Be(DeliveryStatus.Succeeded);
             signal.RequestId.Should().Be("request-1");
             signal.SourceEventId.Should().Be("call-1");
-            signal.LarkMessageId.Should().Be("om_interactive");
+            signal.ProviderMessageId.Should().Be("om_interactive");
             signal.CardId.Should().Be("card_1");
         }
         finally
