@@ -4,10 +4,12 @@ export interface NyxIDRuntimeConfig {
   readonly clientId: string;
   readonly redirectUri: string;
   readonly scope: string;
+  readonly defaultServiceSlugs: readonly string[];
   readonly configurationError?: string;
 }
 
 const DEFAULT_REDIRECT_PATH = '/auth/callback';
+const SERVICE_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function trimOptional(value?: string): string | undefined {
   let normalized = value?.trim();
@@ -115,23 +117,76 @@ function buildConfigurationError(
   return `${variableName} must be a valid http(s) URL or a root-relative path such as ${exampleValue}.`;
 }
 
+function parseDefaultServiceSlugs(value?: string): {
+  readonly slugs: readonly string[];
+  readonly error?: string;
+} {
+  if (value === undefined) {
+    return { slugs: [] };
+  }
+
+  let normalized = value.trim();
+  if (
+    (normalized.startsWith('"') && normalized.endsWith('"')) ||
+    (normalized.startsWith("'") && normalized.endsWith("'"))
+  ) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+
+  if (
+    normalized.localeCompare('undefined', undefined, {
+      sensitivity: 'accent',
+    }) === 0 ||
+    normalized.localeCompare('null', undefined, {
+      sensitivity: 'accent',
+    }) === 0
+  ) {
+    return { slugs: [] };
+  }
+
+  if (!normalized) {
+    return { slugs: [] };
+  }
+
+  const slugs = Array.from(
+    new Set(
+      normalized
+        .split(',')
+        .map((slug) => slug.trim())
+        .filter(Boolean),
+    ),
+  );
+  const invalidSlug = slugs.find((slug) => !SERVICE_SLUG_PATTERN.test(slug));
+  if (invalidSlug) {
+    return {
+      slugs: [],
+      error: `NYXID_DEFAULT_SERVICE_SLUGS contains invalid service slug '${invalidSlug}'. Use comma-separated lowercase letters, numbers, and hyphens.`,
+    };
+  }
+
+  return { slugs };
+}
+
 export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
   const redirectUri =
     trimOptional(process.env.NYXID_REDIRECT_URI) ?? resolveDefaultRedirectUri();
   const normalizedRedirectUri = tryResolveHttpUrl(redirectUri, {
     allowRelative: true,
   });
-  const configurationError =
-    !normalizedRedirectUri
-        ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')
-        : undefined;
+  const defaultServices = parseDefaultServiceSlugs(
+    process.env.NYXID_DEFAULT_SERVICE_SLUGS,
+  );
+  const configurationError = !normalizedRedirectUri
+    ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')
+    : defaultServices.error;
 
   return {
-    enabled: Boolean(normalizedRedirectUri),
+    enabled: Boolean(normalizedRedirectUri) && !configurationError,
     baseUrl: '',
     clientId: '',
     redirectUri: normalizedRedirectUri ?? '',
     scope: '',
+    defaultServiceSlugs: defaultServices.slugs,
     configurationError,
   };
 }
