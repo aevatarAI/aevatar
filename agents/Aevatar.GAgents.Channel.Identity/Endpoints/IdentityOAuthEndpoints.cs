@@ -178,6 +178,36 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status502BadGateway);
         }
 
+        var existingBinding = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
+        if (exchange.BindingUpdated)
+        {
+            var expectedBindingHash = decode.ExpectedBindingHash?.Trim() ?? string.Empty;
+            var currentBindingHash = existingBinding is null
+                ? string.Empty
+                : NyxIdRemoteCapabilityBroker.HashBindingId(existingBinding.Value);
+            if (expectedBindingHash.Length == 0
+                || !string.Equals(expectedBindingHash, currentBindingHash, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "OAuth binding-grant update completed for a stale local binding reference. correlation={CorrelationId}, expected_hash={ExpectedHash}, current_hash={CurrentHash}",
+                    decode.CorrelationId,
+                    expectedBindingHash,
+                    currentBindingHash);
+                return Results.Json(new
+                {
+                    error = "binding_changed_during_review",
+                    detail = "Lark 中的 NyxID 绑定在授权期间发生了变化。请回到 Lark 重新发送 /init。",
+                }, statusCode: StatusCodes.Status409Conflict);
+            }
+
+            logger.LogInformation(
+                "Updated NyxID service grant in place for {Platform}:{Tenant}:{User}; binding_id remained unchanged",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return RenderBindingGrantUpdated(format);
+        }
+
         // Defensive: NyxID returned no binding_id even though authorization-code
         // exchange succeeded. Post NyxID#576 fix, broker mode is triggered by
         // EITHER `broker_capability_enabled=true` OR `urn:nyxid:scope:broker_binding`
@@ -200,7 +230,7 @@ public static class IdentityOAuthEndpoints
 
         var actorId = subject.ToActorId();
 
-        if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
+        if (existingBinding is not null)
         {
             // Concurrent /init protection: if the subject is already bound,
             // the freshly-issued binding_id we just got from NyxID is an
@@ -907,6 +937,43 @@ public static class IdentityOAuthEndpoints
         }
 
         return RenderBindingAcceptedHtmlInternal(displayName, receipt);
+    }
+
+    internal static IResult RenderBindingGrantUpdated(string? format)
+    {
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Ok(new
+            {
+                status = "binding_grant_updated",
+                binding_id_changed = false,
+            });
+        }
+
+        const string html = """
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>NyxID 服务授权 — 已更新</title>
+            <style>
+            body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #1d1d1f; line-height: 1.6; }
+            .badge { display: inline-block; padding: 4px 10px; background: #d1f5d3; color: #146c2e; border-radius: 999px; font-size: 13px; font-weight: 500; }
+            h1 { font-size: 22px; margin: 16px 0 8px; }
+            .hint { background: #f5f5f7; padding: 16px 20px; border-radius: 8px; margin-top: 24px; }
+            .hint code { background: #fff; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+            </style>
+            </head>
+            <body>
+            <span class="badge">已更新</span>
+            <h1>NyxID 服务授权已更新</h1>
+            <p>原有 Lark 绑定保持不变。可以关闭此页并回到 Lark 继续对话。</p>
+            <div class="hint">发送 <code>/init</code> 可再次查看服务授权。</div>
+            </body>
+            </html>
+            """;
+        return Results.Content(html, "text/html; charset=utf-8");
     }
 
     internal static IResult RenderBoundSuccessHtmlInternal(string? displayName, bool alreadyBound)

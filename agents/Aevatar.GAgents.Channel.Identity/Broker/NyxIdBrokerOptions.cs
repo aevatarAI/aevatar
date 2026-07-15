@@ -26,6 +26,14 @@ public sealed class NyxIdBrokerOptions
     public string? RequiredLlmServiceSlug { get; set; }
 
     /// <summary>
+    /// Additional NyxID service slugs required by capabilities exposed through
+    /// this OAuth client. Host composition must source each slug from the same
+    /// configuration as its corresponding provider so authorization and runtime
+    /// routing cannot drift.
+    /// </summary>
+    public string[] AdditionalRequiredServiceSlugs { get; set; } = [];
+
+    /// <summary>
     /// Lifetime of the stateless <c>state</c> token. Bounds how long a user
     /// can sit on the OAuth authorize URL before completing login. Maximum
     /// 5 minutes per ADR-0018 §Implementation Notes #1.

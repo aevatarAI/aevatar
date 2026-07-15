@@ -94,6 +94,9 @@ message StateTokenPayload {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 2;
   string pkce_verifier = 3;
   google.protobuf.Timestamp expires_at = 4;
+  // SHA-256 of the expected current binding_id for a grant-review flow. The
+  // raw opaque binding credential must never be placed in browser-visible state.
+  string expected_binding_hash = 5;
 }
 
 // Read model: one document per actor (= per ExternalSubjectRef). Backs

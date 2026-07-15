@@ -97,8 +97,10 @@ public sealed class MainnetHostCompositionTests
         app.MapAevatarMainnetHost();
         await app.StartAsync();
 
-        app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
-            .Value.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
+        var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
+        brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
+        brokerOptions.AdditionalRequiredServiceSlugs.Should().ContainSingle()
+            .Which.Should().Be(OrnnOptions.DefaultNyxIdSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()

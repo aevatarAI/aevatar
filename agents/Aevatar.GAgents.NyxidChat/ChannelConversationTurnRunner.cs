@@ -510,7 +510,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 try
                 {
                     var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
-                    reply = InitChannelSlashCommandHandler.BuildBindingCard(challenge.AuthorizeUrl);
+                    reply = InitChannelSlashCommandHandler.BuildBindingCard(
+                        challenge.AuthorizeUrl,
+                        challenge.ReviewsExistingBinding);
                 }
                 catch (AevatarOAuthClientNotProvisionedException ex)
                 {
@@ -2629,11 +2631,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding lacks a required service; reconciling the local binding so the sender can reauthorize. subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lacks a required service; preserving the binding for in-place /init grant review. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            TriggerBindingReconcile(subject, "nyx_required_services_missing");
             return null;
         }
         catch (Exception ex)

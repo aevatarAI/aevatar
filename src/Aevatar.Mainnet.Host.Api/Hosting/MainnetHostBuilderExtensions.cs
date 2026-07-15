@@ -162,6 +162,19 @@ public static class MainnetHostBuilderExtensions
             options.RequiredLlmServiceSlug = string.IsNullOrWhiteSpace(configuredRoute)
                 ? LlmDefaults.NyxIdRoute
                 : configuredRoute.Trim();
+            var configuredOrnnSlug = builder.Configuration["Aevatar:Ornn:NyxIdSlug"];
+            var ornnSlug = string.IsNullOrWhiteSpace(configuredOrnnSlug)
+                ? OrnnOptions.DefaultNyxIdSlug
+                : configuredOrnnSlug.Trim();
+            options.AdditionalRequiredServiceSlugs = builder.Configuration
+                .GetSection("Aevatar:NyxId:AdditionalRequiredServiceSlugs")
+                .GetChildren()
+                .Select(static child => child.Value)
+                .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
+                .Select(static serviceSlug => serviceSlug!.Trim())
+                .Append(ornnSlug)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
         });
         builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
         {

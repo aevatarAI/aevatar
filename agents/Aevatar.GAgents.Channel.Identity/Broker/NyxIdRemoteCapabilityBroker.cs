@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Foundation.Abstractions.Helpers;
@@ -79,7 +81,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     private string[] RequiredResourceUris(AevatarOAuthClientSnapshot snapshot) =>
         AevatarOAuthClientResources.RequiredResourceUris(
             snapshot.NyxIdAuthority,
-            _options.RequiredLlmServiceSlug);
+            _options.RequiredLlmServiceSlug,
+            _options.AdditionalRequiredServiceSlugs);
 
     public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,
@@ -93,16 +96,21 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
         var pkce = PkceHelper.GeneratePair();
         var correlationId = Guid.NewGuid().ToString("N");
+        var existingBinding = await _queryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false);
+        var bindingGrantId = existingBinding is null
+            ? null
+            : HashBindingId(existingBinding.Value);
         var stateToken = await _stateTokenCodec
-            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, ct)
+            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, bindingGrantId, ct)
             .ConfigureAwait(false);
 
-        var url = BuildAuthorizeUrl(snapshot, redirectUri, stateToken, pkce.CodeChallenge);
+        var url = BuildAuthorizeUrl(snapshot, redirectUri, stateToken, pkce.CodeChallenge, bindingGrantId);
         var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime).ToUnixTimeSeconds();
         return new BindingChallenge
         {
             AuthorizeUrl = url,
             ExpiresAtUnix = expiresAt,
+            ReviewsExistingBinding = existingBinding is not null,
         };
     }
 
@@ -264,7 +272,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         return CallbackStateDecode.Ok(
             result.Payload.CorrelationId,
             result.Payload.ExternalSubject?.Clone(),
-            result.Payload.PkceVerifier);
+            result.Payload.PkceVerifier,
+            result.Payload.ExpectedBindingHash);
     }
 
     public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
@@ -363,6 +372,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             TokenType = payload.TokenType,
             ExpiresIn = payload.ExpiresIn,
             Scope = payload.Scope,
+            BindingUpdated = payload.BindingUpdated == true,
         };
     }
 
@@ -370,7 +380,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         AevatarOAuthClientSnapshot snapshot,
         string redirectUri,
         string stateToken,
-        string codeChallenge)
+        string codeChallenge,
+        string? bindingGrantId)
     {
         var queryParts = new List<string>
         {
@@ -378,6 +389,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             $"client_id={Uri.EscapeDataString(snapshot.ClientId)}",
             $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
             $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
+            "prompt=consent",
         };
         queryParts.AddRange(RequiredResourceUris(snapshot)
             .Select(static resource => $"resource={Uri.EscapeDataString(resource)}"));
@@ -387,6 +399,8 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
             "code_challenge_method=S256",
         ]);
+        if (!string.IsNullOrEmpty(bindingGrantId))
+            queryParts.Add($"binding_grant_id={Uri.EscapeDataString(bindingGrantId)}");
         return $"{snapshot.NyxIdAuthority.TrimEnd('/')}{AuthorizeEndpoint}?{string.Join("&", queryParts)}";
     }
 
@@ -465,12 +479,16 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
     private static string Truncate(string value, int max) =>
         string.IsNullOrEmpty(value) ? string.Empty : value.Length <= max ? value : value[..max];
 
+    internal static string HashBindingId(string bindingId) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bindingId))).ToLowerInvariant();
+
     private sealed record TokenResponse
     {
         public string? AccessToken { get; init; }
         public string? RefreshToken { get; init; }
         public string? IdToken { get; init; }
         public string? BindingId { get; init; }
+        public bool? BindingUpdated { get; init; }
         public string? Scope { get; init; }
         public string? TokenType { get; init; }
         public int? ExpiresIn { get; init; }
@@ -480,11 +498,21 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 /// <summary>
 /// Result of a state-token decode call on the callback side.
 /// </summary>
-public sealed record CallbackStateDecode(bool Succeeded, string? CorrelationId, ExternalSubjectRef? ExternalSubject, string? PkceVerifier, string? ErrorCode)
+public sealed record CallbackStateDecode(
+    bool Succeeded,
+    string? CorrelationId,
+    ExternalSubjectRef? ExternalSubject,
+    string? PkceVerifier,
+    string? ExpectedBindingHash,
+    string? ErrorCode)
 {
-    public static CallbackStateDecode Ok(string correlationId, ExternalSubjectRef? subject, string verifier) =>
-        new(true, correlationId, subject, verifier, null);
+    public static CallbackStateDecode Ok(
+        string correlationId,
+        ExternalSubjectRef? subject,
+        string verifier,
+        string? expectedBindingHash = null) =>
+        new(true, correlationId, subject, verifier, expectedBindingHash, null);
 
     public static CallbackStateDecode Failed(string errorCode) =>
-        new(false, null, null, null, errorCode);
+        new(false, null, null, null, null, errorCode);
 }

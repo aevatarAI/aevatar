@@ -58,7 +58,8 @@ public static class NyxIdLoginFinalizationEndpoints
                     : snapshot.OauthScope.Trim(),
                 Resources: AevatarOAuthClientResources.RequiredResourceUris(
                     snapshot.NyxIdAuthority,
-                    brokerOptions.Value.RequiredLlmServiceSlug)));
+                    brokerOptions.Value.RequiredLlmServiceSlug,
+                    brokerOptions.Value.AdditionalRequiredServiceSlugs)));
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {

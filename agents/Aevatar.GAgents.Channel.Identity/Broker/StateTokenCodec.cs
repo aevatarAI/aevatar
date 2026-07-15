@@ -41,11 +41,25 @@ public sealed class StateTokenCodec
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task<string> EncodeAsync(string correlationId, ExternalSubjectRef externalSubject, string pkceVerifier, CancellationToken ct = default)
+    public Task<string> EncodeAsync(
+        string correlationId,
+        ExternalSubjectRef externalSubject,
+        string pkceVerifier,
+        CancellationToken ct = default) =>
+        EncodeAsync(correlationId, externalSubject, pkceVerifier, expectedBindingHash: null, ct);
+
+    public async Task<string> EncodeAsync(
+        string correlationId,
+        ExternalSubjectRef externalSubject,
+        string pkceVerifier,
+        string? expectedBindingHash,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(pkceVerifier);
         ArgumentNullException.ThrowIfNull(externalSubject);
+        if (!string.IsNullOrEmpty(expectedBindingHash) && !IsBindingHash(expectedBindingHash))
+            throw new ArgumentException("Expected binding hash must be 64 lowercase hexadecimal characters.", nameof(expectedBindingHash));
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         if (snapshot.HmacKey.Length == 0)
@@ -59,6 +73,7 @@ public sealed class StateTokenCodec
             ExternalSubject = externalSubject.Clone(),
             PkceVerifier = pkceVerifier,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
+            ExpectedBindingHash = expectedBindingHash ?? string.Empty,
         };
 
         // Encode with the snapshot's current kid (defaults to v1 on first
@@ -206,6 +221,10 @@ public sealed class StateTokenCodec
         }
         return Convert.FromBase64String(padded);
     }
+
+    private static bool IsBindingHash(string value) =>
+        value.Length == 64 && value.All(static character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     public sealed record DecodeResult(bool Succeeded, StateTokenPayload? Payload, string? ErrorCode)
     {

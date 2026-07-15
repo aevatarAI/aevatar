@@ -16,16 +16,13 @@ namespace Aevatar.GAgents.Channel.Identity.Slash;
 /// </summary>
 public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
 {
-    private readonly IExternalIdentityBindingQueryPort _queryPort;
     private readonly INyxIdCapabilityBroker _broker;
     private readonly ILogger<InitChannelSlashCommandHandler> _logger;
 
     public InitChannelSlashCommandHandler(
-        IExternalIdentityBindingQueryPort queryPort,
         INyxIdCapabilityBroker broker,
         ILogger<InitChannelSlashCommandHandler> logger)
     {
-        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _broker = broker ?? throw new ArgumentNullException(nameof(broker));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -42,11 +39,6 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
     public async Task<MessageContent?> HandleAsync(ChannelSlashCommandContext context, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
-
-        if (!string.IsNullOrEmpty(context.BindingIdValue))
-        {
-            return PlainText("已绑定 NyxID 账号。需要切换账号请先发送 /unbind 再发送 /init。");
-        }
 
         if (!context.IsPrivateChat)
         {
@@ -82,7 +74,7 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
             return PlainText("启动 NyxID 绑定时遇到内部错误,请稍后重试 /init。");
         }
 
-        return BuildBindingCard(challenge.AuthorizeUrl);
+        return BuildBindingCard(challenge.AuthorizeUrl, challenge.ReviewsExistingBinding);
     }
 
     private static MessageContent PlainText(string text) => new() { Text = text };
@@ -92,22 +84,28 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
     /// button). Channels without card support degrade to plain text via
     /// <see cref="MessageContent.Text"/> being set as the fallback.
     /// </summary>
-    public static MessageContent BuildBindingCard(string authorizeUrl)
+    public static MessageContent BuildBindingCard(
+        string authorizeUrl,
+        bool reviewsExistingBinding = false)
     {
         var content = new MessageContent
         {
-            Text = $"打开此链接完成 NyxID 登录(5 分钟内有效):\n{authorizeUrl}",
+            Text = reviewsExistingBinding
+                ? $"打开此链接查看或更新 Lark bot 的 NyxID 服务授权(5 分钟内有效):\n{authorizeUrl}"
+                : $"打开此链接完成 NyxID 登录并确认服务授权(5 分钟内有效):\n{authorizeUrl}",
         };
         content.Cards.Add(new CardBlock
         {
-            Title = "完成 NyxID 绑定",
-            Text = "登录后回到此对话即可继续。链接 5 分钟内有效。",
+            Title = reviewsExistingBinding ? "查看 NyxID 服务授权" : "完成 NyxID 绑定",
+            Text = reviewsExistingBinding
+                ? "查看当前已授权服务，并按需勾选新的服务。链接 5 分钟内有效。"
+                : "登录并确认 Lark bot 可使用的 NyxID 服务。链接 5 分钟内有效。",
         });
         content.Actions.Add(new ActionElement
         {
             Kind = ActionElementKind.Link,
             ActionId = "nyxid_init_open",
-            Label = "立即绑定 NyxID",
+            Label = reviewsExistingBinding ? "查看服务授权" : "立即绑定 NyxID",
             Value = authorizeUrl,
             IsPrimary = true,
         });

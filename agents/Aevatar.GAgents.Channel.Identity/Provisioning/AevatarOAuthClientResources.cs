@@ -19,16 +19,22 @@ public static class AevatarOAuthClientResources
 
     public static string[] RequiredResourceUris(
         string nyxIdAuthority,
-        string? requiredLlmServiceSlug)
+        string? requiredLlmServiceSlug,
+        IEnumerable<string>? additionalRequiredServiceSlugs = null)
     {
-        var aevatarResource = RequiredServiceResourceUri(nyxIdAuthority);
-        if (string.IsNullOrWhiteSpace(requiredLlmServiceSlug))
-            return [aevatarResource];
+        var serviceSlugs = new List<string> { RequiredServiceSlug };
+        if (!string.IsNullOrWhiteSpace(requiredLlmServiceSlug))
+            serviceSlugs.Add(requiredLlmServiceSlug);
+        if (additionalRequiredServiceSlugs is not null)
+        {
+            serviceSlugs.AddRange(additionalRequiredServiceSlugs.Where(
+                static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug)));
+        }
 
-        var llmResource = ServiceResourceUri(nyxIdAuthority, requiredLlmServiceSlug);
-        return string.Equals(aevatarResource, llmResource, StringComparison.Ordinal)
-            ? [aevatarResource]
-            : [aevatarResource, llmResource];
+        return serviceSlugs
+            .Select(serviceSlug => ServiceResourceUri(nyxIdAuthority, serviceSlug))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     public static string[] MissingRequiredResources(

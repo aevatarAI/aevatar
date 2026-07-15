@@ -2610,6 +2610,55 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldPreserveBinding_WhenGrantLacksRequiredService()
+    {
+        var subject = new ExternalSubjectRef
+        {
+            Platform = "lark",
+            Tenant = "scope-1",
+            ExternalUserId = "ou_user_1",
+        };
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd-user-1" }));
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker.IssueShortLivedAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingServiceAccessMismatchException(
+                subject,
+                ["https://nyxid.test/api/v1/proxy/s/ornn-api"]));
+        var reconciler = Substitute.For<IBindingRevocationReconciler>();
+        var services = new ServiceCollection()
+            .AddSingleton(queryPort)
+            .AddSingleton(broker)
+            .BuildServiceProvider();
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(
+            BuildRegistrationQueryPort(),
+            adapter,
+            services,
+            bindingRevocationReconciler: reconciler);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-bound-missing-service",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras { NyxPlatform = "lark" }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        await reconciler.DidNotReceiveWithAnyArgs()
+            .ReconcileRevokedAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRequestLlmReply_WhenUnboundGroupSenderSendsNormalMessage()
     {
         var broker = new InMemoryCapabilityBroker();
@@ -4435,7 +4484,8 @@ public sealed class ChannelConversationTurnRunnerTests
         IInteractiveReplyDispatcher? interactiveReplyDispatcher = null,
         ILarkBotIdentityResolver? botIdentityResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
-        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
+        IBindingRevocationReconciler? bindingRevocationReconciler = null)
     {
         services ??= BuildAgentBuilderToolServices();
         relayHandler ??= new RecordingJsonHandler("""{"message_id":"relay-reply"}""");
@@ -4479,6 +4529,7 @@ public sealed class ChannelConversationTurnRunnerTests
             identityBindingQueryPort: services.GetService<IExternalIdentityBindingQueryPort>(),
             slashCommandRegistry: services.GetService<ChannelSlashCommandRegistry>(),
             capabilityBroker: services.GetService<INyxIdCapabilityBroker>(),
+            bindingRevocationReconciler: bindingRevocationReconciler,
             userLlmSelectionService: services.GetService<IUserLlmSelectionService>(),
             userLlmOptionsService: services.GetService<IUserLlmOptionsService>(),
             userLlmOptionsRenderer: services.GetService<IUserLlmOptionsRenderer<MessageContent>>(),

@@ -727,12 +727,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding lacks a required service during deferred re-mint; reconciling local binding and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lacks a required service during deferred re-mint; preserving the binding for in-place /init grant review and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
                 request.CorrelationId,
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            TriggerBindingReconcile(subject, "nyx_required_services_missing");
             return control;
         }
         catch (Exception ex)
