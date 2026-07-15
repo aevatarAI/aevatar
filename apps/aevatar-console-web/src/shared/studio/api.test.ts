@@ -1447,6 +1447,196 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('loads workflow board snapshots from the scope read model endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-mainnet-01',
+        generatedAt: '2026-06-24T13:24:16+00:00',
+        watermark: 'workflow-board:v2:filterhash:facthash',
+        counts: {
+          running: 1,
+          waiting: 2,
+          failed: 0,
+          retrying: 0,
+          completed: 3,
+        },
+        teams: [
+          {
+            teamId: 't-alpha',
+            teamName: 'Alpha Team',
+            totalMemberCount: 8,
+            members: [
+              {
+                memberId: 'm-alpha',
+                displayName: 'Alpha member',
+                executionAvailability: 'available',
+                executionStatus: 'running',
+                progress: {
+                  completedSteps: 3,
+                  totalSteps: 8,
+                },
+                completedNodes: [
+                  {
+                    nodeId: 'node-done',
+                    name: 'Done',
+                    completedAt: '2026-06-24T13:21:00+00:00',
+                    durationMs: 120000,
+                  },
+                ],
+                pendingNodes: [
+                  {
+                    nodeId: 'node-pending',
+                    name: 'Pending',
+                    status: 'pending',
+                    reason: 'waiting for input',
+                  },
+                ],
+                failedNodes: [
+                  {
+                    nodeId: 'node-failed',
+                    name: 'Failed',
+                    failedAt: '2026-06-24T13:22:00+00:00',
+                  },
+                ],
+                workflowId: 'wf-alpha',
+                workflowName: 'Workflow Alpha',
+                publishedServiceId: 'svc-alpha',
+                actorId: 'actor-alpha',
+                roleSummary: 'role alpha',
+                currentExecutionId: 'run-alpha',
+                currentNode: {
+                  nodeId: 'node-current',
+                  name: 'Current',
+                  status: 'running',
+                  startedAt: '2026-06-24T13:20:00+00:00',
+                  updatedAt: '2026-06-24T13:24:00+00:00',
+                  durationMs: 240000,
+                },
+                lastNodeUpdatedAt: '2026-06-24T13:24:00+00:00',
+              },
+            ],
+          },
+        ],
+        lastNodeUpdatedAt: '2026-06-24T13:24:00+00:00',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getWorkflowBoardSnapshot('scope-mainnet-01', {
+        take: 100,
+        teamId: 't-alpha',
+      }),
+    ).resolves.toMatchObject({
+      scopeId: 'scope-mainnet-01',
+      counts: {
+        running: 1,
+        waiting: 2,
+      },
+      teams: [
+        {
+          teamId: 't-alpha',
+          totalMemberCount: 8,
+          members: [
+            {
+              memberId: 'm-alpha',
+              executionStatus: 'running',
+              currentExecutionId: 'run-alpha',
+              progress: {
+                completedSteps: 3,
+                totalSteps: 8,
+              },
+              currentNode: {
+                nodeId: 'node-current',
+                status: 'running',
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-mainnet-01/workflow-board/snapshot',
+      expect.objectContaining({
+        body: JSON.stringify({
+          take: 100,
+          teamId: 't-alpha',
+        }),
+        credentials: 'same-origin',
+        method: 'POST',
+      }),
+    );
+  });
+
+  it('accepts nullable workflow board team totals from the backend contract', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-mainnet-01',
+        generatedAt: '2026-06-24T13:24:16+00:00',
+        watermark: 'workflow-board:v2:filterhash:facthash',
+        counts: {
+          running: 0,
+          waiting: 0,
+          failed: 0,
+          retrying: 0,
+          completed: 0,
+        },
+        teams: [
+          {
+            teamId: 't-alpha',
+            teamName: 'Alpha Team',
+            totalMemberCount: null,
+            members: [],
+          },
+        ],
+        lastNodeUpdatedAt: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getWorkflowBoardSnapshot('scope-mainnet-01', {
+        take: 100,
+      }),
+    ).resolves.toMatchObject({
+      teams: [
+        {
+          teamId: 't-alpha',
+          totalMemberCount: null,
+        },
+      ],
+    });
+  });
+
   it('gets a studio team summary from the team authority endpoint', async () => {
     persistAuthSession({
       tokens: {
@@ -2269,6 +2459,52 @@ describe('studioApi host-session requests', () => {
             workflowId: 'wf-alpha',
           },
         }),
+      }),
+    );
+  });
+
+  it('deletes an existing member with the member delete endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        status: 'delete_accepted',
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+        ackedAt: '2026-07-09T08:12:00Z',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.deleteMember({
+        scopeId: 'scope-1',
+        memberId: 'm-alpha',
+      }),
+    ).resolves.toEqual({
+      status: 'delete_accepted',
+      scopeId: 'scope-1',
+      memberId: 'm-alpha',
+      ackedAt: '2026-07-09T08:12:00Z',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/members/m-alpha',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'DELETE',
       }),
     );
   });

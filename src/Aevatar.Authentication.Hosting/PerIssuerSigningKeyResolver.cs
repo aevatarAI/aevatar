@@ -13,15 +13,6 @@ namespace Aevatar.Authentication.Hosting;
 /// against the scope-token keys. This stops a key intended for one issuer from being used
 /// to forge a token that claims a different issuer.
 /// </para>
-/// <para>
-/// CRITICAL (stay non-breaking): when the token's <c>iss</c> matches none of the known
-/// issuers, the resolver falls back to returning ALL configured keys — exactly what the
-/// default validation pipeline would try — so nothing that validates today stops
-/// validating. The fallback also covers the case where the OIDC keys are not yet
-/// materialized here (they are resolved by the base JWT handler from discovery, not owned
-/// by this resolver): scope-token keys are the only ones this resolver owns, so an unknown
-/// or OIDC issuer falls through to the base handler's own key set.
-/// </para>
 /// </summary>
 internal sealed class PerIssuerSigningKeyResolver
 {
@@ -29,17 +20,22 @@ internal sealed class PerIssuerSigningKeyResolver
     private readonly IReadOnlyList<SecurityKey> _scopeKeys;
 
     public PerIssuerSigningKeyResolver(
+        IEnumerable<string> authorityIssuers,
         IEnumerable<string> scopeIssuers,
         IEnumerable<SecurityKey> scopeKeys)
     {
+        ArgumentNullException.ThrowIfNull(authorityIssuers);
         ArgumentNullException.ThrowIfNull(scopeIssuers);
         ArgumentNullException.ThrowIfNull(scopeKeys);
 
-        _scopeIssuers = scopeIssuers
-            .Where(issuer => !string.IsNullOrWhiteSpace(issuer))
-            .Select(issuer => issuer.Trim())
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        var configuredAuthorityIssuers = NormalizeIssuers(authorityIssuers);
+        _scopeIssuers = NormalizeIssuers(scopeIssuers);
+        if (configuredAuthorityIssuers.Intersect(_scopeIssuers, StringComparer.Ordinal).Any())
+        {
+            throw new InvalidOperationException(
+                "Scope service token issuer must be distinct from the configured OIDC authority issuer.");
+        }
+
         _scopeKeys = scopeKeys.ToArray();
     }
 
@@ -52,8 +48,8 @@ internal sealed class PerIssuerSigningKeyResolver
     public IReadOnlyList<SecurityKey> ScopeKeys => _scopeKeys;
 
     /// <summary>
-    /// Matches the <see cref="IssuerSigningKeyResolver"/> delegate signature so it can be
-    /// assigned to <see cref="TokenValidationParameters.IssuerSigningKeyResolver"/>.
+    /// Matches the <see cref="IssuerSigningKeyResolverUsingConfiguration"/> delegate signature
+    /// so OIDC discovery keys remain available to the JWT validation pipeline.
     /// </summary>
     /// <param name="token">The raw JWT (unused; selection is by issuer).</param>
     /// <param name="securityToken">
@@ -61,38 +57,71 @@ internal sealed class PerIssuerSigningKeyResolver
     /// delegate's third argument is the <c>kid</c>, NOT the issuer, so the issuer is read here.
     /// </param>
     /// <param name="kid">The key identifier hint (unused; selection is by issuer).</param>
-    /// <param name="validationParameters">
-    /// The active validation parameters, whose <see cref="TokenValidationParameters.IssuerSigningKeys"/>
-    /// provide the full configured key set used for the non-breaking fallback.
-    /// </param>
+    /// <param name="validationParameters">The active validation parameters.</param>
+    /// <param name="configuration">The authority configuration retrieved through OIDC discovery.</param>
     public IEnumerable<SecurityKey> Resolve(
         string token,
         SecurityToken securityToken,
         string kid,
-        TokenValidationParameters validationParameters)
+        TokenValidationParameters validationParameters,
+        BaseConfiguration configuration)
     {
         var tokenIssuer = securityToken?.Issuer;
-        if (!string.IsNullOrWhiteSpace(tokenIssuer) &&
-            _scopeIssuers.Contains(tokenIssuer.Trim(), StringComparer.Ordinal))
-        {
-            return _scopeKeys;
-        }
+        if (string.IsNullOrWhiteSpace(tokenIssuer))
+            return [];
 
-        // Fallback: unknown or OIDC-authority issuer (also when securityToken is null). Return
-        // every configured key so a token that validates today keeps validating. Returning
-        // null/empty here would break OIDC tokens whose keys the base handler injects into
-        // IssuerSigningKeys.
-        return AllConfiguredKeys(validationParameters);
+        return ClassifyIssuer(tokenIssuer, configuration) switch
+        {
+            IssuerKind.Scope => _scopeKeys,
+            IssuerKind.Authority => configuration?.SigningKeys ?? [],
+            _ => [],
+        };
     }
 
-    private IEnumerable<SecurityKey> AllConfiguredKeys(TokenValidationParameters validationParameters)
+    /// <summary>
+    /// Accepts only the exact scope issuer or the exact issuer returned by OIDC discovery.
+    /// A token matching both is ambiguous and therefore rejected.
+    /// </summary>
+    public string ValidateIssuer(
+        string issuer,
+        SecurityToken securityToken,
+        TokenValidationParameters validationParameters,
+        BaseConfiguration configuration)
     {
-        IEnumerable<SecurityKey> configured = validationParameters.IssuerSigningKeys ?? [];
-        if (validationParameters.IssuerSigningKey is not null)
-            configured = configured.Append(validationParameters.IssuerSigningKey);
+        var normalizedIssuer = issuer?.Trim() ?? string.Empty;
+        if (ClassifyIssuer(normalizedIssuer, configuration) is IssuerKind.Scope or IssuerKind.Authority)
+            return normalizedIssuer;
 
-        // Include this resolver's own scope keys too, so the fallback is a genuine superset
-        // even if the parameters were rebuilt without them.
-        return configured.Concat(_scopeKeys).Distinct();
+        throw new SecurityTokenInvalidIssuerException(
+            $"Issuer '{normalizedIssuer}' does not uniquely match the configured scope issuer or discovered OIDC issuer.");
+    }
+
+    private IssuerKind ClassifyIssuer(string? issuer, BaseConfiguration? configuration)
+    {
+        var normalizedIssuer = issuer?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedIssuer))
+            return IssuerKind.Invalid;
+
+        var discoveredIssuer = configuration?.Issuer?.Trim();
+        var matchesScope = _scopeIssuers.Contains(normalizedIssuer, StringComparer.Ordinal);
+        var matchesAuthority = !string.IsNullOrWhiteSpace(discoveredIssuer) &&
+                               string.Equals(normalizedIssuer, discoveredIssuer, StringComparison.Ordinal);
+        if (matchesScope == matchesAuthority)
+            return IssuerKind.Invalid;
+
+        return matchesScope ? IssuerKind.Scope : IssuerKind.Authority;
+    }
+
+    private static string[] NormalizeIssuers(IEnumerable<string> issuers) => issuers
+        .Where(issuer => !string.IsNullOrWhiteSpace(issuer))
+        .Select(issuer => issuer.Trim())
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+
+    private enum IssuerKind
+    {
+        Invalid,
+        Scope,
+        Authority,
     }
 }

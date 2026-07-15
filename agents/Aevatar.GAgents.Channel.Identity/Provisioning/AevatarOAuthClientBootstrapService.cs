@@ -22,21 +22,31 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
     public const string ForceDcrOnStartupEnvVar = "AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP";
 
     private readonly ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _provisioningDispatch;
-    private readonly IOptions<AevatarOAuthClientDefaultServiceOptions>? _defaultServiceOptions;
+    private readonly AevatarOAuthClientBootstrapOptions _options;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
 
     public AevatarOAuthClientBootstrapService(
         ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> provisioningDispatch,
-        ILogger<AevatarOAuthClientBootstrapService> logger,
-        IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions = null)
+        IOptions<AevatarOAuthClientBootstrapOptions> options,
+        ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         _provisioningDispatch = provisioningDispatch ?? throw new ArgumentNullException(nameof(provisioningDispatch));
+        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _defaultServiceOptions = defaultServiceOptions;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken) =>
-        DispatchBootstrapIntentAsync(cancellationToken);
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled)
+        {
+            _logger.LogInformation(
+                "Aevatar OAuth client bootstrap disabled by {SectionName}:Enabled=false.",
+                AevatarOAuthClientBootstrapOptions.SectionName);
+            return Task.CompletedTask;
+        }
+
+        return DispatchBootstrapIntentAsync(cancellationToken);
+    }
 
     public Task StopAsync(CancellationToken cancellationToken) =>
         Task.CompletedTask;
@@ -61,7 +71,6 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(_logger);
         ValidateStartupProvisioningBoundary(authority, redirectUri);
-        var defaultServiceSlugs = AevatarOAuthClientDefaultServices.Resolve(_defaultServiceOptions, _logger);
         var forceReprovision = string.Equals(
             Environment.GetEnvironmentVariable(ForceDcrOnStartupEnvVar),
             "true",
@@ -82,7 +91,6 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             ForceReprovision = forceReprovision,
         };
         command.RedirectUris.AddRange(redirectUris);
-        command.DefaultServiceSlugs.AddRange(defaultServiceSlugs);
 
         var accepted = await _provisioningDispatch
             .DispatchAsync(command, ct)

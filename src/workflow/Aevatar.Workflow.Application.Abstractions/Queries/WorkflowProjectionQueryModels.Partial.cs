@@ -1,5 +1,5 @@
 using Google.Protobuf.WellKnownTypes;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
 namespace Aevatar.Workflow.Application.Abstractions.Queries;
 
@@ -35,9 +35,9 @@ public sealed partial class WorkflowActorProjectionState
 
 public sealed partial class WorkflowRunFileRef
 {
-    public ApplicationWorkflowFileSourceKind SourceKind
+    public ApplicationFileArtifactSourceKind SourceKind
     {
-        get => (ApplicationWorkflowFileSourceKind)SourceKindValue;
+        get => (ApplicationFileArtifactSourceKind)SourceKindValue;
         set => SourceKindValue = (int)value;
     }
 }

@@ -1168,21 +1168,6 @@ const ScopeInvokePage: React.FC = () => {
   return (
     <AevatarPageShell pageHeaderRender={false} title={t("pages.scopes.invoke.legacy.invoke.lab", "Legacy Invoke Lab")}>
       <div style={viewportShellStyle}>
-        <style>
-          {`
-            @keyframes pulse {
-              0%, 100% { opacity: 1; }
-              50% { opacity: 0.45; }
-            }
-            @keyframes blink {
-              50% { opacity: 0; }
-            }
-            @keyframes bounce {
-              0%, 80%, 100% { transform: translateY(0); opacity: 0.7; }
-              40% { transform: translateY(-3px); opacity: 1; }
-            }
-          `}
-        </style>
         <div style={pageHeaderStyle}>
           <AevatarPageTitleBlock
             backAriaLabel={t("pages.scopes.invoke.team.home", "Team Home")}

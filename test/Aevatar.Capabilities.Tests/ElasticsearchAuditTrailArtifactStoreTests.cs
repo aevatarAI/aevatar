@@ -108,7 +108,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
     }
 
     [Fact]
-    public async Task QueryAsync_ShouldSearchAuditArtifactsAndReturnRecordsWithCursor()
+    public async Task QueryAsync_ShouldSearchNewestAuditArtifactsAndReturnCursorAndWatermark()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
@@ -133,6 +133,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         page.Records.Should().ContainSingle()
             .Which.AuditId.Should().Be("audit-1");
         page.NextCursor.Should().NotBeNullOrWhiteSpace();
+        page.Watermark.Should().Be(DateTimeOffset.Parse("2026-07-03T09:00:00Z"));
         handler.CapturedRequests.Should().ContainSingle()
             .Which.PathAndQuery.Should().Be("/audit-tests-audit-trail/_search");
         using var requestBody = JsonDocument.Parse(handler.CapturedRequests[0].Body);
@@ -153,6 +154,17 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         filterJson.Should().Contain("AUDIT_OUTCOME_SUCCESS");
         filterJson.Should().Contain("artifact.occurred_at");
         requestBody.RootElement.GetProperty("size").GetInt32().Should().Be(1);
+        var sort = requestBody.RootElement.GetProperty("sort");
+        sort[0].GetProperty("artifact.occurred_at").GetProperty("order").GetString().Should().Be("desc");
+        sort[1].GetProperty("id.keyword").GetProperty("order").GetString().Should().Be("asc");
+        requestBody.RootElement
+            .GetProperty("aggs")
+            .GetProperty("query_watermark")
+            .GetProperty("max")
+            .GetProperty("field")
+            .GetString()
+            .Should()
+            .Be("artifact.occurred_at");
     }
 
     [Fact]
@@ -251,7 +263,7 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        return "{\"hits\":{\"hits\":[{\"_source\":"
+        return "{\"aggregations\":{\"query_watermark\":{\"value\":1783069200000,\"value_as_string\":\"2026-07-03T09:00:00.000Z\"}},\"hits\":{\"hits\":[{\"_source\":"
             + formatter.Format(storageDocument)
             + ",\"sort\":"
             + sortJson

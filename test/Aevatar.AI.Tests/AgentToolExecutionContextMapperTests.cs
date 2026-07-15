@@ -293,7 +293,7 @@ public sealed class AgentToolExecutionContextMapperTests
             new AgentToolRequestIdentity(" request-1 ", " call-1 "),
             new AgentToolCredentials(" access-1 ", " org-1 ", " sender-access-1 "),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
-            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 ", " delivery-target-1 ", " secrets://nyx/reply-1 "),
+            new AgentToolChannelContext(" telegram ", " sender-1 ", " registration-1 ", " message-1 ", " platform-message-1 ", " delivery-target-1 ", ChannelWorkflowResultDeliveryCredentialTestData.Create("roundtrip"), " bot-reg-1 "),
             new AgentToolSenderBindingContext(" binding-1 ", " nyx-user-1 ", " ou_tenant_1 "),
             new LLMRequestRoutingContext(" model-1 ", " route-1 ", 7, " memory-1 "),
             new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -334,7 +334,8 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Channel.MessageId.Should().Be("message-1");
         copy.Channel.PlatformMessageId.Should().Be("platform-message-1");
         copy.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
-        copy.Channel.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        copy.Channel.WorkflowResultDeliveryCredential.Should().Be(ChannelWorkflowResultDeliveryCredentialTestData.Create("roundtrip"));
+        copy.Channel.BotRegistrationId.Should().Be("bot-reg-1");
         copy.SenderBinding.BindingId.Should().Be("binding-1");
         copy.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         copy.SenderBinding.SenderTenant.Should().Be("ou_tenant_1");
@@ -395,7 +396,8 @@ public sealed class AgentToolExecutionContextMapperTests
                 "message-1",
                 "platform-message-1",
                 "delivery-target-1",
-                "secrets://nyx/reply-1"),
+                ChannelWorkflowResultDeliveryCredentialTestData.Create("channel"),
+                "bot-reg-1"),
             SenderBinding = new AgentToolSenderBindingContext("binding-1", "nyx-user-1", "tenant-1"),
             CredentialSource = AgentToolCredentialSource.ChannelRegistration,
         };
@@ -412,7 +414,8 @@ public sealed class AgentToolExecutionContextMapperTests
         thirdRound.Channel.SenderId.Should().Be("sender-1");
         thirdRound.Channel.RegistrationScopeId.Should().Be("registration-1");
         thirdRound.Channel.DeliveryTargetId.Should().Be("delivery-target-1");
-        thirdRound.Channel.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        thirdRound.Channel.WorkflowResultDeliveryCredential.Should().Be(ChannelWorkflowResultDeliveryCredentialTestData.Create("channel"));
+        thirdRound.Channel.BotRegistrationId.Should().Be("bot-reg-1");
         thirdRound.SenderBinding.BindingId.Should().Be("binding-1");
         thirdRound.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         thirdRound.SenderBinding.SenderTenant.Should().Be("tenant-1");

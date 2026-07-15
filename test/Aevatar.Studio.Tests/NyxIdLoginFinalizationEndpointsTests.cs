@@ -12,6 +12,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -27,18 +28,24 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 HmacKid: "kid",
                 HmacKey: [1, 2, 3],
                 HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
-                NyxIdAuthority: "https://nyx.example/",
+                NyxIdAuthority: "https://nyx-api.example/",
                 BrokerCapabilityObserved: true,
                 BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
-                OauthScope: "openid broker proxy")));
+                OauthScope: "openid broker proxy")),
+            BrokerOptions());
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         payload.Should().BeEquivalentTo(new NyxIdLoginConfigurationResponse(
-            "https://nyx.example",
+            "https://nyx-api.example",
             "broker-client-1",
-            "openid broker proxy"));
+            "openid broker proxy",
+            [
+                "https://nyx-api.example/api/v1/proxy/s/aevatar",
+                "https://nyx-api.example/api/v1/proxy/s/chrono-llm-public",
+                "https://nyx-api.example/api/v1/proxy/s/ornn-api",
+            ]));
     }
 
     [Fact]
@@ -53,7 +60,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
                 NyxIdAuthority: "https://nyx.example/",
                 BrokerCapabilityObserved: true,
-                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch)));
+                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch)),
+            BrokerOptions());
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
@@ -65,7 +73,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     public async Task Config_ShouldReturnUnavailable_WhenBrokerOAuthClientIsNotProvisioned()
     {
         var result = await NyxIdLoginFinalizationEndpoints.HandleConfigAsync(
-            new NotProvisionedAevatarOAuthClientProvider());
+            new NotProvisionedAevatarOAuthClientProvider(),
+            BrokerOptions());
 
         var context = NewHttpContext();
         await result.ExecuteAsync(context);
@@ -217,6 +226,59 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         broker.RevokedBindingIds.Should().ContainSingle().Which.Should().Be("bnd-new");
         refreshDispatch.Commands.Should().BeEmpty();
         dispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Finalize_ShouldRefreshBinding_WhenExistingBindingLacksRequiredService()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+            BindingId: "bnd-new",
+            IdToken: CreateIdToken(new { uid = "owner-user-1" }),
+            AccessToken: "access-token"));
+        var queryPort = new FakeExternalIdentityBindingQueryPort();
+        queryPort.Bindings[SubjectKey(OwnerSubject("owner-user-1"))] = "bnd-existing";
+        var refreshDispatch = new RecordingBindingRefreshDispatch();
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
+            broker,
+            new ServiceAccessMismatchCapabilityBroker(),
+            queryPort,
+            new RecordingBindingDispatch(),
+            refreshDispatch,
+            NullLoggerFactory.Instance);
+
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.BindingDispatchAccepted.Should().BeTrue();
+        refreshDispatch.Commands.Should().ContainSingle().Which.BindingId.Should().Be("bnd-new");
+    }
+
+    [Fact]
+    public async Task Finalize_ShouldReturnConflict_WhenRequiredServiceWasNotGranted()
+    {
+        var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(null, null, null))
+        {
+            ExchangeError = new NyxIdRequiredServiceAccessException(
+                ["https://nyx.example/api/v1/proxy/s/aevatar"]),
+        };
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest { Code = "auth-code", CodeVerifier = "pkce-verifier", RedirectUri = "http://localhost/auth/callback" },
+            broker,
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingRefreshDispatch(),
+            NullLoggerFactory.Instance);
+
+        var (statusCode, payload) = await ExecuteJsonAsync<LoginErrorResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status409Conflict);
+        payload.Should().Be(new LoginErrorResponse(
+            "required_service_access_missing",
+            "Return to login and allow access to the Aevatar and default LLM services in NyxID."));
     }
 
     [Fact]
@@ -386,6 +448,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         return (context.Response.StatusCode, JsonSerializer.Deserialize<T>(text, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
+    private sealed record LoginErrorResponse(string Error, string Detail);
+
     private static ExternalSubjectRef OwnerSubject(string externalUserId) =>
         new()
         {
@@ -411,6 +475,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
     private sealed class RecordingBrokerCallback(BrokerAuthorizationCodeResult result) : INyxIdBrokerCallbackClient
     {
+        public Exception? ExchangeError { get; init; }
         public List<string> RevokedBindingIds { get; } = [];
         public List<(string Code, string CodeVerifier, string RedirectUri)> Exchanges { get; } = [];
 
@@ -430,6 +495,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             CancellationToken ct = default)
         {
             Exchanges.Add((authorizationCode, codeVerifier, redirectUri));
+            if (ExchangeError is not null)
+                return Task.FromException<BrokerAuthorizationCodeResult>(ExchangeError);
             return Task.FromResult(result);
         }
 
@@ -495,6 +562,24 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             CancellationToken ct = default) =>
             throw new BindingRevokedException(externalSubject);
     }
+
+    private sealed class ServiceAccessMismatchCapabilityBroker : StubCapabilityBroker
+    {
+        public override Task<CapabilityHandle> IssueShortLivedAsync(
+            ExternalSubjectRef externalSubject,
+            CapabilityScope scope,
+            CancellationToken ct = default) =>
+            throw new BindingServiceAccessMismatchException(
+                externalSubject,
+                ["https://nyx.example/api/v1/proxy/s/aevatar"]);
+    }
+
+    private static IOptions<NyxIdBrokerOptions> BrokerOptions() =>
+        Options.Create(new NyxIdBrokerOptions
+        {
+            RequiredLlmServiceSlug = "chrono-llm-public",
+            AdditionalRequiredServiceSlugs = ["ornn-api"],
+        });
 
     private sealed class FailingCapabilityBroker : StubCapabilityBroker
     {

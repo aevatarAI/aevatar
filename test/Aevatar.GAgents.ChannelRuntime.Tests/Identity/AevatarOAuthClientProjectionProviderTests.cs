@@ -43,31 +43,6 @@ public sealed class AevatarOAuthClientProjectionProviderTests
     }
 
     [Fact]
-    public async Task GetAsync_PreservesEmptyDefaultServiceSlugs_ForLegacyDocument()
-    {
-        var document = ProvisionedDocument();
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), new InMemorySecretVault());
-
-        var snapshot = await provider.GetAsync();
-
-        snapshot.DefaultServiceSlugs.Should().BeEmpty(
-            "legacy documents did not register NyxID service access defaults and status must surface that drift");
-    }
-
-    [Fact]
-    public async Task GetAsync_PreservesDefaultServiceSlugs_WhenPresent()
-    {
-        var document = ProvisionedDocument();
-        document.DefaultServiceSlugs.Add("aevatar");
-        document.DefaultServiceSlugs.Add("scope-service");
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), new InMemorySecretVault());
-
-        var snapshot = await provider.GetAsync();
-
-        snapshot.DefaultServiceSlugs.Should().Equal("aevatar", "scope-service");
-    }
-
-    [Fact]
     public async Task GetAsync_ResolvesRefBackedKey_FromVault()
     {
         // New-write shape: the document carries only a vault ref (no legacy

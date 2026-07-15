@@ -66,6 +66,8 @@ import type {
   StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDraftSummary,
   StudioWorkflowDocument,
+  StudioWorkflowBoardSnapshot,
+  StudioWorkflowBoardSnapshotRequest,
   StudioWorkflowFile,
   StudioWorkflowSaveResult,
   StudioWorkflowSummary,
@@ -878,6 +880,358 @@ function readOptionalScalar(
   return undefined;
 }
 
+function readWorkflowBoardExecutionAvailability(
+  value: unknown
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["executionAvailability"] {
+  return normalizeEnumValue(value, "executionAvailability", {
+    "0": "unknown",
+    "1": "available",
+    "2": "unavailable",
+    "3": "pending_backend_contract",
+    available: "available",
+    pendingbackendcontract: "pending_backend_contract",
+    pending_backend_contract: "pending_backend_contract",
+    unavailable: "unavailable",
+    unknown: "unknown",
+    unspecified: "unknown",
+  }) as StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["executionAvailability"];
+}
+
+function readWorkflowBoardExecutionStatus(
+  value: unknown
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["executionStatus"] {
+  return normalizeEnumValue(value, "executionStatus", {
+    "0": "unknown",
+    "1": "running",
+    "2": "waiting",
+    "3": "failed",
+    "4": "timed_out",
+    "5": "retrying",
+    "6": "completed",
+    "7": "stopped",
+    active: "running",
+    awaiting_input: "waiting",
+    awaitinginput: "waiting",
+    canceled: "stopped",
+    cancelled: "stopped",
+    completed: "completed",
+    done: "completed",
+    failed: "failed",
+    human_input_required: "waiting",
+    humaninputrequired: "waiting",
+    retry_pending: "retrying",
+    retrypending: "retrying",
+    retrying: "retrying",
+    running: "running",
+    stopped: "stopped",
+    succeeded: "completed",
+    success: "completed",
+    suspended: "waiting",
+    timed_out: "timed_out",
+    timedout: "timed_out",
+    timeout: "timed_out",
+    waiting: "waiting",
+    unknown: "unknown",
+    unspecified: "unknown",
+  }) as StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["executionStatus"];
+}
+
+function readWorkflowBoardCurrentNodeStatus(
+  value: unknown
+): NonNullable<StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["currentNode"]>["status"] {
+  return normalizeEnumValue(value, "currentNode.status", {
+    "0": "unknown",
+    "1": "running",
+    "2": "waiting",
+    "3": "pending",
+    "4": "failed",
+    "5": "completed",
+    active: "running",
+    completed: "completed",
+    done: "completed",
+    failed: "failed",
+    in_progress: "running",
+    inprogress: "running",
+    pending: "pending",
+    queued: "pending",
+    running: "running",
+    waiting: "waiting",
+    unknown: "unknown",
+    unspecified: "unknown",
+  }) as NonNullable<StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["currentNode"]>["status"];
+}
+
+function readWorkflowBoardPendingNodeStatus(
+  value: unknown
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["pendingNodes"][number]["status"] {
+  return normalizeEnumValue(value, "pendingNode.status", {
+    "0": "unknown",
+    "1": "waiting",
+    "2": "pending",
+    "3": "queued",
+    pending: "pending",
+    queued: "queued",
+    waiting: "waiting",
+    unknown: "unknown",
+    unspecified: "unknown",
+  }) as StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["pendingNodes"][number]["status"];
+}
+
+function decodeStudioWorkflowBoardCounts(
+  value: unknown,
+  label = "StudioWorkflowBoardCounts"
+): StudioWorkflowBoardSnapshot["counts"] {
+  const record = expectRecord(value, label);
+  return {
+    completed: readNumber(record, ["completed", "Completed"], `${label}.completed`),
+    failed: readNumber(record, ["failed", "Failed"], `${label}.failed`),
+    retrying: readNumber(record, ["retrying", "Retrying"], `${label}.retrying`),
+    running: readNumber(record, ["running", "Running"], `${label}.running`),
+    waiting: readNumber(record, ["waiting", "Waiting"], `${label}.waiting`),
+  };
+}
+
+function decodeStudioWorkflowBoardProgress(
+  value: unknown,
+  label = "StudioWorkflowBoardProgress"
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["progress"] {
+  const record = expectRecord(value, label);
+  return {
+    completedSteps: readNumber(
+      record,
+      ["completedSteps", "CompletedSteps"],
+      `${label}.completedSteps`
+    ),
+    totalSteps: readNumber(
+      record,
+      ["totalSteps", "TotalSteps"],
+      `${label}.totalSteps`
+    ),
+  };
+}
+
+function decodeStudioWorkflowBoardCurrentNode(
+  value: unknown,
+  label = "StudioWorkflowBoardCurrentNode"
+): NonNullable<StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["currentNode"]> {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${label}.nodeId`),
+    name: readString(record, ["name", "Name"], `${label}.name`),
+    status: readWorkflowBoardCurrentNodeStatus(
+      record.status ?? record.Status ?? "unknown"
+    ),
+    startedAt:
+      readNullableString(record, ["startedAt", "StartedAt"], `${label}.startedAt`) ??
+      null,
+    updatedAt:
+      readNullableString(record, ["updatedAt", "UpdatedAt"], `${label}.updatedAt`) ??
+      null,
+    durationMs:
+      readOptionalNumber(record.durationMs ?? record.DurationMs) ?? null,
+  };
+}
+
+function decodeStudioWorkflowBoardCompletedNode(
+  value: unknown,
+  label = "StudioWorkflowBoardCompletedNode"
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["completedNodes"][number] {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${label}.nodeId`),
+    name: readString(record, ["name", "Name"], `${label}.name`),
+    completedAt:
+      readNullableString(record, ["completedAt", "CompletedAt"], `${label}.completedAt`) ??
+      null,
+    durationMs:
+      readOptionalNumber(record.durationMs ?? record.DurationMs) ?? null,
+  };
+}
+
+function decodeStudioWorkflowBoardPendingNode(
+  value: unknown,
+  label = "StudioWorkflowBoardPendingNode"
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["pendingNodes"][number] {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${label}.nodeId`),
+    name: readString(record, ["name", "Name"], `${label}.name`),
+    status: readWorkflowBoardPendingNodeStatus(
+      record.status ?? record.Status ?? "unknown"
+    ),
+    reason:
+      readNullableString(record, ["reason", "Reason"], `${label}.reason`) ??
+      null,
+  };
+}
+
+function decodeStudioWorkflowBoardFailedNode(
+  value: unknown,
+  label = "StudioWorkflowBoardFailedNode"
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number]["failedNodes"][number] {
+  const record = expectRecord(value, label);
+  return {
+    nodeId: readString(record, ["nodeId", "NodeId"], `${label}.nodeId`),
+    name: readString(record, ["name", "Name"], `${label}.name`),
+    failedAt:
+      readNullableString(record, ["failedAt", "FailedAt"], `${label}.failedAt`) ??
+      null,
+  };
+}
+
+function decodeStudioWorkflowBoardMemberSnapshot(
+  value: unknown,
+  label = "StudioWorkflowBoardMemberSnapshot"
+): StudioWorkflowBoardSnapshot["teams"][number]["members"][number] {
+  const record = expectRecord(value, label);
+  const currentNode =
+    record.currentNode == null && record.CurrentNode == null
+      ? null
+      : decodeStudioWorkflowBoardCurrentNode(
+          record.currentNode ?? record.CurrentNode,
+          `${label}.currentNode`
+        );
+  return {
+    actorId:
+      readNullableString(record, ["actorId", "ActorId"], `${label}.actorId`) ??
+      null,
+    completedNodes: expectArray(
+      record.completedNodes ?? record.CompletedNodes ?? [],
+      `${label}.completedNodes`,
+      decodeStudioWorkflowBoardCompletedNode
+    ),
+    currentExecutionId:
+      readNullableString(
+        record,
+        ["currentExecutionId", "CurrentExecutionId"],
+        `${label}.currentExecutionId`
+      ) ?? null,
+    currentNode,
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      `${label}.displayName`
+    ),
+    executionAvailability: readWorkflowBoardExecutionAvailability(
+      record.executionAvailability ?? record.ExecutionAvailability ?? "unknown"
+    ),
+    executionStatus: readWorkflowBoardExecutionStatus(
+      record.executionStatus ?? record.ExecutionStatus ?? "unknown"
+    ),
+    failedNodes: expectArray(
+      record.failedNodes ?? record.FailedNodes ?? [],
+      `${label}.failedNodes`,
+      decodeStudioWorkflowBoardFailedNode
+    ),
+    lastNodeUpdatedAt:
+      readNullableString(
+        record,
+        ["lastNodeUpdatedAt", "LastNodeUpdatedAt"],
+        `${label}.lastNodeUpdatedAt`
+      ) ?? null,
+    memberId: readString(record, ["memberId", "MemberId"], `${label}.memberId`),
+    pendingNodes: expectArray(
+      record.pendingNodes ?? record.PendingNodes ?? [],
+      `${label}.pendingNodes`,
+      decodeStudioWorkflowBoardPendingNode
+    ),
+    progress: decodeStudioWorkflowBoardProgress(
+      record.progress ?? record.Progress ?? {
+        completedSteps: 0,
+        totalSteps: 0,
+      },
+      `${label}.progress`
+    ),
+    publishedServiceId:
+      readNullableString(
+        record,
+        ["publishedServiceId", "PublishedServiceId"],
+        `${label}.publishedServiceId`
+      ) ?? null,
+    roleSummary:
+      readNullableString(record, ["roleSummary", "RoleSummary"], `${label}.roleSummary`) ??
+      null,
+    workflowId:
+      readNullableString(record, ["workflowId", "WorkflowId"], `${label}.workflowId`) ??
+      null,
+    workflowName:
+      readNullableString(
+        record,
+        ["workflowName", "WorkflowName"],
+        `${label}.workflowName`
+      ) ?? null,
+  };
+}
+
+function decodeStudioWorkflowBoardTeamSnapshot(
+  value: unknown,
+  label = "StudioWorkflowBoardTeamSnapshot"
+): StudioWorkflowBoardSnapshot["teams"][number] {
+  const record = expectRecord(value, label);
+  const members = expectArray(
+    record.members ?? record.Members ?? [],
+    `${label}.members`,
+    decodeStudioWorkflowBoardMemberSnapshot
+  );
+  return {
+    members,
+    teamId: readString(record, ["teamId", "TeamId"], `${label}.teamId`),
+    teamName: readString(record, ["teamName", "TeamName"], `${label}.teamName`),
+    totalMemberCount:
+      readOptionalNumber(record.totalMemberCount ?? record.TotalMemberCount) ??
+      null,
+  };
+}
+
+function decodeStudioWorkflowBoardSnapshot(
+  value: unknown
+): StudioWorkflowBoardSnapshot {
+  const record = expectRecord(value, "StudioWorkflowBoardSnapshot");
+  return {
+    counts: decodeStudioWorkflowBoardCounts(
+      record.counts ?? record.Counts ?? {},
+      "StudioWorkflowBoardSnapshot.counts"
+    ),
+    generatedAt: readString(
+      record,
+      ["generatedAt", "GeneratedAt"],
+      "StudioWorkflowBoardSnapshot.generatedAt"
+    ),
+    lastNodeUpdatedAt:
+      readNullableString(
+        record,
+        ["lastNodeUpdatedAt", "LastNodeUpdatedAt"],
+        "StudioWorkflowBoardSnapshot.lastNodeUpdatedAt"
+      ) ?? null,
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioWorkflowBoardSnapshot.scopeId"
+    ),
+    teams: expectArray(
+      record.teams ?? record.Teams ?? [],
+      "StudioWorkflowBoardSnapshot.teams",
+      decodeStudioWorkflowBoardTeamSnapshot
+    ),
+    watermark:
+      readNullableString(
+        record,
+        ["watermark", "Watermark"],
+        "StudioWorkflowBoardSnapshot.watermark"
+      ) ?? null,
+  };
+}
+
+function compactWorkflowBoardSnapshotRequest(
+  request: StudioWorkflowBoardSnapshotRequest
+): Record<string, unknown> {
+  return compactObject({
+    memberId: trimOptional(request.memberId),
+    take: request.take,
+    teamId: trimOptional(request.teamId),
+  });
+}
+
 function readScopeBindingImplementationKind(
   record: Record<string, unknown>,
   keys: string[],
@@ -1647,12 +2001,34 @@ function normalizeStudioMemberBindingRunRole(
 function normalizeStudioMemberCommandStatus(
   value: string | number | null | undefined
 ): StudioMemberCommandStatus {
-  return normalizeCommandReceiptStatus(value);
+  if (value == null) {
+    return "unknown";
+  }
+
+  const normalized = normalizeEnumValue(value, "status", {
+    "0": "unknown",
+    "1": "accepted",
+    "2": "no_change",
+    "3": "delete_accepted",
+    accepted: "accepted",
+    delete_accepted: "delete_accepted",
+    deleteaccepted: "delete_accepted",
+    no_change: "no_change",
+    nochange: "no_change",
+    unchanged: "no_change",
+    unknown: "unknown",
+  });
+
+  return normalized === "accepted" ||
+    normalized === "delete_accepted" ||
+    normalized === "no_change"
+    ? normalized
+    : "unknown";
 }
 
 function normalizeCommandReceiptStatus(
   value: string | number | null | undefined
-): StudioMemberCommandStatus | StudioTeamCommandStatus {
+): StudioTeamCommandStatus {
   if (value == null) {
     return "unknown";
   }
@@ -1897,6 +2273,21 @@ export const studioApi = {
     return requestJson(withOptionalScopeId("/api/workspace/", scopeId));
   },
 
+  getWorkflowBoardSnapshot(
+    scopeId: string,
+    request: StudioWorkflowBoardSnapshotRequest
+  ): Promise<StudioWorkflowBoardSnapshot> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/workflow-board/snapshot`,
+      decodeStudioWorkflowBoardSnapshot,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(compactWorkflowBoardSnapshotRequest(request)),
+      }
+    );
+  },
+
   listTeams(scopeId: string): Promise<StudioTeamRoster> {
     return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(scopeId.trim())}/teams`,
@@ -2127,6 +2518,20 @@ export const studioApi = {
             agentKind: trimOptional(input.implementationRef.agentKind),
           }),
         }),
+      }
+    );
+  },
+
+  deleteMember(input: {
+    scopeId: string;
+    memberId: string;
+  }): Promise<StudioMemberCommandResponse> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/members/${encodeURIComponent(input.memberId.trim())}`,
+      decodeStudioMemberCommandResponse,
+      {
+        method: "DELETE",
+        headers: JSON_HEADERS,
       }
     );
   },

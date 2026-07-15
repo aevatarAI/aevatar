@@ -28,6 +28,8 @@ using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.GAgentService.Infrastructure.Schedules;
+using Aevatar.GAgentService.Infrastructure.Credentials;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Hosting.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
@@ -166,7 +168,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
+        services.TryAddSingleton<IWorkflowCallerAccessTokenProvider, NyxIdWorkflowCallerAccessTokenProvider>();
         services.AddScheduledCredentialExchangePort();
+        services.TryAddSingleton<IScheduledDispatchCredentialRequirementPolicy, DefaultScheduledDispatchCredentialRequirementPolicy>();
+        services.AddScheduledCredentialAdmissionPort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
@@ -235,6 +240,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
         services.AddScheduledCredentialExchangePort();
+        services.TryAddSingleton<IScheduledDispatchCredentialRequirementPolicy, DefaultScheduledDispatchCredentialRequirementPolicy>();
+        services.AddScheduledCredentialAdmissionPort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
@@ -249,6 +256,12 @@ public static class ServiceCollectionExtensions
                     broker,
                     sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
                 : new NoopScheduledServiceInvocationCredentialExchangePort());
+
+    private static void AddScheduledCredentialAdmissionPort(this IServiceCollection services) =>
+        services.TryAddSingleton<IScheduledDispatchCredentialAdmissionPort>(sp =>
+            sp.GetService<IExternalIdentityBindingQueryPort>() is { } bindingQueryPort
+                ? new NyxIdScheduledDispatchCredentialAdmissionPort(bindingQueryPort)
+                : new NoopScheduledDispatchCredentialAdmissionPort());
 
     public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(
         this IServiceCollection services,

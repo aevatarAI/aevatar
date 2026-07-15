@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Aevatar.Mainnet.Host.Api</AssemblyName>
     <RootNamespace>Aevatar.Mainnet.Host.Api</RootNamespace>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
@@ -15,6 +16,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.IdentityModel.Tokens" />
     <PackageReference Include="Microsoft.Orleans.Clustering.Redis" />
+    <PackageReference Include="StackExchange.Redis" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" />
     <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
@@ -36,7 +38,6 @@
     <ProjectReference Include="..\..\agents\channels\Aevatar.GAgents.Channel.NyxIdRelay\Aevatar.GAgents.Channel.NyxIdRelay.csproj" />
     <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <ProjectReference Include="..\..\agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatRouting\Aevatar.GAgents.ChatRouting.csproj" />
     <ProjectReference Include="..\Aevatar.ChatRouting.Core\Aevatar.ChatRouting.Core.csproj" />

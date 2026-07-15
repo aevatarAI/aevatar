@@ -300,6 +300,8 @@ Common failure signatures:
 | `404` or `not_initialized` | target actor/module is not enabled or read model is not observed yet | `voice-presence/enable` receipt and capability read model |
 | `409` | a transport lease is already attached | close stale edge session and wait for detach |
 | `503 voice_credential_unavailable` | host could not issue the volatile voice tool credential | `IVoiceToolCredentialIssuer` registration and caller bearer |
+| `503 voice_capability_not_ready` | the enable/lease event committed but its capability read model has not caught up | retry after `Retry-After`; the browser console retries a newly provisioned first connect once |
+| WebSocket close `1008 voice_provider_credential_unavailable` | NyxID could not mint the per-session OpenAI Realtime credential | reauthorize Voice so its feature token includes the configured realtime resource; if it already does, verify the service holds a valid OpenAI credential |
 | no LAN tools | connected-service tool set is not exposed to the actor/session | NyxID service OpenAPI `x-aevatar-tool`, route/actor tool configuration |
 | device event `401` | HMAC signature rejected | shared key and raw-body signature bytes |
 | device event `400` | stale timestamp, missing delivery id, or unsupported event type | body timestamp, `event_id`/`correlation_key`, allowlisted `event_type` |

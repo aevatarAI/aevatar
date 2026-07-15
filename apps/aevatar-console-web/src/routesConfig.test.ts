@@ -45,14 +45,20 @@ describe("console routes", () => {
   it("keeps scoped Team navigation as the default resource route model", () => {
     const routes = loadRoutes();
 
+    expect(findRoute(routes, "/chat").hideInMenu).toBe(false);
+    expect(findRoute(routes, "/chat").name).toBe("Chat");
+    expect(findRoute(routes, "/chat").menuGroupKey).toBe("chat");
+    expect(findRoute(routes, "/chat").icon).toBeUndefined();
     expect(findRoute(routes, "/scopes").hideInMenu).toBe(false);
     expect(findRoute(routes, "/studio").hideInMenu).toBe(true);
-    expect(findRoute(routes, "/chat").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBeUndefined();
     expect(findRoute(routes, "/runtime/runs").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
     expect(findRoute(routes, "/scopes").name).toBe("My Teams");
     expect(findRoute(routes, "/scopes").component).toBe("./teams");
+    expect(findRouteIndex(routes, "/chat")).toBeLessThan(
+      findRouteIndex(routes, "/scopes"),
+    );
     expect(hasRoute(routes, "/teams")).toBe(false);
     expect(hasRoute(routes, "/teams/new")).toBe(false);
     expect(hasRoute(routes, "/teams/:scopeId")).toBe(false);
@@ -121,6 +127,10 @@ describe("console routes", () => {
     expect(hasRoute(routes, "/mission-control")).toBe(true);
     expect(findRoute(routes, "/mission-control").redirect).toBe("/runtime/mission-control");
     expect(findRoute(routes, "/runtime/mission-control").hideInMenu).toBe(true);
+    expect(hasRoute(routes, "/mission-wall")).toBe(true);
+    expect(findRoute(routes, "/mission-wall").redirect).toBe("/runtime/mission-wall");
+    expect(findRoute(routes, "/runtime/mission-wall").hideInMenu).toBe(true);
+    expect(findRoute(routes, "/runtime/mission-wall").name).toBeUndefined();
     expect(findRoute(routes, "/runtime/explorer").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/runtime/explorer/detail").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/explorer/detail").parentKeys).toEqual([

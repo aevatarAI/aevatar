@@ -35,6 +35,5 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<Aevatar.GAgents.Scheduled.IUserAgentCatalogQueryPort>(),
             sp.GetRequiredService<Aevatar.GAgents.Scheduled.IUserAgentCatalogCommandPort>(),
             sp.GetRequiredService<Aevatar.GAgents.Scheduled.ICallerScopeResolver>(),
-            sp.GetRequiredService<Aevatar.Foundation.Abstractions.Credentials.ISecretVault>(),
-            sp.GetService<Aevatar.GAgents.Scheduled.IScheduledAgentApiKeyIssuer>());
+            sp.GetService<Aevatar.GAgents.Scheduled.IScheduledAgentCredentialLifecycle>());
 }

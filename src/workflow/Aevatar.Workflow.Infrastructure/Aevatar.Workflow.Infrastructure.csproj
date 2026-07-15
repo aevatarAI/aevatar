@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Capabilities\Aevatar.Capabilities.csproj" />
     <ProjectReference Include="..\..\Aevatar.Authentication.Abstractions\Aevatar.Authentication.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Audit.Hosting\Aevatar.Audit.Hosting.csproj" />
     <ProjectReference Include="..\..\Aevatar.BackendConsole.Hosting\Aevatar.BackendConsole.Hosting.csproj" />
   </ItemGroup>

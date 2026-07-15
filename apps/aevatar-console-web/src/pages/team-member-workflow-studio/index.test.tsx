@@ -170,6 +170,14 @@ jest.mock("@/shared/agui/sseFrameNormalizer", () => ({
   parseBackendSSEStream: jest.fn(),
 }));
 
+function findRenderedStyleText(fragment: string): string {
+  return (
+    Array.from(document.querySelectorAll("style"))
+      .map((styleElement) => styleElement.textContent ?? "")
+      .find((styleText) => styleText.includes(fragment)) ?? ""
+  );
+}
+
 const mockWorkflowDocument = {
   name: "Support workflow",
   roles: [
@@ -3811,7 +3819,26 @@ describe("TeamMemberWorkflowStudioPage", () => {
     const headerMainRow = screen.getByTestId("workflow-header-main-row");
     expect(headerMainRow).toHaveClass("workflow-studio-header__row");
     expect(headerPrimaryActions).toHaveClass("workflow-studio-header__actions");
-    expect(headerPrimaryActions).toHaveAttribute("data-nowrap", "true");
+    expect(headerPrimaryActions).toHaveAttribute("data-responsive-actions", "true");
+    const titleShell = headerIdentity.querySelector(
+      ".workflow-studio-header__title-shell",
+    );
+    expect(titleShell).toBeTruthy();
+    const headerResponsiveRules = findRenderedStyleText(
+      ".workflow-studio-header__identity",
+    );
+    expect(headerResponsiveRules).toContain(
+      ".workflow-studio-header__identity",
+    );
+    expect(headerResponsiveRules).toContain("overflow: visible;");
+    expect(headerResponsiveRules).toContain("flex-wrap: wrap;");
+    expect(headerResponsiveRules).toContain(
+      "max-width: min(360px, 100%);",
+    );
+    expect(headerResponsiveRules).toContain("@media (max-width: 1320px)");
+    expect(headerResponsiveRules).toContain("@media (max-width: 980px)");
+    expect(headerResponsiveRules).toContain("overflow: hidden;");
+    expect(headerResponsiveRules).not.toContain("overflow-x: auto;");
     expect(screen.queryByTestId("workflow-header-context-row")).toBeNull();
     expect(screen.queryByTestId("workflow-header-node-actions")).toBeNull();
     expect(within(headerIdentity).getByRole("link", { name: "Team" })).toHaveAttribute(
@@ -4140,7 +4167,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         .map((button) => button.getAttribute("aria-label") || button.textContent);
 
     expect(headerMainRow).toHaveClass("workflow-studio-header__row");
-    expect(headerPrimaryActions).toHaveAttribute("data-nowrap", "true");
+    expect(headerPrimaryActions).toHaveAttribute("data-responsive-actions", "true");
     expect(screen.queryByTestId("workflow-header-context-row")).toBeNull();
     expect(screen.queryByTestId("workflow-header-node-actions")).toBeNull();
     expect(readActionButtonNames()).toEqual([

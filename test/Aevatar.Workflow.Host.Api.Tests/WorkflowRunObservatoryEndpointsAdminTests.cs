@@ -35,20 +35,20 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
     private const string RawToken = "eyJhbGciOiJVTklUIn0.eyJzdWIiOiJ1c2VyLTEyMyJ9.c2lnbmF0dXJlLXZhbHVl";
 
     [Fact]
-    public async Task ListRuns_NoScope_UsesOwnScope_AndNeverCallsAuthorizerOrOverview()
+    public async Task ListRuns_NoScope_UsesOwnScope_AndNeverCallsAuthorizerOrAdminQuery()
     {
         var observatory = new FakeObservatory();
-        var overview = new FakeOverview();
+        var adminQuery = new FakeAdminQuery();
         var authorizer = new FakeAuthorizer(elevated: false);
         var http = BuildHttpContext(OwnScope, bearer: "tok");
 
         var result = await WorkflowRunObservatoryEndpoints.ListRuns(
-            http, observatory, overview, authorizer, NullLoggerFactory.Instance, scope: null);
+            http, observatory, adminQuery, authorizer, NullLoggerFactory.Instance, scope: null);
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(200);
         observatory.ListScopes.Should().ContainSingle().Which.Should().Be(OwnScope);
-        overview.ListAllCalls.Should().Be(0);
+        adminQuery.ListAllCalls.Should().Be(0);
         authorizer.Calls.Should().Be(0); // own scope => no NyxID round-trip
     }
 
@@ -60,7 +60,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         var http = BuildHttpContext(OwnScope, bearer: "tok");
 
         await WorkflowRunObservatoryEndpoints.ListRuns(
-            http, observatory, new FakeOverview(), authorizer, NullLoggerFactory.Instance, scope: OwnScope);
+            http, observatory, new FakeAdminQuery(), authorizer, NullLoggerFactory.Instance, scope: OwnScope);
 
         observatory.ListScopes.Should().ContainSingle().Which.Should().Be(OwnScope);
         authorizer.Calls.Should().Be(0);
@@ -70,18 +70,18 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
     public async Task ListRuns_CrossScope_NonAdmin_Denied_AndNeverQueries()
     {
         var observatory = new FakeObservatory();
-        var overview = new FakeOverview();
+        var adminQuery = new FakeAdminQuery();
         var authorizer = new FakeAuthorizer(elevated: false);
         var http = BuildHttpContext(OwnScope, bearer: "tok");
 
         var result = await WorkflowRunObservatoryEndpoints.ListRuns(
-            http, observatory, overview, authorizer, NullLoggerFactory.Instance, scope: OtherScope);
+            http, observatory, adminQuery, authorizer, NullLoggerFactory.Instance, scope: OtherScope);
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(403);
         // The cross-scope query MUST NOT have been reached.
         observatory.ListScopes.Should().BeEmpty();
-        overview.ListAllCalls.Should().Be(0);
+        adminQuery.ListAllCalls.Should().Be(0);
         authorizer.Calls.Should().Be(1);
     }
 
@@ -93,7 +93,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         var http = BuildHttpContext(OwnScope, bearer: null);
 
         var result = await WorkflowRunObservatoryEndpoints.ListRuns(
-            http, observatory, new FakeOverview(), authorizer, NullLoggerFactory.Instance, scope: OtherScope);
+            http, observatory, new FakeAdminQuery(), authorizer, NullLoggerFactory.Instance, scope: OtherScope);
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(401);
@@ -109,40 +109,40 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         var http = BuildHttpContext(OwnScope, bearer: "tok");
 
         await WorkflowRunObservatoryEndpoints.ListRuns(
-            http, observatory, new FakeOverview(), authorizer, NullLoggerFactory.Instance, scope: OtherScope);
+            http, observatory, new FakeAdminQuery(), authorizer, NullLoggerFactory.Instance, scope: OtherScope);
 
         observatory.ListScopes.Should().ContainSingle().Which.Should().Be(OtherScope);
         authorizer.Calls.Should().Be(1);
     }
 
     [Fact]
-    public async Task ListRuns_AllScopes_Admin_UsesOverview()
+    public async Task ListRuns_AllScopes_Admin_UsesAdminQuery()
     {
-        var overview = new FakeOverview();
+        var adminQuery = new FakeAdminQuery();
         var authorizer = new FakeAuthorizer(elevated: true);
         var http = BuildHttpContext(OwnScope, bearer: "tok");
 
         await WorkflowRunObservatoryEndpoints.ListRuns(
-            http, new FakeObservatory(), overview, authorizer, NullLoggerFactory.Instance,
+            http, new FakeObservatory(), adminQuery, authorizer, NullLoggerFactory.Instance,
             scope: WorkflowRunObservatoryEndpoints.AllScopesToken);
 
-        overview.ListAllCalls.Should().Be(1);
+        adminQuery.ListAllCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task ListRuns_AllScopes_NonAdmin_Denied_NoOverview()
+    public async Task ListRuns_AllScopes_NonAdmin_Denied_NoAdminQuery()
     {
-        var overview = new FakeOverview();
+        var adminQuery = new FakeAdminQuery();
         var authorizer = new FakeAuthorizer(elevated: false);
         var http = BuildHttpContext(OwnScope, bearer: "tok");
 
         var result = await WorkflowRunObservatoryEndpoints.ListRuns(
-            http, new FakeObservatory(), overview, authorizer, NullLoggerFactory.Instance,
+            http, new FakeObservatory(), adminQuery, authorizer, NullLoggerFactory.Instance,
             scope: WorkflowRunObservatoryEndpoints.AllScopesToken);
         var status = await ExecuteAsync(result, http);
 
         status.Should().Be(403);
-        overview.ListAllCalls.Should().Be(0);
+        adminQuery.ListAllCalls.Should().Be(0);
     }
 
     [Fact]
@@ -171,6 +171,101 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
             http, "run-1", observatory, authorizer, NullLoggerFactory.Instance, scope: OtherScope);
 
         observatory.GetScopes.Should().ContainSingle().Which.Should().Be(OtherScope);
+    }
+
+    [Fact]
+    public async Task GetAdminRun_NonAdmin_Denied_AndNeverQueries()
+    {
+        var adminQuery = new FakeAdminQuery { Detail = new ObservatoryRunDetail() };
+        var authorizer = new FakeAuthorizer(elevated: false);
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.GetAdminRun(
+            http, "run-1", adminQuery, authorizer, NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(403);
+        adminQuery.GetRunCalls.Should().Be(0);
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetAdminRun_MissingBearer_Returns401_AndNeverQueries()
+    {
+        var adminQuery = new FakeAdminQuery { Detail = new ObservatoryRunDetail() };
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(OwnScope, bearer: null);
+
+        var result = await WorkflowRunObservatoryEndpoints.GetAdminRun(
+            http, "run-1", adminQuery, authorizer, NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(401);
+        adminQuery.GetRunCalls.Should().Be(0);
+        authorizer.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetAdminRun_Admin_ReadsRunByIdAcrossScopes()
+    {
+        var adminQuery = new FakeAdminQuery { Detail = new ObservatoryRunDetail() };
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.GetAdminRun(
+            http, "run-1", adminQuery, authorizer, NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(200);
+        adminQuery.GetRunCalls.Should().Be(1);
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetAdminRun_AdminMissingRun_Returns404()
+    {
+        var adminQuery = new FakeAdminQuery();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.GetAdminRun(
+            http, "run-missing", adminQuery, authorizer, NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(404);
+        adminQuery.GetRunCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetAdminRunGraph_NonAdmin_Denied_AndNeverQueries()
+    {
+        var adminQuery = new FakeAdminQuery { Graph = new ObservatoryRunGraph() };
+        var authorizer = new FakeAuthorizer(elevated: false);
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.GetAdminRunGraph(
+            http, "run-1", adminQuery, authorizer, NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(403);
+        adminQuery.GetRunGraphCalls.Should().Be(0);
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetAdminRunGraph_Admin_ReadsGraphByIdAcrossScopes()
+    {
+        var adminQuery = new FakeAdminQuery { Graph = new ObservatoryRunGraph() };
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(OwnScope, bearer: "tok");
+
+        var result = await WorkflowRunObservatoryEndpoints.GetAdminRunGraph(
+            http, "run-1", adminQuery, authorizer, NullLoggerFactory.Instance);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(200);
+        adminQuery.GetRunGraphCalls.Should().Be(1);
+        authorizer.Calls.Should().Be(1);
     }
 
     [Fact]
@@ -231,7 +326,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         await using var app = await CreateRouteAuditAppAsync(
             appender,
             observatory,
-            new FakeOverview(),
+            new FakeAdminQuery(),
             new FakeAuthorizer(elevated: true),
             new FakeDirectory());
         using var client = CreateClient(app);
@@ -259,12 +354,48 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
             value.Contains("alice@example.com", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task WorkflowObservatoryAdminRunRoute_ShouldAppendEndpointAuditRecords()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var adminQuery = new FakeAdminQuery
+        {
+            Detail = new ObservatoryRunDetail(),
+        };
+        await using var app = await CreateRouteAuditAppAsync(
+            appender,
+            new FakeObservatory(),
+            adminQuery,
+            new FakeAuthorizer(elevated: true),
+            new FakeDirectory());
+        using var client = CreateClient(app);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/workflow/observatory/admin/runs/run-a?access_token={RawToken}&email=alice@example.com");
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", RawToken);
+
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("workflow.observatory.admin.get-run.attempted");
+        appender.Records[1].OperationName.Should().Be("workflow.observatory.admin.get-run");
+        appender.Records.Should().OnlyContain(record =>
+            record.Target.Kind == "workflow-run" &&
+            record.Target.Id == "run-a" &&
+            record.RequestSummary == "GET /api/workflow/observatory/admin/runs/{runId} runId=run-a" &&
+            record.CapturePlane == AuditCapturePlane.BoundaryEndpoint);
+        appender.Records.SelectMany(RecordStrings).Should().NotContain(value =>
+            value.Contains(RawToken, StringComparison.Ordinal) ||
+            value.Contains("alice@example.com", StringComparison.Ordinal));
+    }
+
     // Harness.
 
     private static async Task<WebApplication> CreateRouteAuditAppAsync(
         RecordingAuditTrailAppender appender,
         IWorkflowRunObservatoryQueryService observatory,
-        IWorkflowRunAdminOverviewQueryService overview,
+        IWorkflowRunAdminQueryService adminQuery,
         IPlatformAdminAuthorizer authorizer,
         IPlatformUserDirectory directory)
     {
@@ -285,7 +416,7 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         builder.Services.AddSingleton<IAuditTrailAppender>(appender);
         builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
         builder.Services.AddSingleton(observatory);
-        builder.Services.AddSingleton(overview);
+        builder.Services.AddSingleton(adminQuery);
         builder.Services.AddSingleton(authorizer);
         builder.Services.AddSingleton(directory);
 
@@ -419,14 +550,30 @@ public sealed class WorkflowRunObservatoryEndpointsAdminTests
         }
     }
 
-    private sealed class FakeOverview : IWorkflowRunAdminOverviewQueryService
+    private sealed class FakeAdminQuery : IWorkflowRunAdminQueryService
     {
         public int ListAllCalls { get; private set; }
+        public int GetRunCalls { get; private set; }
+        public int GetRunGraphCalls { get; private set; }
+        public ObservatoryRunDetail? Detail { get; init; }
+        public ObservatoryRunGraph? Graph { get; init; }
 
         public Task<IReadOnlyList<ObservatoryRunSummary>> ListAllRunsAsync(ObservatoryRunListFilter filter, CancellationToken ct = default)
         {
             ListAllCalls++;
             return Task.FromResult<IReadOnlyList<ObservatoryRunSummary>>([]);
+        }
+
+        public Task<ObservatoryRunDetail?> GetRunAsync(string runId, CancellationToken ct = default)
+        {
+            GetRunCalls++;
+            return Task.FromResult(Detail);
+        }
+
+        public Task<ObservatoryRunGraph?> GetRunGraphAsync(string runId, CancellationToken ct = default)
+        {
+            GetRunGraphCalls++;
+            return Task.FromResult(Graph);
         }
     }
 

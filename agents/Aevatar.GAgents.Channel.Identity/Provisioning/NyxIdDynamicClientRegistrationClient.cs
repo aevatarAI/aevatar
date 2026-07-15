@@ -50,24 +50,14 @@ public class NyxIdDynamicClientRegistrationClient
         string authority,
         string clientName,
         IReadOnlyCollection<string> redirectUris,
-        CancellationToken ct = default) =>
-        await RegisterPublicClientAsync(authority, clientName, redirectUris, [], ct).ConfigureAwait(false);
-
-    public virtual async Task<RegistrationResult> RegisterPublicClientAsync(
-        string authority,
-        string clientName,
-        IReadOnlyCollection<string> redirectUris,
-        IReadOnlyCollection<string> defaultServiceSlugs,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
         ArgumentException.ThrowIfNullOrWhiteSpace(clientName);
         ArgumentNullException.ThrowIfNull(redirectUris);
-        ArgumentNullException.ThrowIfNull(defaultServiceSlugs);
         var normalizedRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(redirectUris);
         if (normalizedRedirectUris.Count == 0)
             throw new ArgumentException("At least one redirect URI is required.", nameof(redirectUris));
-        var normalizedDefaultServiceSlugs = NormalizeDefaultServiceSlugs(defaultServiceSlugs);
 
         var url = $"{authority.TrimEnd('/')}{RegisterEndpoint}";
         var request = new RegistrationRequest
@@ -78,7 +68,6 @@ public class NyxIdDynamicClientRegistrationClient
             ResponseTypes = ["code"],
             TokenEndpointAuthMethod = "none",
             Scope = AevatarOAuthClientScopes.AuthorizationScope,
-            DefaultServices = normalizedDefaultServiceSlugs.Length == 0 ? null : normalizedDefaultServiceSlugs,
         };
 
         using var response = await _http.PostAsJsonAsync(url, request, JsonOptions, ct).ConfigureAwait(false);
@@ -115,20 +104,6 @@ public class NyxIdDynamicClientRegistrationClient
     private static string Truncate(string value, int max) =>
         string.IsNullOrEmpty(value) ? string.Empty : value.Length <= max ? value : value[..max];
 
-    private static string[] NormalizeDefaultServiceSlugs(IEnumerable<string> slugs)
-    {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var values = new List<string>();
-        foreach (var slug in slugs)
-        {
-            var value = slug.Trim();
-            if (value.Length > 0 && seen.Add(value))
-                values.Add(value);
-        }
-
-        return values.ToArray();
-    }
-
     public sealed record RegistrationResult(string ClientId, DateTimeOffset IssuedAt);
 
     private sealed record RegistrationRequest
@@ -139,7 +114,6 @@ public class NyxIdDynamicClientRegistrationClient
         public string[] ResponseTypes { get; init; } = Array.Empty<string>();
         public string TokenEndpointAuthMethod { get; init; } = "none";
         public string? Scope { get; init; }
-        public string[]? DefaultServices { get; init; }
     }
 
     private sealed record RegistrationResponse

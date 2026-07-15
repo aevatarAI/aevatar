@@ -492,9 +492,24 @@ public sealed class AevatarInvocationToolSourceTests
             CorrelationId = "workflow-correlation",
             RunId = "workflow-service-run",
         };
+        harness.WorkflowRunDelivery.DeliveryActorId = "delivery-team-alpha";
+        harness.ServiceInvocationDispatcher.OnDispatch = invocation =>
+        {
+            harness.WorkflowRunDelivery.Reservations.Should().ContainSingle();
+            harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+            invocation.CommandId.Should().Be("cmd-team-alpha");
+            invocation.CorrelationId.Should().Be("corr-team-alpha");
+            invocation.WorkflowCompletionNotificationTarget.Should().NotBeNull();
+            invocation.WorkflowCompletionNotificationTarget.ActorId.Should().Be("delivery-team-alpha");
+            var reservation = harness.WorkflowRunDelivery.Reservations.Single();
+            invocation.WorkflowCompletionNotificationTarget.DeliveryId.Should().Be(reservation.DeliveryId);
+            reservation.DeliveryId.Should().StartWith("workflow-delivery:");
+            reservation.DeliveryId.Should().NotContain("cmd-team-alpha");
+            invocation.WorkflowCompletionNotificationTarget.ActorId.Should().NotBe(reservation.DeliveryId);
+        };
         var dispatcher = harness.CreateDispatcher();
 
-        using var _ = PushContext(callId: "call-team-workflow");
+        using var _ = PushContext(callId: "cmd-team-alpha", requestId: "corr-team-alpha");
         var request = BuildChatRunRequest(
             "response-team-workflow",
             "call-team-workflow-tool",
@@ -560,16 +575,72 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowRunDelivery.Registrations[0].StreamTopic.Should().Be(result.StreamTopic);
         harness.WorkflowRunDelivery.Registrations[0].WorkflowActorId.Should().Be("workflow-run-actor");
         harness.WorkflowRunDelivery.Registrations[0].WorkflowRunId.Should().Be("workflow-service-run");
-        harness.WorkflowRunDelivery.Registrations[0].WorkflowCommandId.Should().Be("workflow-command");
-        harness.WorkflowRunDelivery.Registrations[0].WorkflowCorrelationId.Should().Be("workflow-correlation");
+        harness.WorkflowRunDelivery.Registrations[0].WorkflowCommandId.Should().Be("cmd-team-alpha");
+        harness.WorkflowRunDelivery.Registrations[0].WorkflowCorrelationId.Should().Be("corr-team-alpha");
 
         using var output = JsonDocument.Parse(result.ToolExecutionResultJson);
         output.RootElement.GetProperty("run_id").GetString().Should().Be("workflow-service-run");
         output.RootElement.GetProperty("actor_id").GetString().Should().Be("workflow-run-actor");
-        output.RootElement.GetProperty("command_id").GetString().Should().Be("workflow-command");
-        output.RootElement.GetProperty("correlation_id").GetString().Should().Be("workflow-correlation");
+        output.RootElement.GetProperty("command_id").GetString().Should().Be("cmd-team-alpha");
+        output.RootElement.GetProperty("correlation_id").GetString().Should().Be("corr-team-alpha");
         output.RootElement.GetProperty("service_id").GetString().Should().Be("workflow-service");
         output.RootElement.GetProperty("stream_topic").GetString().Should().Be(result.StreamTopic);
+    }
+
+    [Fact]
+    public async Task InvokeTeam_WhenAcceptedWorkflowCommandIdentityDiffers_ShouldReturnAcceptedWithoutAbandoning()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "member-team-mismatch",
+            "workflow-service-mismatch");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "workflow-service-mismatch",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-mismatch");
+        harness.ServiceInvocationDispatcher.HonorRequestIdentitySeeds = false;
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "accepted-team-command-mismatch",
+            ServiceKey = "tenant:aevatar-service:default:workflow-service-mismatch",
+            DeploymentId = "deployment-workflow-service-mismatch",
+            TargetActorId = "workflow-run-team-mismatch",
+            EndpointId = "chat",
+            CommandId = "accepted-team-command-mismatch",
+            CorrelationId = "accepted-team-correlation-mismatch",
+            RunId = "service-run-team-mismatch",
+        };
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "reserved-team-command-mismatch",
+            requestId: "reserved-team-correlation-mismatch");
+        var request = BuildChatRunRequest(
+            "response-team-mismatch",
+            "tool-call-team-mismatch",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "run team workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty();
+        result.Status.Should().Be("streaming");
+        result.RunId.Should().Be("service-run-team-mismatch");
+        harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Abandonments.Should().BeEmpty();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        resultJson.RootElement.GetProperty("command_id").GetString()
+            .Should().Be("accepted-team-command-mismatch");
     }
 
     [Fact]
@@ -646,8 +717,8 @@ public sealed class AevatarInvocationToolSourceTests
         dispatch.Request.Payload!.Unpack<ChatRequestEvent>().Prompt.Should().Be("run published workflow");
 
         using var output = JsonDocument.Parse(result.ToolExecutionResultJson);
-        output.RootElement.GetProperty("command_id").GetString().Should().Be("service-command");
-        output.RootElement.GetProperty("correlation_id").GetString().Should().Be("service-correlation");
+        output.RootElement.GetProperty("command_id").GetString().Should().Be("call-team-workflow-authority");
+        output.RootElement.GetProperty("correlation_id").GetString().Should().Be("request-1");
     }
 
     [Fact]
@@ -1012,9 +1083,9 @@ public sealed class AevatarInvocationToolSourceTests
         ShouldCarryTypedTrustedCallerValues(harness.WorkflowDispatch.Command);
 
         var result = Read(output);
-        result.GetProperty("run_id").GetString().Should().Be("wf-command");
+        result.GetProperty("run_id").GetString().Should().Be("call-workflow");
         result.GetProperty("actor_id").GetString().Should().Be("workflow-actor");
-        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/workflow-actor/runs/wf-command");
+        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/workflow-actor/runs/call-workflow");
     }
 
     [Fact]
@@ -1043,12 +1114,12 @@ public sealed class AevatarInvocationToolSourceTests
         result.ToolCall.Should().BeSameAs(request.ToolCall);
         result.ArgumentsJson.Should().Be(request.ArgumentsJson);
         result.ToolExecutionResultJson.Should().NotBeNullOrWhiteSpace();
-        result.RunId.Should().Be("wf-command");
+        result.RunId.Should().Be("call-workflow-typed");
         result.ScopeId.Should().Be("scope-1");
         result.WaitMode.Should().Be(ChatRunSubRunWaitMode.Stream);
         result.Status.Should().Be("streaming");
         result.ActorId.Should().Be("workflow-actor");
-        result.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/wf-command");
+        result.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/call-workflow-typed");
         result.CompletionObserved.Should().BeFalse();
         result.CompletionResultJson.Should().BeEmpty();
         result.ErrorCode.Should().BeEmpty();
@@ -1093,24 +1164,232 @@ public sealed class AevatarInvocationToolSourceTests
         result.CompletionResultJson.Should().BeEmpty();
         harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
         var registration = harness.WorkflowRunDelivery.Registrations.Single();
-        registration.DeliveryId.Should().Be("workflow-run-delivery:workflow-actor:wf-command");
+        registration.DeliveryId.Should().Be(harness.WorkflowRunDelivery.Reservations.Single().DeliveryId);
         registration.WorkflowActorId.Should().Be("workflow-actor");
-        registration.WorkflowRunId.Should().Be("wf-command");
-        registration.WorkflowCommandId.Should().Be("wf-command");
-        registration.WorkflowCorrelationId.Should().Be("wf-correlation");
-        registration.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/wf-command");
+        registration.WorkflowRunId.Should().Be("call-workflow-delivery");
+        registration.WorkflowCommandId.Should().Be("call-workflow-delivery");
+        registration.WorkflowCorrelationId.Should().Be("request-1");
+        registration.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/call-workflow-delivery");
         registration.ChannelPlatform.Should().Be("telegram");
         registration.ReplyMessageId.Should().Be("message-1");
         registration.PlatformMessageId.Should().Be("platform-message-1");
-        registration.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        registration.WorkflowResultDeliveryCredential.SecretReference.Ref.Should().Be("secrets://nyx/reply-1");
         registration.RegistrationScopeId.Should().Be("registration-scope-1");
+        registration.BotRegistrationId.Should().Be("bot-reg-1");
 
         using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
         var delivery = resultJson.RootElement.GetProperty("workflow_run_delivery");
-        delivery.GetProperty("delivery_actor_id").GetString().Should().Be("registered-delivery-actor");
+        delivery.GetProperty("delivery_actor_id").GetString().Should().Be("reserved-delivery-actor");
         delivery.GetProperty("workflow_actor_id").GetString().Should().Be("workflow-actor");
-        delivery.GetProperty("workflow_command_id").GetString().Should().Be("wf-command");
-        delivery.GetProperty("durable_reply_credential_ref").GetString().Should().Be("secrets://nyx/reply-1");
+        delivery.GetProperty("workflow_command_id").GetString().Should().Be("call-workflow-delivery");
+        // The boundary JSON must not echo any credential handle.
+        delivery.TryGetProperty("durable_reply_credential_ref", out var credentialProperty).Should().BeFalse();
+        credentialProperty.ValueKind.Should().Be(JsonValueKind.Undefined);
+        result.ToolExecutionResultJson.Should().NotContain("secrets://nyx/reply-1");
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_DefaultWaitWithChannelCredential_ShouldReserveBeforeDispatchAndRegisterAfterAcceptance()
+    {
+        var credentialExpiresAtUnixMs = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeMilliseconds();
+        var harness = new Harness();
+        harness.WorkflowRunDelivery.DeliveryActorId = "delivery-actor-alpha";
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt(
+                "workflow-actor-alpha",
+                "wf-main",
+                "ignored-command",
+                "ignored-correlation"));
+        harness.WorkflowDispatch.OnDispatch = command =>
+        {
+            harness.WorkflowRunDelivery.Reservations.Should().ContainSingle();
+            harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+            command.CommandIdSeed.Should().Be("command-alpha");
+            command.CorrelationIdSeed.Should().Be("correlation-alpha");
+            command.CompletionNotificationTarget.Should().NotBeNull();
+            command.CompletionNotificationTarget!.ActorId.Should().Be("delivery-actor-alpha");
+            var reservation = harness.WorkflowRunDelivery.Reservations.Single();
+            command.CompletionNotificationTarget.DeliveryId.Should().Be(reservation.DeliveryId);
+            reservation.DeliveryId.Should().StartWith("workflow-delivery:");
+            reservation.DeliveryId.Should().NotContain("command-alpha");
+            command.CompletionNotificationTarget.ActorId.Should().NotBe(reservation.DeliveryId);
+            command.CompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(credentialExpiresAtUnixMs);
+        };
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "command-alpha",
+            requestId: "correlation-alpha",
+            durableReplyCredentialRef: "secrets://nyx/reply-alpha",
+            durableReplyCredentialExpiresAtUnixMs: credentialExpiresAtUnixMs);
+        var request = BuildChatRunRequest(
+            "response-alpha",
+            "tool-call-alpha",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" }
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        result.RunId.Should().Be("command-alpha");
+        result.ActorId.Should().Be("workflow-actor-alpha");
+        harness.WorkflowRunDelivery.Reservations.Should().ContainSingle()
+            .Which.ExpectedWorkflowCommandId.Should().Be("command-alpha");
+        var registration = harness.WorkflowRunDelivery.Registrations.Should().ContainSingle().Which;
+        registration.DeliveryId.Should().Be(harness.WorkflowRunDelivery.Reservations.Single().DeliveryId);
+        registration.WorkflowCorrelationId.Should().Be("correlation-alpha");
+        harness.WorkflowRunDelivery.Abandonments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_WhenDeliveryReservationFails_ShouldNotDispatch()
+    {
+        var harness = new Harness();
+        harness.WorkflowRunDelivery.ReserveFailure = new InvalidOperationException("reservation boom");
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "command-reserve-failure",
+            durableReplyCredentialRef: "secrets://nyx/reply-reserve-failure");
+        var request = BuildChatRunRequest(
+            "response-reserve-failure",
+            "tool-call-reserve-failure",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" }
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().Be("workflow_background_delivery_reservation_failed");
+        result.ToolExecutionResultJson.Should().NotContain("reservation boom");
+        harness.WorkflowRunDelivery.Reservations.Should().ContainSingle();
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_WhenDispatchThrows_ShouldAbandonReservation()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Failure = new InvalidOperationException("dispatch boom");
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "command-dispatch-failure",
+            durableReplyCredentialRef: "secrets://nyx/reply-dispatch-failure");
+        var request = BuildChatRunRequest(
+            "response-dispatch-failure",
+            "tool-call-dispatch-failure",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" }
+            }
+            """);
+
+        var act = () => dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("dispatch boom");
+        harness.WorkflowRunDelivery.Reservations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Abandonments.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Abandonments[0].Receipt.WorkflowCommandId
+            .Should().Be("command-dispatch-failure");
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_WhenDispatchAdmissionIsRejected_ShouldAbandonWithoutAcknowledging()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(
+                new WorkflowChatRunAcceptedReceipt(
+                    "workflow-actor-rejected",
+                    "wf-main",
+                    "ignored-command",
+                    "ignored-correlation"),
+                new DispatchAdmission(
+                    false,
+                    "command-admission-rejected",
+                    DateTimeOffset.UtcNow,
+                    "workflow-actor-rejected",
+                    "correlation-admission-rejected"));
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "command-admission-rejected",
+            requestId: "correlation-admission-rejected",
+            durableReplyCredentialRef: "secrets://nyx/reply-admission-rejected");
+        var request = BuildChatRunRequest(
+            "response-admission-rejected",
+            "tool-call-admission-rejected",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" }
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().Be("dispatch_not_accepted");
+        result.RunId.Should().BeEmpty();
+        result.Status.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Reservations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Abandonments.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task StartWorkflowForChatRun_WhenAcceptedCommandIdentityDiffers_ShouldReturnAcceptedWithoutAbandoning()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.HonorCommandSeeds = false;
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt(
+                "workflow-actor-mismatch",
+                "wf-main",
+                "accepted-command-mismatch",
+                "accepted-correlation-mismatch"));
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "reserved-command-mismatch",
+            requestId: "reserved-correlation-mismatch",
+            durableReplyCredentialRef: "secrets://nyx/reply-command-mismatch");
+        var request = BuildChatRunRequest(
+            "response-command-mismatch",
+            "tool-call-command-mismatch",
+            "aevatar_start_workflow",
+            """
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" }
+            }
+            """);
+
+        var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty();
+        result.Status.Should().Be("streaming");
+        result.RunId.Should().Be("accepted-command-mismatch");
+        harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Abandonments.Should().BeEmpty();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        resultJson.RootElement.GetProperty("workflow_run_delivery")
+            .GetProperty("workflow_command_id").GetString()
+            .Should().Be("accepted-command-mismatch");
     }
 
     [Fact]
@@ -1158,13 +1437,18 @@ public sealed class AevatarInvocationToolSourceTests
         missingDelivery.ValueKind.Should().Be(JsonValueKind.Undefined);
     }
 
-    [Fact]
-    public async Task StartWorkflowForChatRun_WaitStreamWhenRegistrationThrows_ShouldReturnAcceptedWorkflowWithTypedFailure()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartWorkflowForChatRun_WhenRegistrationFailsOrIsCanceled_ShouldReturnAcceptedWorkflowWithFallbackReceipt(
+        bool canceled)
     {
         var harness = new Harness();
         harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
             .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
-        harness.WorkflowRunDelivery.Failure = new InvalidOperationException("registration boom");
+        harness.WorkflowRunDelivery.Failure = canceled
+            ? new OperationCanceledException("registration canceled")
+            : new InvalidOperationException("registration boom");
         var dispatcher = harness.CreateDispatcher();
 
         using var _ = PushContext(
@@ -1184,17 +1468,20 @@ public sealed class AevatarInvocationToolSourceTests
 
         var result = await dispatcher.StartWorkflowForChatRunAsync(request, request.ArgumentsJson);
 
-        result.RunId.Should().Be("wf-command");
-        result.Status.Should().Be("background_delivery_failed");
-        result.StreamTopic.Should().BeEmpty();
-        result.ErrorCode.Should().Be("workflow_background_delivery_registration_failed");
+        result.RunId.Should().Be("call-workflow-delivery-throws");
+        result.Status.Should().Be("streaming");
+        result.StreamTopic.Should().Be("aevatar://actors/workflow-actor/runs/call-workflow-delivery-throws");
+        result.ErrorCode.Should().BeEmpty();
         harness.WorkflowDispatch.Command.Should().NotBeNull();
         harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Abandonments.Should().BeEmpty(
+            "the accepted workflow still owns the typed completion target and can deliver without the late registration bind");
         using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
-        resultJson.RootElement.GetProperty("error").GetProperty("message").GetString()
-            .Should().Contain("registration boom");
-        resultJson.RootElement.TryGetProperty("workflow_run_delivery", out var missingDelivery).Should().BeFalse();
-        missingDelivery.ValueKind.Should().Be(JsonValueKind.Undefined);
+        resultJson.RootElement.TryGetProperty("error", out var ignoredError).Should().BeFalse();
+        ignoredError.ValueKind.Should().Be(JsonValueKind.Undefined);
+        var delivery = resultJson.RootElement.GetProperty("workflow_run_delivery");
+        delivery.GetProperty("delivery_actor_id").GetString().Should().Be("reserved-delivery-actor");
+        delivery.GetProperty("workflow_command_id").GetString().Should().Be("call-workflow-delivery-throws");
     }
 
     [Fact]
@@ -1219,10 +1506,11 @@ public sealed class AevatarInvocationToolSourceTests
 
         receipt.Should().NotBeNull();
         receipt!.WorkflowRunDelivery.Should().NotBeNull();
-        receipt.WorkflowRunDelivery.DeliveryActorId.Should().Be("registered-delivery-actor");
+        receipt.WorkflowRunDelivery.DeliveryActorId.Should().Be("reserved-delivery-actor");
         receipt.WorkflowRunDelivery.WorkflowActorId.Should().Be("workflow-actor");
-        receipt.WorkflowRunDelivery.WorkflowCommandId.Should().Be("wf-command");
-        receipt.WorkflowRunDelivery.DurableReplyCredentialRef.Should().Be("secrets://nyx/reply-1");
+        receipt.WorkflowRunDelivery.WorkflowCommandId.Should().Be("call-workflow-delivery-receipt");
+        // The receipt intentionally carries no credential handle.
+        receipt.WorkflowRunDelivery.ToString().Should().NotContain("secrets://nyx/reply-1");
     }
 
     [Fact]
@@ -1294,6 +1582,62 @@ public sealed class AevatarInvocationToolSourceTests
         result.RunId.Should().BeEmpty();
         harness.WorkflowDispatch.Command.Should().BeNull(
             "a channel workflow run without a result delivery path would silently lose the terminal result");
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
+        var errorMessage = resultJson.RootElement.GetProperty("error").GetProperty("message").GetString();
+        errorMessage.Should().NotBeNull();
+        errorMessage!.ToLowerInvariant()
+            .Should().NotContain("durable")
+            .And.NotContain("credential");
+    }
+
+    [Fact]
+    public async Task InvokeTeamForChatRun_DefaultWaitWorkflowEntryWithoutChannelDelivery_ShouldNotDispatch()
+    {
+        // The workflow-team path shares the pre-dispatch delivery gate with aevatar_start_workflow:
+        // a channel invocation without a delivery credential must fail closed before the service
+        // invocation dispatch, with the same product-level error.
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "workflow-service");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "workflow-service",
+            endpointId: "chat",
+            primaryActorId: "deployed-workflow-definition-actor");
+        harness.ServiceInvocationResolution.Result!.Artifact.DeploymentPlan.WorkflowPlan =
+            new WorkflowServiceDeploymentPlan
+            {
+                WorkflowName = "published-workflow",
+                WorkflowYaml = "name: published-workflow",
+                DefinitionActorId = "published-definition-actor",
+            };
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(
+            callId: "call-team-workflow-no-channel-delivery",
+            durableReplyCredentialRef: string.Empty);
+        var request = BuildChatRunRequest(
+            "response-team-workflow-no-channel-delivery",
+            "call-team-workflow-no-channel-delivery-tool",
+            "aevatar_invoke_team",
+            """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "run published workflow" }
+            }
+            """);
+
+        var result = await dispatcher.InvokeTeamForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+        result.RunId.Should().BeEmpty();
+        harness.ServiceInvocationDispatcher.Calls.Should().BeEmpty(
+            "a channel workflow-team run without a result delivery path would silently lose the terminal result");
         harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
         using var resultJson = JsonDocument.Parse(result.ToolExecutionResultJson);
         var errorMessage = resultJson.RootElement.GetProperty("error").GetProperty("message").GetString();
@@ -1419,7 +1763,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task aevatar_start_workflow_with_actor_id_dispatches_definition_actor_source()
+    public async Task aevatar_start_workflow_with_actor_id_and_wait_ack_reserves_channel_delivery()
     {
         var harness = new Harness();
         var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
@@ -1441,6 +1785,14 @@ public sealed class AevatarInvocationToolSourceTests
         harness.WorkflowDispatch.Command!.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
         harness.WorkflowDispatch.Command.Source.ActorId.Should().Be("workflow-definition-actor");
         harness.WorkflowDispatch.Command.Source.WorkflowName.Should().Be("wf-main");
+        harness.WorkflowDispatch.Command.CommandIdSeed.Should().Be("call-workflow-actor");
+        harness.WorkflowDispatch.Command.CorrelationIdSeed.Should().Be("request-1");
+        harness.WorkflowDispatch.Command.CompletionNotificationTarget.Should().NotBeNull();
+        harness.WorkflowRunDelivery.Reservations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Registrations.Should().ContainSingle();
+        var result = Read(output);
+        result.GetProperty("status").GetString().Should().Be("accepted");
+        result.GetProperty("wait").GetString().Should().Be("ack");
     }
 
     [Fact]
@@ -1574,6 +1926,9 @@ public sealed class AevatarInvocationToolSourceTests
 
         ErrorCode(output).Should().Be("workflownotfound");
         ErrorMessage(output).Should().Be(WorkflowChatRunStartErrorGuidance.WorkflowNotFound);
+        harness.WorkflowRunDelivery.Reservations.Should().ContainSingle();
+        harness.WorkflowRunDelivery.Registrations.Should().BeEmpty();
+        harness.WorkflowRunDelivery.Abandonments.Should().ContainSingle();
     }
 
     [Theory]
@@ -2444,15 +2799,17 @@ public sealed class AevatarInvocationToolSourceTests
 
     private static AgentToolContextScope PushContext(
         string callId,
+        string requestId = "request-1",
         string? scopeId = "scope-1",
         string? accessToken = "access-token",
         string? senderNyxUserId = null,
         string? senderBindingId = "binding-1",
         AgentWorkflowRuntimeContext? workflowRuntime = null,
         string? durableReplyCredentialRef = "secrets://nyx/default-reply",
+        long durableReplyCredentialExpiresAtUnixMs = 0,
         IReadOnlyDictionary<string, string>? externalMetadata = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
-            new AgentToolRequestIdentity("request-1", callId),
+            new AgentToolRequestIdentity(requestId, callId),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, "owner-1", "response-1"),
             new AgentToolChannelContext(
@@ -2462,13 +2819,31 @@ public sealed class AevatarInvocationToolSourceTests
                 "message-1",
                 "platform-message-1",
                 null,
-                durableReplyCredentialRef),
+                ToDeliveryCredential(durableReplyCredentialRef, durableReplyCredentialExpiresAtUnixMs),
+                "bot-reg-1"),
             new AgentToolSenderBindingContext("binding-1", senderNyxUserId),
             new LLMRequestRoutingContext("model-1", "route-1", 4, "memory"),
             new AgentToolConnectedServicesContext("""{"service":"ctx"}"""),
             workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
             AgentSkillRecoveryContext.Empty,
             BuildExternalMetadata(externalMetadata)));
+
+    private static ChannelWorkflowResultDeliveryCredential? ToDeliveryCredential(
+        string? secretRef,
+        long expiresAtUnixMs) =>
+        string.IsNullOrWhiteSpace(secretRef)
+            ? null
+            : new ChannelWorkflowResultDeliveryCredential
+            {
+                SecretReference = new Aevatar.Foundation.Abstractions.Credentials.SecretReference
+                {
+                    Ref = secretRef,
+                    Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    OwnerScopeKey = "registration-scope-1",
+                    ExpiresAtUnixMs = expiresAtUnixMs,
+                },
+                SubjectId = "nyx-api-key-1",
+            };
 
     private static IReadOnlyDictionary<string, string> BuildExternalMetadata(
         IReadOnlyDictionary<string, string>? externalMetadata)
@@ -2794,6 +3169,9 @@ public sealed class AevatarInvocationToolSourceTests
         : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
     {
         public WorkflowChatRunRequest? Command { get; private set; }
+        public Action<WorkflowChatRunRequest>? OnDispatch { get; set; }
+        public Exception? Failure { get; set; }
+        public bool HonorCommandSeeds { get; set; } = true;
 
         public CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> Result { get; set; } =
             CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
@@ -2804,6 +3182,23 @@ public sealed class AevatarInvocationToolSourceTests
             CancellationToken ct = default)
         {
             Command = command;
+            OnDispatch?.Invoke(command);
+            if (Failure != null)
+                throw Failure;
+
+            if (HonorCommandSeeds && Result.Succeeded && Result.Receipt != null &&
+                !string.IsNullOrWhiteSpace(command.CommandIdSeed))
+            {
+                var accepted = Result.Receipt;
+                return Task.FromResult(CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+                    .Success(new WorkflowChatRunAcceptedReceipt(
+                        accepted.ActorId,
+                        accepted.WorkflowName,
+                        command.CommandIdSeed,
+                        command.CorrelationIdSeed ?? command.CommandIdSeed),
+                        Result.Admission));
+            }
+
             return Task.FromResult(Result);
         }
     }
@@ -2811,6 +3206,9 @@ public sealed class AevatarInvocationToolSourceTests
     private sealed class RecordingServiceInvocationDispatcher : IServiceInvocationDispatcher
     {
         public List<(ServiceInvocationResolvedTarget Target, ServiceInvocationRequest Request)> Calls { get; } = [];
+        public Action<ServiceInvocationRequest>? OnDispatch { get; set; }
+        public Exception? Failure { get; set; }
+        public bool HonorRequestIdentitySeeds { get; set; } = true;
 
         public ServiceInvocationAcceptedReceipt Receipt { get; set; } = new()
         {
@@ -2830,7 +3228,21 @@ public sealed class AevatarInvocationToolSourceTests
             CancellationToken ct = default)
         {
             Calls.Add((CloneTarget(target), request.Clone()));
-            return Task.FromResult(Receipt);
+            OnDispatch?.Invoke(request);
+            if (Failure != null)
+                throw Failure;
+
+            var receipt = Receipt.Clone();
+            if (HonorRequestIdentitySeeds && !string.IsNullOrWhiteSpace(request.CommandId))
+            {
+                receipt.RequestId = request.CommandId;
+                receipt.CommandId = request.CommandId;
+                receipt.CorrelationId = string.IsNullOrWhiteSpace(request.CorrelationId)
+                    ? request.CommandId
+                    : request.CorrelationId;
+            }
+
+            return Task.FromResult(receipt);
         }
 
         private static ServiceInvocationResolvedTarget CloneTarget(ServiceInvocationResolvedTarget target) =>
@@ -2843,10 +3255,30 @@ public sealed class AevatarInvocationToolSourceTests
     private sealed class RecordingWorkflowRunBackgroundDeliveryRegistrationPort
         : IWorkflowRunBackgroundDeliveryRegistrationPort
     {
+        public List<WorkflowRunBackgroundDeliveryReservation> Reservations { get; } = [];
         public List<WorkflowRunBackgroundDeliveryRegistration> Registrations { get; } = [];
+        public List<(WorkflowRunBackgroundDeliveryReservationReceipt Receipt, string Reason)> Abandonments { get; } = [];
+        public Exception? ReserveFailure { get; set; }
         public Exception? Failure { get; set; }
+        public Exception? AbandonFailure { get; set; }
+        public string DeliveryActorId { get; set; } = "reserved-delivery-actor";
+
+        public Task<WorkflowRunBackgroundDeliveryReservationReceipt> ReserveAsync(
+            WorkflowRunBackgroundDeliveryReservation reservation,
+            CancellationToken ct = default)
+        {
+            Reservations.Add(reservation);
+            if (ReserveFailure != null)
+                throw ReserveFailure;
+
+            return Task.FromResult(new WorkflowRunBackgroundDeliveryReservationReceipt(
+                DeliveryActorId,
+                reservation.DeliveryId,
+                reservation.ExpectedWorkflowCommandId));
+        }
 
         public Task<WorkflowRunBackgroundDeliveryReceipt> RegisterAsync(
+            WorkflowRunBackgroundDeliveryReservationReceipt reservationReceipt,
             WorkflowRunBackgroundDeliveryRegistration registration,
             CancellationToken ct = default)
         {
@@ -2856,7 +3288,7 @@ public sealed class AevatarInvocationToolSourceTests
 
             return Task.FromResult(new WorkflowRunBackgroundDeliveryReceipt
             {
-                DeliveryActorId = "registered-delivery-actor",
+                DeliveryActorId = reservationReceipt.DeliveryActorId,
                 WorkflowActorId = registration.WorkflowActorId,
                 WorkflowRunId = registration.WorkflowRunId,
                 WorkflowCommandId = registration.WorkflowCommandId,
@@ -2866,8 +3298,19 @@ public sealed class AevatarInvocationToolSourceTests
                 ReplyMessageId = registration.ReplyMessageId,
                 PlatformMessageId = registration.PlatformMessageId,
                 RegistrationScopeId = registration.RegistrationScopeId,
-                DurableReplyCredentialRef = registration.DurableReplyCredentialRef,
             });
+        }
+
+        public Task AbandonAsync(
+            WorkflowRunBackgroundDeliveryReservationReceipt reservationReceipt,
+            string reason,
+            CancellationToken ct = default)
+        {
+            Abandonments.Add((reservationReceipt, reason));
+            if (AbandonFailure != null)
+                throw AbandonFailure;
+
+            return Task.CompletedTask;
         }
     }
 

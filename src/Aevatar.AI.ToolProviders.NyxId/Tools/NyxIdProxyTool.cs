@@ -236,12 +236,12 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (response.Content.Length == 0)
             return FileArtifactError("empty_file_artifact", "NyxID binary proxy response was empty.", response.HttpStatus, response.ContentType);
 
-        WorkflowFileIngressResult ingressResult;
+        FileArtifactIngressResult ingressResult;
         try
         {
-            ingressResult = await _fileArtifactIngress.IngestAsync(new WorkflowFileIngressRequest(
+            ingressResult = await _fileArtifactIngress.IngestAsync(new FileArtifactIngressRequest(
                 response.Content,
-                WorkflowFileSourceKind.ConnectedServiceResource,
+                FileArtifactSourceKind.ConnectedServiceResource,
                 SourceMessageId: $"nyxid_proxy:{slug}",
                 SourceResourceKey: path,
                 FileName: response.FileName,
@@ -519,7 +519,7 @@ public sealed class NyxIdProxyTool : IAgentTool
                 sourceContentType),
             JsonOptions);
 
-    private static NyxIdProxyWorkflowFileRefProjection ToFileRefProjection(WorkflowFileRef fileRef) =>
+    private static NyxIdProxyWorkflowFileRefProjection ToFileRefProjection(FileArtifactRef fileRef) =>
         new(
             fileRef.FileId,
             fileRef.ArtifactId,

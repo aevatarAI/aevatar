@@ -66,7 +66,6 @@ public sealed class ChannelRuntimeSourceRegressionTests
         var source = ReadRepositoryFile("agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs");
         foreach (var token in new[]
                  {
-                     "Aevatar.GAgents.Platform.Lark",
                      "ILarkOutboundDispatcher",
                      "LarkOutboundDispatcher",
                      "LarkSendNewMessageRequest",
@@ -84,21 +83,26 @@ public sealed class ChannelRuntimeSourceRegressionTests
     }
 
     [Fact]
-    public void Authoring_lark_must_not_own_outbound_delivery_orchestration()
+    public void Standalone_lark_authoring_package_must_not_reappear()
     {
-        var source = ReadRepositorySources("agents/Aevatar.GAgents.Authoring.Lark");
-        foreach (var token in new[]
-                 {
-                     "FeishuCardOutboundMessageSender",
-                     "ILarkOutboundDispatcher",
-                     "LarkOutboundDispatcher",
-                     "LarkSendNewMessageRequest",
-                     "IUserAgentDeliveryTargetReader",
-                 })
-        {
-            source.Should().NotContain(token,
-                "Authoring.Lark owns card/content authoring only; delivery orchestration belongs to channel/platform adapters");
-        }
+        var repositoryRoot = GetRepositoryRoot();
+        Directory.Exists(Path.Combine(repositoryRoot, "agents", "Aevatar.GAgents.Authoring.Lark"))
+            .Should().BeFalse("Lark authoring is not a standalone package; generic tools live in Scheduled and Lark card mapping lives in Platform.Lark");
+    }
+
+    [Fact]
+    public void Scheduled_package_must_not_depend_on_lark_platform_adapter_or_lark_outbound_proxy_metadata()
+    {
+        var source = ReadRepositorySources("agents/Aevatar.GAgents.Scheduled") +
+                     ReadRepositoryFile("agents/Aevatar.GAgents.Scheduled/Aevatar.GAgents.Scheduled.csproj");
+        source.Should().NotContain("Aevatar.GAgents.Platform.Lark",
+            "generic scheduled authoring must work without referencing the Lark platform package");
+        source.Should().NotContain("Aevatar.AI.ToolProviders.Lark",
+            "generic scheduled authoring must work without referencing any Lark package");
+        source.Should().NotContain("LarkConversationTargets",
+            "Lark receive-target inference belongs to the Lark adapter boundary");
+        source.Should().NotContain("ChannelMetadataKeys.LarkOutboundProxySlug",
+            "generic scheduled runtime must consume normalized outbound provider metadata, not Lark fallback keys");
     }
 
     [Fact]

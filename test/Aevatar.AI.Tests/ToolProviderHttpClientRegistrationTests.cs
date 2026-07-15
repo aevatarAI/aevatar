@@ -45,7 +45,7 @@ public sealed class ToolProviderHttpClientRegistrationTests
             descriptor.ServiceType == typeof(INyxIdProxyFileArtifactIngress));
 
         var withWorkflowIngress = new ServiceCollection();
-        withWorkflowIngress.AddSingleton<IWorkflowFileIngressPort, StubWorkflowFileIngressPort>();
+        withWorkflowIngress.AddSingleton<IFileArtifactIngressPort, StubWorkflowFileIngressPort>();
         withWorkflowIngress.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         withWorkflowIngress.Should().ContainSingle(descriptor =>
@@ -101,7 +101,12 @@ public sealed class ToolProviderHttpClientRegistrationTests
 
         var tools = await source.DiscoverToolsAsync();
         var sshExec = tools.Should().ContainSingle(tool => tool is NyxIdSshExecTool).Subject;
+        var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
+        codexExec.Name.Should().Be("codex_exec");
         sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
+            .Should()
+            .BeFalse();
+        codexExec.RequiresApproval("""{"service":"host","principal":"ubuntu","prompt":"check"}""")
             .Should()
             .BeFalse();
     }
@@ -175,12 +180,12 @@ file static class HttpClientRegistrationAssertions
     }
 }
 
-file sealed class StubWorkflowFileIngressPort : IWorkflowFileIngressPort
+file sealed class StubWorkflowFileIngressPort : IFileArtifactIngressPort
 {
-    public ValueTask<WorkflowFileIngressResult> IngestAsync(
-        WorkflowFileIngressRequest request,
+    public ValueTask<FileArtifactIngressResult> IngestAsync(
+        FileArtifactIngressRequest request,
         CancellationToken cancellationToken = default) =>
-        ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+        ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
         {
             FileId = "file-1",
             ArtifactId = "artifact-1",

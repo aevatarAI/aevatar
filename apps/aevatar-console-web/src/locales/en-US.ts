@@ -9,8 +9,10 @@ const enUSMessages = {
   'common.language.zhCN': '中文',
   'common.user.logout': 'Logout',
   'common.user.settings': 'Settings',
+  'common.user.signIn': 'Sign in',
   'menu.Connectors': 'Connectors',
   'menu.Create Team': 'Create Team',
+  'menu.Chat': 'Chat',
   'menu.Deployments': 'Deployments',
   'menu.Event Stream': 'Event Stream',
   'menu.Files': 'Files',
@@ -25,10 +27,12 @@ const enUSMessages = {
   'menu.Team Member Published Runs': 'Team Member Published Runs',
   'menu.Team Member Workflow Studio': 'Team Member Workflow Studio',
   'menu.Topology': 'Topology',
+  'nav.groups.chat': 'Chat',
   'nav.groups.platform': 'Platform',
   'nav.groups.settings': 'Settings',
   'nav.groups.teams': 'Teams',
   'nav.items.deployments': 'Deployments',
+  'nav.items.chat': 'Chat',
   'nav.items.eventStream': 'Event Stream',
   'nav.items.governance': 'Governance',
   'nav.items.myTeams': 'My Teams',
@@ -36,9 +40,133 @@ const enUSMessages = {
   'nav.items.settings': 'Settings',
   'nav.items.topology': 'Topology',
   'pages.gagents.index.platformBreadcrumb': 'Platform',
+  'pages.chat.index.chatStopped': 'Chat stopped.',
+  'pages.chat.index.composerPlaceholder':
+    'Describe the workflow you want, or ask about the current setup...',
+  'pages.chat.index.confirmAndCreate': 'Confirm and create',
+  'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
+  'pages.chat.index.conversationTitle': 'Conversation title',
+  'pages.chat.index.deleteChat': 'Delete {title}',
+  'pages.chat.index.emptyDescription':
+    'Describe the Team, Member, or Workflow you want to create.',
+  'pages.chat.index.historyStoredLocally': 'History is stored in this browser.',
+  'pages.chat.index.newChat': 'New chat',
+  'pages.chat.index.newChatAction': 'New Chat',
+  'pages.chat.index.noChatHistory': 'No chat history',
+  'pages.chat.index.noScope':
+    'No usable scope was resolved for this account. Refresh and try again.',
+  'pages.chat.index.openTeam': 'Open Team',
+  'pages.chat.index.openWorkflowStudio': 'Open Workflow Studio',
+  'pages.chat.index.renameChat': 'Rename {title}',
+  'pages.chat.index.renameChatTitle': 'Rename chat',
+  'pages.chat.index.resolvingScope': 'Resolving scope',
+  'pages.chat.index.reviewPlan': 'Review the plan before creating resources.',
+  'pages.chat.index.scopeValue': 'Scope {scopeId}',
+  'pages.chat.index.status.completed': 'Completed',
+  'pages.chat.index.status.creating': 'Creating',
+  'pages.chat.index.status.draft': 'Draft',
+  'pages.chat.index.status.error': 'Error',
+  'pages.chat.index.status.needsConfirmation': 'Needs confirmation',
+  'pages.chat.index.status.streaming': 'Streaming',
+  'pages.chat.index.status.studioReady': 'Studio ready',
+  'pages.chat.index.time.daysAgo': '{count}d ago',
+  'pages.chat.index.time.hoursAgo': '{count}h ago',
+  'pages.chat.index.time.justNow': 'just now',
+  'pages.chat.index.time.minutesAgo': '{count}m ago',
+  'pages.chat.index.title': 'Chat',
+  'pages.chat.index.tokenSplit': '{input} in / {output} out',
+  'pages.chat.index.totalTokens': '{count} tokens',
   'pages.gagents.index.teamMembersBreadcrumb': 'Team members',
   'pages.missioncontrol.index.missionControlBreadcrumb': 'Mission Control',
   'pages.missioncontrol.index.platformBreadcrumb': 'Platform',
+  'pages.missionwall.focus': 'Focus',
+  'pages.missionwall.focusReason.failed': 'failed',
+  'pages.missionwall.focusReason.latestRunning': 'latest running',
+  'pages.missionwall.focusReason.none': 'No focus',
+  'pages.missionwall.focusReason.recentlyCompleted': 'recently completed',
+  'pages.missionwall.focusReason.retrying': 'retrying',
+  'pages.missionwall.focusReason.staleLive': 'stale',
+  'pages.missionwall.focusReason.staleProjection': 'stale',
+  'pages.missionwall.focusReason.timedOut': 'timed out',
+  'pages.missionwall.focusReason.unknown': 'unknown',
+  'pages.missionwall.focusReason.waitingHuman': 'waiting approval',
+  'pages.missionwall.latencyMs': '{latency}ms',
+  'pages.missionwall.latencySeconds': '{latency}s',
+  'pages.missionwall.liveState.connected':
+    'Connected to published workflow run read models.',
+  'pages.missionwall.liveState.empty':
+    'No published workflow runs are visible yet.',
+  'pages.missionwall.liveState.loading': 'Loading published workflow runs.',
+  'pages.missionwall.liveState.partialRunError':
+    'Some published service runs could not be loaded.',
+  'pages.missionwall.liveState.scopeUnavailable':
+    'Mission wall could not load the authenticated scope.',
+  'pages.missionwall.liveState.snapshotUnavailable':
+    'Mission wall snapshot could not be loaded.',
+  'pages.missionwall.liveStatus.degraded': 'Degraded',
+  'pages.missionwall.liveStatus.disconnected': 'Disconnected',
+  'pages.missionwall.liveStatus.idle': 'Idle',
+  'pages.missionwall.liveStatus.live': 'On',
+  'pages.missionwall.liveStatus.unknown': 'Unknown',
+  'pages.missionwall.metric.failed': 'Failed',
+  'pages.missionwall.metric.live': 'Live',
+  'pages.missionwall.metric.retrying': 'Retrying',
+  'pages.missionwall.metric.running': 'Running',
+  'pages.missionwall.metric.waiting': 'Waiting',
+  'pages.missionwall.noFocusExplain': 'Select a workflow.',
+  'pages.missionwall.noFocusRun': 'No focus run',
+  'pages.missionwall.branchLabel': 'branch: {label}',
+  'pages.missionwall.publishedRunWindow': 'Published Run Window',
+  'pages.missionwall.publishedRunWindowAria': 'Published run window',
+  'pages.missionwall.runProgress': '{completed} / {total} steps',
+  'pages.missionwall.runStage.failedAtStep': '{step} failed',
+  'pages.missionwall.runStage.retryingAtStep': 'Retrying {step}',
+  'pages.missionwall.runStage.runningAtStep': 'Running {step}',
+  'pages.missionwall.runStage.staleAtStep': 'Stale at {step}',
+  'pages.missionwall.runStage.timedOutAtStep': '{step} timed out',
+  'pages.missionwall.runStage.waitingAtStep': 'Waiting at {step}',
+  'pages.missionwall.runtimeKicker': 'AEVATAR WORKFLOW RUNTIME',
+  'pages.missionwall.runtimeData.completed': 'Completed',
+  'pages.missionwall.runtimeData.failed': 'Failed',
+  'pages.missionwall.runtimeData.retrying': 'Retrying',
+  'pages.missionwall.runtimeData.running': 'Running',
+  'pages.missionwall.runtimeData.stopped': 'Stopped',
+  'pages.missionwall.runtimeData.timedOut': 'Timed out',
+  'pages.missionwall.runtimeData.unknown': 'Unknown',
+  'pages.missionwall.runtimeData.noRuntimeRun': 'No visible run',
+  'pages.missionwall.runtimeData.unnamedWorkflow': 'Unnamed workflow',
+  'pages.missionwall.runtimeData.waiting': 'Waiting',
+  'pages.missionwall.status.completed': 'DONE',
+  'pages.missionwall.status.failed': 'FAILED',
+  'pages.missionwall.status.retrying': 'RETRY',
+  'pages.missionwall.status.running': 'LIVE',
+  'pages.missionwall.status.published': 'PUBLISHED',
+  'pages.missionwall.status.stale': 'STALE',
+  'pages.missionwall.status.stopped': 'STOP',
+  'pages.missionwall.status.timedOut': 'TIMEOUT',
+  'pages.missionwall.status.unknown': 'UNKNOWN',
+  'pages.missionwall.status.waiting': 'WAIT',
+  'pages.missionwall.state.auditLoading': 'Loading selected run',
+  'pages.missionwall.state.auditPendingTitle':
+    'No step flow for this run yet',
+  'pages.missionwall.state.emptyKicker': 'Waiting for runs',
+  'pages.missionwall.state.emptyTitle': 'No published workflows are visible',
+  'pages.missionwall.state.loadingKicker': 'Loading runtime',
+  'pages.missionwall.state.loadingTitle': 'Loading workflow runs',
+  'pages.missionwall.state.publishedWorkflowTitle':
+    'No visible run',
+  'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
+  'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepStatus.active': 'ACTIVE',
+  'pages.missionwall.stepStatus.completed': 'COMPLETED',
+  'pages.missionwall.stepStatus.failed': 'FAILED',
+  'pages.missionwall.stepStatus.idle': 'NEXT',
+  'pages.missionwall.stepStatus.retrying': 'RETRYING',
+  'pages.missionwall.stepStatus.unknown': 'UNKNOWN',
+  'pages.missionwall.stepStatus.waiting': 'WAITING',
+  'pages.missionwall.title': 'Published Run Mission Wall',
+  'pages.missionwall.unknownEntryMember': 'Unknown entry member',
+  'pages.missionwall.unknownTeam': 'Unknown team',
   'pages.scopes.assets.legacyAssetsBreadcrumb': 'Legacy Assets',
   'pages.scopes.assets.legacyAssetsContent':
     'Team home now lives under /scopes/:scopeId/teams. Keep this page for older asset deep links, source inspection, and catalog detail while the scoped team flow finishes taking over.',
@@ -91,7 +219,8 @@ const enUSMessages = {
     'The member roster for this workspace is temporarily unavailable.',
   'teams.home.alerts.noScope':
     'No usable team scope could be resolved from the current login state. Refresh and try again.',
-  'teams.home.alerts.partialSignals': 'Some team signals are temporarily unavailable',
+  'teams.home.alerts.partialSignals':
+    'Some team signals are temporarily unavailable',
   'teams.home.alerts.teamsUnavailable':
     'The team roster for this workspace is temporarily unavailable.',
   'teams.home.attention.draft': 'Draft',
@@ -119,7 +248,8 @@ const enUSMessages = {
   'teams.home.breadcrumb': 'Aevatar / Teams',
   'teams.home.empty.description':
     'This account has not created any teams yet. Your AI teams will appear here after creation.',
-  'teams.home.errors.rosterUnavailable': 'The team list cannot be loaded right now.',
+  'teams.home.errors.rosterUnavailable':
+    'The team list cannot be loaded right now.',
   'teams.home.facts.currentStatus': 'Current status',
   'teams.home.facts.latestUpdate': 'Latest update',
   'teams.home.facts.members': 'Members',
@@ -169,7 +299,8 @@ const enUSMessages = {
   'teams.detail.actions.moreAria': 'Team actions',
   'teams.detail.actions.test': 'Test team',
   'teams.detail.archive.hint.noTeam': 'Select a real team before archiving.',
-  'teams.detail.archive.hint.ready': 'The team summary must be loaded before archiving.',
+  'teams.detail.archive.hint.ready':
+    'The team summary must be loaded before archiving.',
   'teams.detail.archive.modal.content':
     'After archiving, this team is de-emphasized in active member lists, but you can still edit configuration and inspect history.',
   'teams.detail.archive.modal.title': 'Archive this team?',
@@ -177,7 +308,8 @@ const enUSMessages = {
   'teams.detail.breadcrumb.teams': 'Teams',
   'teams.detail.backToTeams': 'Back to teams',
   'teams.detail.edit.hint.noTeam': 'Select a real team before editing.',
-  'teams.detail.edit.hint.ready': 'The team summary must be loaded before editing.',
+  'teams.detail.edit.hint.ready':
+    'The team summary must be loaded before editing.',
   'teams.detail.edit.modal.description': 'Team description',
   'teams.detail.edit.modal.descriptionAria': 'Edit team description',
   'teams.detail.edit.modal.help':
@@ -190,7 +322,8 @@ const enUSMessages = {
     'This URL only has workspace context and no concrete team identity. Return to the teams list and choose a team.',
   'teams.detail.empty.panel': 'No team selected',
   'teams.detail.empty.title': 'Team detail',
-  'teams.detail.empty.subtitle': 'Choose a team from the teams list before opening its detail page.',
+  'teams.detail.empty.subtitle':
+    'Choose a team from the teams list before opening its detail page.',
   'teams.detail.heading.currentTeam': 'Current team',
   'teams.detail.heading.default': 'Team detail',
   'teams.detail.loading': 'Loading team detail...',
@@ -207,7 +340,8 @@ const enUSMessages = {
   'teams.detail.messages.teamTestStopped': 'Team Test stopped.',
   'teams.detail.messages.updateFailed': 'Failed to update team.',
   'teams.detail.messages.updateSuccess': 'Team updated.',
-  'teams.detail.meta.memberCount': '{count, plural, one {# member} other {# members}}',
+  'teams.detail.meta.memberCount':
+    '{count, plural, one {# member} other {# members}}',
   'teams.detail.meta.scopeId': 'Workspace',
   'teams.detail.meta.teamId': 'Team',
   'teams.detail.overview.cards.currentRun': 'Latest run',
@@ -219,13 +353,15 @@ const enUSMessages = {
     'There are not enough facts to build team composition yet.',
   'teams.detail.overview.composition.empty.title': 'No team composition yet',
   'teams.detail.overview.composition.title': 'Team composition',
-  'teams.detail.overview.configuration.bindingCurrentService': 'Routes to {service}',
+  'teams.detail.overview.configuration.bindingCurrentService':
+    'Routes to {service}',
   'teams.detail.overview.configuration.bindingMode': 'Binding mode',
   'teams.detail.overview.configuration.bindingNoService':
     'No primary service entry has been matched yet.',
   'teams.detail.overview.configuration.primaryService': 'Primary service entry',
   'teams.detail.overview.configuration.title': 'Configuration details',
   'teams.detail.overview.configuration.versionIdentity': 'Version identity',
+  'teams.detail.overview.configuration.versionStatus': 'Version status',
   'teams.detail.overview.configuration.workflow': 'Team workflow',
   'teams.detail.overview.entry.configuredCaption':
     'Calls to this team route to this member first.',
@@ -246,7 +382,8 @@ const enUSMessages = {
     'Current serving version is available.',
   'teams.detail.overview.configuration.versionPending':
     'Serving version is pending.',
-  'teams.detail.overview.configuration.workflowLinked': 'Workflow draft is linked.',
+  'teams.detail.overview.configuration.workflowLinked':
+    'Workflow draft is linked.',
   'teams.detail.overview.configuration.workflowPending':
     'Workflow draft is not linked yet.',
   'teams.detail.overview.member.selectedCaption':
@@ -255,7 +392,8 @@ const enUSMessages = {
   'teams.detail.overview.service.boundCaption':
     'Traffic is routed through the bound service.',
   'teams.detail.overview.service.boundFallback': 'Bound service',
-  'teams.detail.overview.service.configuredCaption': 'Service routing is configured.',
+  'teams.detail.overview.service.configuredCaption':
+    'Service routing is configured.',
   'teams.detail.overview.pill.run': 'Run · {value}',
   'teams.detail.overview.pill.runMissing': 'No recent visible run',
   'teams.detail.overview.pill.service': 'Service · {value}',
@@ -294,7 +432,8 @@ const enUSMessages = {
   'teams.detail.test.actions.stop': 'Stop',
   'teams.detail.test.currentMemberContext':
     'Current page selected {member}, but Team Test still starts through the entry member.',
-  'teams.detail.test.disabled.archived': 'Archived teams cannot start a new test.',
+  'teams.detail.test.disabled.archived':
+    'Archived teams cannot start a new test.',
   'teams.detail.test.entry.buildFirst': 'Build / Bind first',
   'teams.detail.test.entry.checking.description':
     'You can choose an entry member after the member roster finishes syncing.',
@@ -312,7 +451,8 @@ const enUSMessages = {
   'teams.detail.test.entry.promptRequiredTitle': 'Enter a test prompt first.',
   'teams.detail.test.entry.rosterUnavailable.description':
     'The team member roster cannot be read right now, so an entry member cannot be selected.',
-  'teams.detail.test.entry.rosterUnavailable.title': 'Member roster unavailable',
+  'teams.detail.test.entry.rosterUnavailable.title':
+    'Member roster unavailable',
   'teams.detail.test.entry.setAndTest': 'Set entry and test',
   'teams.detail.test.entrySyncing.action': 'Retry',
   'teams.detail.test.entrySyncing.description':
@@ -369,7 +509,8 @@ const enUSMessages = {
   'teams.detail.test.status.stopped': 'Stopped',
   'teams.detail.test.status.success': 'Completed',
   'teams.detail.test.archivedHint': 'Archived teams cannot start new tests.',
-  'teams.detail.test.subtitle': 'Start a real team invocation through the entry member.',
+  'teams.detail.test.subtitle':
+    'Start a real team invocation through the entry member.',
   'teams.detail.update.empty': 'No visible update time yet',
   'teams.detail.update.fromRun': 'From latest run',
   'teams.detail.update.fromTeam': 'From team update time',
@@ -385,7 +526,8 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL seconds',
   'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
   'shared.studio.nodeConfiguration.checkpoint.name.label': 'Checkpoint name',
-  'shared.studio.nodeConfiguration.checkpoint.name.placeholder': 'before_publish',
+  'shared.studio.nodeConfiguration.checkpoint.name.placeholder':
+    'before_publish',
   'shared.studio.nodeConfiguration.conditional.condition.label': 'Condition',
   'shared.studio.nodeConfiguration.conditional.condition.placeholder':
     'eq($input, "ok")',
@@ -393,7 +535,8 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
     'Configured connector name',
   'shared.studio.nodeConfiguration.connectorCall.method.label': 'Method',
-  'shared.studio.nodeConfiguration.connectorCall.method.option.delete': 'DELETE',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.delete':
+    'DELETE',
   'shared.studio.nodeConfiguration.connectorCall.method.option.get': 'GET',
   'shared.studio.nodeConfiguration.connectorCall.method.option.patch': 'PATCH',
   'shared.studio.nodeConfiguration.connectorCall.method.option.post': 'POST',
@@ -449,7 +592,8 @@ const enUSMessages = {
     'Input is not empty',
   'shared.studio.nodeConfiguration.guard.check.option.regex': 'Matches regex',
   'shared.studio.nodeConfiguration.guard.onFailure.label': 'On failure',
-  'shared.studio.nodeConfiguration.humanApproval.onReject.label': 'On rejection',
+  'shared.studio.nodeConfiguration.humanApproval.onReject.label':
+    'On rejection',
   'shared.studio.nodeConfiguration.humanApproval.onReject.option.fail':
     'Fail the run',
   'shared.studio.nodeConfiguration.humanApproval.onReject.option.skip':
@@ -471,7 +615,8 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
     'Tell the role what this step should do.',
   'shared.studio.nodeConfiguration.mapReduce.delimiter.label': 'Delimiter',
-  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder':
+    '\\n---\\n',
   'shared.studio.nodeConfiguration.mapReduce.mapStepType.label': 'Map step',
   'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.label':
     'Map target role',
@@ -573,7 +718,8 @@ const enUSMessages = {
   'shared.studio.nodeConfiguration.transform.operation.option.uppercase':
     'Uppercase',
   'shared.studio.nodeConfiguration.waitSignal.signalName.label': 'Signal name',
-  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder': 'continue',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder':
+    'continue',
   'shared.studio.nodeConfiguration.waitSignal.timeout.label': 'Timeout ms',
   'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
   'shared.studio.nodeConfiguration.while.condition.label': 'Condition',
@@ -596,6 +742,7 @@ const enUSMessages = {
   'teams.members.actions.createFirst': 'Create first member',
   'teams.members.actions.createFirstWorkflow': 'Create first workflow member',
   'teams.members.actions.createWorkflowMember': 'Create workflow member',
+  'teams.members.actions.delete': 'Delete member',
   'teams.members.actions.editInStudio': 'Edit in Studio',
   'teams.members.actions.automate': 'Automate',
   'teams.members.actions.invokeRequiresBinding':
@@ -630,11 +777,9 @@ const enUSMessages = {
   'teams.automations.cron.hourlyDetail':
     'Every hour at minute {minute} · {timezone}',
   'teams.automations.cron.weekdays': 'Weekdays · {time}',
-  'teams.automations.cron.weekdaysDetail':
-    'Weekdays at {time} · {timezone}',
+  'teams.automations.cron.weekdaysDetail': 'Weekdays at {time} · {timezone}',
   'teams.automations.cron.weekly': '{weekday} · {time}',
-  'teams.automations.cron.weeklyDetail':
-    '{weekday} at {time} · {timezone}',
+  'teams.automations.cron.weeklyDetail': '{weekday} at {time} · {timezone}',
   'teams.automations.description':
     'Recurring work belongs to a member. The team view shows every commitment so operators can see what will run next and what needs attention.',
   'teams.automations.empty.createFirst': 'Create first automation',
@@ -648,6 +793,17 @@ const enUSMessages = {
   'teams.automations.error.title': 'Automations could not load',
   'teams.automations.form.cadence': 'Cadence',
   'teams.automations.form.cadenceAria': 'Automation cadence',
+  'teams.automations.form.agentKeyConsent':
+    'I consent to Aevatar creating an automation-dedicated Agent Key for this schedule.',
+  'teams.automations.form.agentKeyExpiry': 'Expires {time}',
+  'teams.automations.form.agentKeyManaged': 'Aevatar managed',
+  'teams.automations.form.agentKeyMode': 'Credential mode · {mode}',
+  'teams.automations.form.agentKeyNoRawKey':
+    'Browser never receives the raw Agent Key',
+  'teams.automations.form.agentKeyPlan':
+    'Automation dedicated Agent Key',
+  'teams.automations.form.backendRequired': 'Creation unavailable',
+  'teams.automations.form.close': 'Close',
   'teams.automations.form.create': 'Create automation',
   'teams.automations.form.cron': 'Cron expression',
   'teams.automations.form.cronAria': 'Cron expression',
@@ -657,6 +813,8 @@ const enUSMessages = {
   'teams.automations.form.displayName': 'Name',
   'teams.automations.form.displayNameAria': 'Automation name',
   'teams.automations.form.displayNamePlaceholder': 'Daily escalation digest',
+  'teams.automations.form.editPromptHint':
+    'Optional: leave it blank to save without a recurring prompt.',
   'teams.automations.form.editTitle': 'Edit automation',
   'teams.automations.form.enabled': 'Enabled',
   'teams.automations.form.identityMissing':
@@ -665,11 +823,19 @@ const enUSMessages = {
     "Targets the member's published service.",
   'teams.automations.form.member': 'Member',
   'teams.automations.form.memberAria': 'Automation member',
+  'teams.automations.form.nodeGrants': 'Node grants',
+  'teams.automations.form.permissionDigest':
+    'Permission digest · {permissionDigest}',
+  'teams.automations.form.planChanged':
+    'The authorization plan changed. Refresh the review before creating.',
+  'teams.automations.form.policyVersion':
+    'Policy version · {policyVersion}',
   'teams.automations.form.preset.custom': 'Custom cron',
   'teams.automations.form.preset.dailyMorning': 'Daily · 09:00',
   'teams.automations.form.preset.hourly': 'Hourly',
   'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
   'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
+  'teams.automations.form.preparingReview': 'Preparing review',
   'teams.automations.form.preview': 'Preview next runs',
   'teams.automations.form.previewEmpty':
     'Preview the cadence to confirm the next scheduled runs.',
@@ -681,8 +847,22 @@ const enUSMessages = {
     'Optional. Up to {maxLength} characters.',
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.form.refreshReview': 'Refresh review',
+  'teams.automations.form.reviewErrorBody':
+    'The mock contract could not prepare the review. Keep the draft and try again.',
+  'teams.automations.form.reviewErrorTitle':
+    'Permission review needs attention',
+  'teams.automations.form.reviewPermissions': 'Review permissions',
+  'teams.automations.form.reviewPlaceholder':
+    'Review is prepared after the draft cadence and target are ready.',
+  'teams.automations.form.previewOnlyNotice':
+    'Preview only. No automation or Agent Key is created until the scoped backend is connected.',
   'teams.automations.form.save': 'Save changes',
   'teams.automations.form.scheduleReadsAs': 'Schedule reads as',
+  'teams.automations.form.section.permissionReview':
+    '4. Review Agent Key consent',
+  'teams.automations.form.section.permissionReviewHint':
+    'Browser login authorization only confirms this consent. Automation uses a dedicated Agent Key managed by Aevatar.',
   'teams.automations.form.section.schedule': '3. Schedule',
   'teams.automations.form.section.scheduleHint':
     'Choose a common cadence or switch to custom cron for advanced schedules.',
@@ -692,6 +872,7 @@ const enUSMessages = {
   'teams.automations.form.section.work': '2. Work to run',
   'teams.automations.form.section.workHint':
     'Name the automation and optionally add a prompt for each run.',
+  'teams.automations.form.serviceGrants': 'Service grants',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
@@ -718,6 +899,8 @@ const enUSMessages = {
     'Service identity is still loading.',
   'teams.automations.messages.serviceIdentityMissing':
     'The selected member does not have a service identity yet.',
+  'teams.automations.messages.reviewFailed':
+    'Permission review could not be prepared: {message}',
   'teams.automations.messages.updateFailed':
     'Automation was not updated: {message}',
   'teams.automations.messages.updateSuccess': 'Automation updated.',
@@ -781,6 +964,16 @@ const enUSMessages = {
   'teams.members.columns.role': 'Role',
   'teams.members.columns.service': 'Service',
   'teams.members.count': '{count, plural, one {# member} other {# members}}',
+  'teams.members.delete.confirm.body': 'Delete',
+  'teams.members.delete.confirm.body.suffix': 'from this Team?',
+  'teams.members.delete.entry.warning':
+    'This member is the Team entry member. Deleting it removes the member authority and clears it from the Team roster; published service artifacts, revisions, and historical runs stay intact.',
+  'teams.members.delete.failed': 'Failed to delete member.',
+  'teams.members.delete.keep': 'Keep member',
+  'teams.members.delete.success': 'Deleted member {member}.',
+  'teams.members.delete.title': 'Delete member',
+  'teams.members.delete.warning':
+    'This removes the Studio member authority and Team roster entry. Published service artifacts, revisions, and historical runs stay intact.',
   'teams.members.description':
     'Review team members, choose the Team entry member, and open workflow members in Studio. Invoke is available only after a workflow member is bound to a published service.',
   'teams.members.empty.description':
@@ -790,8 +983,7 @@ const enUSMessages = {
   'teams.members.selected': 'Selected',
   'teams.members.unnamed': 'Untitled member',
   'teams.members.service.bound': 'Bound service',
-  'teams.members.service.needsBinding':
-    'Bind this member before invoking it.',
+  'teams.members.service.needsBinding': 'Bind this member before invoking it.',
   'teams.members.service.notBound': 'Not bound yet',
   'teams.members.service.ready': 'Ready to invoke.',
   'teams.members.loading.description': 'Reading members for this team.',
@@ -864,16 +1056,14 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.output': 'Output',
   'pages.runs.memberPublishedRuns.publishedRuns': 'Published runs',
   'pages.runs.memberPublishedRuns.refresh': 'Refresh',
-  'pages.runs.memberPublishedRuns.selectPublishedRun':
-    'Select a published run',
+  'pages.runs.memberPublishedRuns.selectPublishedRun': 'Select a published run',
   'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
   'teamMemberWorkflowStudio.common.close': 'Close',
-  'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    'Draft run console',
+  'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
   'teamMemberWorkflowStudio.executionPanel.clear': 'Clear logs',
   'teamMemberWorkflowStudio.executionPanel.copyAll': 'Copy all logs',
@@ -931,8 +1121,7 @@ const enUSMessages = {
     'This tab only shows executions that can be safely scoped to the current workflow member by stable workflow or service identifiers.',
   'teamMemberWorkflowStudio.executionsPanel.empty':
     'No safely scoped executions are available for this workflow member.',
-  'teamMemberWorkflowStudio.executionsPanel.fallbackName':
-    'Workflow execution',
+  'teamMemberWorkflowStudio.executionsPanel.fallbackName': 'Workflow execution',
   'teamMemberWorkflowStudio.executionsPanel.inspect': 'Inspect',
   'teamMemberWorkflowStudio.executionsPanel.sectionAria':
     'Workflow executions',
@@ -1055,15 +1244,15 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.closeAria': 'Close node library',
   'teamMemberWorkflowStudio.nodeLibrary.emptySearch':
     'No nodes match this search.',
-  'teamMemberWorkflowStudio.nodeLibrary.insertNodeAria': 'Insert {nodeName} node',
+  'teamMemberWorkflowStudio.nodeLibrary.insertNodeAria':
+    'Insert {nodeName} node',
   'teamMemberWorkflowStudio.nodeLibrary.searchAria': 'Search nodes',
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': 'Search nodes',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
-  'teamMemberWorkflowStudio.draftRunPanel.closeAria':
-    'Close draft run panel',
+  'teamMemberWorkflowStudio.draftRunPanel.closeAria': 'Close draft run panel',
   'teamMemberWorkflowStudio.draftRunPanel.emptyInputHint':
     'Leave blank to run this draft without user input.',
   'teamMemberWorkflowStudio.draftRunPanel.addFiles': 'Add files',
@@ -1076,18 +1265,15 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.filesLabel': 'Files',
   'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
     'Images, documents, audio, video, CSV, and text files up to 10 MB.',
-  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
-    'Draft run input',
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel': 'Draft run input',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     'Optional input sent to this workflow draft run',
-  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached':
-    'No files attached',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached': 'No files attached',
   'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
     'Remove empty file {name} before starting the draft run.',
   'teamMemberWorkflowStudio.draftRunPanel.removeFile': 'Remove {name}',
   'teamMemberWorkflowStudio.draftRunPanel.sectionAria': 'Draft run panel',
-  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun':
-    'Start draft run',
+  'teamMemberWorkflowStudio.draftRunPanel.startDraftRun': 'Start draft run',
   'teamMemberWorkflowStudio.draftRunPanel.thisFile': 'this file',
   'teamMemberWorkflowStudio.draftRunPanel.title': 'Draft run',
   'teamMemberWorkflowStudio.runsPanel.description':
@@ -1129,17 +1315,14 @@ const enUSMessages = {
   'pages.studio.studiomemberinvokeinspector.copy':
     'Endpoint, payload, run events, and recent history are available here without taking over the task page.',
   'pages.studio.studiomemberinvokeinspector.current.run': 'Current run',
-  'pages.studio.studiomemberinvokeinspector.close':
-    'Close details',
-  'pages.studio.studiomemberinvokeinspector.drag.handle':
-    'Drag details panel',
+  'pages.studio.studiomemberinvokeinspector.close': 'Close details',
+  'pages.studio.studiomemberinvokeinspector.drag.handle': 'Drag details panel',
   'pages.studio.studiomemberinvokeinspector.endpoint': 'Endpoint',
   'pages.studio.studiomemberinvokeinspector.endpoint.2': 'Endpoint',
   'pages.studio.studiomemberinvokeinspector.history': 'History',
   'pages.studio.studiomemberinvokeinspector.payload': 'Payload',
   'pages.studio.studiomemberinvokeinspector.payload.base64': 'Payload base64',
-  'pages.studio.studiomemberinvokeinspector.payload.base64.2':
-    'Payload base64',
+  'pages.studio.studiomemberinvokeinspector.payload.base64.2': 'Payload base64',
   'pages.studio.studiomemberinvokeinspector.payload.type.url':
     'Payload type URL',
   'pages.studio.studiomemberinvokeinspector.payload.type.url.2':

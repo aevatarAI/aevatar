@@ -27,7 +27,8 @@ public static class EndpointAuditRouteBuilderExtensions
         EndpointAuditTargetResolver targetResolver,
         EndpointAuditSummarySanitizer? requestSanitizer = null,
         EndpointAuditSummarySanitizer? resultSanitizer = null,
-        AuditOperationKind operationKind = AuditOperationKind.Api)
+        AuditOperationKind operationKind = AuditOperationKind.Api,
+        bool captureUnauthenticated = false)
     {
         return builder.WithEndpointAudit(new EndpointAuditMetadata(
             operationName,
@@ -36,6 +37,7 @@ public static class EndpointAuditRouteBuilderExtensions
             targetResolver,
             requestSanitizer ?? EndpointAuditSanitizers.RouteOnlyRequest,
             resultSanitizer ?? EndpointAuditSanitizers.StatusOnlyResult,
-            operationKind));
+            operationKind,
+            captureUnauthenticated));
     }
 }

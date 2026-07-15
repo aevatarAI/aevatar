@@ -16,6 +16,7 @@ run_guard_meta_tests() {
   bash "${SCRIPT_DIR}/tests/test_catch_exception_observability_guard.sh"
   bash "${SCRIPT_DIR}/tests/test_audit_trail_guards.sh"
   bash "${SCRIPT_DIR}/tests/test_lark_agent_path_contract_guard.sh"
+  bash "${SCRIPT_DIR}/tests/test_fkst_host_policy_guard.sh"
 }
 
 if [[ ! -f "${allowlist_file}" ]]; then

@@ -130,7 +130,8 @@ public static class ChannelCallbackEndpoints
                     AppId: request.AppId?.Trim() ?? string.Empty,
                     AppSecret: request.AppSecret?.Trim() ?? string.Empty,
                     VerificationToken: request.VerificationToken?.Trim() ?? string.Empty),
-                Credentials: BuildCredentialsMap(platformNormalized, request)),
+                Credentials: BuildCredentialsMap(platformNormalized, request),
+                DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty),
             ct);
 
         var payload = new
@@ -208,6 +209,7 @@ public static class ChannelCallbackEndpoints
             nyx_channel_bot_id = e.NyxChannelBotId,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
+            default_skill_name = e.DefaultSkillName,
             // Whether this bot belongs to the caller's account. Cross-account bots
             // (admin all-view) cannot have their live status read from NyxID.
             owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
@@ -515,7 +517,10 @@ public static class ChannelCallbackEndpoints
         // Platform-extensible credential bag. Per-platform provisioning services document
         // which keys they expect (e.g. Telegram reads "bot_token").
         IReadOnlyDictionary<string, string>? Credentials,
-        string? Label);
+        string? Label,
+        // Optional Ornn skill this bot's plain inbound messages are routed to
+        // (deterministic channel→skill binding; message text becomes the skill args).
+        string? DefaultSkillName);
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
         string platform,

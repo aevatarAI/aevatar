@@ -538,6 +538,8 @@ internal static class WorkflowExecutionContextTestState
             {
                 BearerToken = delta.CallerCredential.BearerToken,
                 RuntimeSecretReference = delta.CallerCredential.RuntimeSecretReference?.Clone(),
+                DurableCallerCredential = delta.CallerCredential.DurableCallerCredential?.Clone(),
+                NyxIdAuthority = delta.CallerCredential.NyxIdAuthority?.Clone(),
             };
         }
     }

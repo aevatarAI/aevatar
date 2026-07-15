@@ -33,7 +33,7 @@ public sealed class WorkflowChatRunRequestSeedTests
     }
 
     [Fact]
-    public void WorkflowChatRunRequest_ShouldNotSerializeTargetSeed()
+    public void WorkflowChatRunRequest_ShouldNotSerializeInternalTargets()
     {
         var request = new WorkflowChatRunRequest(
             Prompt: "hello",
@@ -42,12 +42,18 @@ public sealed class WorkflowChatRunRequestSeedTests
                 ActorId: "run-1",
                 WorkflowNameForRun: "direct",
                 CreatedActorIds: ["definition-1", "run-1"],
-                Source: WorkflowChatSource.CatalogWorkflow("direct")));
+                Source: WorkflowChatSource.CatalogWorkflow("direct")),
+            CompletionNotificationTarget: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget(
+                ActorId: "delivery-actor-1",
+                DeliveryId: "delivery-1",
+                ExpiresAtUnixMs: 1710000000000));
 
         var json = JsonSerializer.Serialize(request);
 
         json.Should().NotContain("TargetSeed");
+        json.Should().NotContain("CompletionNotificationTarget");
         json.Should().NotContain("run-1");
+        json.Should().NotContain("delivery-actor-1");
     }
 
     [Fact]
@@ -85,5 +91,32 @@ public sealed class WorkflowChatRunRequestSeedTests
         payload.ExternalIngress.AuthScheme.Should().Be("hmac-sha256");
         payload.ExternalIngress.PrincipalSubject.Should().Be("lark");
         payload.Metadata.Should().NotContainKey("external_ingress");
+    }
+
+    [Fact]
+    public void WorkflowChatRequestEnvelopeFactory_ShouldMapCompletionNotificationTargetAsTypedProto()
+    {
+        var factory = new WorkflowChatRequestEnvelopeFactory();
+        var request = new WorkflowChatRunRequest(
+            Prompt: "hello",
+            Source: WorkflowChatSource.CatalogWorkflow("direct"),
+            CompletionNotificationTarget: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget(
+                ActorId: "delivery-actor-1",
+                DeliveryId: "delivery-1",
+                ExpiresAtUnixMs: 1710000000000));
+
+        var envelope = factory.CreateEnvelope(
+            request,
+            new CommandContext(
+                "cmd-1",
+                "corr-1",
+                "target-1",
+                new Dictionary<string, string>(StringComparer.Ordinal)));
+        var payload = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        payload.CompletionNotificationTarget.ActorId.Should().Be("delivery-actor-1");
+        payload.CompletionNotificationTarget.DeliveryId.Should().Be("delivery-1");
+        payload.CompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(1710000000000);
+        payload.Metadata.Should().NotContainKey("completion_notification_target");
     }
 }

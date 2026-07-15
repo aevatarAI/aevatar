@@ -22,9 +22,10 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// The flow is deliberately NON-BLOCKING. Binding a workflow member is an
 /// asynchronous pipeline that can take minutes, so a synchronous handler that
 /// polled the bind to completion would exhaust the gateway timeout and never
-/// invoke. The service performs one authoritative read-model observation: pending
-/// binds get disabled schedules, successful binds may get enabled schedules, and
-/// failed/rejected binds disable any existing deterministic provision schedule.
+/// invoke. The service performs one authoritative read-model observation: new
+/// pending binds do not create runnable schedules, successful binds may get
+/// enabled schedules, and failed/rejected binds disable any existing deterministic
+/// provision schedule.
 /// Because the schedule kind is <see cref="ScheduledDispatchScheduleKind.Workflow"/>,
 /// enabled dispatches project a freshly re-minted caller NyxID token onto the
 /// run's <c>ChatRequestEvent</c> (<c>LlmControl.SenderNyxIdAccessToken</c>), so
@@ -124,7 +125,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    read from the readmodel and never re-created. The actor stamps the
         //    rename-safe published service id at creation, so both paths read it
         //    straight back — no poll, no recompute of the convention.
-        var (memberId, publishedServiceId, teamId) = await ResolveProvisionedMemberAsync(
+        var (memberId, publishedServiceId, teamId, hasUsableBinding) = await ResolveProvisionedMemberAsync(
             normalizedScopeId, displayName, $"wf-{provisionKey}", ct);
 
         // 2. Bind the inline workflow YAML. WorkflowId is a stable identifier the
@@ -166,7 +167,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         {
             await DisableProvisionScheduleIfPresentAsync(publishedServiceId, ct);
         }
-        else if (ShouldSchedule(request))
+        else if (ShouldSchedule(request) && CanEnableProvisionSchedule(provisioningBindingStatus))
         {
             var cronExpression = ResolveCron(request, out var timezone);
             var auth = BuildScheduleAuth(subjectRef);
@@ -177,8 +178,11 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 auth,
                 cronExpression,
                 timezone,
-                enabled: EnableScheduleForBindingStatus(provisioningBindingStatus),
                 ct);
+        }
+        else if (ShouldSchedule(request) && !hasUsableBinding)
+        {
+            await DisableProvisionScheduleIfPresentAsync(publishedServiceId, ct);
         }
 
         return new ProvisionWorkflowResponse(
@@ -206,7 +210,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// created moments ago may not be materialized yet; that create falls
     /// through to the actor's idempotent no-op for identical identity fields.
     /// </summary>
-    private async Task<(string MemberId, string PublishedServiceId, string? TeamId)> ResolveProvisionedMemberAsync(
+    private async Task<(string MemberId, string PublishedServiceId, string? TeamId, bool HasUsableBinding)> ResolveProvisionedMemberAsync(
         string scopeId,
         string displayName,
         string memberId,
@@ -215,10 +219,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         try
         {
             var existing = await _memberService.GetAsync(scopeId, memberId, ct);
+            var publishedServiceId = NormalizeRequired(
+                existing.Summary.PublishedServiceId,
+                nameof(existing.Summary.PublishedServiceId));
             return (
                 existing.Summary.MemberId,
-                NormalizeRequired(existing.Summary.PublishedServiceId, nameof(existing.Summary.PublishedServiceId)),
-                existing.Summary.TeamId);
+                publishedServiceId,
+                existing.Summary.TeamId,
+                HasUsableBinding(existing, publishedServiceId));
         }
         catch (StudioMemberNotFoundException)
         {
@@ -232,7 +240,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             return (
                 created.MemberId,
                 NormalizeRequired(created.PublishedServiceId, nameof(created.PublishedServiceId)),
-                created.TeamId);
+                created.TeamId,
+                HasUsableBinding: false);
         }
     }
 
@@ -251,7 +260,6 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         ScheduledServiceInvocationAuth auth,
         string cronExpression,
         string timezone,
-        bool enabled,
         CancellationToken ct)
     {
         const int maxGenerations = 50;
@@ -264,8 +272,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             {
                 var schedule = await _scheduleService.EnsureAsync(
                     BuildScheduleConfiguration(
-                        scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone, enabled),
-                    ct);
+                        scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone),
+                    ct: ct);
                 return NormalizeOptional(schedule.ScheduleId);
             }
             catch (ScheduledDispatchNotFoundException)
@@ -327,8 +335,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string prompt,
         ScheduledServiceInvocationAuth auth,
         string cronExpression,
-        string timezone,
-        bool enabled) =>
+        string timezone) =>
         new(
             // Deterministic id: EnsureAsync converges retries onto one schedule.
             // '.'/'-' stay inside the scheduled-dispatch id charset ([A-Za-z0-9._-]).
@@ -353,7 +360,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                     Auth: auth)),
             CronExpression: cronExpression,
             Timezone: timezone,
-            Enabled: enabled,
+            Enabled: true,
             Headers: new Dictionary<string, string>(StringComparer.Ordinal),
             ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
 
@@ -382,8 +389,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             _ => ProvisionWorkflowBindingStatusNames.Pending,
         };
 
-    private static bool EnableScheduleForBindingStatus(string bindingStatus) =>
+    private static bool CanEnableProvisionSchedule(string bindingStatus) =>
         string.Equals(bindingStatus, ProvisionWorkflowBindingStatusNames.Bound, StringComparison.Ordinal);
+
+    private static bool HasUsableBinding(StudioMemberDetailResponse member, string publishedServiceId) =>
+        member.LastBinding is not null &&
+        string.Equals(member.LastBinding.PublishedServiceId, publishedServiceId, StringComparison.Ordinal);
 
     private static bool IsTerminalBindingFailure(string bindingStatus) =>
         string.Equals(bindingStatus, ProvisionWorkflowBindingStatusNames.Failed, StringComparison.Ordinal) ||
@@ -417,7 +428,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// monitor; otherwise a one-shot cron pinned to a near-future minute is
     /// synthesized so a single demo run can fire shortly after a successful bind.
     /// The minute granularity matches the standard 5-field cron the dispatch
-    /// validator accepts; pending binds leave the schedule disabled.
+    /// validator accepts; pending binds do not create a runnable schedule.
     /// </summary>
     private string ResolveCron(ProvisionWorkflowRequest request, out string timezone)
     {
@@ -456,7 +467,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// </summary>
     private static ScheduledServiceInvocationAuth BuildScheduleAuth(
         ScheduledServiceInvocationNyxIdCredentialSource subjectRef) =>
-        new(SenderNyxId: subjectRef);
+        new(subjectRef with { Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender });
 
     private static ScheduledServiceInvocationNyxIdCredentialSource BuildSenderNyxIdCredentialSource(
         ProvisionWorkflowCallerCredential credential) =>

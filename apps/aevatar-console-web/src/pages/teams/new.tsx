@@ -230,6 +230,8 @@ const TeamCreatePage: React.FC = () => {
             flexDirection: 'column',
             gap: 18,
             maxWidth: 760,
+            minWidth: 0,
+            width: '100%',
           }}
         >
           <div style={{ display: 'grid', gap: 8 }}>

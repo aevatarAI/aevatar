@@ -61,18 +61,25 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         if (string.IsNullOrWhiteSpace(nyxApiKey))
             return null;
 
+#pragma warning disable CS0612 // deprecated document fields are read only as a channel_address compatibility bridge
+        var channelAddress = UserAgentCatalogChannelAddress.ToModel(
+            document.ChannelAddress,
+            ResolveDeliveryPlatform(document),
+            document.NyxProviderSlug,
+            document.ConversationId,
+            document.LarkReceiveId,
+            document.LarkReceiveIdType,
+            document.LarkReceiveIdFallback,
+            document.LarkReceiveIdTypeFallback);
+#pragma warning restore CS0612
+
         return new UserAgentDeliveryTarget(
             AgentId: document.Id ?? string.Empty,
-#pragma warning disable CS0612 // legacy field read for delivery target compatibility
-            Platform: ResolveDeliveryPlatform(document),
-#pragma warning restore CS0612
-            ConversationId: document.ConversationId ?? string.Empty,
-            NyxProviderSlug: document.NyxProviderSlug ?? string.Empty,
+            Platform: channelAddress.Platform,
+            ConversationId: channelAddress.ConversationId,
+            NyxProviderSlug: channelAddress.ProviderSlug,
             NyxApiKey: nyxApiKey,
-            LarkReceiveId: document.LarkReceiveId ?? string.Empty,
-            LarkReceiveIdType: document.LarkReceiveIdType ?? string.Empty,
-            LarkReceiveIdFallback: document.LarkReceiveIdFallback ?? string.Empty,
-            LarkReceiveIdTypeFallback: document.LarkReceiveIdTypeFallback ?? string.Empty,
+            ChannelAddress: channelAddress,
             OutputFormat: document.OutputFormat,
             TemplateName: document.TemplateName ?? string.Empty,
             AgentType: document.AgentType ?? string.Empty);
@@ -87,7 +94,7 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         {
             var resolved = await _secretVault.ResolveAsync(new ResolveSecretRequest(
                 credential.NyxApiKeyReference.Ref,
-                CredentialSecretPurposes.ScheduledNyxApiKey,
+                ResolveScheduledAgentKeyPurpose(credential.NyxApiKeyReference),
                 credential.NyxApiKeyReference.OwnerScopeKey,
                 ResolveApiKeyId(document, credential),
                 "scheduled-delivery-target"),
@@ -104,6 +111,11 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         string.IsNullOrWhiteSpace(credential.ApiKeyId)
             ? document.ApiKeyId ?? string.Empty
             : credential.ApiKeyId.Trim();
+
+    private static string ResolveScheduledAgentKeyPurpose(SecretReference reference) =>
+        string.IsNullOrWhiteSpace(reference.Purpose)
+            ? CredentialSecretPurposes.ScheduledNyxApiKey
+            : reference.Purpose.Trim();
 
     private static string ResolveDeliveryPlatform(UserAgentCatalogDocument document)
     {

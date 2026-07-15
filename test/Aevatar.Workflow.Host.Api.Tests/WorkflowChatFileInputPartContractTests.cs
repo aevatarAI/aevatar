@@ -4,8 +4,8 @@ using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 using Google.Protobuf;
 using ApplicationWorkflowChatInputPartKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowChatInputPartKind;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -88,10 +88,10 @@ public sealed class WorkflowChatFileInputPartContractTests
                 Uri = "artifact://file-1",
                 MediaType = "application/pdf",
                 Name = "invoice.pdf",
-                FileRef = new ApplicationWorkflowFileRef
+                FileRef = new ApplicationFileArtifactRef
                 {
                     ArtifactId = "artifact://file-1",
-                    SourceKind = ApplicationWorkflowFileSourceKind.FormUpload,
+                    SourceKind = ApplicationFileArtifactSourceKind.FormUpload,
                     FileName = "invoice.pdf",
                     MediaType = "application/pdf",
                     CreatedAtUnixMs = 1710000000000,

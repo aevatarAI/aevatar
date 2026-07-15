@@ -3,7 +3,6 @@ using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity;
-using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -115,7 +114,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         cmd.ClientIdIssuedAtUnix.Should().Be(1700000000);
         cmd.RedirectUri.Should().Be(NyxIdRedirectUriResolver.Resolve());
         cmd.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
-        cmd.DefaultServiceSlugs.Should().Equal("aevatar");
         cmd.NyxidAuthority.Should().NotBeNullOrWhiteSpace();
 
         var ctx = NewHttpContext();
@@ -127,51 +125,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         doc.RootElement.GetProperty("status").GetString().Should().Be("rebuild_pending");
         doc.RootElement.GetProperty("status_url").GetString().Should().Be("/api/oauth/aevatar-client/status");
         doc.RootElement.GetProperty("admin_grant_source").GetString().Should().Be(PlatformAdminGrantSources.AllowedEmail);
-    }
-
-    [Fact]
-    public async Task StatusReportsDefaultServiceDrift_WhenSnapshotMissingAevatarService()
-    {
-        var result = await IdentityOAuthEndpoints.HandleAevatarOAuthClientStatusAsync(
-            new StubAevatarOAuthClientProvider(ProvisionedSnapshot(defaultServiceSlugs: ["legacy-service"])),
-            defaultServiceOptions: null,
-            ct: CancellationToken.None);
-
-        var doc = await ReadJsonAsync(result);
-        doc.RootElement.GetProperty("status").GetString().Should().Be("default_services_drifted");
-        doc.RootElement.GetProperty("default_service_slugs_registered")
-            .EnumerateArray()
-            .Select(static item => item.GetString())
-            .Should()
-            .Equal("legacy-service");
-        doc.RootElement.GetProperty("default_service_slugs_resolved")
-            .EnumerateArray()
-            .Select(static item => item.GetString())
-            .Should()
-            .Equal("aevatar");
-        doc.RootElement.GetProperty("default_service_slugs_drifted").GetBoolean().Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task StatusReportsDefaultServiceDrift_WhenLegacySnapshotHasNoServiceDefaults()
-    {
-        var result = await IdentityOAuthEndpoints.HandleAevatarOAuthClientStatusAsync(
-            new StubAevatarOAuthClientProvider(ProvisionedSnapshot(defaultServiceSlugs: [])),
-            defaultServiceOptions: null,
-            ct: CancellationToken.None);
-
-        var doc = await ReadJsonAsync(result);
-        doc.RootElement.GetProperty("status").GetString().Should().Be("default_services_drifted");
-        doc.RootElement.GetProperty("default_service_slugs_registered")
-            .EnumerateArray()
-            .Should()
-            .BeEmpty();
-        doc.RootElement.GetProperty("default_service_slugs_resolved")
-            .EnumerateArray()
-            .Select(static item => item.GetString())
-            .Should()
-            .Equal("aevatar");
-        doc.RootElement.GetProperty("default_service_slugs_drifted").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
@@ -211,21 +164,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             client_id: OperatorClientId,
             client_id_issued_at_unix: 1700000000);
 
-    private static AevatarOAuthClientSnapshot ProvisionedSnapshot(IReadOnlyList<string> defaultServiceSlugs) =>
-        new(
-            ClientId: "client-1",
-            ClientIdIssuedAt: DateTimeOffset.UnixEpoch,
-            HmacKid: AevatarOAuthClientGAgent.InitialHmacKid,
-            HmacKey: new byte[32],
-            HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
-            NyxIdAuthority: "https://nyxid.test",
-            BrokerCapabilityObserved: true,
-            BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
-            RedirectUri: NyxIdRedirectUriResolver.Resolve(),
-            OauthScope: AevatarOAuthClientScopes.AuthorizationScope,
-            RedirectUris: NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(),
-            DefaultServiceSlugs: defaultServiceSlugs);
-
     private static Task<IResult> InvokeRebuildAsync(
         IPlatformAdminAuthorizer? authorizer,
         string? bearer,
@@ -246,7 +184,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,
-            defaultServiceOptions: null,
             ct: ct);
     }
 
@@ -261,12 +198,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
                 ? new PlatformCaller(true, role, "admin@example.com", "admin-1", grantSource)
                 : PlatformCaller.NotElevated);
         }
-    }
-
-    private sealed class StubAevatarOAuthClientProvider(AevatarOAuthClientSnapshot snapshot) : IAevatarOAuthClientProvider
-    {
-        public Task<AevatarOAuthClientSnapshot> GetAsync(CancellationToken ct = default) =>
-            Task.FromResult(snapshot);
     }
 
     private static async Task<JsonDocument> ReadJsonAsync(IResult result)

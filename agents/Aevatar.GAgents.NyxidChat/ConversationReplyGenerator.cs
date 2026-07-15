@@ -10,8 +10,12 @@ using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
+using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
+using FileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -28,6 +32,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private const int MaxRecentPriorHistoryMessages = 10;
     // Working-set ceiling for the ChatHistory during a turn (prior ≤10 + the live turn's growth).
     private const int MaxWorkingSetMessages = 200;
+    private const int MaxAttachmentMaterializationBytes = 10 * 1024 * 1024;
     private const int MaxInlineImageBytes = 10 * 1024 * 1024;
 
     // Appended to the system prompt when the unbound-sender gate detaches the tool
@@ -70,6 +75,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
     private readonly ILarkNyxClient? _larkClient;
+    private readonly IFileArtifactIngressPort? _fileIngressPort;
+    private readonly IFileArtifactReadPort? _fileArtifactReadPort;
     private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
     private readonly ISystemSkillOverlayProvider? _overlayProvider;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
@@ -109,6 +116,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         INyxIdUserLlmPreferencesStore? preferencesStore = null,
         IUserMemoryStore? userMemoryStore = null,
         ILarkNyxClient? larkClient = null,
+        IFileArtifactIngressPort? fileIngressPort = null,
+        IFileArtifactReadPort? fileArtifactReadPort = null,
         IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null,
@@ -126,6 +135,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
         _larkClient = larkClient;
+        _fileIngressPort = fileIngressPort;
+        _fileArtifactReadPort = fileArtifactReadPort;
         _larkOutboundClientFactory = larkOutboundClientFactory;
         _overlayProvider = overlayProvider;
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
@@ -306,6 +317,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 attachmentContext,
                 ct)
             .ConfigureAwait(false);
+
         var runtime = BuildRuntime(
             activity,
             replyPlan.PrimaryControl,
@@ -389,6 +401,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 attachmentContext: null,
                 ct)
             .ConfigureAwait(false);
+        input = await MaterializeUserInputPartsAsync(input, ct).ConfigureAwait(false);
 
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: NyxID reply construction passed stream_buffer_capacity into ChatRuntime after the stream loop moved to Task.Run + Channel.
@@ -616,7 +629,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                if (!downloaded.Succeeded ||
+                 if (!downloaded.Succeeded ||
                     downloaded.Content.Length == 0 ||
                     downloaded.Content.Length > MaxInlineImageBytes ||
                     !IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
@@ -632,10 +645,47 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
-                parts.Add(ContentPart.ImagePart(
-                    Convert.ToBase64String(downloaded.Content),
-                    NormalizeImageMediaType(downloaded.ContentType ?? attachment.ContentType),
-                    NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name)));
+                if (_fileIngressPort is null)
+                {
+                    unseenCount++;
+                    continue;
+                }
+
+                var mediaType = NormalizeImageMediaType(downloaded.ContentType ?? attachment.ContentType);
+                var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name);
+                FileArtifactIngressResult ingressResult;
+                try
+                {
+                    ingressResult = await _fileIngressPort.IngestAsync(
+                            new FileArtifactIngressRequest(
+                                downloaded.Content,
+                                FileArtifactSourceKind.ChatInput,
+                                SourceMessageId: messageId,
+                                SourceResourceKey: resourceKey,
+                                FileName: fileName,
+                                MediaType: mediaType),
+                            ct)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to ingest Lark image attachment for chat LLM input: messageId={MessageId} resourceKey={ResourceKey}",
+                        messageId,
+                        resourceKey);
+                    unseenCount++;
+                    continue;
+                }
+
+                parts.Add(ContentPart.ImageFileRefPart(
+                    ToChatFileRef(ingressResult.FileRef),
+                    mediaType,
+                    fileName));
             }
         }
 
@@ -647,6 +697,160 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         return new UserInputParts(text, parts, instruction);
     }
+
+    private async Task<UserInputParts> MaterializeUserInputPartsAsync(UserInputParts input, CancellationToken ct)
+    {
+        if (!input.Parts.Any(static part => part.FileRef is not null))
+            return input;
+
+        var materialized = await MaterializeFileRefPartsAsync(input.Parts, _fileArtifactReadPort, ct)
+            .ConfigureAwait(false);
+        return input with { Parts = materialized };
+    }
+
+    internal static async Task<IReadOnlyList<ContentPart>> MaterializeFileRefPartsAsync(
+        IReadOnlyList<ContentPart> parts,
+        IFileArtifactReadPort? fileArtifactReadPort,
+        CancellationToken ct)
+    {
+        if (parts.Count == 0 || parts.All(static part => part.FileRef is null))
+            return parts;
+
+        if (fileArtifactReadPort is null)
+            throw new InvalidOperationException("File artifact read port is required to materialize referenced chat media.");
+
+        var materialized = new List<ContentPart>(parts.Count);
+        foreach (var part in parts)
+        {
+            if (part.FileRef is null)
+            {
+                materialized.Add(part);
+                continue;
+            }
+
+            var artifact = await fileArtifactReadPort.OpenReadAsync(ToFileArtifactRef(part.FileRef), ct)
+                .ConfigureAwait(false);
+            await using var content = artifact.Content;
+            var descriptor = artifact.FileRef;
+            ValidateMaterializedPartDescriptor(part, descriptor);
+            var bytes = await ReadBoundedAsync(
+                    content,
+                    MaxAttachmentMaterializationBytes,
+                    NormalizeOptional(descriptor.FileName) ?? part.Name,
+                    ct)
+                .ConfigureAwait(false);
+            materialized.Add(part.Kind switch
+            {
+                ContentPartKind.Image => ContentPart.ImagePart(
+                    Convert.ToBase64String(bytes),
+                    NormalizeImageMediaType(descriptor.MediaType ?? part.MediaType),
+                    NormalizeOptional(descriptor.FileName) ?? part.Name),
+                ContentPartKind.Audio => ContentPart.AudioPart(
+                    Convert.ToBase64String(bytes),
+                    NormalizeOptional(descriptor.MediaType) ?? part.MediaType ?? "audio/wav",
+                    NormalizeOptional(descriptor.FileName) ?? part.Name),
+                ContentPartKind.Video => ContentPart.VideoPart(
+                    Convert.ToBase64String(bytes),
+                    NormalizeOptional(descriptor.MediaType) ?? part.MediaType ?? "video/mp4",
+                    NormalizeOptional(descriptor.FileName) ?? part.Name),
+                _ => part,
+            });
+        }
+
+        return materialized;
+    }
+
+    private static async Task<byte[]> ReadBoundedAsync(
+        Stream content,
+        int maxBytes,
+        string? fileName,
+        CancellationToken ct)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[81920];
+        while (true)
+        {
+            var read = await content.ReadAsync(chunk.AsMemory(0, chunk.Length), ct).ConfigureAwait(false);
+            if (read == 0)
+                return buffer.ToArray();
+
+            if (buffer.Length + read > maxBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Referenced chat media exceeds the materialization size limit ({maxBytes} bytes): {NormalizeOptional(fileName) ?? "(unnamed file)"}.");
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+    }
+
+    private static void ValidateMaterializedPartDescriptor(ContentPart part, FileArtifactRef descriptor)
+    {
+        var mediaType = descriptor.MediaType ?? part.MediaType;
+        if (part.Kind == ContentPartKind.Image && !IsSupportedImageMediaType(mediaType))
+        {
+            throw new InvalidOperationException(
+                $"Referenced chat image media type cannot be materialized: {NormalizeOptional(mediaType) ?? "unknown media type"}.");
+        }
+    }
+
+    private static LlmChatFileRef ToChatFileRef(FileArtifactRef source) =>
+        new()
+        {
+            FileId = NormalizeOptional(source.FileId),
+            ArtifactId = NormalizeOptional(source.ArtifactId),
+            SourceKind = ToChatFileSourceKind(source.SourceKind),
+            SourceMessageId = NormalizeOptional(source.SourceMessageId),
+            SourceResourceKey = NormalizeOptional(source.SourceResourceKey),
+            FileName = NormalizeOptional(source.FileName),
+            MediaType = NormalizeOptional(source.MediaType),
+            SizeBytes = source.SizeBytes,
+            Sha256 = NormalizeOptional(source.Sha256),
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = NormalizeOptional(source.OwnerRunId),
+            OwnerScopeId = NormalizeOptional(source.OwnerScopeId),
+        };
+
+    private static FileArtifactRef ToFileArtifactRef(LlmChatFileRef source) =>
+        new()
+        {
+            FileId = NormalizeOptional(source.FileId),
+            ArtifactId = NormalizeOptional(source.ArtifactId),
+            SourceKind = ToFileArtifactSourceKind(source.SourceKind),
+            SourceMessageId = NormalizeOptional(source.SourceMessageId),
+            SourceResourceKey = NormalizeOptional(source.SourceResourceKey),
+            FileName = NormalizeOptional(source.FileName),
+            MediaType = NormalizeOptional(source.MediaType),
+            SizeBytes = source.SizeBytes,
+            Sha256 = NormalizeOptional(source.Sha256),
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = NormalizeOptional(source.OwnerRunId),
+            OwnerScopeId = NormalizeOptional(source.OwnerScopeId),
+        };
+
+    private static LlmChatFileSourceKind ToChatFileSourceKind(FileArtifactSourceKind kind) =>
+        kind switch
+        {
+            FileArtifactSourceKind.ChatInput => LlmChatFileSourceKind.ChatInput,
+            FileArtifactSourceKind.FormUpload => LlmChatFileSourceKind.FormUpload,
+            FileArtifactSourceKind.ConnectedServiceResource => LlmChatFileSourceKind.ConnectedServiceResource,
+            FileArtifactSourceKind.ExternalResource => LlmChatFileSourceKind.ExternalResource,
+            FileArtifactSourceKind.Generated => LlmChatFileSourceKind.Generated,
+            _ => LlmChatFileSourceKind.Unspecified,
+        };
+
+    private static FileArtifactSourceKind ToFileArtifactSourceKind(LlmChatFileSourceKind kind) =>
+        kind switch
+        {
+            LlmChatFileSourceKind.ChatInput => FileArtifactSourceKind.ChatInput,
+            LlmChatFileSourceKind.FormUpload => FileArtifactSourceKind.FormUpload,
+            LlmChatFileSourceKind.ConnectedServiceResource => FileArtifactSourceKind.ConnectedServiceResource,
+            LlmChatFileSourceKind.ExternalResource => FileArtifactSourceKind.ExternalResource,
+            LlmChatFileSourceKind.Generated => FileArtifactSourceKind.Generated,
+            _ => FileArtifactSourceKind.Unspecified,
+        };
 
     private ILarkNyxClient? ResolveLarkResourceDownloadClient(ChatActivity activity, out string? providerSlug)
     {

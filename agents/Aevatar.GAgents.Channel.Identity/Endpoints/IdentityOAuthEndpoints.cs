@@ -1,3 +1,5 @@
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -10,7 +12,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 
@@ -32,9 +33,21 @@ public static class IdentityOAuthEndpoints
 
         app.MapGet("/api/oauth/nyxid-callback", HandleNyxIdOAuthCallbackAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.oauth.callback",
+                AuditSensitivityLevel.Confidential,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "callback"),
+                captureUnauthenticated: true)
             .AllowAnonymous();
         app.MapPost("/api/webhooks/nyxid-broker-revocation", HandleBrokerRevocationWebhookAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.binding.broker-revocation",
+                AuditSensitivityLevel.Restricted,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "broker-revocation"),
+                captureUnauthenticated: true)
             .AllowAnonymous();
         app.MapGet("/api/oauth/aevatar-client/status", HandleAevatarOAuthClientStatusAsync)
             .WithTags("ChannelIdentity")
@@ -44,6 +57,12 @@ public static class IdentityOAuthEndpoints
         // inline because this module does not own an ASP.NET auth scheme.
         app.MapPost("/api/oauth/aevatar-client/rebuild", HandleAevatarOAuthClientRebuildAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.oauth-client.rebuild",
+                AuditSensitivityLevel.Restricted,
+                "aevatar_oauth_client",
+                EndpointAuditTargetResolvers.Static("aevatar_oauth_client", "rebuild"),
+                captureUnauthenticated: true)
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
         // Operator-only: rebuild a wiped/reset current-state readmodel for one NyxID
@@ -51,6 +70,12 @@ public static class IdentityOAuthEndpoints
         // no browser round-trip. Same admin gate as the client rebuild.
         app.MapPost("/api/oauth/nyxid-binding/rebuild", HandleNyxIdBindingRebuildAsync)
             .WithTags("ChannelIdentity")
+            .WithEndpointAudit(
+                "identity.binding.rebuild",
+                AuditSensitivityLevel.Restricted,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "rebuild"),
+                captureUnauthenticated: true)
             .AddEndpointFilter<RebuildAuthEndpointFilter>()
             .AllowAnonymous();
 
@@ -131,6 +156,18 @@ public static class IdentityOAuthEndpoints
                 detail = "Aevatar 集群正在初始化 NyxID 客户端,请 30 秒后回到 Lark 重新发送 /init。",
             });
         }
+        catch (NyxIdRequiredServiceAccessException ex)
+        {
+            logger.LogInformation(
+                ex,
+                "OAuth callback rejected because the user did not grant every required NyxID service. correlation={CorrelationId}",
+                decode.CorrelationId);
+            return Results.Json(new
+            {
+                error = "required_service_access_missing",
+                detail = "NyxID 授权未包含 Aevatar 或默认 LLM service。请回到 Lark 重新发送 /init,并在授权页保留这两个 services。",
+            }, statusCode: StatusCodes.Status409Conflict);
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "OAuth callback authorization-code exchange failed for correlation {CorrelationId}", decode.CorrelationId);
@@ -139,6 +176,36 @@ public static class IdentityOAuthEndpoints
                 error = "token_exchange_failed",
                 detail = "NyxID 绑定失败,稍后重试 /init",
             }, statusCode: StatusCodes.Status502BadGateway);
+        }
+
+        var existingBinding = await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
+        if (exchange.BindingUpdated)
+        {
+            var expectedBindingHash = decode.ExpectedBindingHash?.Trim() ?? string.Empty;
+            var currentBindingHash = existingBinding is null
+                ? string.Empty
+                : NyxIdRemoteCapabilityBroker.HashBindingId(existingBinding.Value);
+            if (expectedBindingHash.Length == 0
+                || !string.Equals(expectedBindingHash, currentBindingHash, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "OAuth binding-grant update completed for a stale local binding reference. correlation={CorrelationId}, expected_hash={ExpectedHash}, current_hash={CurrentHash}",
+                    decode.CorrelationId,
+                    expectedBindingHash,
+                    currentBindingHash);
+                return Results.Json(new
+                {
+                    error = "binding_changed_during_review",
+                    detail = "Lark 中的 NyxID 绑定在授权期间发生了变化。请回到 Lark 重新发送 /init。",
+                }, statusCode: StatusCodes.Status409Conflict);
+            }
+
+            logger.LogInformation(
+                "Updated NyxID service grant in place for {Platform}:{Tenant}:{User}; binding_id remained unchanged",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return RenderBindingGrantUpdated(format);
         }
 
         // Defensive: NyxID returned no binding_id even though authorization-code
@@ -163,7 +230,7 @@ public static class IdentityOAuthEndpoints
 
         var actorId = subject.ToActorId();
 
-        if (await queryPort.ResolveAsync(subject, ct).ConfigureAwait(false) is not null)
+        if (existingBinding is not null)
         {
             // Concurrent /init protection: if the subject is already bound,
             // the freshly-issued binding_id we just got from NyxID is an
@@ -238,7 +305,6 @@ public static class IdentityOAuthEndpoints
 
     internal static async Task<IResult> HandleAevatarOAuthClientStatusAsync(
         [FromServices] IAevatarOAuthClientProvider provider,
-        [FromServices] IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions,
         CancellationToken ct)
     {
         try
@@ -247,20 +313,14 @@ public static class IdentityOAuthEndpoints
             var resolvedRedirectUri = NyxIdRedirectUriResolver.Resolve();
             var resolvedRedirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris();
             var registeredRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(snapshot.RedirectUris ?? []);
-            var resolvedDefaultServiceSlugs = AevatarOAuthClientDefaultServices.Resolve(defaultServiceOptions);
-            var registeredDefaultServiceSlugs = AevatarOAuthClientDefaultServices.Normalize(snapshot.DefaultServiceSlugs);
             var redirectUriDrifted = string.IsNullOrEmpty(snapshot.RedirectUri)
                 || !string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal);
             var redirectUriListDrifted = registeredRedirectUris.Count == 0
                 || registeredRedirectUris.Count != resolvedRedirectUris.Count
                 || !registeredRedirectUris.SequenceEqual(resolvedRedirectUris, StringComparer.Ordinal);
             var oauthScopeDrifted = !AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope);
-            var defaultServicesDrifted = !AevatarOAuthClientDefaultServices.ListsEqual(
-                registeredDefaultServiceSlugs,
-                resolvedDefaultServiceSlugs);
             var status = redirectUriDrifted || redirectUriListDrifted
                 ? "redirect_uri_drifted"
-                : defaultServicesDrifted ? "default_services_drifted"
                 : oauthScopeDrifted ? "oauth_scope_drifted"
                 : snapshot.BrokerCapabilityObserved ? "ready" : "broker_capability_pending";
             return Results.Ok(new
@@ -278,14 +338,9 @@ public static class IdentityOAuthEndpoints
                 oauth_scope_registered = snapshot.OauthScope,
                 oauth_scope_required = AevatarOAuthClientScopes.AuthorizationScope,
                 oauth_scope_drifted = oauthScopeDrifted,
-                default_service_slugs_registered = registeredDefaultServiceSlugs,
-                default_service_slugs_resolved = resolvedDefaultServiceSlugs,
-                default_service_slugs_drifted = defaultServicesDrifted,
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
-                ops_handoff = defaultServicesDrifted
-                    ? "Bootstrap must re-run DCR so NyxID Developer Apps preselects the aevatar service during authorization."
-                    : oauthScopeDrifted
+                ops_handoff = oauthScopeDrifted
                     ? "Bootstrap must re-run DCR so the OAuth client includes the proxy scope required by LLM route selection."
                     : snapshot.BrokerCapabilityObserved
                         ? null
@@ -325,7 +380,6 @@ public static class IdentityOAuthEndpoints
         [FromBody] RebuildAevatarOAuthClientRequest? body,
         [FromServices] ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         [FromServices] ILoggerFactory loggerFactory,
-        [FromServices] IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
             http,
@@ -333,7 +387,6 @@ public static class IdentityOAuthEndpoints
             http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
             rebuildDispatch,
             loggerFactory,
-            defaultServiceOptions,
             ct);
 
     /// <summary>
@@ -346,7 +399,6 @@ public static class IdentityOAuthEndpoints
         IPlatformAdminAuthorizer? adminAuthorizer,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         ILoggerFactory loggerFactory,
-        IOptions<AevatarOAuthClientDefaultServiceOptions>? defaultServiceOptions,
         CancellationToken ct)
     {
         // Refactor (iter27/cluster-028-identity-oauth-endpoint):
@@ -372,7 +424,6 @@ public static class IdentityOAuthEndpoints
         var redirectUri = NyxIdRedirectUriResolver.Resolve(logger);
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(logger);
         var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
-        var defaultServiceSlugs = AevatarOAuthClientDefaultServices.Resolve(defaultServiceOptions, logger);
 
         // Validate Unix-seconds before dispatching: AevatarOAuthClient
         // ProjectionProvider later calls DateTimeOffset.FromUnixTimeSeconds
@@ -414,7 +465,6 @@ public static class IdentityOAuthEndpoints
                 RedirectUri = redirectUri,
             };
             command.RedirectUris.AddRange(redirectUris);
-            command.DefaultServiceSlugs.AddRange(defaultServiceSlugs);
             accepted = await rebuildDispatch
                 .DispatchAsync(command, ct)
                 .ConfigureAwait(false);
@@ -887,6 +937,43 @@ public static class IdentityOAuthEndpoints
         }
 
         return RenderBindingAcceptedHtmlInternal(displayName, receipt);
+    }
+
+    internal static IResult RenderBindingGrantUpdated(string? format)
+    {
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.Ok(new
+            {
+                status = "binding_grant_updated",
+                binding_id_changed = false,
+            });
+        }
+
+        const string html = """
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>NyxID 服务授权 — 已更新</title>
+            <style>
+            body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #1d1d1f; line-height: 1.6; }
+            .badge { display: inline-block; padding: 4px 10px; background: #d1f5d3; color: #146c2e; border-radius: 999px; font-size: 13px; font-weight: 500; }
+            h1 { font-size: 22px; margin: 16px 0 8px; }
+            .hint { background: #f5f5f7; padding: 16px 20px; border-radius: 8px; margin-top: 24px; }
+            .hint code { background: #fff; padding: 2px 6px; border-radius: 4px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+            </style>
+            </head>
+            <body>
+            <span class="badge">已更新</span>
+            <h1>NyxID 服务授权已更新</h1>
+            <p>原有 Lark 绑定保持不变。可以关闭此页并回到 Lark 继续对话。</p>
+            <div class="hint">发送 <code>/init</code> 可再次查看服务授权。</div>
+            </body>
+            </html>
+            """;
+        return Results.Content(html, "text/html; charset=utf-8");
     }
 
     internal static IResult RenderBoundSuccessHtmlInternal(string? displayName, bool alreadyBound)

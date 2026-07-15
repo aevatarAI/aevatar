@@ -13,7 +13,7 @@ public enum WorkflowChatInputPartKind
     File = 5,
 }
 
-public enum WorkflowFileSourceKind
+public enum FileArtifactSourceKind
 {
     Unspecified = 0,
     ChatInput = 1,
@@ -23,11 +23,11 @@ public enum WorkflowFileSourceKind
     Generated = 5,
 }
 
-public sealed record WorkflowFileRef
+public sealed record FileArtifactRef
 {
     public string? FileId { get; init; }
     public string? ArtifactId { get; init; }
-    public WorkflowFileSourceKind SourceKind { get; init; }
+    public FileArtifactSourceKind SourceKind { get; init; }
     public string? SourceMessageId { get; init; }
     public string? SourceResourceKey { get; init; }
     public string? FileName { get; init; }
@@ -48,7 +48,7 @@ public sealed record WorkflowChatInputPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
-    public WorkflowFileRef? FileRef { get; init; }
+    public FileArtifactRef? FileRef { get; init; }
 }
 
 public sealed record WorkflowLlmControl(
@@ -58,7 +58,15 @@ public sealed record WorkflowLlmControl(
     string? RoutePreference = null,
     string? SenderNyxIdAccessToken = null);
 
-public sealed record WorkflowCallerCredential(string? BearerToken = null);
+public sealed record WorkflowCallerNyxIdAuthority(
+    string Platform,
+    string Tenant,
+    string ExternalUserId,
+    string Scope);
+
+public sealed record WorkflowCallerCredential(
+    string? BearerToken = null,
+    WorkflowCallerNyxIdAuthority? NyxIdAuthority = null);
 
 public sealed record WorkflowExternalIngressContext(
     string RouteKey,
@@ -69,6 +77,11 @@ public sealed record WorkflowExternalIngressContext(
     string? PayloadFingerprint = null,
     string? AuthScheme = null,
     string? PrincipalSubject = null);
+
+public sealed record WorkflowCompletionNotificationTarget(
+    string ActorId,
+    string DeliveryId,
+    long ExpiresAtUnixMs);
 
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
@@ -188,7 +201,8 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
-    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 

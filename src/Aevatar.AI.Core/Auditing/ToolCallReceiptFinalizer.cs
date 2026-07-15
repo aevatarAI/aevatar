@@ -26,7 +26,7 @@ public static class ToolCallReceiptFinalizer
                     context,
                     AgentToolReceiptStatus.Error,
                     errorCode: "tool_execution_exception",
-                    errorMessage: exception.Message),
+                    errorMessage: ResolveSafeExceptionClass(exception)),
                 IsSynthetic: true);
         }
 
@@ -119,6 +119,18 @@ public static class ToolCallReceiptFinalizer
             ToolCallTerminationKind.ApprovalPending => string.Empty,
             ToolCallTerminationKind.MiddlewareTerminated => "middleware_terminated",
             _ => "tool_call_terminated",
+        };
+
+    private static string ResolveSafeExceptionClass(Exception exception) =>
+        exception switch
+        {
+            OperationCanceledException => nameof(OperationCanceledException),
+            TimeoutException => nameof(TimeoutException),
+            HttpRequestException => nameof(HttpRequestException),
+            ArgumentException => nameof(ArgumentException),
+            InvalidOperationException => nameof(InvalidOperationException),
+            NotSupportedException => nameof(NotSupportedException),
+            _ => nameof(Exception),
         };
 
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>

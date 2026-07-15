@@ -34,9 +34,10 @@ namespace Aevatar.Studio.Tests;
 ///   token);</item>
 ///   <item>the bind is never polled to completion through the member service, but
 ///   the binding run read model is observed once;</item>
-///   <item>pending binds return "pending" with a disabled schedule, succeeded
-///   binds return "bound" with an enabled schedule, and failed binds disable the
-///   deterministic provision schedule.</item>
+///   <item>new pending binds return "pending" without a runnable schedule,
+///   already-bound pending retries leave the existing schedule untouched,
+///   succeeded binds return "bound" with an enabled schedule, and failed binds
+///   disable the deterministic provision schedule.</item>
 /// </list>
 /// </summary>
 public sealed class StudioWorkflowProvisioningServiceTests
@@ -66,12 +67,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 WorkflowYaml: "name: monitor",
                 Prompt: "go"));
 
-        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Pending);
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Bound);
         response.MemberId.Should().Be(MemberId);
         response.ScopeId.Should().Be(ScopeId);
         response.ScheduleId.Should().Be(ScheduleId);
         response.BindingRunId.Should().Be(BindingRunId);
-        response.BindingRunStatus.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
+        response.BindingRunStatus.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
         response.ObservatoryUrl.Should().Be("/workflow/observatory");
 
         // create → bind, carrying the caller scope.
@@ -87,7 +88,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // A Workflow-kind scheduled-dispatch was created targeting the bound member.
         schedule.Ensured.Should().BeTrue();
         var configuration = schedule.Configuration!;
-        configuration.Enabled.Should().BeFalse();
+        configuration.Enabled.Should().BeTrue();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         var invocation = configuration.Target.ServiceInvocation!;
         invocation.Identity.TenantId.Should().Be(ScopeId);
@@ -96,6 +97,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("go");
         chat.ScopeId.Should().Be(ScopeId);
+        schedule.MutationContext.Should().BeNull();
     }
 
     [Fact]
@@ -118,8 +120,32 @@ public sealed class StudioWorkflowProvisioningServiceTests
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-9");
         auth.SenderNyxId.Scope.Should().Be("proxy");
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.Sender);
+        auth.Durable.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldNotUseBodyCallerAsAuthenticatedScheduleMutationContext()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            new ProvisionWorkflowCallerCredential(
+                Platform: " nyxid-body ",
+                ExternalUserId: " body-user-42 ",
+                Scope: " sender-proxy ",
+                Tenant: " body-tenant "),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+
+        var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth!;
+        auth.SenderNyxId!.Subject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid-body", "body-tenant", "body-user-42"));
+        auth.SenderNyxId.Scope.Should().Be("sender-proxy");
+        schedule.MutationContext.Should().BeNull();
     }
 
     [Fact]
@@ -135,7 +161,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.DurableSenderBearerToken.Should().BeNull();
+        auth!.Durable.Should().BeNull();
         auth.SenderNyxId.Should().NotBeNull();
         AssertExactlyOneCredentialSource(auth);
     }
@@ -160,7 +186,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.SenderNyxId.Should().NotBeNull();
-        auth.DurableSenderBearerToken.Should().BeNull();
+        auth.Durable.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }
 
@@ -169,7 +195,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var sut = NewService(member, schedule);
+        var sut = NewService(member, schedule, new RecordingBindingRunQueryPort
+        {
+            Status = StudioMemberBindingRunStatusNames.PlatformBindingPending,
+        });
 
         var response = await sut.ProvisionAsync(
             ScopeId,
@@ -177,10 +206,35 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Pending);
-        response.ScheduleId.Should().Be(ScheduleId);
+        response.ScheduleId.Should().BeNull();
         member.GetBindingRunCallCount.Should().Be(0);
-        schedule.Configuration!.Target.ServiceInvocation!.Auth!.DurableSenderBearerToken.Should().BeNull();
-        schedule.Configuration.Enabled.Should().BeFalse();
+        schedule.Ensured.Should().BeFalse();
+        schedule.GetScheduleIds.Should().Contain($"provision-{PublishedServiceId}");
+        schedule.DisabledScheduleIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenBindingPendingAndMemberAlreadyBound_KeepsProvisionScheduleEnabled()
+    {
+        var member = NewMemberService();
+        member.ExistingDetail = NewBoundMemberDetail();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule, new RecordingBindingRunQueryPort
+        {
+            Status = StudioMemberBindingRunStatusNames.PlatformBindingPending,
+        });
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Pending);
+        response.ScheduleId.Should().BeNull();
+        member.CreateInvoked.Should().BeFalse();
+        schedule.Ensured.Should().BeFalse();
+        schedule.GetScheduleIds.Should().BeEmpty();
+        schedule.DisabledScheduleIds.Should().BeEmpty();
     }
 
     [Fact]
@@ -239,6 +293,62 @@ public sealed class StudioWorkflowProvisioningServiceTests
         schedule.Ensured.Should().BeFalse();
         schedule.GetScheduleIds.Should().ContainSingle().Which.Should().Be($"provision-{PublishedServiceId}");
         schedule.DisabledScheduleIds.Should().ContainSingle().Which.Should().Be($"provision-{PublishedServiceId}");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenBindingRejected_DisablesExistingProvisionScheduleAndReportsFailure()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        schedule.ExistingDetail = NewScheduledDispatchDetail($"provision-{PublishedServiceId}", enabled: true);
+        var failedAt = DateTimeOffset.Parse("2026-07-09T12:05:00Z");
+        var bindingRuns = new RecordingBindingRunQueryPort
+        {
+            Status = StudioMemberBindingRunStatusNames.Rejected,
+            Failure = new StudioMemberBindingFailureResponse(
+                "STUDIO_MEMBER_BINDING_REJECTED",
+                "invalid binding",
+                failedAt),
+        };
+        var sut = NewService(member, schedule, bindingRuns);
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Rejected);
+        response.BindingRunStatus.Should().Be(StudioMemberBindingRunStatusNames.Rejected);
+        response.BindingFailure.Should().Be(new ProvisionWorkflowBindingFailureResponse(
+            "STUDIO_MEMBER_BINDING_REJECTED",
+            "invalid binding",
+            failedAt));
+        response.ScheduleId.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+        schedule.DisabledScheduleIds.Should().ContainSingle().Which.Should().Be($"provision-{PublishedServiceId}");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenBindingFailed_DisablesLaterProvisionScheduleGeneration()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        schedule.ExistingDetail = NewScheduledDispatchDetail($"provision-{PublishedServiceId}.2", enabled: true);
+        var bindingRuns = new RecordingBindingRunQueryPort
+        {
+            Status = StudioMemberBindingRunStatusNames.Failed,
+        };
+        var sut = NewService(member, schedule, bindingRuns);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+
+        schedule.GetScheduleIds.Should().ContainInOrder(
+            $"provision-{PublishedServiceId}",
+            $"provision-{PublishedServiceId}.2");
+        schedule.DisabledScheduleIds.Should().ContainSingle().Which.Should().Be($"provision-{PublishedServiceId}.2");
     }
 
     [Fact]
@@ -301,7 +411,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         member.BindScopeId.Should().Be(ScopeId);
         schedule.Ensured.Should().BeFalse();
         response.ScheduleId.Should().BeNull();
-        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Pending);
+        response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Bound);
     }
 
     [Fact]
@@ -556,10 +666,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static void AssertExactlyOneCredentialSource(ScheduledServiceInvocationAuth? auth)
     {
         auth.Should().NotBeNull();
-        var sources =
-            (auth!.SenderNyxId != null ? 1 : 0) +
-            (string.IsNullOrEmpty(auth.DurableSenderBearerToken) ? 0 : 1) +
-            (auth.ScopeOwnerNyxId != null ? 1 : 0);
+        var sources = auth!.Source == null ? 0 : 1;
         sources.Should().Be(1, "a scheduled dispatch must carry exactly one credential source");
     }
 
@@ -591,7 +698,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         RecordingScheduleService schedule,
         RecordingWorkflowDefinitionParser parser,
         out FakeTimeProvider time)
-        => NewService(member, schedule, parser, new RecordingBindingRunQueryPort(), out time);
+        => NewService(member, schedule, parser, new RecordingBindingRunQueryPort
+        {
+            Status = StudioMemberBindingRunStatusNames.Succeeded,
+        }, out time);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
@@ -611,6 +721,26 @@ public sealed class StudioWorkflowProvisioningServiceTests
             PublishedServiceId = PublishedServiceId,
             BindingRunId = BindingRunId,
         };
+
+    private static StudioMemberDetailResponse NewBoundMemberDetail() =>
+        new(
+            Summary: new StudioMemberSummaryResponse(
+                MemberId: MemberId,
+                ScopeId: ScopeId,
+                DisplayName: "Monitor",
+                Description: string.Empty,
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                LifecycleStage: MemberLifecycleStageNames.BindReady,
+                PublishedServiceId: PublishedServiceId,
+                LastBoundRevisionId: "rev-1",
+                CreatedAt: DateTimeOffset.UtcNow,
+                UpdatedAt: DateTimeOffset.UtcNow),
+            ImplementationRef: null,
+            LastBinding: new StudioMemberBindingContractResponse(
+                PublishedServiceId,
+                "rev-1",
+                MemberImplementationKindNames.Workflow,
+                DateTimeOffset.UtcNow));
 
     private static ScheduledDispatchDetail NewScheduledDispatchDetail(string scheduleId, bool enabled) =>
         new(
@@ -764,6 +894,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Exception? ThrowOnEnsure { get; set; }
         public bool Ensured { get; private set; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
+        public ScheduledDispatchMutationContext? MutationContext { get; private set; }
         public ScheduledDispatchDetail? ExistingDetail { get; set; }
         public List<string> GetScheduleIds { get; } = [];
         public List<string> DisabledScheduleIds { get; } = [];
@@ -776,7 +907,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public HashSet<string> TombstonedScheduleIds { get; } = new(StringComparer.Ordinal);
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default)
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default)
         {
             if (ThrowOnEnsure != null)
                 throw ThrowOnEnsure;
@@ -785,6 +917,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
             Ensured = true;
             Configuration = configuration;
+            MutationContext = context;
             return Task.FromResult(new ScheduledDispatchMutationReceipt(
                 ScheduleId,
                 $"scheduled-dispatch:{ScheduleId}",
@@ -798,12 +931,14 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // ---- Unused members ----
 
         public Task<ScheduledDispatchMutationReceipt> CreateAsync(
-            ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException(
                 "Provisioning must use EnsureAsync so retries converge on one schedule.");
 
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
-            string scheduleId, ScheduledDispatchConfiguration configuration, CancellationToken ct = default) =>
+            string scheduleId, ScheduledDispatchConfiguration configuration, ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<ScheduledDispatchMutationReceipt> EnableAsync(
@@ -832,7 +967,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             string scheduleId, CancellationToken ct = default)
         {
             GetScheduleIds.Add(scheduleId);
-            return Task.FromResult(ExistingDetail);
+            return Task.FromResult(
+                string.Equals(ExistingDetail?.Schedule.ScheduleId, scheduleId, StringComparison.Ordinal)
+                    ? ExistingDetail
+                    : null);
         }
 
         public Task<ScheduledDispatchListResult> ListAsync(

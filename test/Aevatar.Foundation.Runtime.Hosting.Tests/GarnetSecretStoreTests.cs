@@ -1,5 +1,6 @@
 using System.Text;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet;
 using Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet.DependencyInjection;
 using FluentAssertions;
@@ -66,8 +67,268 @@ public sealed class GarnetSecretStoreTests
         wrongSubject.Resolved.Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("in-memory")]
+    [InlineData("garnet")]
+    public async Task SecretVaultRequestedReferenceContract_WithNullReference_AllocatesReference(
+        string provider)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test allocated reference",
+            RequestedRef: null));
+
+        stored.Reference.Ref.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Theory]
+    [InlineData("in-memory", "")]
+    [InlineData("in-memory", " ")]
+    [InlineData("garnet", "")]
+    [InlineData("garnet", " ")]
+    public async Task SecretVaultRequestedReferenceContract_WithBlankReference_RejectsRequest(
+        string provider,
+        string requestedReference)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+
+        var put = () => vault.PutAsync(new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test blank reference",
+            RequestedRef: requestedReference));
+
+        await put.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*RequestedRef*");
+    }
+
+    [Theory]
+    [InlineData("in-memory")]
+    [InlineData("garnet")]
+    public async Task SecretVaultRequestedReferenceContract_WithExactRetry_ReturnsOriginalReference(
+        string provider)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+        var request = new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test exact retry",
+            RequestedRef: "sec_requested_contract");
+
+        var first = await vault.PutAsync(request);
+        var second = await vault.PutAsync(request);
+
+        second.Reference.Should().BeEquivalentTo(first.Reference);
+        second.Reference.Ref.Should().Be("sec_requested_contract");
+    }
+
+    [Theory]
+    [InlineData("in-memory")]
+    [InlineData("garnet")]
+    public async Task SecretVaultRequestedReferenceContract_WithAliasConflict_PreservesOriginalSecret(
+        string provider)
+    {
+        var vault = CreateRequestedReferenceContractVault(provider);
+        var original = new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test alias conflict",
+            RequestedRef: "sec_requested_contract");
+        await vault.PutAsync(original);
+
+        var conflictingPut = () => vault.PutAsync(original with
+        {
+            SubjectId = "key-beta",
+            Secret = "secret-beta",
+        });
+
+        await conflictingPut.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            "sec_requested_contract",
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "test original survives"));
+        resolved.Secret.Should().Be("secret-alpha");
+    }
+
     [Fact]
-    public async Task GarnetBackedSecretVault_ShouldRejectRotateBeforeModifyingRecord()
+    public async Task GarnetBackedSecretVault_WithRequestedReference_RepeatsExactCreateWithoutOverwrite()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var vault = new GarnetBackedSecretVault(
+            keyValueStore,
+            CreateOptions(),
+            CreateKeyring(),
+            ManualTime.Start);
+        var request = new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test requested reference",
+            RequestedRef: "sec_requested_alpha");
+
+        var first = await vault.PutAsync(request);
+        var originalBytes = keyValueStore.Values.Should().ContainSingle().Subject.Value.ToArray();
+        var second = await vault.PutAsync(request);
+
+        first.Reference.Ref.Should().Be("sec_requested_alpha");
+        second.Reference.Should().BeEquivalentTo(first.Reference);
+        keyValueStore.Values.Should().ContainSingle().Subject.Value.Should().Equal(originalBytes);
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_WithRequestedReference_RejectsAliasWithoutOverwritingOriginal()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var vault = new GarnetBackedSecretVault(
+            keyValueStore,
+            CreateOptions(),
+            CreateKeyring(),
+            ManualTime.Start);
+        var original = new StoreSecretRequest(
+            "scheduled.nyx-api-key",
+            "owner-alpha",
+            "key-alpha",
+            "secret-alpha",
+            "test requested reference",
+            RequestedRef: "sec_requested_alpha");
+        await vault.PutAsync(original);
+        var originalBytes = keyValueStore.Values.Should().ContainSingle().Subject.Value.ToArray();
+
+        var conflictingWrite = () => vault.PutAsync(original with
+        {
+            SubjectId = "key-beta",
+            Secret = "secret-beta",
+        });
+
+        await conflictingWrite.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already exists*");
+        keyValueStore.Values.Should().ContainSingle().Subject.Value.Should().Equal(originalBytes);
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldPersistAndEnforceExpiresAt()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var clock = new ManualTime(new DateTimeOffset(2026, 7, 5, 12, 0, 0, TimeSpan.Zero));
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, clock);
+        var expiresAt = clock.GetUtcNow().AddMinutes(5);
+        var expiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds();
+
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "expiring-secret",
+            "test store expiring",
+            expiresAt));
+
+        stored.Reference.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        keyValueStore.Expirations.Values.Should().ContainSingle()
+            .Which.Should().Be(TimeSpan.FromMinutes(5));
+        var record = GarnetSecretVaultRecord.Parser.ParseFrom(
+            keyValueStore.Values.Should().ContainSingle().Subject.Value);
+        record.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+
+        var beforeExpiry = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve before expiry"));
+        beforeExpiry.Resolved.Should().BeTrue();
+        beforeExpiry.Reference!.ExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
+        beforeExpiry.Secret.Should().Be("expiring-secret");
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        var expired = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve expired"));
+        expired.Resolved.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldReapplyRemainingExpiryWhenRotating()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var clock = new ManualTime(new DateTimeOffset(2026, 7, 5, 12, 0, 0, TimeSpan.Zero));
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, clock);
+        var expiresAt = clock.GetUtcNow().AddMinutes(5);
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store expiring",
+            expiresAt));
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        var rotated = await vault.RotateAsync(new RotateSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "rotated-secret",
+            "test rotate expiring"));
+
+        rotated.Reference.ExpiresAtUnixMs.Should().Be(expiresAt.ToUnixTimeMilliseconds());
+        keyValueStore.Expirations.Values.Should().ContainSingle()
+            .Which.Should().Be(TimeSpan.FromMinutes(4));
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldNotExpandShorterBackendExpiryWhenRotating()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var clock = new ManualTime(new DateTimeOffset(2026, 7, 5, 12, 0, 0, TimeSpan.Zero));
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, clock);
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store expiring",
+            clock.GetUtcNow().AddMinutes(10)));
+        var key = keyValueStore.Expirations.Keys.Should().ContainSingle().Which;
+        keyValueStore.Expirations[key] = TimeSpan.FromMinutes(2);
+
+        await vault.RotateAsync(new RotateSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "rotated-secret",
+            "test rotate expiring"));
+
+        keyValueStore.Expirations.Values.Should().ContainSingle()
+            .Which.Should().Be(TimeSpan.FromMinutes(2));
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldRotateByCompareSet()
     {
         var keyValueStore = new RecordingGarnetSecretKeyValueStore();
         var options = CreateOptions();
@@ -80,9 +341,7 @@ public sealed class GarnetSecretStoreTests
             "user-alpha",
             "initial-secret",
             "test store"));
-        var storedBytes = keyValueStore.Values.Should().ContainSingle().Subject.Value.ToArray();
-
-        var rotate = async () => await vault.RotateAsync(new RotateSecretRequest(
+        var rotated = await vault.RotateAsync(new RotateSecretRequest(
             stored.Reference.Ref,
             "api-token",
             "scope-alpha",
@@ -90,21 +349,21 @@ public sealed class GarnetSecretStoreTests
             "rotated-secret",
             "test rotate"));
 
-        await rotate.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*atomic versioned transitions*");
-        keyValueStore.Values.Should().ContainSingle().Which.Value.Should().Equal(storedBytes);
+        rotated.Reference.Ref.Should().Be(stored.Reference.Ref);
+        rotated.Reference.Version.Should().Be(2);
+        rotated.Reference.Fingerprint.Should().NotBe(stored.Reference.Fingerprint);
 
         var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
             stored.Reference.Ref,
             "api-token",
             "scope-alpha",
             "user-alpha",
-            "test resolve original after rejected rotate"));
-        resolved.Secret.Should().Be("initial-secret");
+            "test resolve rotated"));
+        resolved.Secret.Should().Be("rotated-secret");
     }
 
     [Fact]
-    public async Task GarnetBackedSecretVault_ShouldRejectRevokeBeforeModifyingRecord()
+    public async Task GarnetBackedSecretVault_ShouldKeepRecordWhenRotateCompareSetLoses()
     {
         var keyValueStore = new RecordingGarnetSecretKeyValueStore();
         var options = CreateOptions();
@@ -117,26 +376,197 @@ public sealed class GarnetSecretStoreTests
             "user-alpha",
             "initial-secret",
             "test store"));
-        var storedBytes = keyValueStore.Values.Should().ContainSingle().Subject.Value.ToArray();
+        var storedEntry = keyValueStore.Values.Should().ContainSingle().Subject;
+        var storedBytes = storedEntry.Value.ToArray();
+        keyValueStore.RejectNextCompareSet = true;
 
-        var revoke = async () => await vault.RevokeAsync(new RevokeSecretRequest(
+        var rotate = async () => await vault.RotateAsync(new RotateSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "rotated-secret",
+            "test rotate conflict"));
+
+        await rotate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*changed before rotate*");
+        keyValueStore.Values.Should().ContainKey(storedEntry.Key)
+            .WhoseValue.Should().Equal(storedBytes);
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve after rotate conflict"));
+        resolved.Secret.Should().Be("initial-secret");
+        resolved.Reference!.Version.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldRevokeByCompareDelete()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, ManualTime.Start);
+
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store"));
+        var revoked = await vault.RevokeAsync(new RevokeSecretRequest(
             stored.Reference.Ref,
             "api-token",
             "scope-alpha",
             "user-alpha",
             "test revoke"));
 
-        await revoke.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*atomic versioned transitions*");
-        keyValueStore.Values.Should().ContainSingle().Which.Value.Should().Equal(storedBytes);
+        revoked.Revoked.Should().BeTrue();
+        keyValueStore.Values.Should().BeEmpty();
+
+        var replayed = await vault.RevokeAsync(new RevokeSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test replay revoke"));
+        replayed.Revoked.Should().BeTrue("the exact revocation postcondition is already satisfied");
 
         var afterRevoke = await vault.ResolveAsync(new ResolveSecretRequest(
             stored.Reference.Ref,
             "api-token",
             "scope-alpha",
             "user-alpha",
-            "test resolve original after rejected revoke"));
-        afterRevoke.Secret.Should().Be("initial-secret");
+            "test resolve after revoke"));
+        afterRevoke.Resolved.Should().BeFalse();
+        afterRevoke.FailureReason.Should().Be(SecretResolutionFailureReason.NotFound);
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldKeepRecordWhenRevokeCompareDeleteLoses()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, ManualTime.Start);
+
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store"));
+        var storedEntry = keyValueStore.Values.Should().ContainSingle().Subject;
+        var storedBytes = storedEntry.Value.ToArray();
+        keyValueStore.RejectNextCompareDelete = true;
+
+        var revoked = await vault.RevokeAsync(new RevokeSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test revoke conflict"));
+
+        revoked.Revoked.Should().BeFalse();
+        keyValueStore.Values.Should().ContainKey(storedEntry.Key)
+            .WhoseValue.Should().Equal(storedBytes);
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve after revoke conflict"));
+        resolved.Secret.Should().Be("initial-secret");
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_WhenCompetingRevokeDeletesFirst_ReturnsSuccess()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var vault = new GarnetBackedSecretVault(
+            keyValueStore,
+            CreateOptions(),
+            CreateKeyring(),
+            ManualTime.Start);
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store"));
+        keyValueStore.RejectNextCompareDelete = true;
+        keyValueStore.DeleteOnNextRejectedCompareDelete = true;
+
+        var revoked = await vault.RevokeAsync(new RevokeSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test concurrent revoke"));
+
+        revoked.Revoked.Should().BeTrue();
+        keyValueStore.Values.Should().BeEmpty();
+    }
+
+    [GarnetIntegrationFact]
+    public async Task GarnetSecretKeyValueStore_ShouldCompareSetAndCompareDeleteWithExactBytes()
+    {
+        var options = CreateOptions();
+        options.ConnectionString = RequireGarnetConnectionString();
+        using var connection = new GarnetSecretConnectionMultiplexer(options);
+        var store = new GarnetSecretKeyValueStore(connection, options);
+        var key = $"{options.SecretVaultPrefix}:compare:{Guid.NewGuid():N}";
+        byte[] original = [0x00, 0x01, 0xFE, 0xFF];
+        byte[] wrongExpected = [0x00, 0x01, 0xFE, 0x00];
+        byte[] updated = [0x10, 0x20, 0x30, 0x40];
+        var createOnlyKey = $"{options.SecretVaultPrefix}:set-nx:{Guid.NewGuid():N}";
+        byte[] createOnlyOriginal = [0xA1, 0xB2, 0xC3];
+        byte[] createOnlyConflict = [0xD4, 0xE5, 0xF6];
+
+        var firstCreate = await store.SetIfAbsentAsync(createOnlyKey, createOnlyOriginal, null);
+        var conflictingCreate = await store.SetIfAbsentAsync(createOnlyKey, createOnlyConflict, null);
+
+        firstCreate.Should().BeTrue();
+        conflictingCreate.Should().BeFalse();
+        (await store.GetAsync(createOnlyKey)).Should().Equal(createOnlyOriginal);
+
+        await store.SetAsync(key, original, TimeSpan.FromMinutes(2));
+
+        var rejectedSet = await store.CompareSetAsync(
+            key,
+            wrongExpected,
+            updated,
+            TimeSpan.FromMinutes(4));
+
+        rejectedSet.Should().BeFalse();
+        (await store.GetAsync(key)).Should().Equal(original);
+
+        var acceptedSet = await store.CompareSetAsync(
+            key,
+            original,
+            updated,
+            TimeSpan.FromMinutes(4));
+
+        acceptedSet.Should().BeTrue();
+        (await store.GetAsync(key)).Should().Equal(updated);
+        var ttl = await connection.GetDatabase(options.Database).KeyTimeToLiveAsync(key);
+        ttl.Should().NotBeNull();
+        ttl.Should().BeGreaterThan(TimeSpan.FromMinutes(1));
+        ttl.Should().BeLessThanOrEqualTo(TimeSpan.FromMinutes(2));
+
+        var rejectedDelete = await store.CompareDeleteAsync(key, original);
+
+        rejectedDelete.Should().BeFalse();
+        (await store.GetAsync(key)).Should().Equal(updated);
+
+        var acceptedDelete = await store.CompareDeleteAsync(key, updated);
+
+        acceptedDelete.Should().BeTrue();
+        (await store.GetAsync(key)).Should().BeNull();
     }
 
     [Fact]
@@ -169,6 +599,86 @@ public sealed class GarnetSecretStoreTests
 
         resolved.Resolved.Should().BeFalse();
         resolved.Secret.Should().BeNull();
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.AuthenticationFailed);
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldReturnKeyringMismatch_WhenCiphertextKeyIsMissing()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var writerKeyring = CreateKeyring();
+        var readerKeyring = CreateKeyringWithSingleKey(seed: 9, fingerprintSeed: 3);
+        var writer = new GarnetBackedSecretVault(keyValueStore, options, writerKeyring, ManualTime.Start);
+        var reader = new GarnetBackedSecretVault(keyValueStore, options, readerKeyring, ManualTime.Start);
+
+        var stored = await writer.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store"));
+
+        var resolved = await reader.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve with drifted keyring"));
+
+        resolved.Resolved.Should().BeFalse();
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.KeyringMismatch);
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldReturnInvalidRecord_WhenStoredBytesAreNotProtobuf()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, ManualTime.Start);
+        const string reference = "sec_corrupt";
+        keyValueStore.Values[$"{options.SecretVaultPrefix}:{reference}"] = [0x80];
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            reference,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve corrupt record"));
+
+        resolved.Resolved.Should().BeFalse();
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.InvalidRecord);
+    }
+
+    [Fact]
+    public async Task GarnetBackedSecretVault_ShouldReturnUnsupportedAlgorithm_WhenCiphertextAlgorithmIsUnknown()
+    {
+        var keyValueStore = new RecordingGarnetSecretKeyValueStore();
+        var options = CreateOptions();
+        var keyring = CreateKeyring();
+        var vault = new GarnetBackedSecretVault(keyValueStore, options, keyring, ManualTime.Start);
+
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "initial-secret",
+            "test store"));
+        var storedEntry = keyValueStore.Values.Should().ContainSingle().Subject;
+        var record = GarnetSecretVaultRecord.Parser.ParseFrom(storedEntry.Value);
+        record.EncryptedSecret.Algorithm = "AES-128-GCM";
+        keyValueStore.Values[storedEntry.Key] = record.ToByteArray();
+
+        var resolved = await vault.ResolveAsync(new ResolveSecretRequest(
+            stored.Reference.Ref,
+            "api-token",
+            "scope-alpha",
+            "user-alpha",
+            "test resolve unsupported algorithm"));
+
+        resolved.Resolved.Should().BeFalse();
+        resolved.FailureReason.Should().Be(SecretResolutionFailureReason.UnsupportedAlgorithm);
     }
 
     [Fact]
@@ -318,7 +828,7 @@ public sealed class GarnetSecretStoreTests
     }
 
     [Fact]
-    public void GarnetSecretStoreKeyring_ShouldRejectMissingMalformedAndNon32ByteKeys()
+    public void GarnetSecretStoreKeyring_ShouldRejectMissingMalformedNon32ByteAndMissingFingerprintKeys()
     {
         var missingPath = Path.Combine(Path.GetTempPath(), $"missing-keyring-{Guid.NewGuid():N}.json");
         var missing = () => GarnetSecretStoreKeyring.LoadFromFile(missingPath);
@@ -349,6 +859,17 @@ public sealed class GarnetSecretStoreTests
         """);
         var shortKeyLoad = () => GarnetSecretStoreKeyring.LoadFromFile(shortKey.Path);
         shortKeyLoad.Should().Throw<InvalidOperationException>().WithMessage("*32-byte*");
+
+        using var missingFingerprint = new TempFile($$"""
+        {
+          "activeKeyId": "key-1",
+          "keys": {
+            "key-1": "{{Base64Key(1)}}"
+          }
+        }
+        """);
+        var missingFingerprintLoad = () => GarnetSecretStoreKeyring.LoadFromFile(missingFingerprint.Path);
+        missingFingerprintLoad.Should().Throw<InvalidOperationException>().WithMessage("*fingerprintKey*");
 
         using var valid = new TempFile($$"""
         {
@@ -459,6 +980,18 @@ public sealed class GarnetSecretStoreTests
         RuntimeSecretPrefix = $"aevatar:test:runtime:{Guid.NewGuid():N}",
     };
 
+    private static ISecretVault CreateRequestedReferenceContractVault(string provider) =>
+        provider switch
+        {
+            "in-memory" => new InMemorySecretVault(),
+            "garnet" => new GarnetBackedSecretVault(
+                new RecordingGarnetSecretKeyValueStore(),
+                CreateOptions(),
+                CreateKeyring(),
+                ManualTime.Start),
+            _ => throw new ArgumentOutOfRangeException(nameof(provider), provider, null),
+        };
+
     private static GarnetSecretStoreKeyring CreateKeyring()
     {
         using var keyringFile = new TempFile($$"""
@@ -474,11 +1007,29 @@ public sealed class GarnetSecretStoreTests
         return GarnetSecretStoreKeyring.LoadFromFile(keyringFile.Path);
     }
 
+    private static GarnetSecretStoreKeyring CreateKeyringWithSingleKey(byte seed, byte fingerprintSeed)
+    {
+        using var keyringFile = new TempFile($$"""
+        {
+          "activeKeyId": "key-9",
+          "keys": {
+            "key-9": "{{Base64Key(seed)}}"
+          },
+          "fingerprintKey": "{{Base64Key(fingerprintSeed)}}"
+        }
+        """);
+        return GarnetSecretStoreKeyring.LoadFromFile(keyringFile.Path);
+    }
+
     private static string StoredValueText(RecordingGarnetSecretKeyValueStore keyValueStore)
     {
         var bytes = keyValueStore.Values.Should().ContainSingle().Subject.Value;
         return Encoding.UTF8.GetString(bytes);
     }
+
+    private static string RequireGarnetConnectionString() =>
+        Environment.GetEnvironmentVariable("AEVATAR_TEST_GARNET_CONNECTION_STRING")
+        ?? throw new InvalidOperationException("Missing AEVATAR_TEST_GARNET_CONNECTION_STRING.");
 
     private static string Base64Key(byte seed)
     {
@@ -497,6 +1048,12 @@ public sealed class GarnetSecretStoreTests
 
         public Dictionary<string, TimeSpan?> Expirations { get; } = new(StringComparer.Ordinal);
 
+        public bool RejectNextCompareSet { get; set; }
+
+        public bool RejectNextCompareDelete { get; set; }
+
+        public bool DeleteOnNextRejectedCompareDelete { get; set; }
+
         public Task<byte[]?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -509,6 +1066,79 @@ public sealed class GarnetSecretStoreTests
             Values[key] = value.ToArray();
             Expirations[key] = expiry;
             return Task.CompletedTask;
+        }
+
+        public Task<bool> SetIfAbsentAsync(
+            string key,
+            ReadOnlyMemory<byte> value,
+            TimeSpan? expiry,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Values.ContainsKey(key))
+                return Task.FromResult(false);
+
+            Values[key] = value.ToArray();
+            Expirations[key] = expiry;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> CompareSetAsync(
+            string key,
+            ReadOnlyMemory<byte> expectedValue,
+            ReadOnlyMemory<byte> newValue,
+            TimeSpan? expiry,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (RejectNextCompareSet)
+            {
+                RejectNextCompareSet = false;
+                return Task.FromResult(false);
+            }
+
+            if (!Values.TryGetValue(key, out var current) ||
+                !current.AsSpan().SequenceEqual(expectedValue.Span))
+            {
+                return Task.FromResult(false);
+            }
+
+            Values[key] = newValue.ToArray();
+            Expirations.TryGetValue(key, out var existingExpiry);
+            Expirations[key] = existingExpiry.HasValue &&
+                               (!expiry.HasValue || existingExpiry.Value < expiry.Value)
+                ? existingExpiry
+                : expiry;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> CompareDeleteAsync(
+            string key,
+            ReadOnlyMemory<byte> expectedValue,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (RejectNextCompareDelete)
+            {
+                RejectNextCompareDelete = false;
+                if (DeleteOnNextRejectedCompareDelete)
+                {
+                    DeleteOnNextRejectedCompareDelete = false;
+                    Values.Remove(key);
+                    Expirations.Remove(key);
+                }
+                return Task.FromResult(false);
+            }
+
+            if (!Values.TryGetValue(key, out var current) ||
+                !current.AsSpan().SequenceEqual(expectedValue.Span))
+            {
+                return Task.FromResult(false);
+            }
+
+            Values.Remove(key);
+            Expirations.Remove(key);
+            return Task.FromResult(true);
         }
     }
 

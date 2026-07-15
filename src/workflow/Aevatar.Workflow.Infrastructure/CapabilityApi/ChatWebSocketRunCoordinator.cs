@@ -13,7 +13,7 @@ internal static class ChatWebSocketRunCoordinator
         ApiRequestScope scope,
         CancellationToken ct = default,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        IWorkflowFileIngressPort? fileIngressPort = null,
+        IFileArtifactIngressPort? fileIngressPort = null,
         string? trustedScopeId = null)
     {
         var responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);

@@ -56,12 +56,41 @@ internal static class ChatRunRequestNormalizer
 
     private static CallerCredentialNormalizationResult NormalizeCallerCredential(WorkflowCallerCredential? source)
     {
-        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
+        if (source == null)
+            return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.None);
+
+        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source.BearerToken);
         if (parsed.IsInvalid)
             return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.InvalidCallerCredential);
+
+        var authority = NormalizeCallerNyxIdAuthority(source.NyxIdAuthority);
+        if (parsed.IsMissing && authority == null)
+            return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.None);
+
         return new CallerCredentialNormalizationResult(
-            parsed.IsMissing ? null : new WorkflowCallerCredential(parsed.NormalizedBearerToken),
+            new WorkflowCallerCredential(
+                parsed.IsMissing ? null : parsed.NormalizedBearerToken,
+                authority),
             WorkflowChatRunStartError.None);
+    }
+
+    private static WorkflowCallerNyxIdAuthority? NormalizeCallerNyxIdAuthority(
+        WorkflowCallerNyxIdAuthority? authority)
+    {
+        if (authority == null)
+            return null;
+
+        var platform = NormalizeOptional(authority.Platform);
+        var externalUserId = NormalizeOptional(authority.ExternalUserId);
+        var scope = NormalizeOptional(authority.Scope);
+        if (platform == null || externalUserId == null || scope == null)
+            return null;
+
+        return new WorkflowCallerNyxIdAuthority(
+            platform,
+            NormalizeOptional(authority.Tenant) ?? string.Empty,
+            externalUserId,
+            scope);
     }
 
     private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -92,7 +121,7 @@ internal static class ChatRunRequestNormalizer
 
     public static async ValueTask<ChatRunRequestNormalizationResult> NormalizeAsync(
         ChatInput input,
-        IWorkflowFileIngressPort? fileIngressPort,
+        IFileArtifactIngressPort? fileIngressPort,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
         CancellationToken cancellationToken = default,
@@ -313,7 +342,7 @@ internal static class ChatRunRequestNormalizer
 
     private static async ValueTask<InputPartsNormalizationResult> NormalizeInputPartsAsync(
         IReadOnlyList<ChatInputContentPart>? inputParts,
-        IWorkflowFileIngressPort fileIngressPort,
+        IFileArtifactIngressPort fileIngressPort,
         CancellationToken cancellationToken)
     {
         if (inputParts == null || inputParts.Count == 0)
@@ -395,7 +424,7 @@ internal static class ChatRunRequestNormalizer
         string? MediaType,
         string? Uri,
         string? Name,
-        WorkflowFileRef? FileRef,
+        FileArtifactRef? FileRef,
         WorkflowChatRunStartError Error);
 
     private static FileInputNormalizationResult NormalizeFileInput(ChatInputContentPart part)
@@ -414,7 +443,7 @@ internal static class ChatRunRequestNormalizer
 
     private static async ValueTask<FileInputNormalizationResult> NormalizeFileInputAsync(
         ChatInputContentPart part,
-        IWorkflowFileIngressPort fileIngressPort,
+        IFileArtifactIngressPort fileIngressPort,
         CancellationToken cancellationToken)
     {
         if (part.InlineFile != null && part.FileRef != null)
@@ -458,7 +487,7 @@ internal static class ChatRunRequestNormalizer
 
     private static async ValueTask<FileInputNormalizationResult> NormalizeInlineFileAsync(
         ChatInputInlineFile inlineFile,
-        IWorkflowFileIngressPort fileIngressPort,
+        IFileArtifactIngressPort fileIngressPort,
         CancellationToken cancellationToken)
     {
         var dataBase64 = NormalizeOptional(inlineFile.DataBase64);
@@ -478,9 +507,9 @@ internal static class ChatRunRequestNormalizer
         }
 
         var result = await fileIngressPort.IngestAsync(
-            new WorkflowFileIngressRequest(
+            new FileArtifactIngressRequest(
                 content,
-                WorkflowFileSourceKind.ChatInput,
+                FileArtifactSourceKind.ChatInput,
                 FileName: NormalizeContentPartValue(inlineFile.Name),
                 MediaType: NormalizeContentPartValue(inlineFile.MediaType),
                 OwnerScopeId: NormalizeContentPartValue(inlineFile.OwnerScopeId)),
@@ -517,7 +546,7 @@ internal static class ChatRunRequestNormalizer
         var fileName = NormalizeContentPartValue(fileRef.FileName) ??
                        NormalizeContentPartValue(fileRef.Name);
 
-        var normalized = new WorkflowFileRef
+        var normalized = new FileArtifactRef
         {
             FileId = fileId,
             ArtifactId = artifactId,
@@ -542,9 +571,9 @@ internal static class ChatRunRequestNormalizer
             WorkflowChatRunStartError.None);
     }
 
-    private static bool TryNormalizeFileSourceKind(string? sourceKind, out WorkflowFileSourceKind normalized)
+    private static bool TryNormalizeFileSourceKind(string? sourceKind, out FileArtifactSourceKind normalized)
     {
-        normalized = WorkflowFileSourceKind.Unspecified;
+        normalized = FileArtifactSourceKind.Unspecified;
 
         var value = NormalizeContentPartValue(sourceKind);
         if (value == null)
@@ -554,21 +583,21 @@ internal static class ChatRunRequestNormalizer
         normalized = sourceKindKey switch
         {
             "unspecified" =>
-                WorkflowFileSourceKind.Unspecified,
+                FileArtifactSourceKind.Unspecified,
             "chatinput" or "chat" =>
-                WorkflowFileSourceKind.ChatInput,
+                FileArtifactSourceKind.ChatInput,
             "formupload" or "form" =>
-                WorkflowFileSourceKind.FormUpload,
+                FileArtifactSourceKind.FormUpload,
             "connectedserviceresource" or "connectedservice" =>
-                WorkflowFileSourceKind.ConnectedServiceResource,
+                FileArtifactSourceKind.ConnectedServiceResource,
             "externalresource" or "external" =>
-                WorkflowFileSourceKind.ExternalResource,
+                FileArtifactSourceKind.ExternalResource,
             "generated" =>
-                WorkflowFileSourceKind.Generated,
-            _ => WorkflowFileSourceKind.Unspecified,
+                FileArtifactSourceKind.Generated,
+            _ => FileArtifactSourceKind.Unspecified,
         };
 
-        return normalized != WorkflowFileSourceKind.Unspecified || sourceKindKey == "unspecified";
+        return normalized != FileArtifactSourceKind.Unspecified || sourceKindKey == "unspecified";
     }
 
     private static bool TryNormalizeUnixMs(long? value, out long normalized)

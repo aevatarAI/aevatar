@@ -79,7 +79,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
         var fileRef = snapshot.InputFileRefs.Should().ContainSingle().Subject;
         fileRef.FileId.Should().Be("file-1");
         fileRef.ArtifactId.Should().Be("workflow-file://file-1");
-        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource);
+        fileRef.SourceKind.Should().Be(Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind.ConnectedServiceResource);
         fileRef.SourceMessageId.Should().Be("om_1");
         fileRef.SourceResourceKey.Should().Be("file_key_1");
         fileRef.FileName.Should().Be("invoice.pdf");

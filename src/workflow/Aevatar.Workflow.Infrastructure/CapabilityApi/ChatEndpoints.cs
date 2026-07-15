@@ -125,7 +125,7 @@ public static class WorkflowCapabilityEndpoints
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -146,7 +146,7 @@ public static class WorkflowCapabilityEndpoints
                 return;
             }
 
-            fileIngressPort ??= serviceProvider?.GetService<IWorkflowFileIngressPort>();
+            fileIngressPort ??= serviceProvider?.GetService<IFileArtifactIngressPort>();
             // 06-20-observatory-run-state-feed (R2d): derive the run scope_id from the authenticated caller
             // claim so the materialized current-state doc is attributed to the caller's observatory (and the
             // body-supplied scopeId cannot spoof another scope). When auth is disabled or no single scope
@@ -225,7 +225,7 @@ public static class WorkflowCapabilityEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct = default,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
@@ -892,7 +892,7 @@ public static class WorkflowCapabilityEndpoints
         IWorkflowChatRunInteractionPort chatRunService,
         ILoggerFactory loggerFactory,
         CancellationToken ct = default,
-        IWorkflowFileIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null)
     {
         using var scope = ApiRequestScope.BeginWebSocket();
         if (!http.WebSockets.IsWebSocketRequest)
@@ -939,7 +939,7 @@ public static class WorkflowCapabilityEndpoints
 
             responseMessageType = ChatWebSocketProtocol.NormalizeMessageType(command.ResponseMessageType);
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(http.RequestServices, logger);
-            fileIngressPort ??= http.RequestServices.GetService<IWorkflowFileIngressPort>();
+            fileIngressPort ??= http.RequestServices.GetService<IFileArtifactIngressPort>();
             await ChatWebSocketRunCoordinator.ExecuteAsync(
                 socket,
                 command,

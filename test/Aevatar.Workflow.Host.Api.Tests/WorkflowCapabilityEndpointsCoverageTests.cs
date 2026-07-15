@@ -6,8 +6,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Connectors;
 using FluentAssertions;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -750,7 +750,7 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
                 Uri = "artifact://file-1",
                 MediaType = "image/png",
                 Name = "hello.png",
-                FileRef = new ApplicationWorkflowFileRef
+                FileRef = new ApplicationFileArtifactRef
                 {
                     ArtifactId = "artifact://file-1",
                     MediaType = "image/png",
@@ -795,11 +795,11 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         part.Uri.Should().Be("artifact-1");
         part.MediaType.Should().Be("image/png");
         part.Name.Should().Be("invoice.png");
-        part.FileRef.Should().BeEquivalentTo(new ApplicationWorkflowFileRef
+        part.FileRef.Should().BeEquivalentTo(new ApplicationFileArtifactRef
         {
             FileId = "file-1",
             ArtifactId = "artifact-1",
-            SourceKind = ApplicationWorkflowFileSourceKind.ConnectedServiceResource,
+            SourceKind = ApplicationFileArtifactSourceKind.ConnectedServiceResource,
             SourceMessageId = "om_1",
             SourceResourceKey = "image_key_1",
             FileName = "invoice.png",

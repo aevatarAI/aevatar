@@ -730,18 +730,9 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         WorkflowCompletedEvent terminalFailure,
         WorkflowExecutionKernelState state,
         StepCompletedEvent? terminalStep,
-        CancellationToken ct,
-        bool knownNoCompensableLedger = false)
+        CancellationToken ct)
     {
-        var result = knownNoCompensableLedger
-            ? new WorkflowCompensationTransitionResult(
-                WorkflowCompensationTransitionStatus.NoCompensableLedger,
-                string.Empty,
-                string.Empty,
-                string.Empty,
-                string.Empty,
-                string.Empty)
-            : await _stateHost.TryStartCompensationAsync(terminalFailure, terminalStep, ct);
+        var result = await _stateHost.TryStartCompensationAsync(terminalFailure, terminalStep, ct);
         switch (result.Status)
         {
             case WorkflowCompensationTransitionStatus.Started:
@@ -1272,8 +1263,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 terminalFailure,
                 state,
                 terminalStep: null,
-                ct,
-                knownNoCompensableLedger: true);
+                ct);
             return;
         }
 

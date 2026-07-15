@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
+using Aevatar.Audit.Core.Sanitization;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -48,6 +49,47 @@ public sealed class ProjectionAuditTrailAppenderTests
         document.CommittedActorType.Should().Be("CommittedActorType");
         document.CommittedEventTypeUrl.Should().Be("type.googleapis.com/aevatar.audit.TestEvent");
         document.CommittedStateVersion.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task AppendAsync_ShouldSanitizeBeforeHashingAndWriting()
+    {
+        var store = new RecordingAuditTrailArtifactStore();
+        var sanitizer = new AuditRecordSanitizer(new AuditRecordSanitizerOptions
+        {
+            MaxSummaryLength = 64,
+            MaxAnnotationValueLength = 64,
+        });
+        var appender = new ProjectionAuditTrailAppender([store], sanitizer);
+        var record = CreateRecord("audit-sanitized");
+        record.RequestSummary = "  request\n  summary  ";
+        record.Annotations.Add("note", "  safe\n  detail  ");
+        var originalHash = ComputeContentHash(record);
+
+        var result = await appender.AppendAsync(record);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Appended);
+        var document = store.Documents.Should().ContainSingle().Subject;
+        document.Record.RequestSummary.Should().Be("request summary");
+        document.Record.Annotations.Should().Contain("note", "safe detail");
+        document.ContentHash.Should().Be(ComputeContentHash(document.Record));
+        document.ContentHash.Should().NotBe(originalHash);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenSanitizerRejectsSecretCarrier_ShouldReturnConflictWithoutStoreAccess()
+    {
+        var store = new RecordingAuditTrailArtifactStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+        var record = CreateRecord("audit-secret");
+        record.Annotations.Add("authorization", "Bearer must-not-be-stored");
+
+        var result = await appender.AppendAsync(record);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Conflict);
+        result.Message.Should().Be("Audit record is invalid.");
+        store.ReadCount.Should().Be(0);
+        store.Documents.Should().BeEmpty();
     }
 
     [Fact]
@@ -158,9 +200,14 @@ public sealed class ProjectionAuditTrailAppenderTests
             OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00")),
             ScopeId = $"scope-{auditId}",
             AuditActorId = $"actor-{auditId}",
+            IdentityKeyId = "identity-key-1",
+            ActorKind = AuditActorKind.NyxidUser,
+            CredentialSource = AuditCredentialSource.BearerToken,
+            OperationKind = AuditOperationKind.Api,
             OperationName = "audit.operation",
             Outcome = AuditOutcome.Success,
             SensitivityLevel = AuditSensitivityLevel.Confidential,
+            CapturePlane = AuditCapturePlane.ProjectionArtifact,
             Target = new AuditTarget
             {
                 Kind = "workflow",

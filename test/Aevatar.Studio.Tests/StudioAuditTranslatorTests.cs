@@ -3,8 +3,14 @@ using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.CommittedFacts;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.ChatHistory;
+using Aevatar.GAgents.ConnectorCatalog;
+using Aevatar.GAgents.Registry;
+using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
+using Aevatar.GAgents.UserConfig;
+using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Projection.Audit;
 using Aevatar.Studio.Projection.DependencyInjection;
 using Aevatar.Studio.Projection.Orchestration;
@@ -46,6 +52,23 @@ public sealed class StudioAuditTranslatorTests
                 typeof(StudioTeamCreatedAuditTranslator),
                 typeof(StudioTeamUpdatedAuditTranslator),
                 typeof(StudioTeamArchivedAuditTranslator),
+                typeof(StudioMemberRenamedAuditTranslator),
+                typeof(StudioMemberBindingCompletedAuditTranslator),
+                typeof(StudioMemberBindingFailedAuditTranslator),
+                typeof(StudioMemberBindingRejectedAuditTranslator),
+                typeof(StudioTeamEntryMemberChangedAuditTranslator),
+                typeof(ActorRegisteredAuditTranslator),
+                typeof(ActorUnregisteredAuditTranslator),
+                typeof(ConnectorCatalogSavedAuditTranslator),
+                typeof(ConnectorDraftSavedAuditTranslator),
+                typeof(ConnectorDraftDeletedAuditTranslator),
+                typeof(RoleCatalogSavedAuditTranslator),
+                typeof(RoleDraftSavedAuditTranslator),
+                typeof(RoleDraftDeletedAuditTranslator),
+                typeof(UserConfigUpdatedAuditTranslator),
+                typeof(UserConfigGithubUsernameUpdatedAuditTranslator),
+                typeof(MemoryEntriesClearedAuditTranslator),
+                typeof(ConversationDeletedAuditTranslator),
             ]);
     }
 
@@ -219,6 +242,357 @@ public sealed class StudioAuditTranslatorTests
             "studio.team.archived",
             "studio_team",
             "team-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Restricted,
+                true,
+                EmptyAnnotations),
+        ];
+        yield return
+        [
+            new StudioMemberRenamedAuditTranslator(),
+            new StudioMemberRenamedEvent
+            {
+                DisplayName = "Renamed Member",
+                Description = "desc",
+            },
+            "studio.member.renamed",
+            "studio_member",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["display_name"] = "Renamed Member",
+                }),
+        ];
+        yield return
+        [
+            new StudioMemberBindingCompletedAuditTranslator(),
+            new StudioMemberBindingCompletedEvent
+            {
+                BindingRunId = "run-1",
+                PublishedServiceId = "svc-alpha",
+                RevisionId = "rev-1",
+                ImplementationKind = StudioMemberImplementationKind.Workflow,
+                ExpectedActorId = "actor-1",
+            },
+            "studio.member.binding.completed",
+            "studio_member",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["binding_run_id"] = "run-1",
+                    ["published_service_id"] = "svc-alpha",
+                    ["revision_id"] = "rev-1",
+                    ["implementation_kind"] = StudioMemberImplementationKind.Workflow.ToString(),
+                }),
+        ];
+        yield return
+        [
+            new StudioMemberBindingFailedAuditTranslator(),
+            new StudioMemberBindingFailedEvent
+            {
+                BindingRunId = "run-1",
+                Failure = new StudioMemberBindingFailure { Code = "ERR", Message = "boom" },
+            },
+            "studio.member.binding.failed",
+            "studio_member",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["binding_run_id"] = "run-1",
+                    ["failure_code"] = "ERR",
+                    ["failure_message"] = "boom",
+                }),
+        ];
+        yield return
+        [
+            new StudioMemberBindingRejectedAuditTranslator(),
+            new StudioMemberBindingRejectedEvent
+            {
+                BindingRunId = "run-1",
+                ScopeId = "scope-alpha",
+                MemberId = "m-alpha",
+                Failure = new StudioMemberBindingFailure { Code = "STALE", Message = "rejected" },
+            },
+            "studio.member.binding.rejected",
+            "studio_member",
+            "m-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["binding_run_id"] = "run-1",
+                    ["failure_code"] = "STALE",
+                    ["failure_message"] = "rejected",
+                }),
+        ];
+        yield return
+        [
+            new StudioTeamEntryMemberChangedAuditTranslator(),
+            new StudioTeamEntryMemberChangedEvent
+            {
+                TeamId = "team-alpha",
+                ScopeId = "scope-alpha",
+                EntryMemberId = "m-alpha",
+            },
+            "studio.team.entry-member.changed",
+            "studio_team",
+            "team-alpha",
+            new ExpectedAuditFields(
+                "scope-alpha",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["entry_member_id"] = "m-alpha",
+                }),
+        ];
+        yield return
+        [
+            new ActorRegisteredAuditTranslator(),
+            new ActorRegisteredEvent
+            {
+                AgentKind = "chat-agent",
+                ActorId = "actor-1",
+            },
+            "registry.actor.registered",
+            "registry_actor",
+            "actor-1",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["agent_kind"] = "chat-agent",
+                }),
+        ];
+        yield return
+        [
+            new ActorUnregisteredAuditTranslator(),
+            new ActorUnregisteredEvent
+            {
+                AgentKind = "chat-agent",
+                ActorId = "actor-1",
+            },
+            "registry.actor.unregistered",
+            "registry_actor",
+            "actor-1",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Restricted,
+                true,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["agent_kind"] = "chat-agent",
+                }),
+        ];
+        yield return
+        [
+            new ConnectorCatalogSavedAuditTranslator(),
+            new ConnectorCatalogSavedEvent
+            {
+                Connectors =
+                {
+                    new ConnectorDefinitionEntry { Name = "gh", Type = "http" },
+                    new ConnectorDefinitionEntry { Name = "slack", Type = "mcp" },
+                },
+            },
+            "connector.catalog.saved",
+            "connector_catalog",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["connector_count"] = "2",
+                    ["connector_names"] = "gh,slack",
+                    ["connector_types"] = "http,mcp",
+                }),
+        ];
+        yield return
+        [
+            new ConnectorDraftSavedAuditTranslator(),
+            new ConnectorDraftSavedEvent
+            {
+                Draft = new ConnectorDefinitionEntry { Name = "gh", Type = "http" },
+            },
+            "connector.draft.saved",
+            "connector_catalog",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["connector_name"] = "gh",
+                    ["connector_type"] = "http",
+                }),
+        ];
+        yield return
+        [
+            new ConnectorDraftDeletedAuditTranslator(),
+            new ConnectorDraftDeletedEvent(),
+            "connector.draft.deleted",
+            "connector_catalog",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Restricted,
+                true,
+                EmptyAnnotations),
+        ];
+        yield return
+        [
+            new RoleCatalogSavedAuditTranslator(),
+            new RoleCatalogSavedEvent
+            {
+                Roles =
+                {
+                    new RoleDefinitionEntry { Id = "r1", Name = "Writer", Model = "gpt" },
+                    new RoleDefinitionEntry { Id = "r2", Name = "Editor", Model = "claude" },
+                },
+            },
+            "role.catalog.saved",
+            "role_catalog",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["role_count"] = "2",
+                    ["role_ids"] = "r1,r2",
+                    ["role_names"] = "Writer,Editor",
+                    ["role_models"] = "gpt,claude",
+                }),
+        ];
+        yield return
+        [
+            new RoleDraftSavedAuditTranslator(),
+            new RoleDraftSavedEvent
+            {
+                Draft = new RoleDefinitionEntry { Id = "r1", Name = "Writer", Model = "gpt" },
+            },
+            "role.draft.saved",
+            "role_catalog",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["role_id"] = "r1",
+                    ["role_name"] = "Writer",
+                    ["role_model"] = "gpt",
+                }),
+        ];
+        yield return
+        [
+            new RoleDraftDeletedAuditTranslator(),
+            new RoleDraftDeletedEvent(),
+            "role.draft.deleted",
+            "role_catalog",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Restricted,
+                true,
+                EmptyAnnotations),
+        ];
+        yield return
+        [
+            new UserConfigUpdatedAuditTranslator(),
+            new UserConfigUpdatedEvent
+            {
+                RuntimeMode = "remote",
+                LocalRuntimeBaseUrl = "",
+                RemoteRuntimeBaseUrl = "https://runtime.example",
+                DefaultModel = "gpt",
+                PreferredLlmRoute = "route-a",
+                MaxToolRounds = 4,
+                GithubUsername = "octocat",
+            },
+            "user-config.updated",
+            "user_config",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["runtime_mode"] = "remote",
+                    ["has_local_runtime_base_url"] = "false",
+                    ["has_remote_runtime_base_url"] = "true",
+                    ["default_model"] = "gpt",
+                    ["preferred_llm_route"] = "route-a",
+                    ["max_tool_rounds"] = "4",
+                    ["has_github_username"] = "true",
+                }),
+        ];
+        yield return
+        [
+            new UserConfigGithubUsernameUpdatedAuditTranslator(),
+            new UserConfigGithubUsernameUpdatedEvent
+            {
+                GithubUsername = "octocat",
+            },
+            "user-config.github-username.updated",
+            "user_config",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Confidential,
+                false,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["github_username"] = "octocat",
+                }),
+        ];
+        yield return
+        [
+            new MemoryEntriesClearedAuditTranslator(),
+            new MemoryEntriesClearedEvent(),
+            "user-memory.cleared",
+            "user_memory",
+            "studio-member-actor",
+            new ExpectedAuditFields(
+                "",
+                AuditSensitivityLevel.Restricted,
+                true,
+                EmptyAnnotations),
+        ];
+        yield return
+        [
+            new ConversationDeletedAuditTranslator(),
+            new ConversationDeletedEvent
+            {
+                ConversationId = "conv-1",
+                ScopeId = "scope-alpha",
+            },
+            "conversation.deleted",
+            "chat_conversation",
+            "conv-1",
             new ExpectedAuditFields(
                 "scope-alpha",
                 AuditSensitivityLevel.Restricted,

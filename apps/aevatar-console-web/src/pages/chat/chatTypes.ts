@@ -23,6 +23,33 @@ export type ChatMessage = {
   toolCalls?: ToolCallInfo[];
 };
 
+export type ChatUsageSummary = {
+  completionTokens?: number;
+  cost?: number;
+  latencyMs?: number;
+  model?: string;
+  promptTokens?: number;
+  totalTokens?: number;
+};
+
+export type ChatStudioTarget = {
+  memberId?: string;
+  runId?: string;
+  scopeId?: string;
+  studioUrl?: string;
+  teamId?: string;
+  workflowId?: string;
+};
+
+export type LocalChatStatus =
+  | "draft"
+  | "streaming"
+  | "needs_confirmation"
+  | "creating"
+  | "completed_text"
+  | "completed_with_studio_target"
+  | "error";
+
 export type StepInfo = RuntimeStepInfo;
 
 export type ToolCallInfo = RuntimeToolCallInfo;
@@ -76,6 +103,10 @@ export type ConversationMeta = {
   title: string;
   serviceId: string;
   serviceKind: string;
+  scopeId?: string;
+  status?: LocalChatStatus;
+  target?: ChatStudioTarget;
+  usage?: ChatUsageSummary;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -94,6 +125,18 @@ export type StoredChatMessage = {
   steps?: StepInfo[];
   thinking?: string;
   toolCalls?: ToolCallInfo[];
+};
+
+export type LocalChatConversation = {
+  createdAt: string;
+  id: string;
+  messages: StoredChatMessage[];
+  scopeId: string;
+  status: LocalChatStatus;
+  target?: ChatStudioTarget;
+  title: string;
+  updatedAt: string;
+  usage?: ChatUsageSummary;
 };
 
 export type ChatSessionState = {

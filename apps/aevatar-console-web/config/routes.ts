@@ -27,6 +27,13 @@ export default [
     hideInMenu: true,
   },
   {
+    path: "/chat",
+    name: "Chat",
+    component: "./chat",
+    menuGroupKey: "chat",
+    hideInMenu: false,
+  },
+  {
     path: "/scopes",
     name: "My Teams",
     component: "./teams",
@@ -116,11 +123,6 @@ export default [
     hideInMenu: true,
   },
   {
-    path: "/chat",
-    component: "./chat",
-    hideInMenu: true,
-  },
-  {
     path: "/scopes/invoke",
     component: "./scopes/invoke",
     hideInMenu: true,
@@ -135,6 +137,11 @@ export default [
     path: "/runtime/mission-control",
     name: "Mission Control",
     component: "./MissionControl",
+    hideInMenu: true,
+  },
+  {
+    path: "/runtime/mission-wall",
+    component: "./MissionWall",
     hideInMenu: true,
   },
   {
@@ -257,6 +264,11 @@ export default [
   {
     path: "/mission-control",
     redirect: "/runtime/mission-control",
+    hideInMenu: true,
+  },
+  {
+    path: "/mission-wall",
+    redirect: "/runtime/mission-wall",
     hideInMenu: true,
   },
   {

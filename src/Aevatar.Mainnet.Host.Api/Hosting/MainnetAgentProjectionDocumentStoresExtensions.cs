@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Reflection;
@@ -102,6 +103,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<UserAgentCatalogDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<SkillRunnerExecutionDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogNyxCredentialDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<UserAgentApiKeyRevocationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<HealthProbeTargetDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<WorkflowExternalApprovalContinuationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<StreamingProxyChatSessionTerminalSnapshot>(services, configuration, static document => document.Id);
@@ -121,6 +123,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddInMemoryStore<UserAgentCatalogDocument>(services, static document => document.Id);
         TryAddInMemoryStore<SkillRunnerExecutionDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogNyxCredentialDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<UserAgentApiKeyRevocationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<HealthProbeTargetDocument>(services, static document => document.Id);
         TryAddInMemoryStore<WorkflowExternalApprovalContinuationDocument>(services, static document => document.Id);
         TryAddInMemoryStore(
@@ -153,6 +156,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<SkillRunnerExecutionDocument>(services, "skill-runner-execution", "SkillRunnerGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogNyxCredentialDocument>(services, "user-agent-catalog-nyx-credential", "UserAgentCatalogGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<UserAgentApiKeyRevocationDocument>(services, "user-agent-api-key-revocation", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<HealthProbeTargetDocument>(services, "health-probe-target", "HealthProbeGAgent", engineLabel, shape);
         // WorkflowExternalApprovalContinuationDocument is inventoried at the workflow store-registration
         // site (it owns that read-model); registering it here too would double-count it in the inventory.
@@ -361,15 +365,15 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             await EnsureSuccessAsync(response, "audit artifact query", cancellationToken);
             var payload = await response.Content.ReadAsStringAsync(cancellationToken);
             using var jsonDocument = JsonDocument.Parse(payload);
+            var watermark = ParseAuditQueryWatermark(jsonDocument.RootElement);
             if (!jsonDocument.RootElement.TryGetProperty("hits", out var hitsNode) ||
                 !hitsNode.TryGetProperty("hits", out var hitItems))
             {
-                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, null);
+                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, watermark);
             }
 
             var records = new List<AuditRecord>();
             string? nextCursor = null;
-            DateTimeOffset? watermark = null;
             foreach (var hit in hitItems.EnumerateArray())
             {
                 if (!hit.TryGetProperty("_source", out var sourceNode))
@@ -380,10 +384,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                     continue;
 
                 records.Add(record.Clone());
-                var occurredAt = record.OccurredAt?.ToDateTimeOffset();
-                if (occurredAt.HasValue && (!watermark.HasValue || occurredAt.Value > watermark.Value))
-                    watermark = occurredAt.Value;
-
                 nextCursor = BuildSearchAfterCursor(hit);
             }
 
@@ -533,7 +533,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                     {
                         ["artifact.occurred_at"] = new Dictionary<string, object?>
                         {
-                            ["order"] = "asc",
+                            ["order"] = "desc",
                             ["unmapped_type"] = "date",
                         },
                     },
@@ -543,6 +543,16 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                         {
                             ["order"] = "asc",
                             ["unmapped_type"] = "keyword",
+                        },
+                    },
+                },
+                ["aggs"] = new Dictionary<string, object?>
+                {
+                    ["query_watermark"] = new Dictionary<string, object?>
+                    {
+                        ["max"] = new Dictionary<string, object?>
+                        {
+                            ["field"] = "artifact.occurred_at",
                         },
                     },
                 },
@@ -716,6 +726,25 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 return null;
 
             return Convert.ToBase64String(Encoding.UTF8.GetBytes(sortNode.GetRawText()));
+        }
+
+        private static DateTimeOffset? ParseAuditQueryWatermark(JsonElement root)
+        {
+            if (!root.TryGetProperty("aggregations", out var aggregations) ||
+                !aggregations.TryGetProperty("query_watermark", out var watermark) ||
+                !watermark.TryGetProperty("value_as_string", out var value) ||
+                value.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            return DateTimeOffset.TryParse(
+                value.GetString(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var parsed)
+                ? parsed
+                : null;
         }
 
         private static AuditTrailArtifactWriteResult EvaluateExisting(

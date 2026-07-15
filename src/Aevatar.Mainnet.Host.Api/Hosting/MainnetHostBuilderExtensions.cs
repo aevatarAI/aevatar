@@ -27,8 +27,8 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
-using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -132,6 +132,11 @@ public static class MainnetHostBuilderExtensions
             options.EnableScriptingCapability = false;
             options.ConfigureAIFeatures = ConfigureMainnetAIFeatures;
         });
+        // Hosted services start in registration order. Register the provider-local index
+        // reconcile before capability modules can add startup readers so schema drift is
+        // migrated before any read-model query executes.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, ElasticsearchProjectionIndexReconcileHostedService>());
         builder.AddGAgentServiceCapabilityBundle();
         builder.AddStudioCapability();
         builder.Services.AddAuditTrailCore(builder.Configuration);
@@ -151,6 +156,26 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
+        builder.Services.Configure<NyxIdBrokerOptions>(options =>
+        {
+            var configuredRoute = builder.Configuration["Aevatar:NyxId:DefaultRoute"];
+            options.RequiredLlmServiceSlug = string.IsNullOrWhiteSpace(configuredRoute)
+                ? LlmDefaults.NyxIdRoute
+                : configuredRoute.Trim();
+            var configuredOrnnSlug = builder.Configuration["Aevatar:Ornn:NyxIdSlug"];
+            var ornnSlug = string.IsNullOrWhiteSpace(configuredOrnnSlug)
+                ? OrnnOptions.DefaultNyxIdSlug
+                : configuredOrnnSlug.Trim();
+            options.AdditionalRequiredServiceSlugs = builder.Configuration
+                .GetSection("Aevatar:NyxId:AdditionalRequiredServiceSlugs")
+                .GetChildren()
+                .Select(static child => child.Value)
+                .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
+                .Select(static serviceSlug => serviceSlug!.Trim())
+                .Append(ornnSlug)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        });
         builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
         {
             // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.
@@ -184,11 +209,19 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<IResponsesCallerScopeResolver, NyxIdResponsesCallerScopeResolver>();
         builder.Services.Configure<ResponsesNyxIdIdentityAssertionOptions>(
             builder.Configuration.GetSection(ResponsesNyxIdIdentityAssertionOptions.SectionName));
-        // Single-use jti replay guard for NyxID identity assertions. In-memory + node-local by
-        // default (bounded by each assertion's short lifetime); swap for a distributed backing
-        // (e.g. Garnet) to make replay detection cluster-wide without touching callers.
-        builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard>(
-            sp => new InMemoryIdentityAssertionReplayGuard(sp.GetRequiredService<TimeProvider>()));
+        // Mainnet's single-use assertion guarantee must survive load balancing across replicas.
+        // Development keeps the deterministic in-memory implementation; every other environment
+        // requires the shared Garnet connection composed by the distributed runtime.
+        if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+        {
+            builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard>(
+                sp => new InMemoryIdentityAssertionReplayGuard(sp.GetRequiredService<TimeProvider>()));
+        }
+        else
+        {
+            builder.Services.TryAddSingleton<IIdentityAssertionSingleUseStore, GarnetIdentityAssertionSingleUseStore>();
+            builder.Services.TryAddSingleton<IIdentityAssertionReplayGuard, DistributedIdentityAssertionReplayGuard>();
+        }
         builder.Services.TryAddSingleton<NyxIdIdentityAssertionValidator>();
         builder.Services.TryAddSingleton<IResponsesChatRouteDecisionPort, ResponsesChatRouteDecisionPort>();
         // Default model for direct OpenAI-compatible ingress (/v1/responses, /v1/messages,
@@ -233,7 +266,6 @@ public static class MainnetHostBuilderExtensions
         // neither side has to depend on Studio.Application — the host is the natural composition
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
-        builder.Services.AddLarkAgentAuthoring();
         builder.Services.AddSkillBackedHumanInteractionDelivery();
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
@@ -361,8 +393,6 @@ public static class MainnetHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.UseDefaultFiles();
-        app.UseStaticFiles();
         app.UseAevatarDefaultHost();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
@@ -381,6 +411,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapSkillRunnerExternalTriggerEndpoints();
+        app.MapScheduledAgentCredentialRepairAdminEndpoints();
         app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 

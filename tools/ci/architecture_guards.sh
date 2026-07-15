@@ -584,7 +584,7 @@ python3 - <<'PY'
 from pathlib import Path
 import sys
 
-path = Path("agents/Aevatar.GAgents.Authoring.Lark/AgentBuilderTool.cs")
+path = Path("agents/Aevatar.GAgents.Scheduled/Authoring/AgentBuilderTool.cs")
 text = path.read_text()
 methods = [
     "RunAgentAsync",

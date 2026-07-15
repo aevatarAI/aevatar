@@ -66,7 +66,8 @@ public class WorkflowExecutionProjectionRegistrationTests
         continuationDispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
         currentStateMaterializers.Should().ContainSingle();
-        artifactMaterializers.Should().HaveCount(2);
+        // Continuation projector, insight report projector, and the committed-fact audit materializer.
+        artifactMaterializers.Should().HaveCount(3);
         provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowExternalApprovalContinuationProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();

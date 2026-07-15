@@ -15,6 +15,14 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 {
+    private static Aevatar.Foundation.Abstractions.Credentials.SecretReference TestDeliverySecretReference(string registrationId) =>
+        new()
+        {
+            Ref = $"sec_delivery_{registrationId}",
+            Purpose = Aevatar.Foundation.Abstractions.Credentials.CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-x",
+        };
+
     private ChannelBotRegistrationGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
 
@@ -81,7 +89,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             NyxChannelBotId = "bot-1",
             NyxAgentApiKeyId = "key-1",
             NyxConversationRouteId = "route-1",
-            NyxReplyCredentialRef = "secrets://channel/nyxid/lark/reg-1/reply-api-key",
+            WorkflowResultDeliveryCredential = TestDeliverySecretReference("reg-1"),
         });
 
         _agent.State.Registrations.Should().ContainSingle();
@@ -94,8 +102,29 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.NyxChannelBotId.Should().Be("bot-1");
         entry.NyxAgentApiKeyId.Should().Be("key-1");
         entry.NyxConversationRouteId.Should().Be("route-1");
-        entry.NyxReplyCredentialRef.Should().Be("secrets://channel/nyxid/lark/reg-1/reply-api-key");
+        entry.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("reg-1"));
         entry.Tombstoned.Should().BeFalse();
+        entry.DefaultSkillName.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRegister_PersistsCanonicalDefaultSkillName()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            ScopeId = "scope-1",
+            RequestedId = "reg-bound",
+            NyxChannelBotId = "bot-1",
+            NyxAgentApiKeyId = "key-1",
+            // Leading trigger token and mixed case must normalize to the parser's
+            // canonical skill-name form so inbound routing compares 1:1.
+            DefaultSkillName = " /WhatsApp-Reply-Draft ",
+        });
+
+        _agent.State.Registrations.Single(r => r.Id == "reg-bound")
+            .DefaultSkillName.Should().Be("whatsapp-reply-draft");
     }
 
     [Fact]

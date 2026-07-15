@@ -7,6 +7,8 @@
     <RootNamespace>Aevatar.GAgentService.Governance.Projection</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Abstractions\Aevatar.GAgentService.Governance.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.GAgentService.Governance.Core\Aevatar.GAgentService.Governance.Core.csproj" />

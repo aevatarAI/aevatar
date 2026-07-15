@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -23,8 +24,8 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Primitives;
-using ApplicationWorkflowFileRef = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef;
-using ApplicationWorkflowFileSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -378,7 +379,7 @@ public sealed class ChatEndpointsInternalTests
         service.DispatchCalls.Should().Be(1);
         ingressPort.Requests.Should().ContainSingle();
         ingressPort.Requests[0].Content.ToArray().Should().Equal(Encoding.UTF8.GetBytes("hello"));
-        ingressPort.Requests[0].SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.ChatInput);
+        ingressPort.Requests[0].SourceKind.Should().Be(ApplicationFileArtifactSourceKind.ChatInput);
         ingressPort.Requests[0].FileName.Should().Be("hello.png");
         ingressPort.Requests[0].MediaType.Should().Be("image/png");
         service.LastCommand.Should().NotBeNull();
@@ -558,6 +559,11 @@ public sealed class ChatEndpointsInternalTests
         };
         var http = CreateHttpContext();
         http.Request.Headers.Authorization = "Bearer trusted-token";
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("uid", "nyx-user-from-uid"),
+            new Claim("sub", "nyx-user-from-sub"),
+        ], "test"));
 
         await WorkflowCapabilityEndpoints.HandleChat(
             http,
@@ -574,6 +580,12 @@ public sealed class ChatEndpointsInternalTests
 
         capturedCommand.Should().NotBeNull();
         capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
+        capturedCommand.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                "nyxid",
+                string.Empty,
+                "nyx-user-from-uid",
+                "proxy"));
         capturedCommand.Metadata.Should().NotContainKey("connector.http.authorization");
     }
 
@@ -598,7 +610,7 @@ public sealed class ChatEndpointsInternalTests
             .AddOptions()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
             .AddSingleton<IHostEnvironment>(new StubHostEnvironment())
-            .AddSingleton<IWorkflowFileIngressPort>(ingressPort)
+            .AddSingleton<IFileArtifactIngressPort>(ingressPort)
             .BuildServiceProvider();
         var input = JsonSerializer.Deserialize<ChatInput>(
             """
@@ -672,7 +684,7 @@ public sealed class ChatEndpointsInternalTests
             CancellationToken.None);
 
         ingressPort.Requests.Should().ContainSingle();
-        ingressPort.Requests[0].SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.FormUpload);
+        ingressPort.Requests[0].SourceKind.Should().Be(ApplicationFileArtifactSourceKind.FormUpload);
         ingressPort.Requests[0].OwnerScopeId.Should().Be("scope-1");
         capturedCommand.Should().NotBeNull();
         capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
@@ -680,7 +692,7 @@ public sealed class ChatEndpointsInternalTests
         var part = capturedCommand.InputParts.Should().ContainSingle().Which;
         part.DataBase64.Should().BeNull();
         part.FileRef.Should().NotBeNull();
-        part.FileRef!.SourceKind.Should().Be(ApplicationWorkflowFileSourceKind.FormUpload);
+        part.FileRef!.SourceKind.Should().Be(ApplicationFileArtifactSourceKind.FormUpload);
         part.FileRef.ArtifactId.Should().Be("workflow-file://file-1");
     }
 
@@ -1995,17 +2007,17 @@ public sealed class ChatEndpointsInternalTests
         }
     }
 
-    private sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    private sealed class RecordingWorkflowFileIngressPort : IFileArtifactIngressPort
     {
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new ApplicationWorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new ApplicationFileArtifactRef
             {
                 FileId = "file-1",
                 ArtifactId = "workflow-file://file-1",

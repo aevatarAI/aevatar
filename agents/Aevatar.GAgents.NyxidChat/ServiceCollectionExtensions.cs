@@ -76,7 +76,7 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
                 sp.GetService<TimeProvider>(),
                 sp.GetService<ILarkNyxClient>(),
-                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>(),
+                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
                 sp.GetService<ILarkOutboundClientFactory>()));
         // ─── Conversation turn-runner override + reply generator ───
         // Lets the turn runner resolve the bot's own Lark open_id on demand so its group-chat
@@ -131,6 +131,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<INyxIdUserLlmPreferencesStore>(),
                 sp.GetService<IUserMemoryStore>(),
                 larkClient: sp.GetService<ILarkNyxClient>(),
+                fileIngressPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
+                fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactReadPort>(),
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
@@ -139,6 +141,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
         services.TryAddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort, WorkflowRunBackgroundDeliveryRegistrationPort>();
+        services.TryAddSingleton<IWorkflowResultDeliveryCredentialResolver, SecretVaultWorkflowResultDeliveryCredentialResolver>();
         // ─── LLM-call middleware that injects channel context into LLM requests ───
         // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware
         // (AI.Abstractions); keeping it in NyxidChat lets Channel.Runtime stay free of

@@ -1,5 +1,6 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
 using Google.Protobuf.WellKnownTypes;
@@ -24,6 +25,37 @@ public sealed class InMemoryAuditTrailStoreTests
         receipt.AuditActorId.ShouldBe("actor-a");
         page.Records.Single().ScopeId.ShouldBe("scope-a");
         page.Records.Single().ShouldNotBeSameAs(record);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenSameAuditAndContentExists_ShouldReturnDuplicateWithoutAddingRecord()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var record = CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success);
+
+        var first = await store.AppendAsync(record);
+        var second = await store.AppendAsync(record.Clone());
+        var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
+
+        first.Status.ShouldBe(AuditTrailAppendStatus.Appended);
+        second.Status.ShouldBe(AuditTrailAppendStatus.Duplicate);
+        page.Records.Select(static item => item.AuditId).ShouldBe(["audit-1"]);
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenSameAuditAndDifferentContentExists_ShouldReturnConflictWithoutReplacingRecord()
+    {
+        var store = new InMemoryAuditTrailStore();
+        var original = CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success);
+        var conflicting = original.Clone();
+        conflicting.RequestSummary = "different request";
+
+        await store.AppendAsync(original);
+        var result = await store.AppendAsync(conflicting);
+        var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
+
+        result.Status.ShouldBe(AuditTrailAppendStatus.Conflict);
+        page.Records.ShouldHaveSingleItem().RequestSummary.ShouldBe("request summary");
     }
 
     [Fact]
@@ -106,23 +138,26 @@ public sealed class InMemoryAuditTrailStoreTests
     }
 
     [Fact]
-    public async Task QueryAsync_PaginatesInOccurrenceOrder()
+    public async Task QueryAsync_PaginatesNewestFirstAndKeepsMatchingWatermark()
     {
         var store = new InMemoryAuditTrailStore();
         await store.AppendManyAsync(
         [
             CreateRecord("audit-3", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 3),
             CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 1),
-            CreateRecord("audit-2", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 2)
+            CreateRecord("audit-2", "scope-a", "actor-a", "api.call", AuditOutcome.Success, seconds: 2),
+            CreateRecord("audit-other-scope", "scope-b", "actor-a", "api.call", AuditOutcome.Success, seconds: 10)
         ]);
 
         var first = await store.QueryAsync(new AuditTrailQuery { ScopeId = "scope-a", Take = 2 });
         var second = await store.QueryAsync(new AuditTrailQuery { ScopeId = "scope-a", Cursor = first.NextCursor, Take = 2 });
 
-        first.Records.Select(static record => record.AuditId).ShouldBe(["audit-1", "audit-2"]);
+        first.Records.Select(static record => record.AuditId).ShouldBe(["audit-3", "audit-2"]);
         first.NextCursor.ShouldNotBeNull();
-        second.Records.Select(static record => record.AuditId).ShouldBe(["audit-3"]);
+        first.Watermark.ShouldBe(DateTimeOffset.Parse("2026-01-02T03:04:08Z"));
+        second.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
         second.NextCursor.ShouldBeNull();
+        second.Watermark.ShouldBe(first.Watermark);
     }
 
     [Fact]

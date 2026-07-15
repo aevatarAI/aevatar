@@ -65,6 +65,11 @@ public sealed class ScheduledDispatchCurrentStateProjector
             DisplayName = state.DisplayName ?? string.Empty,
             TargetKind = ToApplicationTargetKind(target.Kind).ToString(),
             ScheduleKind = ToApplicationScheduleKind(state.ScheduleKind).ToString(),
+            CredentialRequirementTargetKind = ToApplicationCredentialRequirementTargetKind(
+                target,
+                state.ScheduleKind).ToString(),
+            CredentialSourceKind = ToApplicationCredentialSourceKind(target.ServiceInvocation?.Auth).ToString(),
+            ScheduleMode = ToApplicationScheduleMode(state.ScheduleMode).ToString(),
             PayloadTypeUrl = state.PayloadTypeUrl ?? string.Empty,
             CronExpression = state.CronExpression ?? string.Empty,
             Timezone = state.Timezone ?? string.Empty,
@@ -82,6 +87,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             Prompt = ExtractPrompt(target.ServiceInvocation?.Payload, state.TriggerEnvelope),
             TargetActorId = state.TargetActorId ?? string.Empty,
             Deleted = state.Deleted,
+            Completed = state.Completed,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -93,6 +99,8 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.LastFireAt = state.LastFireAt;
         document.LastOverdueFireAt = state.LastOverdueFireAt;
         document.DeletedAt = state.DeletedAt;
+        document.OneShotFireAt = state.OneShotFireAt;
+        document.CompletedAt = state.CompletedAt;
         document.Headers = state.Headers
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
@@ -169,6 +177,100 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
+
+    private static ScheduledDispatchCredentialRequirementTargetKind ToApplicationCredentialRequirementTargetKind(
+        ScheduledDispatchTargetState target,
+        ScheduledDispatchScheduleKindState scheduleKind)
+    {
+        var configuredKind = target.CredentialRequirementTargetKind switch
+        {
+            ScheduledDispatchCredentialRequirementTargetKindState.Envelope =>
+                ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            ScheduledDispatchCredentialRequirementTargetKindState.StaticService =>
+                ScheduledDispatchCredentialRequirementTargetKind.StaticService,
+            ScheduledDispatchCredentialRequirementTargetKindState.ScriptingService =>
+                ScheduledDispatchCredentialRequirementTargetKind.ScriptingService,
+            ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService =>
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialRequirementTargetKindState.Connector =>
+                ScheduledDispatchCredentialRequirementTargetKind.Connector,
+            _ => ScheduledDispatchCredentialRequirementTargetKind.Unspecified,
+        };
+        if (configuredKind != ScheduledDispatchCredentialRequirementTargetKind.Unspecified)
+            return configuredKind;
+
+        if (target.Kind == ScheduledDispatchTargetKindState.Envelope)
+            return ScheduledDispatchCredentialRequirementTargetKind.Envelope;
+
+        return target.Kind == ScheduledDispatchTargetKindState.ServiceInvocation &&
+               scheduleKind == ScheduledDispatchScheduleKindState.Workflow
+            ? ScheduledDispatchCredentialRequirementTargetKind.WorkflowService
+            : ScheduledDispatchCredentialRequirementTargetKind.Unspecified;
+    }
+
+    private static ScheduledDispatchCredentialSourceKind ToApplicationCredentialSourceKind(
+        ScheduledServiceInvocationAuthState? auth)
+    {
+        if (auth == null)
+            return ScheduledDispatchCredentialSourceKind.None;
+        if (auth.LegacyDurableSenderBearerBlocked ||
+            !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken))
+        {
+            return ScheduledDispatchCredentialSourceKind.LegacyDurableSenderBearer;
+        }
+
+        var sourceCount = 0;
+        var sourceKind = ScheduledDispatchCredentialSourceKind.None;
+        AddCredentialSourceKind(ResolveOneofCredentialSourceKind(auth), ref sourceCount, ref sourceKind);
+        if (auth.SenderNyxId != null)
+        {
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.SenderNyxId, ref sourceCount, ref sourceKind);
+        }
+
+        if (auth.ScopeOwnerNyxId != null)
+        {
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId, ref sourceCount, ref sourceKind);
+        }
+
+        return sourceCount switch
+        {
+            0 => ScheduledDispatchCredentialSourceKind.None,
+            1 => sourceKind,
+            _ => ScheduledDispatchCredentialSourceKind.Multiple,
+        };
+    }
+
+    private static ScheduledDispatchCredentialSourceKind ResolveOneofCredentialSourceKind(
+        ScheduledServiceInvocationAuthState auth) =>
+        auth.SourceCase switch
+        {
+            ScheduledServiceInvocationAuthState.SourceOneofCase.NyxId =>
+                auth.NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
+                    ? ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId
+                    : ScheduledDispatchCredentialSourceKind.SenderNyxId,
+            ScheduledServiceInvocationAuthState.SourceOneofCase.Durable =>
+                ScheduledDispatchCredentialSourceKind.DurableCredentialReference,
+            ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey =>
+                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+            _ => ScheduledDispatchCredentialSourceKind.None,
+        };
+
+    private static void AddCredentialSourceKind(
+        ScheduledDispatchCredentialSourceKind candidate,
+        ref int sourceCount,
+        ref ScheduledDispatchCredentialSourceKind sourceKind)
+    {
+        if (candidate == ScheduledDispatchCredentialSourceKind.None)
+            return;
+
+        sourceCount++;
+        sourceKind = candidate;
+    }
+
+    private static ScheduledDispatchScheduleMode ToApplicationScheduleMode(ScheduledDispatchScheduleModeState stateMode) =>
+        stateMode == ScheduledDispatchScheduleModeState.OneShotAtUtc
+            ? ScheduledDispatchScheduleMode.OneShotAtUtc
+            : ScheduledDispatchScheduleMode.RecurringCron;
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
         timestamp?.Seconds ?? 0;

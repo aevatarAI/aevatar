@@ -71,6 +71,15 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 "Step dispatch terminal failure must enter compensation decision path"
             },
             {
+                "dispatch failure fabricates an empty run ledger",
+                sources => sources.ReplaceInMethod(
+                    KernelFile,
+                    "PublishStepDispatchTerminalFailureAsync",
+                    "terminalStep: null,\n                ct);",
+                    "terminalStep: null,\n                ct,\n                knownNoCompensableLedger: true);"),
+                "Step dispatch failure must query the run-level compensation ledger"
+            },
+            {
                 "executor exception publishes no failed completion",
                 sources => sources.ReplaceInMethod(
                     BridgeFile,
@@ -168,13 +177,13 @@ public sealed class WorkflowRuntimeTerminalFailureTests
                 "Step dispatch terminal failure must publish sanitized step_dispatch_failed WorkflowCompletedEvent.");
         }
 
-        if (!RuntimeFailureSyntaxQueries.HasArgumentNameWithLiteral(
+        if (RuntimeFailureSyntaxQueries.HasArgumentNameWithLiteral(
                 publishDispatchFailure,
                 "knownNoCompensableLedger",
                 "true"))
         {
             violations.Add(
-                "Step dispatch failure before executor receipt must explicitly declare knownNoCompensableLedger.");
+                "Step dispatch failure must query the run-level compensation ledger instead of inferring it from the current step.");
         }
 
         var bridgeHandle = index.GetMethod(BridgeFile, "HandleAsync");

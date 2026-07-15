@@ -66,7 +66,7 @@ internal sealed class NyxIdIdentityAssertionValidator
         try
         {
             var keys = await GetKeysAsync(forceRefresh: false, ct);
-            var initial = ValidateCore(identityToken.Trim(), keys);
+            var initial = await ValidateCoreAsync(identityToken.Trim(), keys, ct);
             if (initial.Succeeded)
                 return initial;
 
@@ -74,7 +74,7 @@ internal sealed class NyxIdIdentityAssertionValidator
                 return initial;
 
             var refreshed = await RefreshKeysAfterKidMissAsync(ct);
-            return ValidateCore(identityToken.Trim(), refreshed);
+            return await ValidateCoreAsync(identityToken.Trim(), refreshed, ct);
         }
         catch (OperationCanceledException)
         {
@@ -87,9 +87,10 @@ internal sealed class NyxIdIdentityAssertionValidator
         }
     }
 
-    private NyxIdIdentityAssertionValidationResult ValidateCore(
+    private async Task<NyxIdIdentityAssertionValidationResult> ValidateCoreAsync(
         string identityToken,
-        NyxIdJwksCacheEntry keys)
+        NyxIdJwksCacheEntry keys,
+        CancellationToken cancellationToken)
     {
         var handler = new JwtSecurityTokenHandler
         {
@@ -141,7 +142,7 @@ internal sealed class NyxIdIdentityAssertionValidator
             // JWT ValidTo is UTC; force the kind so DateTimeOffset never throws on Unspecified.
             var expiresUtc = new DateTimeOffset(
                 DateTime.SpecifyKind(validatedToken.ValidTo, DateTimeKind.Utc));
-            if (!_replayGuard.TryConsume(jti, expiresUtc))
+            if (!await _replayGuard.TryConsumeAsync(jti, expiresUtc, cancellationToken))
             {
                 return Fail(
                     "identity_assertion_replayed",

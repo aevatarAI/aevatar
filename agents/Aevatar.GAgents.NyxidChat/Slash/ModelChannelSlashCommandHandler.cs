@@ -106,12 +106,17 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         }
         catch (BindingScopeMismatchException)
         {
-            return await SelfHealRevokedBindingAsync(
-                context,
-                reason: "auto_self_heal_scope_mismatch",
-                submittedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理已提交。请稍后发送 /init 完成新绑定。",
-                degradedMessage: "当前 NyxID 绑定缺少 LLM route 权限,本地清理提交失败。请稍后重试 /models,或发送 /unbind 后再发送 /init 重新绑定。",
-                ct).ConfigureAwait(false);
+            return new MessageContent
+            {
+                Text = "当前 NyxID 绑定缺少 LLM route 权限。请发送 /init 更新现有绑定的服务授权。",
+            };
+        }
+        catch (BindingServiceAccessMismatchException)
+        {
+            return new MessageContent
+            {
+                Text = "当前 NyxID 绑定缺少 Aevatar、默认 LLM 或 Ornn service 授权。请发送 /init 更新现有绑定的服务授权。",
+            };
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)
         {
