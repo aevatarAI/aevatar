@@ -34,6 +34,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             chatRequest.ForkSeed = ToProto(command.ForkSeed);
         if (command.ExternalIngress != null)
             chatRequest.ExternalIngress = ToProto(command.ExternalIngress);
+        if (command.CompletionNotificationTarget != null)
+            chatRequest.CompletionNotificationTarget = ToProto(command.CompletionNotificationTarget);
 
         var envelope = new EventEnvelope
         {
@@ -194,6 +196,15 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         AppendVariables(payload.Variables, source.Variables);
         return payload;
     }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowCompletionNotificationTarget ToProto(
+        Application.Abstractions.Runs.WorkflowCompletionNotificationTarget source) =>
+        new()
+        {
+            ActorId = Normalize(source.ActorId),
+            DeliveryId = Normalize(source.DeliveryId),
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+        };
 
     private static Aevatar.Workflow.Abstractions.WorkflowExternalIngressContext ToProto(
         Application.Abstractions.Runs.WorkflowExternalIngressContext source)

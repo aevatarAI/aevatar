@@ -166,7 +166,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>())
             .Returns<Task<BrokerAuthorizationCodeResult>>(_ => throw new NyxIdRequiredServiceAccessException(
-                "https://nyxid.test/api/v1/proxy/s/aevatar"));
+                ["https://nyxid.test/api/v1/proxy/s/aevatar"]));
         var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
 
         var result = await InvokeCallbackAsync(

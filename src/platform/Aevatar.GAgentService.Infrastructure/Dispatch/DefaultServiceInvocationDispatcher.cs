@@ -121,11 +121,66 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var serviceRunId = run.ActorId;
-        await RegisterRunAsync(target, request, serviceRunId, commandId, correlationId, run.ActorId, ServiceImplementationKind.Workflow, ct);
+        var serviceRunRegistration = await RegisterRunAsync(
+            target,
+            request,
+            serviceRunId,
+            commandId,
+            correlationId,
+            run.ActorId,
+            ServiceImplementationKind.Workflow,
+            ct);
         var workflowChatRequest = ToWorkflowChatRequest(chatRequest, request, target, run.ActorId, callerCredential);
         var envelope = CreateEnvelope(run.ActorId, Any.Pack(workflowChatRequest), commandId, correlationId);
-        await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
+        var admission = await _dispatchPort.DispatchAsync(run.ActorId, envelope, ct);
+        if (!admission.Accepted)
+        {
+            await MarkRejectedWorkflowRunFailedAsync(serviceRunRegistration).ConfigureAwait(false);
+            await DestroyRejectedWorkflowRunAsync(run.ActorId).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"Workflow service dispatch was not accepted for actor '{run.ActorId}'.");
+        }
+
         return CreateReceipt(target, run.ActorId, commandId, correlationId, serviceRunId);
+    }
+
+    private async Task MarkRejectedWorkflowRunFailedAsync(ServiceRunRegistrationResult registration)
+    {
+        try
+        {
+            await _serviceRunRegistrationPort
+                .UpdateStatusAsync(
+                    registration.RunActorId,
+                    registration.RunId,
+                    ServiceRunStatus.Failed,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Rejected workflow service run status update failed: serviceRunActorId={ServiceRunActorId} serviceRunId={ServiceRunId}",
+                registration.RunActorId,
+                registration.RunId);
+        }
+    }
+
+    private async Task DestroyRejectedWorkflowRunAsync(string workflowRunActorId)
+    {
+        try
+        {
+            await _workflowRunProvisioningPort
+                .DestroyAsync(workflowRunActorId, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Rejected workflow service dispatch cleanup failed: workflowRunActorId={WorkflowRunActorId}",
+                workflowRunActorId);
+        }
     }
 
     private static string ResolveWorkflowServiceDefinitionActorId(
@@ -198,7 +253,25 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         };
         if (source.LlmControl?.HasMaxToolRoundsOverride == true)
             request.LlmControl.MaxToolRoundsOverride = source.LlmControl.MaxToolRoundsOverride;
+        ApplyWorkflowCompletionNotificationTarget(
+            request,
+            invocationRequest.WorkflowCompletionNotificationTarget);
         return request;
+    }
+
+    private static void ApplyWorkflowCompletionNotificationTarget(
+        WorkflowChatRequestEvent workflowRequest,
+        WorkflowServiceCompletionNotificationTarget? target)
+    {
+        if (target is null)
+            return;
+
+        workflowRequest.CompletionNotificationTarget = new Aevatar.Workflow.Abstractions.WorkflowCompletionNotificationTarget
+        {
+            ActorId = target.ActorId,
+            DeliveryId = target.DeliveryId,
+            ExpiresAtUnixMs = target.ExpiresAtUnixMs,
+        };
     }
 
     private static Aevatar.Workflow.Abstractions.WorkflowCallerCredential BuildWorkflowCallerCredential(
@@ -309,7 +382,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 ? "bearer_token"
                 : string.Empty;
 
-    private async Task RegisterRunAsync(
+    private async Task<ServiceRunRegistrationResult> RegisterRunAsync(
         ServiceInvocationResolvedTarget target,
         ServiceInvocationRequest request,
         string runId,
@@ -336,7 +409,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             ScheduleId = request.ScheduleId ?? string.Empty,
             Identity = request.Identity?.Clone(),
         };
-        await _serviceRunRegistrationPort.RegisterAsync(record, ct);
+        return await _serviceRunRegistrationPort.RegisterAsync(record, ct);
     }
 
     private static void EnsureEndpointPayloadMatch(ServiceEndpointDescriptor endpoint, ServiceInvocationRequest request)

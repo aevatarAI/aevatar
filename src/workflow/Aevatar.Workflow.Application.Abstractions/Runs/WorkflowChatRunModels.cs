@@ -78,6 +78,11 @@ public sealed record WorkflowExternalIngressContext(
     string? AuthScheme = null,
     string? PrincipalSubject = null);
 
+public sealed record WorkflowCompletionNotificationTarget(
+    string ActorId,
+    string DeliveryId,
+    long ExpiresAtUnixMs);
+
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
     string StartAtStepId,
@@ -196,7 +201,8 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
-    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 

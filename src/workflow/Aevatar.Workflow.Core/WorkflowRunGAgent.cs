@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -15,6 +16,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using ApplicationWorkflowFileArtifactOwnershipPort = Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
@@ -45,6 +47,12 @@ public sealed class WorkflowRunGAgent
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
     private static readonly TimeSpan ScheduledCallerCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
+    private const string TerminalNotificationDispatchOperationPrefix = "workflow-terminal-notification";
+    private const string TerminalNotificationRetryCallbackPrefix = "workflow-terminal-notification-retry";
+    private const int TerminalNotificationInitialRetryDelayMs = 250;
+    private const int TerminalNotificationMaxRetryDelayMs = 30_000;
+    private const string WorkflowNotExecutableError = "Workflow run is not definition-bound or compiled.";
+    private const string InputFileBindingError = "workflow_input_file_binding_failed";
     private WorkflowDefinition? _compiledWorkflow;
     private readonly WorkflowParser _parser = new();
     private readonly List<string> _childAgentIds = [];
@@ -378,6 +386,7 @@ public sealed class WorkflowRunGAgent
             await _subWorkflowOrchestrator.RecoverPendingSubWorkflowInvocationsAsync(State, ct);
 
         await ResumeCompensationAsync(ct);
+        await RecoverTerminalNotificationAsync(ct);
     }
 
     public async Task BindWorkflowRunDefinitionAsync(
@@ -438,25 +447,21 @@ public sealed class WorkflowRunGAgent
     [EventHandler]
     public async Task HandleChatRequest(WorkflowChatRequestEvent request)
     {
-        if (_compiledWorkflow == null)
-        {
-            await PublishAsync(new WorkflowLlmInvocationCompletedEvent
-            {
-                RunId = RunId,
-                Content = "Workflow run is not definition-bound or compiled.",
-                SessionId = request.SessionId,
-                Success = false,
-                Error = "Workflow run is not definition-bound or compiled.",
-            }, TopologyAudience.Parent);
-            return;
-        }
+        ArgumentNullException.ThrowIfNull(request);
+        var commandId = ActiveInboundEnvelope?.Id?.Trim() ?? string.Empty;
+        var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId?.Trim() ?? string.Empty;
+        var runId = string.IsNullOrWhiteSpace(State.RunId)
+            ? WorkflowRunIdNormalizer.Normalize(Id)
+            : WorkflowRunIdNormalizer.Normalize(State.RunId);
+        var scopeId = ResolveScopeId(request.ScopeId, State.ScopeId);
+        await AdoptCompletionNotificationTargetAsync(
+            request.CompletionNotificationTarget,
+            runId,
+            scopeId,
+            commandId,
+            correlationId,
+            CancellationToken.None);
 
-        // Refactor (iter163/cluster-002-first):
-        //   Old pattern: actor read command id from request.Headers[workflow.command_id],
-        //                making Headers a stable control flow channel.
-        //   New principle: actor reads command id from ActiveInboundEnvelope.Id,
-        //                  the typed envelope identity.
-        var commandId = ActiveInboundEnvelope?.Id;
         if (!string.IsNullOrWhiteSpace(commandId))
         {
             await PersistDomainEventAsync(
@@ -467,6 +472,23 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
+        if (_compiledWorkflow == null)
+        {
+            await HandleWorkflowCompleted(new WorkflowCompletedEvent
+            {
+                RunId = runId,
+                WorkflowName = State.WorkflowName ?? string.Empty,
+                Success = false,
+                Error = WorkflowNotExecutableError,
+            }, request.SessionId);
+            return;
+        }
+
+        // Refactor (iter163/cluster-002-first):
+        //   Old pattern: actor read command id from request.Headers[workflow.command_id],
+        //                making Headers a stable control flow channel.
+        //   New principle: actor reads command id from ActiveInboundEnvelope.Id,
+        //                  the typed envelope identity.
         var callerCredentialDelta = await WorkflowCallerCredentialRuntimeContextAccess.BuildCredentialDeltaAsync(
             this,
             request.CallerCredential,
@@ -478,20 +500,25 @@ public sealed class WorkflowRunGAgent
 
         await EnsureAgentTreeAsync();
 
-        var runId = string.IsNullOrWhiteSpace(State.RunId)
-            ? WorkflowRunIdNormalizer.Normalize(Id)
-            : WorkflowRunIdNormalizer.Normalize(State.RunId);
-        var scopeId = ResolveScopeId(request.ScopeId, State.ScopeId);
         inputFileRefs = StampInputFileRefs(inputFileRefs, runId, scopeId);
-        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId, request.SessionId))
+        if (!await BindInputFileArtifactsAsync(inputFileRefs, runId, scopeId))
+        {
+            await HandleWorkflowCompleted(new WorkflowCompletedEvent
+            {
+                RunId = runId,
+                WorkflowName = _compiledWorkflow.Name,
+                Success = false,
+                Error = InputFileBindingError,
+            }, request.SessionId);
             return;
+        }
 
         var executionContextDelta = MergeExecutionContextDeltas(
             callerCredentialDelta,
             llmControlDelta,
             WorkflowRunExecutionContextStateAccess.ClearWorkflowRuntimeDelta());
         var executionInput = ResolveExecutionInput(request);
-        await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
+        var executionStarted = new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
             WorkflowName = _compiledWorkflow.Name,
@@ -503,7 +530,12 @@ public sealed class WorkflowRunGAgent
             InputFileRefs = { inputFileRefs.Select(static fileRef => fileRef.Clone()) },
             // O2 (06-19-workflow-run-observatory): capture the run-start fact so the readmodel can sort by it.
             StartedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
+            WorkflowCommandId = commandId,
+            WorkflowCorrelationId = correlationId,
+        };
+        if (request.CompletionNotificationTarget != null)
+            executionStarted.CompletionNotificationTarget = request.CompletionNotificationTarget.Clone();
+        await PersistDomainEventAsync(executionStarted);
 
         var start = new StartWorkflowEvent
         {
@@ -624,6 +656,30 @@ public sealed class WorkflowRunGAgent
         }
     }
 
+    private Task AdoptCompletionNotificationTargetAsync(
+        WorkflowCompletionNotificationTarget? target,
+        string runId,
+        string scopeId,
+        string commandId,
+        string correlationId,
+        CancellationToken ct)
+    {
+        if (target == null)
+            return Task.CompletedTask;
+
+        return PersistDomainEventAsync(
+            new WorkflowRunCompletionNotificationTargetAdoptedEvent
+            {
+                CompletionNotificationTarget = target.Clone(),
+                WorkflowRunId = runId,
+                ScopeId = scopeId,
+                WorkflowCommandId = commandId,
+                WorkflowCorrelationId = correlationId,
+                AdoptedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            ct);
+    }
+
     private static string ResolveExecutionInput(WorkflowChatRequestEvent request)
     {
         if (request.ForkSeed != null &&
@@ -663,8 +719,7 @@ public sealed class WorkflowRunGAgent
     private async Task<bool> BindInputFileArtifactsAsync(
         IReadOnlyList<WorkflowFileRef> fileRefs,
         string runId,
-        string scopeId,
-        string? sessionId)
+        string scopeId)
     {
         if (fileRefs.Count == 0 || _fileArtifactOwnership == null)
             return true;
@@ -682,14 +737,6 @@ public sealed class WorkflowRunGAgent
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FileNotFoundException or IOException or UnauthorizedAccessException)
             {
                 Logger.LogWarning(ex, "Workflow input file artifact owner binding failed: {RunId}", runId);
-                await PublishAsync(new WorkflowLlmInvocationCompletedEvent
-                {
-                    RunId = runId,
-                    Content = "Workflow input file artifact could not be bound to the current run.",
-                    SessionId = sessionId ?? string.Empty,
-                    Success = false,
-                    Error = "workflow_input_file_binding_failed",
-                }, TopologyAudience.Parent);
                 return false;
             }
         }
@@ -753,6 +800,48 @@ public sealed class WorkflowRunGAgent
             ActiveInboundEnvelope,
             State,
             CancellationToken.None);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleWorkflowRunTerminalNotificationRetryFired(
+        WorkflowRunTerminalNotificationRetryFiredEvent retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        var pending = State.PendingTerminalNotification;
+        var matchesIdentity = pending != null &&
+            string.Equals(retry.WorkflowActorId, Id, StringComparison.Ordinal) &&
+            string.Equals(retry.DeliveryId, pending.DeliveryId, StringComparison.Ordinal) &&
+            string.Equals(retry.WorkflowCommandId, pending.WorkflowCommandId, StringComparison.Ordinal);
+        var matchesScheduledRetry =
+            State.TerminalNotificationDeliveryStatus == WorkflowRunTerminalNotificationDeliveryStatus.RetryScheduled &&
+            retry.Attempt == State.TerminalNotificationAttempt;
+        var recoversUncommittedSchedule =
+            State.TerminalNotificationDeliveryStatus == WorkflowRunTerminalNotificationDeliveryStatus.Prepared &&
+            retry.Attempt == State.TerminalNotificationAttempt + 1;
+        if (!matchesIdentity || (!matchesScheduledRetry && !recoversUncommittedSchedule))
+        {
+            Logger.LogDebug(
+                "Ignore stale workflow terminal notification retry. actor={ActorId} delivery={DeliveryId} command={CommandId} attempt={Attempt}",
+                Id,
+                retry.DeliveryId,
+                retry.WorkflowCommandId,
+                retry.Attempt);
+            return;
+        }
+
+        if (recoversUncommittedSchedule)
+        {
+            await PersistDomainEventAsync(
+                new WorkflowRunTerminalNotificationPreparedEvent
+                {
+                    Notification = pending!.Clone(),
+                    Attempt = retry.Attempt,
+                    PreparedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+                CancellationToken.None);
+        }
+
+        await AttemptPendingTerminalNotificationAsync(CancellationToken.None);
     }
 
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
@@ -848,7 +937,7 @@ public sealed class WorkflowRunGAgent
         await HandleWorkflowRunStoppedAsync(stopped);
     }
 
-    public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt)
+    public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt, string? sessionId = null)
     {
         if (ShouldIgnoreWorkflowCompleted(State))
         {
@@ -856,6 +945,7 @@ public sealed class WorkflowRunGAgent
                 "Ignore duplicate WorkflowCompletedEvent for terminal run={RunId} status={Status}.",
                 string.IsNullOrWhiteSpace(evt.RunId) ? RunId : evt.RunId,
                 State.Status);
+            await EnsureTerminalNotificationAsync(CancellationToken.None);
             return;
         }
 
@@ -895,12 +985,14 @@ public sealed class WorkflowRunGAgent
         await PublishAsync(new WorkflowLlmInvocationCompletedEvent
         {
             RunId = evt.RunId,
+            SessionId = sessionId?.Trim() ?? string.Empty,
             Success = evt.Success,
             Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
             Error = evt.Success ? string.Empty : evt.Error,
         }, TopologyAudience.Parent);
 
         await PublishManagedParentInvocationCompletionAsync(evt, stateBeforeCompletion, CancellationToken.None);
+        await EnsureTerminalNotificationAsync(CancellationToken.None);
     }
 
     // R1 (06-20-observatory-run-state-feed): a provisioned run delegates execution to an inner child
@@ -942,6 +1034,7 @@ public sealed class WorkflowRunGAgent
                 "Skip adopting relayed WorkflowCompletedEvent for terminal run={RunId} status={Status}.",
                 RunId,
                 State.Status);
+            await EnsureTerminalNotificationAsync(CancellationToken.None);
             return;
         }
 
@@ -950,6 +1043,7 @@ public sealed class WorkflowRunGAgent
             RunId,
             evt.Success);
         await PersistDomainEventAsync(NormalizeAdoptedCompleted(evt));
+        await EnsureTerminalNotificationAsync(CancellationToken.None);
     }
 
     private WorkflowCompletedEvent NormalizeAdoptedCompleted(WorkflowCompletedEvent evt)
@@ -1030,7 +1124,11 @@ public sealed class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(evt);
 
         if (!TryPrepareStop(evt.RunId, nameof(WorkflowStoppedEvent), out var runId))
+        {
+            if (IsTerminalStatus(State.Status))
+                await EnsureTerminalNotificationAsync(CancellationToken.None);
             return;
+        }
 
         var persistedEvent = new WorkflowStoppedEvent
         {
@@ -1052,7 +1150,11 @@ public sealed class WorkflowRunGAgent
     {
         ArgumentNullException.ThrowIfNull(evt);
         if (!TryPrepareStop(evt.RunId, nameof(WorkflowRunStoppedEvent), out var runId))
+        {
+            if (IsTerminalStatus(State.Status))
+                await EnsureTerminalNotificationAsync(CancellationToken.None);
             return;
+        }
 
         var persistedEvent = new WorkflowRunStoppedEvent
         {
@@ -1312,6 +1414,7 @@ public sealed class WorkflowRunGAgent
         StateTransitionMatcher
             .Match(current, evt)
             .On<BindWorkflowRunDefinitionEvent>(ApplyBindWorkflowRunDefinition)
+            .On<WorkflowRunCompletionNotificationTargetAdoptedEvent>(ApplyWorkflowRunCompletionNotificationTargetAdopted)
             .On<WorkflowCommandObservedEvent>(ApplyWorkflowCommandObserved)
             .On<WorkflowRunExecutionStartedEvent>(ApplyWorkflowRunExecutionStarted)
             .On<WorkflowRunExecutionContextUpdatedEvent>(ApplyWorkflowRunExecutionContextUpdated)
@@ -1328,6 +1431,11 @@ public sealed class WorkflowRunGAgent
             .On<WorkflowStoppedEvent>(ApplyWorkflowStopped)
             .On<WorkflowCompletedEvent>(ApplyWorkflowCompleted)
             .On<WorkflowRunStoppedEvent>(ApplyWorkflowRunStopped)
+            .On<WorkflowRunTerminalNotificationPreparedEvent>(ApplyWorkflowRunTerminalNotificationPrepared)
+            .On<WorkflowRunTerminalNotificationRetryScheduledEvent>(ApplyWorkflowRunTerminalNotificationRetryScheduled)
+            .On<WorkflowRunTerminalNotificationDispatchedEvent>(ApplyWorkflowRunTerminalNotificationDispatched)
+            .On<WorkflowRunTerminalNotificationExpiredEvent>(ApplyWorkflowRunTerminalNotificationExpired)
+            .On<WorkflowRunTerminalNotificationRetryFiredEvent>(KeepCurrentState)
             .On<SubWorkflowDefinitionResolutionRegisteredEvent>(SubWorkflowOrchestrator.ApplySubWorkflowDefinitionResolutionRegistered)
             .On<SubWorkflowDefinitionResolvedEvent>(KeepCurrentState)
             .On<SubWorkflowDefinitionResolveFailedEvent>(KeepCurrentState)
@@ -1382,6 +1490,12 @@ public sealed class WorkflowRunGAgent
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
         next.LastCommandId = string.Empty;
+        next.CompletionNotificationTarget = null;
+        next.WorkflowCorrelationId = string.Empty;
+        next.PendingTerminalNotification = null;
+        next.TerminalNotificationAttempt = 0;
+        next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
+        next.TerminalNotificationRetryCallbackId = string.Empty;
         next.InlineWorkflowYamls.Clear();
         foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
         {
@@ -1398,6 +1512,40 @@ public sealed class WorkflowRunGAgent
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunCompletionNotificationTargetAdopted(
+        WorkflowRunState current,
+        WorkflowRunCompletionNotificationTargetAdoptedEvent evt)
+    {
+        if (evt.CompletionNotificationTarget == null)
+            return current;
+
+        var next = current.Clone();
+        var sameDelivery =
+            string.Equals(
+                current.CompletionNotificationTarget?.DeliveryId,
+                evt.CompletionNotificationTarget.DeliveryId,
+                StringComparison.Ordinal) &&
+            string.Equals(current.LastCommandId, evt.WorkflowCommandId, StringComparison.Ordinal);
+        next.CompletionNotificationTarget = evt.CompletionNotificationTarget.Clone();
+        next.RunId = string.IsNullOrWhiteSpace(evt.WorkflowRunId)
+            ? current.RunId
+            : WorkflowRunIdNormalizer.Normalize(evt.WorkflowRunId);
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId)
+            ? current.ScopeId
+            : evt.ScopeId.Trim();
+        next.LastCommandId = evt.WorkflowCommandId?.Trim() ?? string.Empty;
+        next.WorkflowCorrelationId = evt.WorkflowCorrelationId?.Trim() ?? string.Empty;
+        if (!sameDelivery)
+        {
+            next.PendingTerminalNotification = null;
+            next.TerminalNotificationAttempt = 0;
+            next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
+            next.TerminalNotificationRetryCallbackId = string.Empty;
+        }
+
         return next;
     }
 
@@ -1420,6 +1568,15 @@ public sealed class WorkflowRunGAgent
         next.DeadLetterError = string.Empty;
         next.CompensationOriginFailedStepId = string.Empty;
         next.TerminalWorkflowCompletionRecorded = false;
+        next.CompletionNotificationTarget = evt.CompletionNotificationTarget?.Clone();
+        next.LastCommandId = string.IsNullOrWhiteSpace(evt.WorkflowCommandId)
+            ? current.LastCommandId
+            : evt.WorkflowCommandId.Trim();
+        next.WorkflowCorrelationId = evt.WorkflowCorrelationId?.Trim() ?? string.Empty;
+        next.PendingTerminalNotification = null;
+        next.TerminalNotificationAttempt = 0;
+        next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Unspecified;
+        next.TerminalNotificationRetryCallbackId = string.Empty;
         next.ExecutionContext ??= new WorkflowRunExecutionContextState();
         ApplyExecutionContextDelta(next.ExecutionContext, evt.ExecutionContextDelta);
         if (string.IsNullOrWhiteSpace(next.DefinitionActorId) && !string.IsNullOrWhiteSpace(evt.DefinitionActorId))
@@ -1787,11 +1944,87 @@ public sealed class WorkflowRunGAgent
         return next;
     }
 
+    private static WorkflowRunState ApplyWorkflowRunTerminalNotificationPrepared(
+        WorkflowRunState current,
+        WorkflowRunTerminalNotificationPreparedEvent evt)
+    {
+        if (evt.Notification == null)
+            return current;
+
+        var next = current.Clone();
+        next.PendingTerminalNotification = evt.Notification.Clone();
+        next.TerminalNotificationAttempt = Math.Max(0, evt.Attempt);
+        next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Prepared;
+        next.TerminalNotificationRetryCallbackId = string.Empty;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunTerminalNotificationRetryScheduled(
+        WorkflowRunState current,
+        WorkflowRunTerminalNotificationRetryScheduledEvent evt)
+    {
+        var next = current.Clone();
+        if (!MatchesPendingTerminalNotification(next, evt.DeliveryId, evt.WorkflowCommandId) ||
+            evt.Attempt <= next.TerminalNotificationAttempt)
+        {
+            return next;
+        }
+
+        next.TerminalNotificationAttempt = evt.Attempt;
+        next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.RetryScheduled;
+        next.TerminalNotificationRetryCallbackId = evt.CallbackId ?? string.Empty;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunTerminalNotificationDispatched(
+        WorkflowRunState current,
+        WorkflowRunTerminalNotificationDispatchedEvent evt)
+    {
+        var next = current.Clone();
+        if (!MatchesPendingTerminalNotification(next, evt.DeliveryId, evt.WorkflowCommandId) ||
+            evt.Attempt != next.TerminalNotificationAttempt)
+        {
+            return next;
+        }
+
+        next.PendingTerminalNotification = null;
+        next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Dispatched;
+        next.TerminalNotificationRetryCallbackId = string.Empty;
+        return next;
+    }
+
+    private static WorkflowRunState ApplyWorkflowRunTerminalNotificationExpired(
+        WorkflowRunState current,
+        WorkflowRunTerminalNotificationExpiredEvent evt)
+    {
+        var next = current.Clone();
+        if (!MatchesPendingTerminalNotification(next, evt.DeliveryId, evt.WorkflowCommandId) ||
+            evt.Attempt != next.TerminalNotificationAttempt)
+        {
+            return next;
+        }
+
+        next.PendingTerminalNotification = null;
+        next.TerminalNotificationDeliveryStatus = WorkflowRunTerminalNotificationDeliveryStatus.Expired;
+        next.TerminalNotificationRetryCallbackId = string.Empty;
+        return next;
+    }
+
+    private static bool MatchesPendingTerminalNotification(
+        WorkflowRunState state,
+        string? deliveryId,
+        string? workflowCommandId) =>
+        state.PendingTerminalNotification != null &&
+        string.Equals(state.PendingTerminalNotification.DeliveryId, deliveryId, StringComparison.Ordinal) &&
+        string.Equals(state.PendingTerminalNotification.WorkflowCommandId, workflowCommandId, StringComparison.Ordinal);
+
     private static WorkflowRunState KeepCurrentState(WorkflowRunState current, SubWorkflowDefinitionResolvedEvent _) => current;
 
     private static WorkflowRunState KeepCurrentState(WorkflowRunState current, SubWorkflowDefinitionResolveFailedEvent _) => current;
 
     private static WorkflowRunState KeepCurrentState(WorkflowRunState current, SubWorkflowDefinitionResolutionTimeoutFiredEvent _) => current;
+
+    private static WorkflowRunState KeepCurrentState(WorkflowRunState current, WorkflowRunTerminalNotificationRetryFiredEvent _) => current;
 
     private static bool IsTerminalStatus(string? status) =>
         string.Equals(status, CompletedStatus, StringComparison.OrdinalIgnoreCase) ||
@@ -1802,6 +2035,264 @@ public sealed class WorkflowRunGAgent
         state.TerminalWorkflowCompletionRecorded ||
         (IsTerminalStatus(state.Status) &&
          state.SagaStatus != WorkflowSagaStatus.CompensationDeadLetter);
+
+    private async Task RecoverTerminalNotificationAsync(CancellationToken ct)
+    {
+        if (!IsTerminalStatus(State.Status) || !HasCompletionNotificationTarget(State.CompletionNotificationTarget))
+            return;
+
+        if (State.TerminalNotificationDeliveryStatus is
+            WorkflowRunTerminalNotificationDeliveryStatus.Dispatched or
+            WorkflowRunTerminalNotificationDeliveryStatus.Expired)
+        {
+            return;
+        }
+
+        await EnsureTerminalNotificationAsync(ct);
+    }
+
+    private async Task EnsureTerminalNotificationAsync(CancellationToken ct)
+    {
+        var target = State.CompletionNotificationTarget;
+        if (!IsTerminalStatus(State.Status) || !HasCompletionNotificationTarget(target))
+            return;
+
+        if (State.TerminalNotificationDeliveryStatus is
+            WorkflowRunTerminalNotificationDeliveryStatus.Dispatched or
+            WorkflowRunTerminalNotificationDeliveryStatus.Expired)
+        {
+            return;
+        }
+
+        if (State.PendingTerminalNotification == null)
+        {
+            var terminalStatus = ResolveTerminalNotificationStatus(State.Status);
+            if (terminalStatus == WorkflowRunTerminalStatus.Unspecified)
+                return;
+
+            await PersistDomainEventAsync(
+                new WorkflowRunTerminalNotificationPreparedEvent
+                {
+                    Notification = new WorkflowRunTerminalNotification
+                    {
+                        DeliveryId = target!.DeliveryId.Trim(),
+                        WorkflowActorId = Id,
+                        WorkflowRunId = RunId,
+                        WorkflowCommandId = State.LastCommandId?.Trim() ?? string.Empty,
+                        WorkflowCorrelationId = State.WorkflowCorrelationId?.Trim() ?? string.Empty,
+                        Status = terminalStatus,
+                        Output = State.FinalOutput ?? string.Empty,
+                        Error = State.FinalError ?? string.Empty,
+                        TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    },
+                    Attempt = 0,
+                    PreparedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+                ct);
+        }
+
+        await AttemptPendingTerminalNotificationAsync(ct);
+    }
+
+    private async Task AttemptPendingTerminalNotificationAsync(CancellationToken ct)
+    {
+        var target = State.CompletionNotificationTarget?.Clone();
+        var pending = State.PendingTerminalNotification?.Clone();
+        if (!HasCompletionNotificationTarget(target) || pending == null)
+            return;
+
+        if (!string.Equals(target!.DeliveryId, pending.DeliveryId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Workflow terminal notification target does not match the pending outbox. actor={ActorId} targetDelivery={TargetDeliveryId} pendingDelivery={PendingDeliveryId}",
+                Id,
+                target.DeliveryId,
+                pending.DeliveryId);
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (target.ExpiresAtUnixMs <= now.ToUnixTimeMilliseconds())
+        {
+            await PersistDomainEventAsync(
+                new WorkflowRunTerminalNotificationExpiredEvent
+                {
+                    DeliveryId = pending.DeliveryId,
+                    WorkflowCommandId = pending.WorkflowCommandId,
+                    Attempt = State.TerminalNotificationAttempt,
+                    ExpiredAt = Timestamp.FromDateTimeOffset(now),
+                },
+                ct);
+            return;
+        }
+
+        var attempt = State.TerminalNotificationAttempt;
+        try
+        {
+            await SendToAsync(
+                target.ActorId.Trim(),
+                pending,
+                ct,
+                BuildTerminalNotificationDispatchOptions(pending));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "Workflow terminal notification dispatch failed; scheduling actor-owned retry. actor={ActorId} target={TargetActorId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                target.ActorId,
+                pending.DeliveryId,
+                attempt);
+            await ScheduleTerminalNotificationRetryAsync(target, pending, attempt + 1, now, ct);
+            return;
+        }
+
+        await PersistDomainEventAsync(
+            new WorkflowRunTerminalNotificationDispatchedEvent
+            {
+                DeliveryId = pending.DeliveryId,
+                WorkflowCommandId = pending.WorkflowCommandId,
+                Attempt = attempt,
+                DispatchedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+            ct);
+    }
+
+    private async Task ScheduleTerminalNotificationRetryAsync(
+        WorkflowCompletionNotificationTarget target,
+        WorkflowRunTerminalNotification pending,
+        int attempt,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        var remainingMs = target.ExpiresAtUnixMs - now.ToUnixTimeMilliseconds();
+        if (remainingMs <= 0)
+        {
+            await PersistDomainEventAsync(
+                new WorkflowRunTerminalNotificationExpiredEvent
+                {
+                    DeliveryId = pending.DeliveryId,
+                    WorkflowCommandId = pending.WorkflowCommandId,
+                    Attempt = State.TerminalNotificationAttempt,
+                    ExpiredAt = Timestamp.FromDateTimeOffset(now),
+                },
+                ct);
+            return;
+        }
+
+        var delay = ResolveTerminalNotificationRetryDelay(attempt, remainingMs);
+        var callbackId = BuildTerminalNotificationRetryCallbackId(pending, attempt);
+        var retryFired = new WorkflowRunTerminalNotificationRetryFiredEvent
+        {
+            DeliveryId = pending.DeliveryId,
+            WorkflowActorId = Id,
+            WorkflowCommandId = pending.WorkflowCommandId,
+            Attempt = attempt,
+        };
+        var retryOptions = BuildTerminalNotificationRetryOptions(callbackId);
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                delay,
+                retryFired,
+                retryOptions,
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var canPublishImmediateRecovery =
+                State.TerminalNotificationDeliveryStatus == WorkflowRunTerminalNotificationDeliveryStatus.Prepared &&
+                State.TerminalNotificationAttempt == 0 &&
+                attempt == 1;
+            Logger.LogWarning(
+                ex,
+                canPublishImmediateRecovery
+                    ? "Workflow terminal notification durable retry scheduling failed; publishing one immediate recovery continuation. actor={ActorId} delivery={DeliveryId} attempt={Attempt}"
+                    : "Workflow terminal notification durable retry scheduling failed; preserving the outbox for activation recovery. actor={ActorId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                pending.DeliveryId,
+                attempt);
+            if (canPublishImmediateRecovery)
+                await SendToAsync(Id, retryFired, ct, retryOptions);
+            return;
+        }
+
+        await PersistDomainEventAsync(
+            new WorkflowRunTerminalNotificationRetryScheduledEvent
+            {
+                DeliveryId = pending.DeliveryId,
+                WorkflowCommandId = pending.WorkflowCommandId,
+                Attempt = attempt,
+                CallbackId = callbackId,
+                RetryAt = Timestamp.FromDateTimeOffset(now.Add(delay)),
+            },
+            ct);
+    }
+
+    private static WorkflowRunTerminalStatus ResolveTerminalNotificationStatus(string? status) =>
+        status?.Trim().ToLowerInvariant() switch
+        {
+            CompletedStatus => WorkflowRunTerminalStatus.Completed,
+            FailedStatus => WorkflowRunTerminalStatus.Failed,
+            StoppedStatus => WorkflowRunTerminalStatus.Stopped,
+            _ => WorkflowRunTerminalStatus.Unspecified,
+        };
+
+    private static bool HasCompletionNotificationTarget(WorkflowCompletionNotificationTarget? target) =>
+        target != null &&
+        !string.IsNullOrWhiteSpace(target.ActorId) &&
+        !string.IsNullOrWhiteSpace(target.DeliveryId);
+
+    private static TimeSpan ResolveTerminalNotificationRetryDelay(int attempt, long remainingMs)
+    {
+        var exponent = Math.Clamp(attempt - 1, 0, 16);
+        var exponentialDelayMs = Math.Min(
+            TerminalNotificationMaxRetryDelayMs,
+            TerminalNotificationInitialRetryDelayMs * (1L << exponent));
+        var delayMs = Math.Max(1L, Math.Min(exponentialDelayMs, remainingMs));
+        return TimeSpan.FromMilliseconds(delayMs);
+    }
+
+    private static EventEnvelopePublishOptions BuildTerminalNotificationDispatchOptions(
+        WorkflowRunTerminalNotification notification) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    TerminalNotificationDispatchOperationPrefix,
+                    notification.DeliveryId,
+                    notification.WorkflowCommandId),
+            },
+        };
+
+    private static EventEnvelopePublishOptions BuildTerminalNotificationRetryOptions(string callbackId) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                DeduplicationOperationId = callbackId,
+            },
+        };
+
+    private static string BuildTerminalNotificationRetryCallbackId(
+        WorkflowRunTerminalNotification notification,
+        int attempt) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            TerminalNotificationRetryCallbackPrefix,
+            notification.DeliveryId,
+            notification.WorkflowCommandId,
+            attempt.ToString(CultureInfo.InvariantCulture));
 
     private async Task ResumeCompensationAsync(CancellationToken ct)
     {
@@ -2082,6 +2573,7 @@ public sealed class WorkflowRunGAgent
             Content = BuildStoppedMessage(reason),
             Error = BuildStoppedMessage(reason),
         }, TopologyAudience.Parent);
+        await EnsureTerminalNotificationAsync(ct);
     }
 
     private async Task TryRevokeScheduledCallerCredentialAsync(

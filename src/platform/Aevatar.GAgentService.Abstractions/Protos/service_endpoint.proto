@@ -49,6 +49,13 @@ message ServiceInvocationRequest {
   // (the dispatcher defaults it to "service-invoke"); scheduled dispatch sets "provisioned".
   string run_origin = 8;
   string schedule_id = 9;
+  WorkflowServiceCompletionNotificationTarget workflow_completion_notification_target = 10;
+}
+
+message WorkflowServiceCompletionNotificationTarget {
+  string actor_id = 1;
+  string delivery_id = 2;
+  int64 expires_at_unix_ms = 3;
 }
 
 message ServiceInvocationAcceptedReceipt {

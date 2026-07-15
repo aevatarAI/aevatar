@@ -160,12 +160,12 @@ public static class IdentityOAuthEndpoints
         {
             logger.LogInformation(
                 ex,
-                "OAuth callback rejected because the user did not grant aevatar's required NyxID service. correlation={CorrelationId}",
+                "OAuth callback rejected because the user did not grant every required NyxID service. correlation={CorrelationId}",
                 decode.CorrelationId);
             return Results.Json(new
             {
                 error = "required_service_access_missing",
-                detail = "NyxID 授权未包含 Aevatar service。请回到 Lark 重新发送 /init,并在授权页保留 Aevatar service。",
+                detail = "NyxID 授权未包含 Aevatar 或默认 LLM service。请回到 Lark 重新发送 /init,并在授权页保留这两个 services。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception ex)

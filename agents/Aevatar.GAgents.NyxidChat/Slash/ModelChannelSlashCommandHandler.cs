@@ -118,8 +118,8 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
             return await SelfHealRevokedBindingAsync(
                 context,
                 reason: "auto_self_heal_service_access_mismatch",
-                submittedMessage: "当前 NyxID 绑定未授权 Aevatar service,本地清理已提交。请稍后发送 /init,并在授权页保留 Aevatar service。",
-                degradedMessage: "当前 NyxID 绑定未授权 Aevatar service,本地清理提交失败。请发送 /unbind 后再发送 /init 重新绑定。",
+                submittedMessage: "当前 NyxID 绑定未授权 Aevatar 或默认 LLM service,本地清理已提交。请稍后发送 /init,并在授权页保留这两个 services。",
+                degradedMessage: "当前 NyxID 绑定缺少必需 service 授权,本地清理提交失败。请发送 /unbind 后再发送 /init 重新绑定。",
                 ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)

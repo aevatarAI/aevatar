@@ -109,14 +109,22 @@ public sealed class DefaultCommandDispatchPipeline<TCommand, TTarget, TReceipt, 
         //   New principle: live observation is an explicit interaction phase that starts before dispatch; PrepareAsync and dispatch-only callers stay free of read-side lifecycle work
         ArgumentNullException.ThrowIfNull(execution);
         var target = execution.Target;
+        var cleanupInvoked = false;
 
         try
         {
-            return await _targetDispatcher.DispatchAsync(target, execution.Envelope, ct);
+            var admission = await _targetDispatcher.DispatchAsync(target, execution.Envelope, ct);
+            if (!admission.Accepted && target is ICommandDispatchCleanupAware rejectedCleanup)
+            {
+                cleanupInvoked = true;
+                await rejectedCleanup.CleanupAfterDispatchFailureAsync(CancellationToken.None);
+            }
+
+            return admission;
         }
         catch
         {
-            if (target is ICommandDispatchCleanupAware cleanupAware)
+            if (!cleanupInvoked && target is ICommandDispatchCleanupAware cleanupAware)
                 await cleanupAware.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
             throw;

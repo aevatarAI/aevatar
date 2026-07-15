@@ -296,6 +296,524 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     }
 
     [Fact]
+    public async Task CompletedRun_WithNotificationTarget_ShouldCommitOutboxBeforeDispatchingTerminal()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+
+        await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = true,
+            Output = "final output",
+        });
+
+        var sent = harness.Publisher.SuccessfulSends
+            .Should()
+            .ContainSingle(x => x.Event is WorkflowRunTerminalNotification)
+            .Subject;
+        sent.TargetActorId.Should().Be("delivery-actor-1");
+        var notification = sent.Event.Should().BeOfType<WorkflowRunTerminalNotification>().Subject;
+        notification.DeliveryId.Should().Be("delivery-1");
+        notification.WorkflowActorId.Should().Be(harness.RunId);
+        notification.WorkflowRunId.Should().Be(harness.RunId);
+        notification.WorkflowCommandId.Should().Be("command-1");
+        notification.WorkflowCorrelationId.Should().Be("correlation-1");
+        notification.Status.Should().Be(WorkflowRunTerminalStatus.Completed);
+        notification.Output.Should().Be("final output");
+        notification.Error.Should().BeEmpty();
+        notification.TerminalAt.Should().NotBeNull();
+        sent.Options?.Delivery?.DeduplicationOperationId.Should().Contain("delivery-1");
+        sent.Options?.Delivery?.DeduplicationOperationId.Should().Contain("command-1");
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        harness.Agent.State.PendingTerminalNotification.Should().BeNull();
+
+        CommittedTypeOrder(harness.CommittedPublisher)
+            .Should()
+            .ContainInOrder(
+                WorkflowCompletedEvent.Descriptor.FullName,
+                WorkflowRunTerminalNotificationPreparedEvent.Descriptor.FullName,
+                WorkflowRunTerminalNotificationDispatchedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task StoppedRun_WithNotificationTarget_ShouldDispatchTypedStoppedTerminal()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+
+        await harness.Agent.HandleWorkflowStopped(new WorkflowStoppedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Reason = "operator stop",
+        });
+
+        var notification = harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        notification.Status.Should().Be(WorkflowRunTerminalStatus.Stopped);
+        notification.Output.Should().BeEmpty();
+        notification.Error.Should().Be("operator stop");
+    }
+
+    [Fact]
+    public async Task ChatRequest_WhenWorkflowIsNotCompiled_ShouldCommitAndDispatchTerminalFailure()
+    {
+        var runId = "run-invalid-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, workflowYaml: "name: [invalid");
+        var request = CreateNotificationTargetRequest();
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(
+            "api",
+            request,
+            envelopeId: "command-1",
+            correlationId: "correlation-1"));
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        var terminal = CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Subject;
+        terminal.Success.Should().BeFalse();
+        terminal.Error.Should().Be("Workflow run is not definition-bound or compiled.");
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Which.Error.Should().Be(terminal.Error);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowCompletedEvent).Should().Be(1);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+        CommittedTypeOrder(harness.CommittedPublisher)
+            .Should()
+            .ContainInOrder(
+                WorkflowRunCompletionNotificationTargetAdoptedEvent.Descriptor.FullName,
+                WorkflowCompletedEvent.Descriptor.FullName,
+                WorkflowRunTerminalNotificationPreparedEvent.Descriptor.FullName,
+                WorkflowRunTerminalNotificationDispatchedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task ChatRequest_WhenInputFileBindingFails_ShouldCommitAndDispatchTerminalFailure()
+    {
+        var runId = "run-file-bind-failure-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(
+            runId,
+            fileOwnershipPort: new ThrowingWorkflowFileArtifactOwnershipPort());
+        var request = CreateNotificationTargetRequest();
+        request.InputParts.Add(new WorkflowChatInputPartPayload
+        {
+            Kind = WorkflowChatInputPartKind.File,
+            FileRef = new WorkflowFileRef
+            {
+                FileId = "file-1",
+                ArtifactId = "workflow-file://file-1",
+                SourceKind = WorkflowFileSourceKind.ChatInput,
+            },
+        });
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(
+            "api",
+            request,
+            envelopeId: "command-1",
+            correlationId: "correlation-1"));
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher).Should().BeEmpty();
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher)
+            .Should()
+            .ContainSingle()
+            .Which.Error.Should().Be("workflow_input_file_binding_failed");
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Which.Status.Should().Be(WorkflowRunTerminalStatus.Failed);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowCompletedEvent).Should().Be(1);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RelayedOwnRunCompletion_WithNotificationTarget_ShouldDispatchAdoptedTerminal()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(ChildActorId, new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = false,
+            Error = "inner failure",
+        }));
+
+        var notification = harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        notification.Status.Should().Be(WorkflowRunTerminalStatus.Failed);
+        notification.Error.Should().Be("inner failure");
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
+    public async Task Reactivation_WithPendingTerminalOutbox_ShouldRecoverDispatch()
+    {
+        var harness = await CreateStartedRunAsync(
+            includeCompletionNotificationTarget: true,
+            failTerminalNotificationDispatch: true);
+
+        await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = false,
+            Error = "boom",
+        });
+
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.RetryScheduled);
+        harness.Agent.State.PendingTerminalNotification.Should().NotBeNull();
+        harness.Scheduler.TimeoutRequests.Should().ContainSingle();
+
+        var reactivated = await CreateRunAsync(harness.RunId, harness.EventStore);
+
+        reactivated.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        reactivated.Agent.State.PendingTerminalNotification.Should().BeNull();
+        reactivated.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Which.Error.Should().Be("boom");
+    }
+
+    [Fact]
+    public async Task Reactivation_WithTerminalTargetButMissingOutbox_ShouldPrepareAndDispatch()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+        await AppendSeedEventAsync(harness.EventStore, harness.RunId, new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = true,
+            Output = "recovered output",
+        });
+
+        var reactivated = await CreateRunAsync(harness.RunId, harness.EventStore);
+
+        reactivated.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Which.Output.Should().Be("recovered output");
+        reactivated.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        CommittedTypeOrder(reactivated.CommittedPublisher)
+            .Should()
+            .ContainInOrder(
+                WorkflowRunTerminalNotificationPreparedEvent.Descriptor.FullName,
+                WorkflowRunTerminalNotificationDispatchedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task Reactivation_WithPreExecutionTerminalAndAdoptedTarget_ShouldRecoverMissingOutbox()
+    {
+        var runId = "run-invalid-recovery-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, workflowYaml: "name: [invalid");
+        await AppendSeedEventAsync(harness.EventStore, runId, new WorkflowRunCompletionNotificationTargetAdoptedEvent
+        {
+            CompletionNotificationTarget = CreateCompletionNotificationTarget(),
+            WorkflowRunId = runId,
+            ScopeId = "scope-1",
+            WorkflowCommandId = "command-1",
+            WorkflowCorrelationId = "correlation-1",
+            AdoptedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        await AppendSeedEventAsync(harness.EventStore, runId, new WorkflowCompletedEvent
+        {
+            RunId = runId,
+            WorkflowName = "wf_relayed",
+            Success = false,
+            Error = "Workflow run is not definition-bound or compiled.",
+        });
+
+        var reactivated = await CreateRunAsync(
+            runId,
+            harness.EventStore,
+            workflowYaml: "name: [invalid");
+
+        reactivated.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Which.WorkflowCommandId.Should().Be("command-1");
+        reactivated.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(reactivated.CommittedPublisher).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TerminalNotificationRetry_WithStaleAttempt_ShouldNotDispatchOrAdvanceOutbox()
+    {
+        var harness = await CreateStartedRunAsync(
+            includeCompletionNotificationTarget: true,
+            failTerminalNotificationDispatch: true);
+        await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = true,
+            Output = "done",
+        });
+        var scheduledRequest = harness.Scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        var scheduledRetry = scheduledRequest.TriggerEnvelope.Payload
+            .Unpack<WorkflowRunTerminalNotificationRetryFiredEvent>();
+        var attemptsBeforeStale = harness.Publisher.SendAttempts.Count;
+        harness.Publisher.FailTerminalNotificationDispatch = false;
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(harness.RunId, new WorkflowRunTerminalNotificationRetryFiredEvent
+        {
+            DeliveryId = scheduledRetry.DeliveryId,
+            WorkflowActorId = scheduledRetry.WorkflowActorId,
+            WorkflowCommandId = scheduledRetry.WorkflowCommandId,
+            Attempt = scheduledRetry.Attempt + 1,
+        }));
+
+        harness.Publisher.SendAttempts.Should().HaveCount(attemptsBeforeStale);
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.RetryScheduled);
+
+        await harness.Agent.HandleEventAsync(scheduledRequest.TriggerEnvelope);
+
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle();
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
+    public async Task TerminalNotificationRetry_WhenSchedulerFails_ShouldKeepPreparedAndContinueThroughSelfMessage()
+    {
+        var harness = await CreateStartedRunAsync(
+            includeCompletionNotificationTarget: true,
+            failTerminalNotificationDispatch: true);
+        harness.Scheduler.Exception = new InvalidOperationException("scheduler unavailable");
+
+        await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = true,
+            Output = "done",
+        });
+
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Prepared);
+        CommittedEvents<WorkflowRunTerminalNotificationRetryScheduledEvent>(harness.CommittedPublisher)
+            .Should().BeEmpty();
+        harness.Scheduler.TimeoutRequests.Should().BeEmpty();
+        var selfRetry = harness.Publisher.SuccessfulSends
+            .Should()
+            .ContainSingle(x =>
+                x.TargetActorId == harness.RunId &&
+                x.Event is WorkflowRunTerminalNotificationRetryFiredEvent)
+            .Subject;
+        selfRetry.Options?.Delivery?.DeduplicationOperationId.Should().NotBeNullOrWhiteSpace();
+        harness.Publisher.FailTerminalNotificationDispatch = false;
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            (WorkflowRunTerminalNotificationRetryFiredEvent)selfRetry.Event));
+
+        CommittedEvents<WorkflowRunTerminalNotificationPreparedEvent>(harness.CommittedPublisher)
+            .Select(x => x.Attempt)
+            .Should()
+            .Equal(0, 1);
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task TerminalNotificationRetry_WhenSchedulerKeepsFailing_ShouldBoundImmediateContinuationAndRecoverOnActivation()
+    {
+        var harness = await CreateStartedRunAsync(
+            includeCompletionNotificationTarget: true,
+            failTerminalNotificationDispatch: true);
+        harness.Scheduler.Exception = new InvalidOperationException("scheduler unavailable");
+
+        await harness.Agent.HandleWorkflowCompleted(new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = false,
+            Error = "boom",
+        });
+
+        var selfRetry = harness.Publisher.SuccessfulSends
+            .Should()
+            .ContainSingle(x =>
+                x.TargetActorId == harness.RunId &&
+                x.Event is WorkflowRunTerminalNotificationRetryFiredEvent)
+            .Subject;
+
+        await harness.Agent.HandleEventAsync(SelfEnvelope(
+            harness.RunId,
+            (WorkflowRunTerminalNotificationRetryFiredEvent)selfRetry.Event));
+
+        harness.Publisher.SuccessfulSends
+            .Count(x => x.Event is WorkflowRunTerminalNotificationRetryFiredEvent)
+            .Should().Be(1);
+        harness.Publisher.SendAttempts
+            .Count(x => x.Event is WorkflowRunTerminalNotification)
+            .Should().Be(2);
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Prepared);
+        harness.Agent.State.TerminalNotificationAttempt.Should().Be(1);
+        harness.Agent.State.PendingTerminalNotification.Should().NotBeNull();
+        CommittedEvents<WorkflowRunTerminalNotificationRetryScheduledEvent>(harness.CommittedPublisher)
+            .Should().BeEmpty();
+
+        var reactivated = await CreateRunAsync(harness.RunId, harness.EventStore);
+
+        reactivated.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        reactivated.Agent.State.PendingTerminalNotification.Should().BeNull();
+        reactivated.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle()
+            .Which.Error.Should().Be("boom");
+    }
+
+    [Fact]
+    public async Task DuplicateCompletion_AfterRetryContinuationFailure_ShouldReconcilePendingOutbox()
+    {
+        var harness = await CreateStartedRunAsync(
+            includeCompletionNotificationTarget: true,
+            failTerminalNotificationDispatch: true);
+        harness.Scheduler.Exception = new InvalidOperationException("scheduler unavailable");
+        harness.Publisher.FailTerminalNotificationRetrySelfDispatch = true;
+        var terminal = new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = false,
+            Error = "boom",
+        };
+
+        var firstAttempt = () => harness.Agent.HandleWorkflowCompleted(terminal);
+        await firstAttempt.Should().ThrowAsync<InvalidOperationException>();
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Prepared);
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher).Should().ContainSingle();
+        harness.Publisher.Published.Count(x => x.Event is WorkflowCompletedEvent).Should().Be(1);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+        harness.Publisher.FailTerminalNotificationDispatch = false;
+        harness.Publisher.FailTerminalNotificationRetrySelfDispatch = false;
+
+        await harness.Agent.HandleWorkflowCompleted(terminal.Clone());
+
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher).Should().ContainSingle();
+        harness.Publisher.Published.Count(x => x.Event is WorkflowCompletedEvent).Should().Be(1);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
+    public async Task DuplicateCompletion_AfterOutboxPreparePublicationFailure_ShouldReconcileWithoutRepublishingParent()
+    {
+        var harness = await CreateStartedRunAsync(includeCompletionNotificationTarget: true);
+        harness.CommittedPublisher.FailTerminalNotificationPrepare = true;
+        var terminal = new WorkflowCompletedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Success = true,
+            Output = "done",
+        };
+
+        var firstAttempt = () => harness.Agent.HandleWorkflowCompleted(terminal);
+        await firstAttempt.Should().ThrowAsync<InvalidOperationException>();
+        harness.Agent.State.Status.Should().Be("completed");
+        harness.Agent.State.PendingTerminalNotification.Should().NotBeNull();
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Prepared);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowCompletedEvent).Should().Be(1);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+        harness.CommittedPublisher.FailTerminalNotificationPrepare = false;
+
+        await harness.Agent.HandleWorkflowCompleted(terminal.Clone());
+
+        CommittedEvents<WorkflowCompletedEvent>(harness.CommittedPublisher).Should().ContainSingle();
+        harness.Publisher.Published.Count(x => x.Event is WorkflowCompletedEvent).Should().Be(1);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
+    public async Task DuplicateStop_AfterRetryContinuationFailure_ShouldReconcilePendingOutbox()
+    {
+        var harness = await CreateStartedRunAsync(
+            includeCompletionNotificationTarget: true,
+            failTerminalNotificationDispatch: true);
+        harness.Scheduler.Exception = new InvalidOperationException("scheduler unavailable");
+        harness.Publisher.FailTerminalNotificationRetrySelfDispatch = true;
+        var stopped = new WorkflowStoppedEvent
+        {
+            RunId = harness.RunId,
+            WorkflowName = "wf_relayed",
+            Reason = "operator stop",
+        };
+
+        var firstAttempt = () => harness.Agent.HandleWorkflowStopped(stopped);
+        await firstAttempt.Should().ThrowAsync<InvalidOperationException>();
+        harness.Agent.State.Status.Should().Be("stopped");
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Prepared);
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+        harness.Publisher.FailTerminalNotificationDispatch = false;
+        harness.Publisher.FailTerminalNotificationRetrySelfDispatch = false;
+
+        await harness.Agent.HandleWorkflowStopped(stopped.Clone());
+
+        CommittedEvents<WorkflowStoppedEvent>(harness.CommittedPublisher).Should().ContainSingle();
+        harness.Publisher.Published.Count(x => x.Event is WorkflowLlmInvocationCompletedEvent).Should().Be(1);
+        harness.Agent.State.TerminalNotificationDeliveryStatus
+            .Should().Be(WorkflowRunTerminalNotificationDeliveryStatus.Dispatched);
+        harness.Publisher.SuccessfulSends
+            .Select(x => x.Event)
+            .OfType<WorkflowRunTerminalNotification>()
+            .Should()
+            .ContainSingle();
+    }
+
+    [Fact]
     public async Task TerminalRun_WithPendingSubWorkflowInvocation_ShouldNotRecoverOnActivation()
     {
         // C4 (06-20-observatory-run-state-feed): ApplyWorkflowCompleted does NOT clear
@@ -359,16 +877,28 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             .BeEmpty();
     }
 
-    private static async Task<RunHarness> CreateStartedRunAsync()
+    private static async Task<RunHarness> CreateStartedRunAsync(
+        bool includeCompletionNotificationTarget = false,
+        bool failTerminalNotificationDispatch = false)
     {
         var runId = "run-relayed-" + Guid.NewGuid().ToString("N");
-        var harness = await CreateRunAsync(runId);
+        var harness = await CreateRunAsync(
+            runId,
+            failTerminalNotificationDispatch: failTerminalNotificationDispatch);
 
-        await harness.Agent.HandleEventAsync(EnvelopeFrom("api", new WorkflowChatRequestEvent
+        var request = new WorkflowChatRequestEvent
         {
             Prompt = "hello",
             ScopeId = "scope-1",
-        }));
+        };
+        if (includeCompletionNotificationTarget)
+            request.CompletionNotificationTarget = CreateCompletionNotificationTarget();
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(
+            "api",
+            request,
+            envelopeId: "command-1",
+            correlationId: "correlation-1"));
 
         harness.Agent.State.Status.Should().Be("running");
         harness.Agent.State.RunId.Should().Be(runId);
@@ -383,23 +913,31 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     private static async Task<RunHarness> CreateRunAsync(
         string runId,
         RecordingEventStore? eventStore = null,
+        bool failTerminalNotificationDispatch = false,
+        string? workflowYaml = null,
+        Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort? fileOwnershipPort = null,
         ISecretVault? secretVault = null,
         TimeProvider? timeProvider = null)
     {
         eventStore ??= new RecordingEventStore();
         var committedHook = new RecordingCommittedStatePublicationHook();
-        var topologyPublisher = new RecordingEventPublisher(runId);
+        var topologyPublisher = new RecordingEventPublisher(runId)
+        {
+            FailTerminalNotificationDispatch = failTerminalNotificationDispatch,
+        };
+        var scheduler = new RecordingRuntimeCallbackScheduler();
         var agent = new WorkflowRunGAgent(
             new UnsupportedActorRuntime(),
             new UnsupportedActorRuntime(),
             new EmptyEventModuleFactory(),
             [new EmptyWorkflowModulePack()],
             secretVault: secretVault,
+            fileArtifactOwnership: fileOwnershipPort,
             timeProvider: timeProvider)
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkflowRunState>(eventStore),
             EventPublisher = topologyPublisher,
-            Services = new TestServiceProvider(new NoopRuntimeCallbackScheduler(), committedHook),
+            Services = new TestServiceProvider(scheduler, committedHook),
             Logger = NullLogger.Instance,
         };
         SetAgentId(agent, runId);
@@ -413,13 +951,13 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             {
                 DefinitionActorId = "definition-relayed",
                 WorkflowName = "wf_relayed",
-                WorkflowYaml = WorkflowYaml(),
+                WorkflowYaml = workflowYaml ?? WorkflowYaml(),
                 RunId = runId,
                 ScopeId = "scope-1",
             }));
         }
 
-        return new RunHarness(agent, runId, eventStore, committedHook, topologyPublisher);
+        return new RunHarness(agent, runId, eventStore, committedHook, topologyPublisher, scheduler);
     }
 
     private sealed class CancellationAwareStalledSecretVault : ISecretVault
@@ -458,6 +996,22 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             return new RevokeSecretResult(false);
         }
     }
+
+    private static WorkflowChatRequestEvent CreateNotificationTargetRequest() =>
+        new()
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+            CompletionNotificationTarget = CreateCompletionNotificationTarget(),
+        };
+
+    private static WorkflowCompletionNotificationTarget CreateCompletionNotificationTarget() =>
+        new()
+        {
+            ActorId = "delivery-actor-1",
+            DeliveryId = "delivery-1",
+            ExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        };
 
     // Seed a recoverable pending sub-workflow invocation directly into the run's committed event stream.
     // SubWorkflowInvocationRegisteredEvent's reducer (registered on WorkflowRunGAgent) adds the pending
@@ -525,16 +1079,26 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         }
     }
 
-    private static EventEnvelope EnvelopeFrom(string publisherActorId, IMessage payload) =>
+    private static IEnumerable<string> CommittedTypeOrder(RecordingCommittedStatePublicationHook hook) =>
+        hook.Events
+            .Select(static published => published.StateEvent?.EventData?.TypeUrl)
+            .Where(static typeUrl => !string.IsNullOrWhiteSpace(typeUrl))
+            .Select(static typeUrl => typeUrl![(typeUrl!.LastIndexOf('/') + 1)..]);
+
+    private static EventEnvelope EnvelopeFrom(
+        string publisherActorId,
+        IMessage payload,
+        string? envelopeId = null,
+        string? correlationId = null) =>
         new()
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = envelopeId ?? Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             Payload = Any.Pack(payload),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(publisherActorId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
-                CorrelationId = Guid.NewGuid().ToString("N"),
+                CorrelationId = correlationId ?? Guid.NewGuid().ToString("N"),
             },
         };
 
@@ -564,7 +1128,8 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         string RunId,
         RecordingEventStore EventStore,
         RecordingCommittedStatePublicationHook CommittedPublisher,
-        RecordingEventPublisher Publisher);
+        RecordingEventPublisher Publisher,
+        RecordingRuntimeCallbackScheduler Scheduler);
 
     private sealed class EmptyWorkflowModulePack : IWorkflowModulePack
     {
@@ -580,6 +1145,17 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         public IReadOnlyList<IWorkflowModuleConfigurator> Configurators { get; } = [];
     }
 
+    private sealed class ThrowingWorkflowFileArtifactOwnershipPort
+        : Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort
+    {
+        public ValueTask BindOwnerAsync(
+            Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef fileRef,
+            string ownerRunId,
+            string? ownerScopeId,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException(new InvalidOperationException("file owner binding failed"));
+    }
+
     private sealed class EmptyEventModuleFactory : IEventModuleFactory<IWorkflowExecutionContext>
     {
         public bool TryCreate(string name, out IEventModule<IWorkflowExecutionContext>? module)
@@ -593,6 +1169,10 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     private sealed class RecordingEventPublisher(string runId) : IEventPublisher
     {
         public List<(IMessage Event, TopologyAudience Audience)> Published { get; } = [];
+        public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> SendAttempts { get; } = [];
+        public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> SuccessfulSends { get; } = [];
+        public bool FailTerminalNotificationDispatch { get; set; }
+        public bool FailTerminalNotificationRetrySelfDispatch { get; set; }
 
         public async Task PublishAsync<T>(
             T evt,
@@ -617,17 +1197,35 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
             CancellationToken ct,
             EventEnvelope? sourceEnvelope,
             EventEnvelopePublishOptions? options)
-            where T : IMessage =>
-            Task.CompletedTask;
+            where T : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            var attempt = (targetActorId, (IMessage)evt, options?.DeepClone());
+            SendAttempts.Add(attempt);
+            if (FailTerminalNotificationDispatch && evt is WorkflowRunTerminalNotification)
+                return Task.FromException(new IOException("terminal notification transport unavailable"));
+            if (FailTerminalNotificationRetrySelfDispatch && evt is WorkflowRunTerminalNotificationRetryFiredEvent)
+                return Task.FromException(new InvalidOperationException("terminal notification self dispatch unavailable"));
+
+            SuccessfulSends.Add(attempt);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingCommittedStatePublicationHook : ICommittedStatePublicationHook
     {
         public List<CommittedStateEventPublished> Events { get; } = [];
+        public bool FailTerminalNotificationPrepare { get; set; }
 
         public Task BeforePublishAsync(CommittedStatePublicationContext context, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            if (FailTerminalNotificationPrepare &&
+                context.Published.StateEvent?.EventData?.Is(WorkflowRunTerminalNotificationPreparedEvent.Descriptor) == true)
+            {
+                throw new InvalidOperationException("terminal notification prepare publication failed");
+            }
+
             Events.Add(context.Published.Clone());
             return Task.CompletedTask;
         }
@@ -696,7 +1294,7 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
     }
 
     private sealed class TestServiceProvider(
-        NoopRuntimeCallbackScheduler scheduler,
+        RecordingRuntimeCallbackScheduler scheduler,
         RecordingCommittedStatePublicationHook committedHook) : IServiceProvider
     {
         public object? GetService(System.Type serviceType)
@@ -712,16 +1310,26 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         }
     }
 
-    private sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+        public Exception? Exception { get; set; }
+
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (Exception != null)
+                return Task.FromException<RuntimeCallbackLease>(Exception);
+
+            TimeoutRequests.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
                 1,
                 RuntimeCallbackBackend.InMemory));
+        }
 
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
             RuntimeCallbackTimerRequest request,
