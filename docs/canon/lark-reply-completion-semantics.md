@@ -47,15 +47,18 @@ Conversation state 维护 bounded `recent_deliveries` 与 `last_successful_deliv
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
     autonumber
-    participant U as User (Lark)
-    participant CGA as ConversationGAgent
-    participant D as IChannelLlmReplyRunDispatcher
-    participant ARG as AgentRunGAgent
-    participant CR as ChatRuntime
-    participant LK as Lark API
+    participant U as "User (Lark)"
+    participant CGA as "ConversationGAgent"
+    participant RS as "IRuntimeSecretStore"
+    participant D as "IChannelLlmReplyRunDispatcher"
+    participant ARG as "AgentRunGAgent"
+    participant CR as "ChatRuntime"
+    participant LK as "Lark API"
 
     U->>CGA: inbound message
-    CGA->>CGA: raise NeedsLlmReplyEvent<br/>(accepted)
+    CGA->>RS: Put(reply token + user token, TTL)
+    RS-->>CGA: typed RuntimeSecretReference values
+    CGA->>CGA: raise NeedsLlmReplyEvent<br/>(accepted, references only)
     CGA->>D: DispatchAsync(evt)
     D-->>CGA: normal return (accepted for dispatch)
     D->>ARG: AgentRunStartRequested (via IActorDispatchPort)
@@ -79,7 +82,30 @@ sequenceDiagram
 
 ## 4. 时序图：Failure Paths
 
-### 4.1 LLM 产出失败（committed 前 dropped）
+### 4.1 Actor inbox handoff 瞬时失败
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    autonumber
+    participant CGA as "ConversationGAgent"
+    participant RS as "IRuntimeSecretStore"
+    participant D as "IChannelLlmReplyRunDispatcher"
+    participant ARG as "AgentRunGAgent"
+
+    CGA->>D: DispatchAsync(evt + runtime credentials)
+    D--xCGA: transport exception before inbox acceptance
+    CGA->>CGA: schedule durable retry
+    CGA->>RS: Resolve(typed references)
+    RS-->>CGA: runtime-only credentials
+    CGA->>D: DispatchAsync(same run_id)
+    D->>ARG: AgentRunStartRequested
+```
+
+`NeedsLlmReplyEvent` 只持久化引用，不持久化 raw token。retry clone 在进入
+`IActorDispatchPort` 前恢复凭据；引用缺失或过期时提交明确失败事实，禁止静默丢 turn。
+
+### 4.2 LLM 产出失败（committed 前 dropped）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -96,7 +122,7 @@ sequenceDiagram
     ARG->>ARG: cleanup_completed_at = now
 ```
 
-### 4.2 Lark sink 失败（committed 后、delivered 失败）
+### 4.3 Lark sink 失败（committed 后、delivered 失败）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -113,7 +139,7 @@ sequenceDiagram
     CGA->>CGA: raise ConversationContinueFailedEvent<br/>(finalized, committed-but-not-delivered)
 ```
 
-### 4.3 Stale signal 到达终态 actor（必须 no-op）
+### 4.4 Stale signal 到达终态 actor（必须 no-op）
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -132,6 +158,7 @@ sequenceDiagram
 
 | 故障发生时所处阶段 | 故障类型 | 终态 status | last_reply_delivery | 上抛事件 | 责任 actor |
 |---|---|---|---|---|---|
+| accepted → committed | initial actor inbox handoff exception | pending; same `run_id` durable retry | `null` | runtime-secret reference resolve + redispatch | ConversationGAgent |
 | accepted → committed | duplicate run start | 不变（terminal duplicate no-op / retry path keeps `REPLY_PRODUCED`） | 不变 | log only or persisted retry handoff | AgentRunGAgent |
 | accepted → committed | stale run age > MaxRunRequestAgeMs | `AgentRunStatus.DROPPED` | `null` | `AgentRunDroppedEvent` + `DeferredLlmReplyDroppedEvent` | AgentRunGAgent |
 | accepted → committed | LLM provider error | `AgentRunStatus.FAILED` | `null` | `AgentRunFailedEvent` + `ConversationContinueFailedEvent` | AgentRunGAgent |
