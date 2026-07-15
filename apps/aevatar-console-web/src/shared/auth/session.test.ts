@@ -66,6 +66,7 @@ describe('auth session storage', () => {
       clientId: 'client-1',
       redirectUri: 'http://127.0.0.1:5173/auth/callback',
       scope: 'openid profile email',
+      defaultServiceSlugs: [],
     });
 
     expect(state.isAuthenticated).toBe(false);
