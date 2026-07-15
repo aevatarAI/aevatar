@@ -5044,6 +5044,40 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
+  it("blocks an unchanged YAML buffer after the draft revision advances", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const titleInput = await screen.findByLabelText("Workflow title");
+    clickYamlAction("Edit YAML");
+    const editor = await screen.findByLabelText("Workflow YAML editor");
+    const originalYaml = (editor as HTMLTextAreaElement).value;
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
+    await waitFor(() => {
+      expect(applyButton).toBeEnabled();
+    });
+
+    fireEvent.change(titleInput, {
+      target: { value: "Renamed member" },
+    });
+
+    await waitFor(() => {
+      expect(editor).toHaveValue(originalYaml);
+      expect(applyButton).toBeDisabled();
+      expect(
+        screen.getByText(
+          "This YAML buffer is stale because the canvas or source draft changed.",
+        ),
+      ).toBeTruthy();
+    });
+    expect(titleInput).toHaveValue("Renamed member");
+  });
+
   it("preserves unchanged step layout and adds new YAML steps deterministically", async () => {
     window.history.replaceState(
       {},

@@ -1144,7 +1144,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const yamlEditHasBlockingFindings = hasBlockingFindings(yamlEditDiagnostics);
   const yamlEditHasConflict = Boolean(
     yamlPanelOpen &&
-      yamlEditHasUnappliedChanges &&
       (yamlEditBaseRevision !== draftRevision ||
         yamlEditBaseSourceKey !== sourceKeyRef.current),
   );
@@ -1963,7 +1962,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return;
     }
 
-    if (yamlEditHasConflict) {
+    if (
+      yamlEditBaseRevision !== draftRevisionRef.current ||
+      yamlEditBaseSourceKey !== sourceKeyRef.current
+    ) {
       setYamlEditError(
         "This YAML buffer was based on an older draft. Reopen Edit YAML from the current canvas before applying.",
       );
@@ -2038,8 +2040,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     routeFallbackTitle,
     workflowTitle,
     yamlEditBuffer,
+    yamlEditBaseRevision,
+    yamlEditBaseSourceKey,
     yamlEditDiagnostics,
-    yamlEditHasConflict,
     yamlEditParsedDocument,
     yamlEditValidatedBuffer,
   ]);
