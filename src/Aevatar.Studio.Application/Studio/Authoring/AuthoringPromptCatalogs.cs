@@ -12,6 +12,8 @@ namespace Aevatar.Studio.Application.Studio.Authoring;
 public sealed class WorkflowAuthoringPromptCatalog
 {
     private const string SkillRelativePath = ".cursor/skills/aevatar-workflow-yaml/SKILL.md";
+    private const string AuthorableRootFieldsToken = "{{workflow_authorable_root_fields}}";
+    private const string UnsupportedDialectRootFieldsToken = "{{workflow_unsupported_dialect_root_fields}}";
     private readonly ILogger<WorkflowAuthoringPromptCatalog> _logger;
     private readonly WorkflowCompatibilityProfile _profile;
 
@@ -93,9 +95,14 @@ public sealed class WorkflowAuthoringPromptCatalog
         builder.AppendLine("Use snake_case keys and author parameters as strings unless the schema requires another shape.");
         builder.AppendLine();
         builder.AppendLine("Reference:");
-        builder.AppendLine(skillMarkdown.Trim());
+        builder.AppendLine(RenderSkillMarkdown(skillMarkdown).Trim());
         return builder.ToString().Trim();
     }
+
+    private string RenderSkillMarkdown(string skillMarkdown) =>
+        skillMarkdown
+            .Replace(AuthorableRootFieldsToken, _profile.FormatRootFields(), StringComparison.Ordinal)
+            .Replace(UnsupportedDialectRootFieldsToken, _profile.FormatRejectedDialectRootFields(), StringComparison.Ordinal);
 
     private string BuildBuiltInSkillFallback() =>
         $"""

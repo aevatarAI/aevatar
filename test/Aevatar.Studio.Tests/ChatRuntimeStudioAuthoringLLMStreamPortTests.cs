@@ -69,7 +69,13 @@ public sealed class ChatRuntimeStudioAuthoringLLMStreamPortTests
         provider.LastSystemPrompt.Should().Contain(
             $"The only supported top-level fields are: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}.");
         provider.LastSystemPrompt.Should().Contain(
+            $"The only supported top-level fields are {WorkflowYamlRootSchema.FormatAuthorableRootFields()}.");
+        provider.LastSystemPrompt.Should().Contain(
             $"Do not emit top-level fields from other workflow dialects, including {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}.");
+        provider.LastSystemPrompt.Should().NotContain("{{workflow_authorable_root_fields}}");
+        provider.LastSystemPrompt.Should().NotContain("{{workflow_unsupported_dialect_root_fields}}");
+        provider.LastSystemPrompt.Should().NotContain("The only supported top-level fields are `name`, `description`, `configuration`, `roles`, and `steps`.");
+        provider.LastSystemPrompt.Should().NotContain("including `version`, `inputs`, `outputs`, `triggers`, `on`, `env`, or `jobs`.");
         provider.LastSystemPrompt.Should().NotContain("stream_buffer_capacity");
         provider.LastSystemPrompt.Should().NotContain("agent_type: RoleGAgent");
         provider.LastSystemPrompt.Should().NotContain("agent_id: role");

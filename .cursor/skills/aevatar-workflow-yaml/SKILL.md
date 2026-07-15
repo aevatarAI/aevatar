@@ -10,8 +10,8 @@ Use this skill when creating, editing, reviewing, or debugging `workflow yaml` f
 ## Canonical Schema
 
 All keys use snake_case (`UnderscoredNamingConvention`).
-The only supported top-level fields are `name`, `description`, `configuration`, `roles`, and `steps`.
-Do not emit top-level fields from other workflow dialects, including `version`, `inputs`, `outputs`, `triggers`, `on`, `env`, or `jobs`.
+The only supported top-level fields are {{workflow_authorable_root_fields}}.
+Do not emit top-level fields from other workflow dialects, including {{workflow_unsupported_dialect_root_fields}}.
 
 ```yaml
 name: my_workflow               # required
