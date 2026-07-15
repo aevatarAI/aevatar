@@ -1349,7 +1349,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 "scope" => throw new BindingScopeMismatchException(externalSubject),
                 "service" => throw new BindingServiceAccessMismatchException(
                     externalSubject,
-                    "https://nyxid.test/api/v1/proxy/s/aevatar"),
+                    ["https://nyxid.test/api/v1/proxy/s/aevatar"]),
                 "unexpected" => throw new InvalidOperationException("broker failed"),
                 "empty-token" => Task.FromResult(new CapabilityHandle()),
                 _ => Task.FromResult(new CapabilityHandle

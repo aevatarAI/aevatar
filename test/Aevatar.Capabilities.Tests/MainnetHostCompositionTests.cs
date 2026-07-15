@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
@@ -32,6 +33,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
@@ -96,6 +98,8 @@ public sealed class MainnetHostCompositionTests
         app.MapAevatarMainnetHost();
         await app.StartAsync();
 
+        app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
+            .Value.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()

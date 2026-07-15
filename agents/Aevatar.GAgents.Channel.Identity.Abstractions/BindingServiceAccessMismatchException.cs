@@ -4,7 +4,7 @@ namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 
 /// <summary>
 /// Thrown when a NyxID binding can mint a token but the grant does not include
-/// the service resource required by aevatar.
+/// every service resource required by aevatar.
 /// </summary>
 public sealed class BindingServiceAccessMismatchException : Exception
 {
@@ -14,23 +14,30 @@ public sealed class BindingServiceAccessMismatchException : Exception
     public ExternalSubjectRef ExternalSubject { get; }
 
     /// <summary>
-    /// RFC 8707 resource URI that the binding must grant.
+    /// RFC 8707 resource URIs that the binding must grant.
     /// </summary>
-    public string RequiredResource { get; }
+    public IReadOnlyList<string> RequiredResources { get; }
 
     /// <summary>
     /// Creates a service-access mismatch for an existing binding.
     /// </summary>
     public BindingServiceAccessMismatchException(
         ExternalSubjectRef externalSubject,
-        string requiredResource,
+        IEnumerable<string> requiredResources,
         string? message = null,
         Exception? innerException = null)
         : base(
             message ?? $"Binding service access mismatch for {externalSubject.Platform}:{externalSubject.Tenant}:{externalSubject.ExternalUserId}",
             innerException)
     {
+        ArgumentNullException.ThrowIfNull(requiredResources);
         ExternalSubject = externalSubject;
-        RequiredResource = requiredResource;
+        RequiredResources = requiredResources
+            .Where(static resource => !string.IsNullOrWhiteSpace(resource))
+            .Select(static resource => resource.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (RequiredResources.Count == 0)
+            throw new ArgumentException("At least one required resource must be provided.", nameof(requiredResources));
     }
 }

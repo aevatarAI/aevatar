@@ -18,6 +18,14 @@ public sealed class NyxIdBrokerOptions
     public string Scope { get; set; } = AevatarOAuthClientScopes.AuthorizationScope;
 
     /// <summary>
+    /// NyxID service slug used by the deployment's default LLM route. The Host
+    /// composition root must source this from the same setting/default as the
+    /// LLM provider. When set, every binding flow grants both the core
+    /// <c>aevatar</c> service and this LLM service.
+    /// </summary>
+    public string? RequiredLlmServiceSlug { get; set; }
+
+    /// <summary>
     /// Lifetime of the stateless <c>state</c> token. Bounds how long a user
     /// can sit on the OAuth authorize URL before completing login. Maximum
     /// 5 minutes per ADR-0018 §Implementation Notes #1.

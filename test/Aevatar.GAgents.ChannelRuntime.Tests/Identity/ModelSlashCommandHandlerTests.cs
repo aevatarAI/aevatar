@@ -230,13 +230,13 @@ public sealed class ModelSlashCommandHandlerTests
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingServiceAccessMismatchException(
                 context.Subject,
-                "https://nyxid.test/api/v1/proxy/s/aevatar")),
+                ["https://nyxid.test/api/v1/proxy/s/aevatar"])),
             actorDispatchPort: dispatchPort);
 
         var reply = await handler.HandleAsync(context, default);
 
         reply.Should().NotBeNull();
-        reply!.Text.Should().Contain("未授权 Aevatar service");
+        reply!.Text.Should().Contain("默认 LLM service");
         reply.Text.Should().Contain("/init");
         AssertRevokeBindingDispatched(
             dispatchPort,

@@ -2613,11 +2613,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding lacks the required aevatar service; reconciling the local binding so the sender can reauthorize. subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lacks a required service; reconciling the local binding so the sender can reauthorize. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            TriggerBindingReconcile(subject, "nyx_required_service_missing");
+            TriggerBindingReconcile(subject, "nyx_required_services_missing");
             return null;
         }
         catch (Exception ex)

@@ -29,6 +29,7 @@ using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -156,6 +157,13 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
+        builder.Services.Configure<NyxIdBrokerOptions>(options =>
+        {
+            var configuredRoute = builder.Configuration["Aevatar:NyxId:DefaultRoute"];
+            options.RequiredLlmServiceSlug = string.IsNullOrWhiteSpace(configuredRoute)
+                ? LlmDefaults.NyxIdRoute
+                : configuredRoute.Trim();
+        });
         builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
         {
             // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.

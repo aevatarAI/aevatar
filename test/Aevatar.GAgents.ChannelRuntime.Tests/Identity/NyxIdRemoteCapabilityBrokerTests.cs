@@ -20,7 +20,10 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
     private const string OAuthAuthority = "https://nyx-ui.test";
-    private const string RequiredResource = $"{OAuthAuthority}/api/v1/proxy/s/aevatar";
+    private const string RequiredLlmServiceSlug = "chrono-llm-public";
+    private const string RequiredAevatarResource = $"{OAuthAuthority}/api/v1/proxy/s/aevatar";
+    private const string RequiredLlmResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredLlmServiceSlug}";
+    private static readonly string[] RequiredResources = [RequiredAevatarResource, RequiredLlmResource];
 
     private readonly string? _savedOverride;
 
@@ -121,7 +124,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         result.Scope.Should().Be("openid profile proxy");
         handler.LastRequestUri.Should().Be($"{OAuthAuthority}/oauth/token");
         QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")["resource"]
-            .Should().ContainSingle().Which.Should().Be(RequiredResource);
+            .Should().Equal(RequiredResources);
     }
 
     [Fact]
@@ -140,7 +143,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var scope = query["scope"].Should().ContainSingle().Which;
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
-        query["resource"].Should().ContainSingle().Which.Should().Be(RequiredResource);
+        query["resource"].Should().Equal(RequiredResources);
         query["state"].Should().ContainSingle();
         query["code_challenge"].Should().ContainSingle();
         query["code_challenge_method"].Should().ContainSingle().Which.Should().Be("S256");
@@ -155,6 +158,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             options: new NyxIdBrokerOptions
             {
                 Scope = $"{AevatarOAuthClientScopes.AuthorizationScope} email",
+                RequiredLlmServiceSlug = RequiredLlmServiceSlug,
             });
 
         var challenge = await broker.StartExternalBindingAsync(SampleSubject());
@@ -179,9 +183,9 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_RequiresAevatarResourceInIssuedToken()
+    public async Task IssueShortLivedByBindingIdAsync_RequiresEveryConfiguredResourceInIssuedToken()
     {
-        var accessToken = CreateAccessToken([RequiredResource]);
+        var accessToken = CreateAccessToken(RequiredResources);
         var handler = StubHandler.Text(
             HttpStatusCode.OK,
             JsonSerializer.Serialize(new
@@ -202,11 +206,11 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         result.AccessToken.Should().Be(accessToken);
         QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")["resource"]
-            .Should().ContainSingle().Which.Should().Be(RequiredResource);
+            .Should().Equal(RequiredResources);
     }
 
     [Fact]
-    public async Task IssueShortLivedByBindingIdAsync_RejectsLegacyBindingWithoutAevatarResource()
+    public async Task IssueShortLivedByBindingIdAsync_RejectsLegacyBindingWithoutLlmResource()
     {
         var broker = NewBroker(
             NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
@@ -214,7 +218,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
                 HttpStatusCode.OK,
                 JsonSerializer.Serialize(new
                 {
-                    access_token = CreateAccessToken([]),
+                    access_token = CreateAccessToken([RequiredAevatarResource]),
                     token_type = "Bearer",
                     expires_in = 300,
                     scope = "proxy",
@@ -225,7 +229,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             "bnd-user",
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
-        await act.Should().ThrowAsync<BindingServiceAccessMismatchException>();
+        var exception = await act.Should().ThrowAsync<BindingServiceAccessMismatchException>();
+        exception.Which.RequiredResources.Should().Equal(RequiredLlmResource);
     }
 
     [Fact]
@@ -241,7 +246,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
         var exception = await act.Should().ThrowAsync<BindingServiceAccessMismatchException>();
-        exception.Which.RequiredResource.Should().Be(RequiredResource);
+        exception.Which.RequiredResources.Should().Equal(RequiredResources);
     }
 
     [Fact]
@@ -253,7 +258,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         var act = () => broker.ExchangeAuthorizationCodeAsync("auth-code", "verifier");
 
-        await act.Should().ThrowAsync<NyxIdRequiredServiceAccessException>();
+        var exception = await act.Should().ThrowAsync<NyxIdRequiredServiceAccessException>();
+        exception.Which.RequiredResources.Should().Equal(RequiredResources);
     }
 
     private static NyxIdRemoteCapabilityBroker NewBroker(
@@ -262,7 +268,10 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         HttpMessageHandler? httpHandler = null)
     {
         var provider = new FakeOAuthClientProvider(snapshot);
-        options ??= new NyxIdBrokerOptions();
+        options ??= new NyxIdBrokerOptions
+        {
+            RequiredLlmServiceSlug = RequiredLlmServiceSlug,
+        };
         return new NyxIdRemoteCapabilityBroker(
             new FakeHttpClientFactory(httpHandler),
             provider,

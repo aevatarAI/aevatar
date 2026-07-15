@@ -25,6 +25,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 /// short-lived NyxID token by binding id and overlays it onto the LLM control so
 /// it projects into the tool credentials. On <see cref="BindingRevokedException"/>
 /// it triggers a local binding reconcile and keeps the owner fallback intact.
+/// A binding whose grant lacks a required service follows the same self-heal.
 /// Without a sender binding it touches neither broker nor reconciler.
 /// </summary>
 public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
@@ -117,6 +118,48 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         reason.Should().Be("nyx_invalid_grant");
         reconciledSubject.Platform.Should().Be("lark");
         reconciledSubject.ExternalUserId.Should().Be("ou_user_y");
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenBindingLacksRequiredService_ReconcilesAndKeepsTokenEmpty()
+    {
+        var subjectSeen = new ExternalSubjectRef { Platform = "lark", Tenant = "ou_tenant_x", ExternalUserId = "ou_user_y" };
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                SenderBindingId,
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingServiceAccessMismatchException(
+                subjectSeen,
+                ["https://nyxid.test/api/v1/proxy/s/chrono-llm-public"]));
+        var reconcileSignal = new TaskCompletionSource<(ExternalSubjectRef Subject, string Reason)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconciler = Substitute.For<IBindingRevocationReconciler>();
+        reconciler
+            .ReconcileRevokedAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                reconcileSignal.TrySetResult(
+                    (call.ArgAt<ExternalSubjectRef>(0), call.ArgAt<string>(1)));
+                return Task.CompletedTask;
+            });
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(generator, broker, reconciler);
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(senderBindingId: SenderBindingId, senderTenant: "ou_tenant_x"),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
+        AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
+            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+
+        var (reconciledSubject, reason) = await reconcileSignal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        reason.Should().Be("nyx_required_services_missing");
+        reconciledSubject.Should().BeEquivalentTo(subjectSeen);
     }
 
     [Fact]

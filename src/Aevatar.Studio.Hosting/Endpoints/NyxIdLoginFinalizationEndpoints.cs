@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -43,6 +44,7 @@ public static class NyxIdLoginFinalizationEndpoints
 
     internal static async Task<IResult> HandleConfigAsync(
         [FromServices] IAevatarOAuthClientProvider oauthClientProvider,
+        [FromServices] IOptions<NyxIdBrokerOptions> brokerOptions,
         CancellationToken ct = default)
     {
         try
@@ -55,7 +57,8 @@ public static class NyxIdLoginFinalizationEndpoints
                     ? AevatarOAuthClientScopes.AuthorizationScope
                     : snapshot.OauthScope.Trim(),
                 Resources: AevatarOAuthClientResources.RequiredResourceUris(
-                    snapshot.NyxIdAuthority)));
+                    snapshot.NyxIdAuthority,
+                    brokerOptions.Value.RequiredLlmServiceSlug)));
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -96,11 +99,11 @@ public static class NyxIdLoginFinalizationEndpoints
         }
         catch (NyxIdRequiredServiceAccessException ex)
         {
-            logger.LogInformation(ex, "NyxID login did not grant aevatar's required service resource.");
+            logger.LogInformation(ex, "NyxID login did not grant every required service resource.");
             return Results.Json(new
             {
                 error = "required_service_access_missing",
-                detail = "Return to login and allow access to the Aevatar service in NyxID.",
+                detail = "Return to login and allow access to the Aevatar and default LLM services in NyxID.",
             }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception ex)
