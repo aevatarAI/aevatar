@@ -9,6 +9,7 @@ import "chat_activity.proto";
 import "channel_contracts.proto";
 import "chat_route_policy.proto";
 import "ai_messages.proto";
+import "Credentials/credential_secret_references.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -84,6 +85,13 @@ message NeedsLlmReplyEvent {
   // transient run command so the chat LLM path can include recent image context
   // or inject an honest degradation warning.
   repeated RecentConversationAttachmentActivity recent_attachment_activities = 14;
+  // Durable handle to the encrypted, TTL-bound relay reply token. The raw token
+  // remains runtime-only; this reference lets a transient actor-dispatch failure
+  // retry without silently abandoning the accepted inbound turn.
+  aevatar.credentials.RuntimeSecretReference relay_reply_token_ref = 15;
+  // Durable handle to the encrypted, TTL-bound NyxID user access token used by
+  // the LLM gateway. The raw access token is never persisted in actor state.
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 16;
 }
 
 enum ChannelWorkflowDraftRunSourceKind {

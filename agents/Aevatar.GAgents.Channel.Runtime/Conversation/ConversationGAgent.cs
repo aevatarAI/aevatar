@@ -3,6 +3,7 @@ using Aevatar.ChatRouting.Core;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
@@ -75,6 +76,8 @@ public sealed partial class ConversationGAgent :
     private const int RecentAttachmentActivityCap = 5;
     private const int RecentDeliveriesCap = 100;
     private const int MaxNyxRelayInterimUpdateRetryCount = 2;
+    private const string RelayReplyTokenSecretPurpose = "channel-relay-reply-token";
+    private const string RelayUserAccessTokenSecretPurpose = "channel-relay-user-access-token";
     private static readonly TimeSpan RecentAttachmentActivityWindow = TimeSpan.FromMinutes(10);
     private const int RuntimeCredentialLocalOccRetryCount = 3;
 
@@ -314,10 +317,9 @@ public sealed partial class ConversationGAgent :
                 return;
             }
 
-            // The transient run command copy keeps reply_token + expiry + per-call credentials
-            // in Metadata so the run actor can echo them back inside LlmReplyReadyEvent and
-            // forward them to the LLM call; the persisted state copy must not carry any of
-            // those credentials into the event store / projection / read model.
+            // The transient run command copy keeps the raw reply token and per-call credentials
+            // so the run actor can echo them back inside LlmReplyReadyEvent and forward them to
+            // the LLM call. The persisted copy keeps only encrypted runtime-secret references.
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
@@ -325,6 +327,7 @@ public sealed partial class ConversationGAgent :
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            await AttachRelayRuntimeSecretReferencesAsync(runCopy, runtimeContext, CancellationToken.None);
             runCopy.PriorHistory.Clear();
             runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
             runCopy.RecentAttachmentActivities.Clear();
@@ -704,20 +707,39 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
-        if (IsRelayActivity(request.Activity) && string.IsNullOrWhiteSpace(request.ReplyToken))
+        var dispatchRequest = request.Clone();
+        try
+        {
+            await RestoreRelayRuntimeCredentialsAsync(dispatchRequest, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Failed to resolve relay runtime credentials; scheduling durable retry: correlation={CorrelationId}",
+                request.CorrelationId);
+            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
+            return;
+        }
+
+        if (IsRelayActivity(dispatchRequest.Activity) && string.IsNullOrWhiteSpace(dispatchRequest.ReplyToken))
         {
             await PersistMissingRuntimeCredentialFailureAsync(
-                BuildLlmReplyCommandId(request.CorrelationId),
-                request.CorrelationId,
+                BuildLlmReplyCommandId(dispatchRequest.CorrelationId),
+                dispatchRequest.CorrelationId,
                 "missing_runtime_reply_token",
-                "Pending relay LLM reply cannot be dispatched after rehydration because reply credentials are runtime-only.",
+                "Pending relay LLM reply cannot be dispatched because its runtime reply credential is unavailable or expired.",
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(request.RunId))
+        if (string.IsNullOrWhiteSpace(dispatchRequest.RunId))
         {
-            await DropLegacyPendingLlmReplyWithoutRunIdAsync(request);
+            await DropLegacyPendingLlmReplyWithoutRunIdAsync(dispatchRequest);
             return;
         }
 
@@ -726,12 +748,12 @@ public sealed partial class ConversationGAgent :
             // Refactor (iter56/cluster-935-agent-run-actor-admission): old=dispatcher in-process admission, new=actor-owned admission with plain Task
             //   Conversation observes only dispatch handoff success/failure here.
             //   Run duplicate/stale decisions are committed by AgentRunGAgent events.
-            await dispatcher.DispatchAsync(request.Clone(), ct);
+            await dispatcher.DispatchAsync(dispatchRequest, ct);
             Logger.LogInformation(
                 "Dispatched LLM reply run request: runId={RunId} correlation={CorrelationId} conversation={Key}",
-                request.RunId,
-                request.CorrelationId,
-                request.Activity?.Conversation?.CanonicalKey);
+                dispatchRequest.RunId,
+                dispatchRequest.CorrelationId,
+                dispatchRequest.Activity?.Conversation?.CanonicalKey);
         }
         catch (Exception ex)
         {
@@ -2602,6 +2624,114 @@ public sealed partial class ConversationGAgent :
 
         activity.TransportExtras ??= new TransportExtras();
         activity.TransportExtras.NyxUserAccessToken = accessToken;
+    }
+
+    private async Task AttachRelayRuntimeSecretReferencesAsync(
+        NeedsLlmReplyEvent request,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct)
+    {
+        if (!IsRelayActivity(request.Activity) ||
+            runtimeContext.NyxRelayReplyToken is not { } replyContext ||
+            Services.GetService<IRuntimeSecretStore>() is not { } secretStore)
+        {
+            return;
+        }
+
+        var timeToLive = replyContext.ExpiresAtUtc - DateTimeOffset.UtcNow;
+        if (timeToLive <= TimeSpan.Zero)
+            return;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.RelayReplyTokenRef?.Ref) &&
+                NormalizeOptional(replyContext.ReplyToken) is { } replyToken)
+            {
+                request.RelayReplyTokenRef = (await secretStore.PutAsync(
+                    new StoreRuntimeSecretRequest(
+                        RelayReplyTokenSecretPurpose,
+                        request.RunId,
+                        request.CorrelationId,
+                        replyToken,
+                        timeToLive,
+                        ConsumeOnce: false,
+                        AuditReason: "Preserve relay reply credential for actor-dispatch recovery."),
+                    ct)).Reference;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.RelayUserAccessTokenRef?.Ref) &&
+                NormalizeOptional(runtimeContext.NyxUserAccessToken) is { } userAccessToken)
+            {
+                request.RelayUserAccessTokenRef = (await secretStore.PutAsync(
+                    new StoreRuntimeSecretRequest(
+                        RelayUserAccessTokenSecretPurpose,
+                        request.RunId,
+                        request.CorrelationId,
+                        userAccessToken,
+                        timeToLive,
+                        ConsumeOnce: false,
+                        AuditReason: "Preserve relay user credential for actor-dispatch recovery."),
+                    ct)).Reference;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // The same-turn dispatch still carries both raw credentials. A secret-store
+            // outage must not turn an otherwise healthy inbound turn into a failure.
+            Logger.LogWarning(
+                ex,
+                "Failed to preserve relay runtime credentials for dispatch recovery: runId={RunId} correlation={CorrelationId}",
+                request.RunId,
+                request.CorrelationId);
+        }
+    }
+
+    private async Task RestoreRelayRuntimeCredentialsAsync(
+        NeedsLlmReplyEvent request,
+        CancellationToken ct)
+    {
+        if (!IsRelayActivity(request.Activity) ||
+            Services.GetService<IRuntimeSecretStore>() is not { } secretStore)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(request.ReplyToken) &&
+            request.RelayReplyTokenRef is { Ref.Length: > 0 } replyTokenRef)
+        {
+            var resolved = await secretStore.ResolveAsync(
+                new ResolveRuntimeSecretRequest(
+                    replyTokenRef.Ref,
+                    RelayReplyTokenSecretPurpose,
+                    request.RunId,
+                    request.CorrelationId,
+                    "Recover relay reply credential after actor-dispatch failure."),
+                ct);
+            if (NormalizeOptional(resolved.Secret) is { } replyToken)
+            {
+                request.ReplyToken = replyToken;
+                request.ReplyTokenExpiresAtUnixMs = replyTokenRef.ExpiresAtUnixMs;
+            }
+        }
+
+        if (NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken) is null &&
+            request.RelayUserAccessTokenRef is { Ref.Length: > 0 } userAccessTokenRef)
+        {
+            var resolved = await secretStore.ResolveAsync(
+                new ResolveRuntimeSecretRequest(
+                    userAccessTokenRef.Ref,
+                    RelayUserAccessTokenSecretPurpose,
+                    request.RunId,
+                    request.CorrelationId,
+                    "Recover relay user credential after actor-dispatch failure."),
+                ct);
+            if (NormalizeOptional(resolved.Secret) is { } userAccessToken)
+                RestoreRuntimeTransportCredentials(request.Activity, userAccessToken);
+        }
     }
 
     private string DescribeReplyTokenSource(LlmReplyReadyEvent evt, ConversationTurnRuntimeContext runtimeContext)
