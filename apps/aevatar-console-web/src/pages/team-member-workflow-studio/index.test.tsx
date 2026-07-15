@@ -2069,10 +2069,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
         value: "name: Imported member 9\nsteps:\n  - id: triage\n    type: llm_call\n",
       },
     });
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Apply to draft" })).toBeEnabled();
+      expect(applyButton).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Apply to draft" }));
+    fireEvent.click(applyButton);
 
     await waitFor(() => {
       expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
@@ -4625,10 +4626,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
         value: "name: Imported workflow\nsteps:\n  - id: triage\n    type: llm_call\n",
       },
     });
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Apply to draft" })).toBeEnabled();
+      expect(applyButton).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Apply to draft" }));
+    fireEvent.click(applyButton);
 
     await waitFor(() => {
       expect(studioApi.parseYaml).toHaveBeenCalledWith({
@@ -4642,6 +4644,93 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(screen.getByLabelText("Workflow YAML panel")).toBeTruthy();
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  });
+
+  it("freezes YAML editing while Apply is in flight", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    let resolveApplySerialize: (() => void) | null = null;
+    (studioApi.serializeYaml as jest.Mock).mockImplementation(
+      ({ document }) => {
+        const response = {
+          document,
+          findings: [],
+          yaml: `name: ${document.name}\nsteps:\n${(document.steps ?? [])
+            .map((step: { id?: string; type?: string }) => `  - id: ${step.id}\n    type: ${step.type}`)
+            .join("\n")}`,
+        };
+
+        if (document.name === "Applied workflow") {
+          return new Promise((resolve) => {
+            resolveApplySerialize = () => resolve(response);
+          });
+        }
+
+        return Promise.resolve(response);
+      },
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await screen.findByLabelText("Workflow title");
+    clickYamlAction("Edit YAML");
+    const editor = await screen.findByLabelText("Workflow YAML editor");
+    fireEvent.change(editor, {
+      target: {
+        value:
+          "name: Applied workflow\nsteps:\n  - id: triage\n    type: llm_call\n",
+      },
+    });
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
+    await waitFor(() => {
+      expect(applyButton).toBeEnabled();
+    });
+
+    fireEvent.click(applyButton);
+    await waitFor(() => {
+      expect(resolveApplySerialize).toBeTruthy();
+      expect(editor).toHaveProperty("readOnly", true);
+    });
+    fireEvent.change(editor, {
+      target: {
+        value:
+          "name: Newer in-flight edit\nsteps:\n  - id: later\n    type: guard\n",
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: { value: "Newer canvas title" },
+    });
+
+    await act(async () => {
+      resolveApplySerialize?.();
+    });
+
+    await waitFor(() => {
+      expect(editor).toHaveProperty("readOnly", false);
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:0");
+      expect(screen.getByLabelText("Workflow title")).toHaveValue(
+        "Newer canvas title",
+      );
+      expect(
+        screen.getAllByText(
+          "This YAML buffer was based on an older draft. Reopen Edit YAML from the current canvas before applying.",
+        ),
+      ).not.toHaveLength(0);
+    });
+    expect((editor as HTMLTextAreaElement).value).toContain(
+      "name: Applied workflow",
+    );
+    expect((editor as HTMLTextAreaElement).value).not.toContain(
+      "Newer in-flight edit",
+    );
+    expect(
+      (studioApi.parseYaml as jest.Mock).mock.calls.some(([input]) =>
+        String(input.yaml).includes("Newer in-flight edit"),
+      ),
+    ).toBe(false);
   });
 
   it("keeps applied YAML in the edit buffer", async () => {
@@ -4725,10 +4814,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
           "name: Imported workflow\nsteps:\n  - id: triage\n    type: llm_call\n  - id: guard\n    type: guard\n",
       },
     });
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Apply to draft" })).toBeEnabled();
+      expect(applyButton).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Apply to draft" }));
+    fireEvent.click(applyButton);
 
     await waitFor(() => {
       expect(screen.getByText("nodes:2")).toBeTruthy();
@@ -5078,6 +5168,128 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(titleInput).toHaveValue("Renamed member");
   });
 
+  it("keeps a declined source refresh pending until YAML edits are discarded", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    const loadedWorkflow = {
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps:\n  - id: triage\n    type: llm_call\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    };
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue(loadedWorkflow);
+    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
+    const { queryClient } = renderWithQueryClient(
+      React.createElement(TeamMemberWorkflowStudioPage),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    clickYamlAction("Edit YAML");
+    const editor = await screen.findByLabelText("Workflow YAML editor");
+    fireEvent.change(editor, {
+      target: {
+        value:
+          "name: Local YAML edit\nsteps:\n  - id: triage\n    type: llm_call\n",
+      },
+    });
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
+    await waitFor(() => {
+      expect(applyButton).toBeEnabled();
+    });
+
+    act(() => {
+      queryClient.setQueryData(
+        [
+          "team-member-workflow-studio",
+          "workflow",
+          "scope-1",
+          "workflow-alpha",
+          "draft",
+        ],
+        {
+          ...loadedWorkflow,
+          document: {
+            ...mockWorkflowDocument,
+            name: "Server workflow",
+            steps: [
+              ...mockWorkflowDocument.steps,
+              {
+                id: "guard",
+                type: "guard",
+                targetRole: "",
+                parameters: { check: "not_empty" },
+                next: null,
+                branches: {},
+              },
+            ],
+          },
+          name: "Server workflow",
+          updatedAtUtc: "2026-06-08T00:00:01Z",
+          yaml:
+            "name: Server workflow\nsteps:\n  - id: triage\n    type: llm_call\n  - id: guard\n    type: guard\n",
+        },
+      );
+    });
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(applyButton).toBeDisabled();
+      expect(
+        screen.getByText(
+          "This YAML buffer is stale because the canvas or source draft changed.",
+        ),
+      ).toBeTruthy();
+    });
+    expect((editor as HTMLTextAreaElement).value).toContain("Local YAML edit");
+    expect(screen.getByLabelText("Workflow title")).toHaveValue("Workflow Alpha");
+    expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "canvas" }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledTimes(2);
+      expect(screen.queryByLabelText("Workflow YAML panel")).toBeNull();
+      expect(screen.getByLabelText("Workflow title")).toHaveValue(
+        "Server workflow",
+      );
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:2");
+    });
+    confirmSpy.mockRestore();
+  });
+
   it("preserves unchanged step layout and adds new YAML steps deterministically", async () => {
     window.history.replaceState(
       {},
@@ -5150,10 +5362,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
           "name: Layout Applied\nsteps:\n  - id: triage\n    type: llm_call\n  - id: guard\n    type: guard\n",
       },
     });
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Apply to draft" })).toBeEnabled();
+      expect(applyButton).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Apply to draft" }));
+    fireEvent.click(applyButton);
     await waitFor(() => {
       expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:2");
     });

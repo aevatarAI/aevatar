@@ -1102,6 +1102,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [yamlEditError, setYamlEditError] = React.useState("");
   const [yamlEditPending, setYamlEditPending] = React.useState(false);
   const [yamlEditApplying, setYamlEditApplying] = React.useState(false);
+  const yamlEditApplyingRef = React.useRef(false);
   const [yamlEditParsedDocument, setYamlEditParsedDocument] =
     React.useState<StudioWorkflowDocument | null>(null);
   const [yamlEditValidatedBuffer, setYamlEditValidatedBuffer] =
@@ -1116,11 +1117,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     React.useState("Untitled member");
   const [draftRevision, setDraftRevision] = React.useState(0);
   const draftRevisionRef = React.useRef(0);
-  const sourceKeyRef = React.useRef("");
+  const appliedSourceKeyRef = React.useRef("");
   const yamlEditRequestIdRef = React.useRef(0);
   const yamlEditValidationRequestIdRef = React.useRef(0);
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
+  const latestSourceKeyRef = React.useRef("");
   const teamsHref = buildTeamsHref();
   const advanceDraftRevision = React.useCallback(() => {
     const nextRevision = draftRevisionRef.current + 1;
@@ -1142,11 +1144,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlPanelOpen && yamlEditBuffer !== yamlEditSnapshot,
   );
   const yamlEditHasBlockingFindings = hasBlockingFindings(yamlEditDiagnostics);
-  const yamlEditHasConflict = Boolean(
-    yamlPanelOpen &&
-      (yamlEditBaseRevision !== draftRevision ||
-        yamlEditBaseSourceKey !== sourceKeyRef.current),
-  );
   const closeYamlPanelWithConfirmation = React.useCallback(() => {
     if (yamlEditHasUnappliedChanges && !confirmDiscardYamlEdits()) {
       return false;
@@ -1371,14 +1368,19 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         : linkedWorkflowMissing
           ? `missing:${route.scopeId}:${route.memberId}`
           : "";
+  latestSourceKeyRef.current = sourceKey;
+  const yamlEditHasConflict = Boolean(
+    yamlPanelOpen &&
+      (yamlEditBaseRevision !== draftRevision ||
+        yamlEditBaseSourceKey !== sourceKey),
+  );
 
   React.useEffect(() => {
-    if (!sourceDocument || !sourceKey || sourceKeyRef.current === sourceKey) {
+    if (!sourceDocument || !sourceKey || appliedSourceKeyRef.current === sourceKey) {
       return;
     }
 
     if (yamlEditHasUnappliedChanges && !confirmDiscardYamlEdits()) {
-      sourceKeyRef.current = sourceKey;
       return;
     }
 
@@ -1390,7 +1392,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       workflowSourceSignaturesMatch(sourceSignature, suppressedSourceSignature)
     ) {
       suppressedSourceSignatureRef.current = null;
-      sourceKeyRef.current = sourceKey;
+      appliedSourceKeyRef.current = sourceKey;
       return;
     }
 
@@ -1401,7 +1403,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       workflowDraftTitle ||
       trimOptional(nextDocument.name) ||
       routeFallbackTitle;
-    sourceKeyRef.current = sourceKey;
+    appliedSourceKeyRef.current = sourceKey;
     setEditableDocument({
       ...nextDocument,
       name: nextTitle,
@@ -1906,7 +1908,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     const requestId = yamlEditRequestIdRef.current + 1;
     yamlEditRequestIdRef.current = requestId;
     const baseRevision = draftRevisionRef.current;
-    const baseSourceKey = sourceKeyRef.current;
+    const baseSourceKey = appliedSourceKeyRef.current;
     setYamlEditPending(true);
 
     try {
@@ -1956,22 +1958,27 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     workflowTitle,
   ]);
   const applyYamlEdit = React.useCallback(async () => {
+    if (yamlEditApplyingRef.current) {
+      return;
+    }
+
     const yaml = yamlEditBuffer;
+    const baseIsCurrent = () =>
+      yamlEditBaseRevision === draftRevisionRef.current &&
+      yamlEditBaseSourceKey === latestSourceKeyRef.current;
     if (!yaml.trim()) {
       setYamlEditError("Enter workflow YAML before applying it to the draft.");
       return;
     }
 
-    if (
-      yamlEditBaseRevision !== draftRevisionRef.current ||
-      yamlEditBaseSourceKey !== sourceKeyRef.current
-    ) {
+    if (!baseIsCurrent()) {
       setYamlEditError(
         "This YAML buffer was based on an older draft. Reopen Edit YAML from the current canvas before applying.",
       );
       return;
     }
 
+    yamlEditApplyingRef.current = true;
     setYamlEditApplying(true);
     setYamlEditError("");
 
@@ -2000,6 +2007,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
       assertNoBlockingFindings(serialized.findings);
+      if (!baseIsCurrent()) {
+        throw new Error(
+          "This YAML buffer was based on an older draft. Reopen Edit YAML from the current canvas before applying.",
+        );
+      }
+
       const nextDocument =
         cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
       const nextGraph = buildStudioGraphElements(nextDocument, editableLayout);
@@ -2023,7 +2036,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setYamlEditParsedDocument(nextDocument);
       setYamlEditValidatedBuffer(serialized.yaml);
       setYamlEditBaseRevision(nextRevision);
-      setYamlEditBaseSourceKey(sourceKeyRef.current);
+      setYamlEditBaseSourceKey(latestSourceKeyRef.current);
       void message.success("Workflow YAML applied to the draft.");
     } catch (error) {
       const errorMessage =
@@ -2031,6 +2044,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setYamlEditError(errorMessage);
       void message.error(errorMessage);
     } finally {
+      yamlEditApplyingRef.current = false;
       setYamlEditApplying(false);
     }
   }, [
@@ -3224,6 +3238,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     updateSelectedStepConfiguration,
     workflowTitle,
     setYamlEditBuffer: (yaml: string) => {
+      if (yamlEditApplyingRef.current) {
+        return;
+      }
+
       setYamlEditBufferState(yaml);
       setYamlEditError("");
       setYamlEditDiagnostics([]);

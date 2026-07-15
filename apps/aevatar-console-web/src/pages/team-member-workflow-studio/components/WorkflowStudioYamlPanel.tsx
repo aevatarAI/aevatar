@@ -325,12 +325,17 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
             "Workflow YAML editor",
           )}
           autoFocus
-          onChange={(event) => onBufferChange(event.target.value)}
+          onChange={(event) => {
+            if (!applying) {
+              onBufferChange(event.target.value);
+            }
+          }}
           onScroll={(event) => {
             if (gutterRef.current) {
               gutterRef.current.scrollTop = event.currentTarget.scrollTop;
             }
           }}
+          readOnly={applying}
           spellCheck={false}
           style={textareaStyle}
           value={buffer}
