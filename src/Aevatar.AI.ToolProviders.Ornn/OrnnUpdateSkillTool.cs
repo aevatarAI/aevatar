@@ -137,7 +137,7 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return BuildResult("error", "No NyxID access token available. User must be authenticated.");
 

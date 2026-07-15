@@ -60,7 +60,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         // And it must project into the resulting step-state tool credentials so
         // ToolCallCredentialPolicyMiddleware admits sender-credentialed tools.
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        toolContext.Credentials.SenderAccessToken.Should().Be("fresh-sender-token");
 
         // The subject rebuilt from the tool context must match the bound sender
         // (platform lowercased, tenant carried as identity fact, sender id).
@@ -110,7 +110,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.Should().NotBeNull();
         generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        toolContext.Credentials.SenderAccessToken.Should().BeNull();
 
         // Reconcile fires (best-effort, fire-and-forget) with the invalid_grant reason.
         // WaitAsync gives a deterministic one-shot timeout (throws TimeoutException if the
@@ -146,7 +146,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.Should().NotBeNull();
         generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+            .Credentials.SenderAccessToken.Should().BeNull();
 
         await reconciler.DidNotReceiveWithAnyArgs()
             .ReconcileRevokedAsync(default!, default!, default);
@@ -167,7 +167,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.Should().NotBeNull();
         generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        toolContext.Credentials.SenderAccessToken.Should().BeNull();
 
         await broker.DidNotReceiveWithAnyArgs()
             .IssueShortLivedByBindingIdAsync(default!, default!, default!, default);
@@ -190,7 +190,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.Should().NotBeNull();
         generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+            .Credentials.SenderAccessToken.Should().BeNull();
     }
 
     [Fact]
@@ -211,7 +211,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.Should().NotBeNull();
         generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+            .Credentials.SenderAccessToken.Should().BeNull();
         await broker.DidNotReceiveWithAnyArgs()
             .IssueShortLivedByBindingIdAsync(default!, default!, default!, default);
     }
@@ -239,7 +239,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.Should().NotBeNull();
         generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         AgentToolExecutionContextMapper.FromPayload(state.ToolContext)
-            .Credentials.SenderNyxIdAccessToken.Should().BeNull();
+            .Credentials.SenderAccessToken.Should().BeNull();
         AgentRunReplyStepMappers.LlmControlFromProto(state).SenderNyxIdAccessToken.Should().BeNull();
         LLMControlContextMapper.FromPayload(state.OwnerFallbackLlmControl)
             .SenderNyxIdAccessToken.Should().BeNull();

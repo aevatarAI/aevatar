@@ -41,7 +41,7 @@ internal sealed class NyxIdSshCommandExecutor : INyxIdSshCommandExecutor
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
             return JsonSerializer.Serialize(new

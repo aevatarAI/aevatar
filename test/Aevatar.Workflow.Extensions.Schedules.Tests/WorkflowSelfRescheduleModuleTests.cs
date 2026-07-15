@@ -31,11 +31,11 @@ public sealed class WorkflowSelfRescheduleModuleTests
         configuration.Prompt.Should().Be("scheduled prompt");
         configuration.ScopeId.Should().Be("scope-1");
         configuration.Headers.Should().Contain("trace", "enabled");
-        configuration.Auth!.SenderNyxId.Should().BeEquivalentTo(
-            new WorkflowScheduleNyxIdCredentialSource(
-                new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-a", "external-user-42"),
+        configuration.Auth!.SenderIdentity.Should().BeEquivalentTo(
+            new WorkflowScheduleIdentityCredentialSource(
+                new WorkflowScheduleIdentitySubject("lark", "tenant-a", "external-user-42"),
                 "proxy"));
-        configuration.Auth.ScopeOwnerNyxId.Should().BeNull();
+        configuration.Auth.ScopeOwnerIdentity.Should().BeNull();
         configuration.MutationContext.Should().BeNull();
         var completed = context.Published.Should().ContainSingle().Which.Event.Unpack<StepCompletedEvent>();
         completed.Success.Should().BeTrue();

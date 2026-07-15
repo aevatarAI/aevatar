@@ -92,8 +92,8 @@ public static class AgentToolExecutionContextMapper
                 ? mapped.Credentials
                 : mapped.Credentials with
                 {
-                    NyxIdAccessToken = AgentToolExecutionContext.Normalize(caller.Credentials.NyxIdBearer)
-                        ?? mapped.Credentials.NyxIdAccessToken,
+                    AccessToken = AgentToolExecutionContext.Normalize(caller.Credentials.NyxIdBearer)
+                        ?? mapped.Credentials.AccessToken,
                 },
             Routing = request.RoutingContext ?? mapped.Routing,
             ExternalMetadata = StripOwnedControlKeys(request.Metadata),
@@ -135,9 +135,9 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Request?.CallId),
                 AgentToolExecutionContext.Normalize(payload.Request?.IdempotencyKey)),
             new AgentToolCredentials(
-                AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdAccessToken),
-                AgentToolExecutionContext.Normalize(payload.Credentials?.NyxIdOrgToken),
-                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderNyxIdAccessToken)),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.AccessToken),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.OrganizationToken),
+                AgentToolExecutionContext.Normalize(payload.Credentials?.SenderAccessToken)),
             new AgentToolCallerContext(
                 AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
                 AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
@@ -183,9 +183,9 @@ public static class AgentToolExecutionContextMapper
             },
             Credentials = new AgentToolCredentialsPayload
             {
-                NyxIdAccessToken = context.Credentials.NyxIdAccessToken ?? string.Empty,
-                NyxIdOrgToken = context.Credentials.NyxIdOrgToken ?? string.Empty,
-                SenderNyxIdAccessToken = context.Credentials.SenderNyxIdAccessToken ?? string.Empty,
+                AccessToken = context.Credentials.AccessToken ?? string.Empty,
+                OrganizationToken = context.Credentials.OrganizationToken ?? string.Empty,
+                SenderAccessToken = context.Credentials.SenderAccessToken ?? string.Empty,
             },
             Caller = new AgentToolCallerContextPayload
             {
@@ -277,7 +277,7 @@ public static class AgentToolExecutionContextMapper
     private static AgentToolCredentialSource FromCredentialSourcePayload(AgentToolCredentialSourcePayload source) =>
         source switch
         {
-            AgentToolCredentialSourcePayload.NyxidAssertion => AgentToolCredentialSource.NyxIdAssertion,
+            AgentToolCredentialSourcePayload.IdentityAssertion => AgentToolCredentialSource.IdentityAssertion,
             AgentToolCredentialSourcePayload.BearerToken => AgentToolCredentialSource.BearerToken,
             AgentToolCredentialSourcePayload.ChannelRegistration => AgentToolCredentialSource.ChannelRegistration,
             AgentToolCredentialSourcePayload.ScheduledRun => AgentToolCredentialSource.ScheduledRun,
@@ -289,7 +289,7 @@ public static class AgentToolExecutionContextMapper
     private static AgentToolCredentialSourcePayload ToCredentialSourcePayload(AgentToolCredentialSource source) =>
         source switch
         {
-            AgentToolCredentialSource.NyxIdAssertion => AgentToolCredentialSourcePayload.NyxidAssertion,
+            AgentToolCredentialSource.IdentityAssertion => AgentToolCredentialSourcePayload.IdentityAssertion,
             AgentToolCredentialSource.BearerToken => AgentToolCredentialSourcePayload.BearerToken,
             AgentToolCredentialSource.ChannelRegistration => AgentToolCredentialSourcePayload.ChannelRegistration,
             AgentToolCredentialSource.ScheduledRun => AgentToolCredentialSourcePayload.ScheduledRun,

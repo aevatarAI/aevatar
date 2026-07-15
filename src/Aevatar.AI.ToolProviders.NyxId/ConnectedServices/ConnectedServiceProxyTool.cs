@@ -63,8 +63,8 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var userToken = AgentToolRequestContext.NyxIdAccessToken;
-        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
+        var userToken = AgentToolRequestContext.AccessToken;
+        var orgToken = AgentToolRequestContext.OrganizationToken;
         var token = _preferOrgToken && !string.IsNullOrWhiteSpace(orgToken) ? orgToken : userToken;
         if (string.IsNullOrWhiteSpace(token))
             return Error("No NyxID access token available. User must be authenticated.");

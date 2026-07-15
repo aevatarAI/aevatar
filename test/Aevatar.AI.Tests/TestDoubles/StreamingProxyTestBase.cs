@@ -63,7 +63,7 @@ public abstract class StreamingProxyTestBase
                 {
                     Credentials = AgentToolCredentials.Empty with
                     {
-                        NyxIdAccessToken = "access-token",
+                        AccessToken = "access-token",
                     },
                 }).ToPayload(),
             });

@@ -61,7 +61,7 @@ public sealed class ChannelMetadataCallerScopeResolver : ICallerScopeResolver
                 $"Channel platform metadata is present (platform=\"{platform}\") but scope_id is missing. Cannot scope agent operations safely.");
         }
 
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
             throw new CallerScopeUnavailableException(

@@ -80,7 +80,7 @@ public static class ScheduledDispatchEndpoints
                 input.ScheduleId,
                 catalogReader,
                 revisionCatalogReader,
-                context.AuthenticatedNyxIdOwnerSubject,
+                context.AuthenticatedIdentityOwnerSubject,
                 defaultMissingWorkflowScheduleAuth: true,
                 ct);
         }
@@ -118,7 +118,7 @@ public static class ScheduledDispatchEndpoints
                 scheduleId,
                 catalogReader,
                 revisionCatalogReader,
-                context.AuthenticatedNyxIdOwnerSubject,
+                context.AuthenticatedIdentityOwnerSubject,
                 defaultMissingWorkflowScheduleAuth: false,
                 ct);
         }
@@ -257,10 +257,10 @@ public static class ScheduledDispatchEndpoints
         ArgumentNullException.ThrowIfNull(http);
         return new ScheduledDispatchMutationContext(
             ReadFirstClaim(http.User, "scope_id", "workflow.scope_id"),
-            ResolveAuthenticatedNyxIdOwnerSubject(http));
+            ResolveAuthenticatedIdentityOwnerSubject(http));
     }
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
+    private static ScheduledServiceInvocationIdentitySubject? ResolveAuthenticatedIdentityOwnerSubject(HttpContext http)
     {
         ArgumentNullException.ThrowIfNull(http);
 
@@ -273,7 +273,7 @@ public static class ScheduledDispatchEndpoints
         if (string.IsNullOrWhiteSpace(ownerUserId))
             return null;
 
-        return new ScheduledServiceInvocationNyxIdSubjectRef(
+        return new ScheduledServiceInvocationIdentitySubject(
             OwnerScope.NyxIdPlatform,
             string.Empty,
             ownerUserId.Trim());
@@ -362,7 +362,7 @@ public static class ScheduledDispatchEndpoints
 
 public sealed record ScheduledDispatchConfigurationHttpRequest
 {
-    private const string DefaultWorkflowScheduleNyxIdScope = "proxy";
+    private const string DefaultWorkflowScheduleIdentityScope = "proxy";
 
     public string? ScheduleId { get; init; }
     public string? DisplayName { get; init; }
@@ -379,7 +379,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         string? fallbackScheduleId,
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject = null,
         bool defaultMissingWorkflowScheduleAuth = true,
         CancellationToken ct = default)
     {
@@ -405,7 +405,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     private async Task<ResolvedScheduledDispatchTarget> ResolveTargetAsync(
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject,
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject,
         CancellationToken ct)
     {
         var targetCount = (Envelope == null ? 0 : 1) +
@@ -449,7 +449,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     private static ScheduledDispatchTargetDescriptor ApplyDefaultWorkflowScheduleAuth(
         ScheduledDispatchTargetDescriptor target,
         ScheduledDispatchScheduleKind scheduleKind,
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject)
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject)
     {
         var serviceInvocation = target.ServiceInvocation;
         if (scheduleKind != ScheduledDispatchScheduleKind.Workflow ||
@@ -463,7 +463,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         if (authenticatedOwnerSubject == null)
         {
             throw new ArgumentException(
-                "Authenticated NyxID owner subject is required for workflow schedule auth.",
+                "Authenticated identity owner subject is required for workflow schedule auth.",
                 nameof(authenticatedOwnerSubject));
         }
 
@@ -472,10 +472,10 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
             ServiceInvocation = serviceInvocation with
             {
                 Auth = new ScheduledServiceInvocationAuth(
-                    new ScheduledServiceInvocationNyxIdCredentialSource(
+                    new ScheduledServiceInvocationIdentityCredentialSource(
                         authenticatedOwnerSubject,
-                        DefaultWorkflowScheduleNyxIdScope,
-                        ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner)),
+                        DefaultWorkflowScheduleIdentityScope,
+                        ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner)),
             },
         };
     }
@@ -518,7 +518,7 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
     public async Task<ScheduledDispatchTargetDescriptor> ToTargetAsync(
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject = null,
         CancellationToken ct = default) =>
         (await ToResolvedTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct))
         .Target;
@@ -526,7 +526,7 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
     internal async Task<ScheduledDispatchConfigurationHttpRequest.ResolvedScheduledDispatchTarget> ToResolvedTargetAsync(
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject = null,
         CancellationToken ct = default)
     {
         var (payload, revisionId) = await ResolvePayloadAsync(catalogReader, revisionCatalogReader, ct);
@@ -541,7 +541,7 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
     public ScheduledDispatchTargetDescriptor ToTarget(
         Any payload,
         string revisionId,
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null)
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject = null)
     {
         ScheduledDispatchEndpoints.RejectExternalCallerDurableCredential(payload);
         return new(
@@ -658,52 +658,52 @@ public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledServiceInvocationAuthHttpRequest
 {
-    public ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest? SenderNyxId { get; init; }
+    public ScheduledServiceInvocationIdentityCredentialSourceHttpRequest? SenderIdentity { get; init; }
     public string? DurableSenderBearerToken { get; init; }
-    public ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest? ScopeOwnerNyxId { get; init; }
+    public ScheduledServiceInvocationScopeOwnerCredentialSourceHttpRequest? ScopeOwnerIdentity { get; init; }
 
     public ScheduledServiceInvocationAuth ToAuth(
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null)
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject = null)
     {
-        var hasSenderNyxId = SenderNyxId != null;
+        var hasSenderIdentity = SenderIdentity != null;
         var durableToken = DurableSenderBearerToken?.Trim() ?? string.Empty;
         var hasDurableSenderBearerToken = durableToken.Length > 0;
-        var hasScopeOwnerNyxId = ScopeOwnerNyxId != null;
+        var hasScopeOwnerIdentity = ScopeOwnerIdentity != null;
         if (hasDurableSenderBearerToken)
         {
             throw new ArgumentException(
-                "durableSenderBearerToken is no longer accepted for schedule auth; use senderNyxId or scopeOwnerNyxId.",
+                "durableSenderBearerToken is no longer accepted for schedule auth; use senderIdentity or scopeOwnerIdentity.",
                 nameof(DurableSenderBearerToken));
         }
 
-        if (Convert.ToInt32(hasSenderNyxId) +
-            Convert.ToInt32(hasScopeOwnerNyxId) != 1)
+        if (Convert.ToInt32(hasSenderIdentity) +
+            Convert.ToInt32(hasScopeOwnerIdentity) != 1)
         {
-            throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(SenderNyxId));
+            throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(SenderIdentity));
         }
 
-        if (hasScopeOwnerNyxId)
-            return new ScheduledServiceInvocationAuth(ScopeOwnerNyxId!.ToSource(authenticatedOwnerSubject));
+        if (hasScopeOwnerIdentity)
+            return new ScheduledServiceInvocationAuth(ScopeOwnerIdentity!.ToSource(authenticatedOwnerSubject));
 
-        return new ScheduledServiceInvocationAuth(SenderNyxId!.ToSource());
+        return new ScheduledServiceInvocationAuth(SenderIdentity!.ToSource());
     }
 }
 
-public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
+public sealed record ScheduledServiceInvocationScopeOwnerCredentialSourceHttpRequest
 {
     public required string Scope { get; init; }
 
-    public ScheduledServiceInvocationNyxIdCredentialSource ToSource(
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null) =>
+    public ScheduledServiceInvocationIdentityCredentialSource ToSource(
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject = null) =>
         new(
             RequireAuthenticatedOwnerSubject(authenticatedOwnerSubject),
             NormalizeRequired(Scope, nameof(Scope)),
-            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
+            ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner);
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef RequireAuthenticatedOwnerSubject(
-        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject) =>
+    private static ScheduledServiceInvocationIdentitySubject RequireAuthenticatedOwnerSubject(
+        ScheduledServiceInvocationIdentitySubject? authenticatedOwnerSubject) =>
         authenticatedOwnerSubject ?? throw new ArgumentException(
-            "Authenticated NyxID owner subject is required for scope owner schedule auth.",
+            "Authenticated identity owner subject is required for scope owner schedule auth.",
             nameof(authenticatedOwnerSubject));
 
     private static string NormalizeRequired(string? value, string name)
@@ -715,16 +715,16 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHt
     }
 }
 
-public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
+public sealed record ScheduledServiceInvocationIdentityCredentialSourceHttpRequest
 {
-    public required ScheduledServiceInvocationNyxIdSubjectRefHttpRequest Subject { get; init; }
+    public required ScheduledServiceInvocationIdentitySubjectHttpRequest Subject { get; init; }
     public required string Scope { get; init; }
 
-    public ScheduledServiceInvocationNyxIdCredentialSource ToSource() =>
+    public ScheduledServiceInvocationIdentityCredentialSource ToSource() =>
         new(NormalizeSubject(Subject), NormalizeRequired(Scope, nameof(Scope)));
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
-        ScheduledServiceInvocationNyxIdSubjectRefHttpRequest? subject)
+    private static ScheduledServiceInvocationIdentitySubject NormalizeSubject(
+        ScheduledServiceInvocationIdentitySubjectHttpRequest? subject)
     {
         if (subject == null)
             throw new ArgumentException("Subject is required.", nameof(Subject));
@@ -741,13 +741,13 @@ public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
     }
 }
 
-public sealed record ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
+public sealed record ScheduledServiceInvocationIdentitySubjectHttpRequest
 {
     public required string Platform { get; init; }
     public string? Tenant { get; init; }
     public required string ExternalUserId { get; init; }
 
-    public ScheduledServiceInvocationNyxIdSubjectRef ToSubject() =>
+    public ScheduledServiceInvocationIdentitySubject ToSubject() =>
         new(
             NormalizeRequired(Platform, nameof(Platform)).ToLowerInvariant(),
             NormalizeOptional(Tenant),

@@ -328,7 +328,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
 
         return auth.Source switch
         {
-            ScheduledServiceInvocationNyxIdCredentialSource nyxId => new ScheduledServiceInvocationAuthState
+            ScheduledServiceInvocationIdentityCredentialSource nyxId => new ScheduledServiceInvocationAuthState
             {
                 NyxId = CreateNyxIdCredentialSourceState(nyxId),
             },
@@ -349,7 +349,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
     }
 
     private static ScheduledServiceInvocationNyxIdCredentialSourceState CreateNyxIdCredentialSourceState(
-        ScheduledServiceInvocationNyxIdCredentialSource source) =>
+        ScheduledServiceInvocationIdentityCredentialSource source) =>
         new()
         {
             Subject = CreateSubjectState(source.Subject),
@@ -358,10 +358,10 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         };
 
     private static ScheduledServiceInvocationNyxIdCredentialRoleState ToStateRole(
-        ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        ScheduledServiceInvocationIdentityCredentialRole role) =>
         role switch
         {
-            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner =>
+            ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner =>
                 ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
             _ => ScheduledServiceInvocationNyxIdCredentialRoleState.Sender,
         };
@@ -376,7 +376,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         };
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(
-        ScheduledServiceInvocationNyxIdSubjectRef? subject) =>
+        ScheduledServiceInvocationIdentitySubject? subject) =>
         subject == null
             ? null
             : new ScheduledServiceInvocationNyxIdSubjectRefState

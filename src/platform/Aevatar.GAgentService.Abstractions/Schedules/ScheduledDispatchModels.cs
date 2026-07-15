@@ -37,12 +37,12 @@ public sealed record ScheduledServiceInvocationTargetDescriptor(
     ServiceInvocationCaller? Caller = null,
     ScheduledServiceInvocationAuth? Auth = null);
 
-public sealed record ScheduledServiceInvocationNyxIdSubjectRef(
+public sealed record ScheduledServiceInvocationIdentitySubject(
     string Platform,
     string Tenant,
     string ExternalUserId);
 
-public enum ScheduledServiceInvocationNyxIdCredentialRole
+public enum ScheduledServiceInvocationIdentityCredentialRole
 {
     Sender = 1,
     ScopeOwner = 2,
@@ -50,15 +50,15 @@ public enum ScheduledServiceInvocationNyxIdCredentialRole
 
 public abstract record ScheduledServiceInvocationCredentialSource;
 
-public sealed record ScheduledServiceInvocationNyxIdCredentialSource(
-    ScheduledServiceInvocationNyxIdSubjectRef Subject,
+public sealed record ScheduledServiceInvocationIdentityCredentialSource(
+    ScheduledServiceInvocationIdentitySubject Subject,
     string Scope,
-    ScheduledServiceInvocationNyxIdCredentialRole Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender)
+    ScheduledServiceInvocationIdentityCredentialRole Role = ScheduledServiceInvocationIdentityCredentialRole.Sender)
     : ScheduledServiceInvocationCredentialSource;
 
-public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+public sealed record ScheduledServiceInvocationScopeOwnerCredentialSource(
     string Scope,
-    ScheduledServiceInvocationNyxIdSubjectRef? OwnerSubject = null);
+    ScheduledServiceInvocationIdentitySubject? OwnerSubject = null);
 
 public sealed record ScheduledInvocationAgentKeyCredentialReference(
     SecretReference SecretReference,
@@ -82,14 +82,14 @@ public sealed record ScheduledServiceInvocationAuth
         Source = source ?? throw new ArgumentNullException(nameof(source));
     }
 
-    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationNyxIdCredentialSource SenderNyxId)
-        : this((ScheduledServiceInvocationCredentialSource)(SenderNyxId ??
-                                                            throw new ArgumentNullException(nameof(SenderNyxId))))
+    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationIdentityCredentialSource SenderIdentity)
+        : this((ScheduledServiceInvocationCredentialSource)(SenderIdentity ??
+                                                            throw new ArgumentNullException(nameof(SenderIdentity))))
     {
     }
 
-    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource ScopeOwnerNyxId)
-        : this((ScheduledServiceInvocationCredentialSource)ToNyxIdSource(ScopeOwnerNyxId))
+    public ScheduledServiceInvocationAuth(ScheduledServiceInvocationScopeOwnerCredentialSource ScopeOwnerIdentity)
+        : this((ScheduledServiceInvocationCredentialSource)ToIdentitySource(ScopeOwnerIdentity))
     {
     }
 
@@ -107,8 +107,8 @@ public sealed record ScheduledServiceInvocationAuth
 
     public ScheduledServiceInvocationCredentialSource? Source { get; init; }
 
-    public ScheduledServiceInvocationNyxIdCredentialSource? NyxId =>
-        Source as ScheduledServiceInvocationNyxIdCredentialSource;
+    public ScheduledServiceInvocationIdentityCredentialSource? Identity =>
+        Source as ScheduledServiceInvocationIdentityCredentialSource;
 
     public ScheduledServiceInvocationDurableCredentialReference? Durable =>
         Source as ScheduledServiceInvocationDurableCredentialReference;
@@ -119,35 +119,35 @@ public sealed record ScheduledServiceInvocationAuth
     public ScheduledInvocationAgentKeyCredentialReference? ScheduledInvocationAgentKey =>
         Source as ScheduledInvocationAgentKeyCredentialReference;
 
-    public ScheduledServiceInvocationNyxIdCredentialSource? SenderNyxId =>
-        NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRole.Sender ? NyxId : null;
+    public ScheduledServiceInvocationIdentityCredentialSource? SenderIdentity =>
+        Identity?.Role == ScheduledServiceInvocationIdentityCredentialRole.Sender ? Identity : null;
 
-    public ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId =>
-        NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
-            ? new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(NyxId.Scope, NyxId.Subject)
+    public ScheduledServiceInvocationScopeOwnerCredentialSource? ScopeOwnerIdentity =>
+        Identity?.Role == ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner
+            ? new ScheduledServiceInvocationScopeOwnerCredentialSource(Identity.Scope, Identity.Subject)
             : null;
 
-    private static ScheduledServiceInvocationNyxIdCredentialSource ToNyxIdSource(
-        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source)
+    private static ScheduledServiceInvocationIdentityCredentialSource ToIdentitySource(
+        ScheduledServiceInvocationScopeOwnerCredentialSource source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        return new ScheduledServiceInvocationNyxIdCredentialSource(
+        return new ScheduledServiceInvocationIdentityCredentialSource(
             source.OwnerSubject!,
             source.Scope,
-            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
+            ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner);
     }
 }
 
 public sealed record ScheduledDispatchMutationContext(
     string? AuthenticatedScopeId = null,
-    ScheduledServiceInvocationNyxIdSubjectRef? AuthenticatedNyxIdOwnerSubject = null)
+    ScheduledServiceInvocationIdentitySubject? AuthenticatedIdentityOwnerSubject = null)
 {
     public static ScheduledDispatchMutationContext None { get; } = new();
 }
 
 public sealed record ScheduledDispatchCredentialAdmissionRequest(
     ScheduledDispatchMutationContext Context,
-    ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource ScopeOwnerNyxId,
+    ScheduledServiceInvocationScopeOwnerCredentialSource ScopeOwnerIdentity,
     ServiceIdentity ServiceIdentity);
 
 public enum ScheduledDispatchCredentialAdmissionStatus
@@ -399,8 +399,8 @@ public interface IScheduledServiceInvocationDispatchPort
 
 public interface IScheduledServiceInvocationCredentialExchangePort
 {
-    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueNyxIdAsync(
-        ScheduledServiceInvocationNyxIdCredentialSource source,
+    Task<ScheduledServiceInvocationCredentialExchangeResult> IssueAsync(
+        ScheduledServiceInvocationIdentityCredentialSource source,
         CancellationToken ct = default);
 }
 

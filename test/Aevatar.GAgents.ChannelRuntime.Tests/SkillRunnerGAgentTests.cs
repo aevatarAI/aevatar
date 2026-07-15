@@ -1999,7 +1999,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         request.ToolContext!.Request.RequestId.Should().NotBeNullOrWhiteSpace();
         request.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         request.ToolContext.Channel.RegistrationScopeId.Should().Be("scope-1");
-        request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("nyx-api-key");
+        request.ToolContext.Credentials.AccessToken.Should().Be("nyx-api-key");
         request.ToolContext.ExternalMetadata.Should().ContainKey(ChannelMetadataKeys.ConversationId);
         request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
     }

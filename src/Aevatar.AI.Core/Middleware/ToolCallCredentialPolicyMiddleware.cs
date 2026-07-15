@@ -40,16 +40,16 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
             return;
         }
 
-        var senderToken = current?.Credentials.SenderNyxIdAccessToken?.Trim();
+        var senderToken = current?.Credentials.SenderAccessToken?.Trim();
         if (!string.IsNullOrWhiteSpace(senderToken))
         {
             var senderContext = current! with
             {
                 Credentials = current.Credentials with
                 {
-                    NyxIdAccessToken = senderToken,
-                    NyxIdOrgToken = senderToken,
-                    SenderNyxIdAccessToken = senderToken,
+                    AccessToken = senderToken,
+                    OrganizationToken = senderToken,
+                    SenderAccessToken = senderToken,
                 },
             };
 
@@ -103,7 +103,7 @@ public sealed class ToolCallCredentialPolicyMiddleware : IToolCallMiddleware
         if (!string.IsNullOrWhiteSpace(current?.Schedule.ScheduleId))
             return AgentToolCredentialSource.ScheduledRun;
 
-        return string.IsNullOrWhiteSpace(current?.Credentials.NyxIdAccessToken)
+        return string.IsNullOrWhiteSpace(current?.Credentials.AccessToken)
             ? AgentToolCredentialSource.System
             : AgentToolCredentialSource.BearerToken;
     }

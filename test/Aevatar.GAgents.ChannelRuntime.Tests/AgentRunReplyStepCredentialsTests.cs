@@ -27,9 +27,9 @@ public sealed class AgentRunReplyStepCredentialsTests
         {
             Credentials = new AgentToolCredentialsPayload
             {
-                NyxIdAccessToken = "user-token",
-                NyxIdOrgToken = "org-token",
-                SenderNyxIdAccessToken = "sender-token",
+                AccessToken = "user-token",
+                OrganizationToken = "org-token",
+                SenderAccessToken = "sender-token",
             },
             SenderBinding = new AgentToolSenderBindingContextPayload { BindingId = "bnd-1" },
             Caller = new AgentToolCallerContextPayload { OwnerSubject = "owner-subj", ScopeId = "scope-1" },
@@ -45,9 +45,9 @@ public sealed class AgentRunReplyStepCredentialsTests
         {
             Credentials = new AgentToolCredentialsPayload
             {
-                NyxIdAccessToken = "owner-token",
-                NyxIdOrgToken = "owner-org-token",
-                SenderNyxIdAccessToken = "leaked-sender",
+                AccessToken = "owner-token",
+                OrganizationToken = "owner-org-token",
+                SenderAccessToken = "leaked-sender",
             },
         },
     };
@@ -60,15 +60,15 @@ public sealed class AgentRunReplyStepCredentialsTests
         stripped.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         stripped.LlmControl.NyxIdOrgToken.Should().BeEmpty();
         stripped.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        stripped.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
-        stripped.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
-        stripped.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        stripped.ToolContext.Credentials.AccessToken.Should().BeEmpty();
+        stripped.ToolContext.Credentials.OrganizationToken.Should().BeEmpty();
+        stripped.ToolContext.Credentials.SenderAccessToken.Should().BeEmpty();
         stripped.OwnerFallbackLlmControl.NyxIdAccessToken.Should().BeEmpty();
         stripped.OwnerFallbackLlmControl.NyxIdOrgToken.Should().BeEmpty();
         stripped.OwnerFallbackLlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
-        stripped.OwnerFallbackToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
-        stripped.OwnerFallbackToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
-        stripped.OwnerFallbackToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        stripped.OwnerFallbackToolContext.Credentials.AccessToken.Should().BeEmpty();
+        stripped.OwnerFallbackToolContext.Credentials.OrganizationToken.Should().BeEmpty();
+        stripped.OwnerFallbackToolContext.Credentials.SenderAccessToken.Should().BeEmpty();
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public sealed class AgentRunReplyStepCredentialsTests
         AgentRunReplyStepCredentials.StripRuntimeCredentials(original);
 
         original.LlmControl.NyxIdAccessToken.Should().Be("user-token");
-        original.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        original.ToolContext.Credentials.SenderAccessToken.Should().Be("sender-token");
         original.OwnerFallbackLlmControl.NyxIdAccessToken.Should().Be("owner-token");
     }
 

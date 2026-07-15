@@ -65,7 +65,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         configured.Configuration.CredentialRequirementTargetKind.Should()
             .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
         configured.Configuration.Target.ServiceInvocation.Auth.Should().NotBeNull();
-        configured.Configuration.Target.ServiceInvocation.Auth!.SenderNyxId.Should().NotBeNull();
+        configured.Configuration.Target.ServiceInvocation.Auth!.SenderIdentity.Should().NotBeNull();
         configured.Configuration.Timezone.Should().Be("UTC");
         configured.Configuration.Headers.Should().Contain(
             new KeyValuePair<string, string>("trace", "enabled"));
@@ -154,7 +154,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.Payload.Unpack<ChatRequestEvent>().Metadata.Should().Contain("trace", "enabled");
         invocation.Auth.Should().NotBeNull();
-        invocation.Auth!.SenderNyxId.Should().NotBeNull();
+        invocation.Auth!.SenderIdentity.Should().NotBeNull();
     }
 
     [Fact]
@@ -173,8 +173,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         AssertScopeOwnerAdmissionRequest(admissionPort.Requests.Should().ContainSingle().Which);
         actorPort.Ensured.Should().ContainSingle()
-            .Which.Configuration.Target.ServiceInvocation!.Auth!.ScopeOwnerNyxId!.OwnerSubject
-            .Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+            .Which.Configuration.Target.ServiceInvocation!.Auth!.ScopeOwnerIdentity!.OwnerSubject
+            .Should().BeEquivalentTo(new ScheduledServiceInvocationIdentitySubject("nyx", "tenant-1", "owner-user-1"));
     }
 
     [Fact]
@@ -196,17 +196,17 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Enabled: true,
             Headers: new Dictionary<string, string>(),
             ScopeId: "scope-1",
-            Auth: new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
-                new WorkflowScheduleNyxIdSubjectRef(" lark ", " tenant-1 ", " ou-user-1 "),
+            Auth: new WorkflowScheduleAuth(new WorkflowScheduleIdentityCredentialSource(
+                new WorkflowScheduleIdentitySubject(" lark ", " tenant-1 ", " ou-user-1 "),
                 " proxy "))));
 
         var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
         invocation.Auth.Should().NotBeNull();
-        invocation.Auth!.SenderNyxId.Should().NotBeNull();
-        invocation.Auth.SenderNyxId!.Subject.Platform.Should().Be("lark");
-        invocation.Auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
-        invocation.Auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
-        invocation.Auth.SenderNyxId.Scope.Should().Be("proxy");
+        invocation.Auth!.SenderIdentity.Should().NotBeNull();
+        invocation.Auth.SenderIdentity!.Subject.Platform.Should().Be("lark");
+        invocation.Auth.SenderIdentity.Subject.Tenant.Should().Be("tenant-1");
+        invocation.Auth.SenderIdentity.Subject.ExternalUserId.Should().Be("ou-user-1");
+        invocation.Auth.SenderIdentity.Scope.Should().Be("proxy");
     }
 
     [Fact]
@@ -237,13 +237,13 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         await service.CreateAsync(CreateConfiguration("auth-schedule") with
         {
-            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
-                new WorkflowScheduleNyxIdSubjectRef("lark", " ", "ou-user-1"),
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleIdentityCredentialSource(
+                new WorkflowScheduleIdentitySubject("lark", " ", "ou-user-1"),
                 "proxy")),
         });
 
         var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
-        invocation.Auth!.SenderNyxId!.Subject.Tenant.Should().BeEmpty();
+        invocation.Auth!.SenderIdentity!.Subject.Tenant.Should().BeEmpty();
     }
 
     [Fact]
@@ -259,20 +259,20 @@ public sealed class WorkflowScheduleApplicationServiceTests
         await service.CreateAsync(CreateConfiguration("owner-auth-schedule") with
         {
             Auth = new WorkflowScheduleAuth(
-                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                ScopeOwnerIdentity: new WorkflowScheduleScopeOwnerIdentityCredentialSource(
                     " owner-proxy ",
-                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+                    new WorkflowScheduleIdentitySubject(" nyx ", " tenant-1 ", " owner-user-1 "))),
             MutationContext = new WorkflowScheduleMutationContext(
                 "scope-1",
-                new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 ")),
+                new WorkflowScheduleIdentitySubject(" nyx ", " tenant-1 ", " owner-user-1 ")),
         });
 
         var invocation = actorPort.Created.Single().Configuration.Target.ServiceInvocation!;
         invocation.Auth.Should().NotBeNull();
-        invocation.Auth!.SenderNyxId.Should().BeNull();
-        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
-        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
-            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+        invocation.Auth!.SenderIdentity.Should().BeNull();
+        invocation.Auth.ScopeOwnerIdentity!.Scope.Should().Be("owner-proxy");
+        invocation.Auth.ScopeOwnerIdentity.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationIdentitySubject("nyx", "tenant-1", "owner-user-1"));
         admissionPort.Requests.Should().ContainSingle();
     }
 
@@ -284,12 +284,12 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
         {
             Auth = new WorkflowScheduleAuth(
-                new WorkflowScheduleNyxIdCredentialSource(
-                    new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                new WorkflowScheduleIdentityCredentialSource(
+                    new WorkflowScheduleIdentitySubject("lark", "tenant-1", "ou-user-1"),
                     "proxy"),
-                new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                new WorkflowScheduleScopeOwnerIdentityCredentialSource(
                     "owner-proxy",
-                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+                    new WorkflowScheduleIdentitySubject("nyx", string.Empty, "owner-user-1"))),
         });
 
         await act.Should().ThrowAsync<ArgumentException>()
@@ -304,9 +304,9 @@ public sealed class WorkflowScheduleApplicationServiceTests
         var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
         {
             Auth = new WorkflowScheduleAuth(
-                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                ScopeOwnerIdentity: new WorkflowScheduleScopeOwnerIdentityCredentialSource(
                     " ",
-                    new WorkflowScheduleNyxIdSubjectRef("nyx", string.Empty, "owner-user-1"))),
+                    new WorkflowScheduleIdentitySubject("nyx", string.Empty, "owner-user-1"))),
         });
 
         await act.Should().ThrowAsync<ArgumentException>()
@@ -333,7 +333,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
         {
-            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(null!, "proxy")),
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleIdentityCredentialSource(null!, "proxy")),
         });
 
         await act.Should().ThrowAsync<ArgumentException>()
@@ -354,8 +354,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
 
         var act = () => service.CreateAsync(CreateConfiguration("auth-schedule") with
         {
-            Auth = new WorkflowScheduleAuth(new WorkflowScheduleNyxIdCredentialSource(
-                new WorkflowScheduleNyxIdSubjectRef(platform, tenant, externalUserId),
+            Auth = new WorkflowScheduleAuth(new WorkflowScheduleIdentityCredentialSource(
+                new WorkflowScheduleIdentitySubject(platform, tenant, externalUserId),
                 scope)),
         });
 
@@ -1196,30 +1196,30 @@ public sealed class WorkflowScheduleApplicationServiceTests
             Auth: CreateDefaultAuth());
 
     private static WorkflowScheduleAuth CreateDefaultAuth() =>
-        new(new WorkflowScheduleNyxIdCredentialSource(
-            new WorkflowScheduleNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+        new(new WorkflowScheduleIdentityCredentialSource(
+            new WorkflowScheduleIdentitySubject("lark", "tenant-1", "ou-user-1"),
             "proxy"));
 
     private static WorkflowScheduleConfiguration CreateScopeOwnerWorkflowConfiguration(string scheduleId) =>
         CreateConfiguration(scheduleId) with
         {
             Auth = new WorkflowScheduleAuth(
-                ScopeOwnerNyxId: new WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+                ScopeOwnerIdentity: new WorkflowScheduleScopeOwnerIdentityCredentialSource(
                     " owner-proxy ",
-                    new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 "))),
+                    new WorkflowScheduleIdentitySubject(" nyx ", " tenant-1 ", " owner-user-1 "))),
             MutationContext = new WorkflowScheduleMutationContext(
                 " scope-1 ",
-                new WorkflowScheduleNyxIdSubjectRef(" nyx ", " tenant-1 ", " owner-user-1 ")),
+                new WorkflowScheduleIdentitySubject(" nyx ", " tenant-1 ", " owner-user-1 ")),
         };
 
     private static void AssertScopeOwnerAdmissionRequest(ScheduledDispatchCredentialAdmissionRequest request)
     {
         request.Context.AuthenticatedScopeId.Should().Be("scope-1");
-        request.Context.AuthenticatedNyxIdOwnerSubject.Should().BeEquivalentTo(
-            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
-        request.ScopeOwnerNyxId.Scope.Should().Be("owner-proxy");
-        request.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(
-            new ScheduledServiceInvocationNyxIdSubjectRef("nyx", "tenant-1", "owner-user-1"));
+        request.Context.AuthenticatedIdentityOwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationIdentitySubject("nyx", "tenant-1", "owner-user-1"));
+        request.ScopeOwnerIdentity.Scope.Should().Be("owner-proxy");
+        request.ScopeOwnerIdentity.OwnerSubject.Should().BeEquivalentTo(
+            new ScheduledServiceInvocationIdentitySubject("nyx", "tenant-1", "owner-user-1"));
         request.ServiceIdentity.TenantId.Should().Be("scope-1");
         request.ServiceIdentity.ServiceId.Should().Be("direct");
     }
@@ -1263,7 +1263,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
                 Prompt: "saved prompt",
                 ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
                 CredentialRequirementTargetKind: ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
-                CredentialSourceKind: ScheduledDispatchCredentialSourceKind.SenderNyxId,
+                CredentialSourceKind: ScheduledDispatchCredentialSourceKind.SenderIdentity,
                 ScheduleMode: scheduleMode,
                 OneShotFireAt: oneShotFireAt,
                 Completed: completed),

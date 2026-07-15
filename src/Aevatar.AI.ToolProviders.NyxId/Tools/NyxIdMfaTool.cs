@@ -38,7 +38,7 @@ public sealed class NyxIdMfaTool : IAgentTool, IAgentToolCapabilityDescriptor
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 

@@ -18,8 +18,8 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<ScheduledServiceInvocationCredentialExchangeResult> IssueNyxIdAsync(
-        ScheduledServiceInvocationNyxIdCredentialSource source,
+    public async Task<ScheduledServiceInvocationCredentialExchangeResult> IssueAsync(
+        ScheduledServiceInvocationIdentityCredentialSource source,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -82,6 +82,6 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
         }
     }
 
-    private static string ToErrorSubject(ScheduledServiceInvocationNyxIdCredentialRole role) =>
-        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner ? "scope owner" : "subject";
+    private static string ToErrorSubject(ScheduledServiceInvocationIdentityCredentialRole role) =>
+        role == ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner ? "scope owner" : "subject";
 }

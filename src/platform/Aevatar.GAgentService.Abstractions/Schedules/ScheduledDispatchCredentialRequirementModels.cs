@@ -25,8 +25,8 @@ public enum ScheduledDispatchCredentialRequirementOperation
 public enum ScheduledDispatchCredentialSourceKind
 {
     None = 0,
-    SenderNyxId = 1,
-    ScopeOwnerNyxId = 2,
+    SenderIdentity = 1,
+    ScopeOwnerIdentity = 2,
     LegacyDurableSenderBearer = 3,
     Multiple = 4,
     DurableCredentialReference = 5,
@@ -129,10 +129,10 @@ public static class ScheduledDispatchCredentialRequirementRequests
 
         var kind = auth.Source switch
         {
-            ScheduledServiceInvocationNyxIdCredentialSource { Role: ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner } =>
-                ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId,
-            ScheduledServiceInvocationNyxIdCredentialSource =>
-                ScheduledDispatchCredentialSourceKind.SenderNyxId,
+            ScheduledServiceInvocationIdentityCredentialSource { Role: ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner } =>
+                ScheduledDispatchCredentialSourceKind.ScopeOwnerIdentity,
+            ScheduledServiceInvocationIdentityCredentialSource =>
+                ScheduledDispatchCredentialSourceKind.SenderIdentity,
             ScheduledServiceInvocationDurableCredentialReference =>
                 ScheduledDispatchCredentialSourceKind.DurableCredentialReference,
             ScheduledInvocationAgentKeyCredentialReference =>
@@ -180,9 +180,9 @@ public static class ScheduledDispatchCredentialRequirementRequests
             return new ScheduledDispatchPayloadCredentialSignal(true, nameof(ChatRequestEvent.LlmControl));
         }
 
-        if (!string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.NyxIdAccessToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.NyxIdOrgToken) ||
-            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderNyxIdAccessToken))
+        if (!string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.AccessToken) ||
+            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.OrganizationToken) ||
+            !string.IsNullOrWhiteSpace(chatRequest.ToolContext?.Credentials?.SenderAccessToken))
         {
             return new ScheduledDispatchPayloadCredentialSignal(true, "ToolContext.Credentials");
         }

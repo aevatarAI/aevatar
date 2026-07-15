@@ -26,7 +26,7 @@ public sealed class LarkMessagesReactTool : AgentToolBase<LarkMessagesReactTool.
     //   New principle: missing reaction message_id returns structured error; external tools path remains.
     protected override async Task<string> ExecuteAsync(Parameters parameters, CancellationToken ct)
     {
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return LarkProxyResponseParser.Serialize(new { success = false, error = "No NyxID access token available. User must be authenticated." });
 

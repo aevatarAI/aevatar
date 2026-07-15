@@ -9,7 +9,7 @@ public sealed class AgentToolExecutionContextPayloadContractTests
     public void AgentToolExecutionContextPayload_ShouldExposeCredentialSourceAndScheduleAsTypedFields()
     {
         ((int)AgentToolCredentialSourcePayload.Unspecified).Should().Be(0);
-        ((int)AgentToolCredentialSourcePayload.NyxidAssertion).Should().Be(1);
+        ((int)AgentToolCredentialSourcePayload.IdentityAssertion).Should().Be(1);
         ((int)AgentToolCredentialSourcePayload.BearerToken).Should().Be(2);
         ((int)AgentToolCredentialSourcePayload.ChannelRegistration).Should().Be(3);
         ((int)AgentToolCredentialSourcePayload.ScheduledRun).Should().Be(4);

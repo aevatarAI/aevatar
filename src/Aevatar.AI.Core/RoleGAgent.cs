@@ -984,7 +984,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
         // Stash this turn's token for chartered direct-chat subclasses (System Skill Overlay seam).
         // Kept in memory only for the turn; never persisted or logged.
-        _currentTurnNyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken;
+        _currentTurnNyxIdAccessToken = toolContext.Credentials.AccessToken;
         var inputParts = ResolveRequestInputParts(request);
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))

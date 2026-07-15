@@ -132,9 +132,9 @@ public class ToolCallLoopTests
 
         context.Request.RequestId.Should().BeNull();
         context.Request.CallId.Should().BeNull();
-        context.Credentials.NyxIdAccessToken.Should().BeNull();
-        context.Credentials.NyxIdOrgToken.Should().BeNull();
-        context.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        context.Credentials.AccessToken.Should().BeNull();
+        context.Credentials.OrganizationToken.Should().BeNull();
+        context.Credentials.SenderAccessToken.Should().BeNull();
         context.Caller.ScopeId.Should().BeNull();
         context.Caller.OwnerSubject.Should().BeNull();
         context.Caller.ResponseId.Should().BeNull();
@@ -176,7 +176,7 @@ public class ToolCallLoopTests
         var tools = new ToolManager();
         tools.Register(new DelegateTool("capture", _ =>
         {
-            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedToken = AgentToolRequestContext.AccessToken;
             capturedScope = AgentToolRequestContext.ScopeId;
             capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
             capturedCallId = AgentToolRequestContext.CallId;
@@ -216,7 +216,7 @@ public class ToolCallLoopTests
         var tools = new ToolManager();
         tools.Register(new DelegateTool("capture", _ =>
         {
-            capturedToken = AgentToolRequestContext.NyxIdAccessToken;
+            capturedToken = AgentToolRequestContext.AccessToken;
             capturedScope = AgentToolRequestContext.ScopeId;
             capturedExternal = AgentToolRequestContext.TryGetExternalMetadata("trace-id");
             capturedCallId = AgentToolRequestContext.CallId;
@@ -290,7 +290,7 @@ public class ToolCallLoopTests
         {
             observedOperatorUserId = AgentToolRequestContext.TryGetExternalMetadata("channel.lark.operator_user_id");
             observedExplicitMetadata = AgentToolRequestContext.TryGetExternalMetadata("explicit");
-            observedAccessToken = AgentToolRequestContext.NyxIdAccessToken;
+            observedAccessToken = AgentToolRequestContext.AccessToken;
             return "{}";
         }));
         var loop = new ToolCallLoop(tools);

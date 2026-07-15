@@ -221,15 +221,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             configuredTarget,
             headers);
         Logger.LogInformation(
-            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} credentialRequirementTargetKind={CredentialRequirementTargetKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
+            "Scheduled dispatch configuration prepared. scheduleId={ScheduleId} isCreate={IsCreate} targetKind={TargetKind} scheduleKind={ScheduleKind} credentialRequirementTargetKind={CredentialRequirementTargetKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerIdentity={HasScopeOwnerIdentity} hasSenderIdentity={HasSenderIdentity} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked}",
             NormalizeRequired(scheduleId, nameof(scheduleId)),
             isCreate,
             configuredTarget.Kind,
             scheduleKind,
             configuredTarget.CredentialRequirementTargetKind,
             HasServiceInvocationAuth(configuredTarget),
-            HasScopeOwnerNyxId(configuredTarget),
-            HasSenderNyxId(configuredTarget),
+            HasScopeOwnerIdentity(configuredTarget),
+            HasSenderIdentity(configuredTarget),
             HasDurableCredentialReference(configuredTarget),
             HasScheduledInvocationAgentKey(configuredTarget),
             HasLegacyDurableSenderBearerBlocked(configuredTarget));
@@ -464,12 +464,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
             var stateTarget = State.Target;
             Logger.LogInformation(
-                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerNyxId={HasScopeOwnerNyxId} hasSenderNyxId={HasSenderNyxId} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
+                "Scheduled service invocation fire prepared from actor state. scheduleId={ScheduleId} scheduleKind={ScheduleKind} hasServiceInvocationAuth={HasServiceInvocationAuth} hasScopeOwnerIdentity={HasScopeOwnerIdentity} hasSenderIdentity={HasSenderIdentity} hasDurableCredentialReference={HasDurableCredentialReference} hasScheduledInvocationAgentKey={HasScheduledInvocationAgentKey} hasLegacyDurableSenderBearerBlocked={HasLegacyDurableSenderBearerBlocked} projectWorkflowCallerCredential={ProjectWorkflowCallerCredential}",
                 ResolveScheduleId(),
                 State.ScheduleKind,
                 HasServiceInvocationAuth(stateTarget),
-                HasScopeOwnerNyxId(stateTarget),
-                HasSenderNyxId(stateTarget),
+                HasScopeOwnerIdentity(stateTarget),
+                HasSenderIdentity(stateTarget),
                 HasDurableCredentialReference(stateTarget),
                 HasScheduledInvocationAgentKey(stateTarget),
                 HasLegacyDurableSenderBearerBlocked(stateTarget),
@@ -653,8 +653,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (nyxId == null)
             return null;
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            ToRuntimeSubject(nyxId.Subject) ?? new ScheduledServiceInvocationNyxIdSubjectRef(
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationIdentityCredentialSource(
+            ToRuntimeSubject(nyxId.Subject) ?? new ScheduledServiceInvocationIdentitySubject(
                 string.Empty,
                 string.Empty,
                 string.Empty),
@@ -688,17 +688,17 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         return null;
     }
 
-    private static ScheduledServiceInvocationNyxIdCredentialRole ToRuntimeRole(
+    private static ScheduledServiceInvocationIdentityCredentialRole ToRuntimeRole(
         ScheduledServiceInvocationNyxIdCredentialRoleState role) =>
         role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
-            ? ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
-            : ScheduledServiceInvocationNyxIdCredentialRole.Sender;
+            ? ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner
+            : ScheduledServiceInvocationIdentityCredentialRole.Sender;
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef? ToRuntimeSubject(
+    private static ScheduledServiceInvocationIdentitySubject? ToRuntimeSubject(
         ScheduledServiceInvocationNyxIdSubjectRefState? subject) =>
         subject == null
             ? null
-            : new ScheduledServiceInvocationNyxIdSubjectRef(
+            : new ScheduledServiceInvocationIdentitySubject(
                 subject.Platform ?? string.Empty,
                 subject.Tenant ?? string.Empty,
                 subject.ExternalUserId ?? string.Empty);
@@ -775,12 +775,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         AddCredentialSourceKind(ResolveOneofCredentialSourceKind(auth), ref sourceCount, ref kind);
         if (auth.SenderNyxId != null)
         {
-            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.SenderNyxId, ref sourceCount, ref kind);
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.SenderIdentity, ref sourceCount, ref kind);
         }
 
         if (auth.ScopeOwnerNyxId != null)
         {
-            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId, ref sourceCount, ref kind);
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.ScopeOwnerIdentity, ref sourceCount, ref kind);
         }
 
         return sourceCount switch
@@ -797,8 +797,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             ScheduledServiceInvocationAuthState.SourceOneofCase.NyxId =>
                 auth.NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
-                    ? ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId
-                    : ScheduledDispatchCredentialSourceKind.SenderNyxId,
+                    ? ScheduledDispatchCredentialSourceKind.ScopeOwnerIdentity
+                    : ScheduledDispatchCredentialSourceKind.SenderIdentity,
             ScheduledServiceInvocationAuthState.SourceOneofCase.Durable =>
                 ScheduledDispatchCredentialSourceKind.DurableCredentialReference,
             ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey =>
@@ -1384,11 +1384,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private static bool HasServiceInvocationAuth(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth != null;
 
-    private static bool HasScopeOwnerNyxId(ScheduledDispatchTargetState? target) =>
+    private static bool HasScopeOwnerIdentity(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth is { } auth &&
         ResolveNyxIdSource(auth)?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner;
 
-    private static bool HasSenderNyxId(ScheduledDispatchTargetState? target) =>
+    private static bool HasSenderIdentity(ScheduledDispatchTargetState? target) =>
         target?.ServiceInvocation?.Auth is { } auth &&
         ResolveNyxIdSource(auth)?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.Sender;
 

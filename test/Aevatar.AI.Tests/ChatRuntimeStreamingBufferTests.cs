@@ -272,7 +272,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tool.CapturedContext.Should().NotBeNull();
         tool.CapturedContext!.Request.CallId.Should().Be("tool-1");
         tool.CapturedContext.Request.RequestId.Should().Be("req-123");
-        tool.CapturedContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        tool.CapturedContext.Credentials.AccessToken.Should().BeNull();
         tool.CapturedContext.Routing.ModelOverride.Should().Be("model-a");
         tool.CapturedContext.ExternalMetadata["safe"].Should().Be("tool-context");
         tool.CapturedContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
@@ -399,7 +399,7 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         request.RequestId.Should().Be("request-1");
         request.ToolContext!.Request.RequestId.Should().Be("request-1");
-        request.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        request.ToolContext.Credentials.AccessToken.Should().BeNull();
         request.ToolContext.Routing.ModelOverride.Should().BeNull();
         request.Metadata.Should().BeEquivalentTo(new Dictionary<string, string>
         {
@@ -804,7 +804,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var tools = new ToolManager();
         tools.Register(new DelegateTool("lookup", _ => string.Join(
             "|",
-            AgentToolRequestContext.NyxIdAccessToken,
+            AgentToolRequestContext.AccessToken,
             AgentToolRequestContext.ScopeId,
             AgentToolRequestContext.CallId,
             AgentToolRequestContext.ChannelMessageId)));
@@ -890,7 +890,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.LastStreamRequest.Should().NotBeNull();
         provider.LastStreamRequest!.RoutingContext.Should().BeNull();
         provider.LastStreamRequest.ToolContext!.Routing.ModelOverride.Should().BeNull();
-        provider.LastStreamRequest.ToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        provider.LastStreamRequest.ToolContext.Credentials.AccessToken.Should().BeNull();
         provider.LastStreamRequest.Metadata.Should().BeEmpty();
     }
 
@@ -957,7 +957,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.LastStreamRequest!.LlmControl.Should().Be(control);
         provider.LastStreamRequest.Metadata.Should().BeEmpty();
         provider.LastStreamRequest.RoutingContext!.ModelOverride.Should().Be("control-model");
-        provider.LastStreamRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-1");
+        provider.LastStreamRequest.ToolContext!.Credentials.AccessToken.Should().Be("token-1");
     }
 
     [Fact]

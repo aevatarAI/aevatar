@@ -50,8 +50,8 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.LlmControl!.NyxIdAccessToken.Should().Be("raw-token");
         provider.LastRequest.LlmControl.NyxIdRoutePreference.Should().Be("route-a");
         provider.LastRequest.ToolContext.Should().NotBeNull();
-        provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("raw-token");
-        provider.LastRequest.ToolContext.Credentials.NyxIdOrgToken.Should().Be("raw-token");
+        provider.LastRequest.ToolContext!.Credentials.AccessToken.Should().Be("raw-token");
+        provider.LastRequest.ToolContext.Credentials.OrganizationToken.Should().Be("raw-token");
         provider.LastRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentActorId.Should().Be("parent-actor");
         provider.LastRequest.ToolContext.WorkflowRuntime.ParentRunId.Should().Be("parent-run");

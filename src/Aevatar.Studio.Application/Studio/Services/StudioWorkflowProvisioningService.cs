@@ -110,7 +110,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 $"workflow_yaml is not a valid workflow definition: {parseResult.Error}");
         }
 
-        var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
+        var subjectRef = BuildSenderIdentityCredentialSource(callerCredential);
 
         // Provision identity: one (scope, display name) pair owns exactly one
         // member + workflow id + schedule, so retries converge on the same
@@ -356,12 +356,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// re-mints a fresh sender token from it on every fire.
     /// </summary>
     private static ScheduledServiceInvocationAuth BuildScheduleAuth(
-        ScheduledServiceInvocationNyxIdCredentialSource subjectRef) =>
-        new(subjectRef with { Role = ScheduledServiceInvocationNyxIdCredentialRole.Sender });
+        ScheduledServiceInvocationIdentityCredentialSource subjectRef) =>
+        new(subjectRef with { Role = ScheduledServiceInvocationIdentityCredentialRole.Sender });
 
-    private static ScheduledServiceInvocationNyxIdCredentialSource BuildSenderNyxIdCredentialSource(
+    private static ScheduledServiceInvocationIdentityCredentialSource BuildSenderIdentityCredentialSource(
         ProvisionWorkflowCallerCredential credential) =>
-        new(new ScheduledServiceInvocationNyxIdSubjectRef(
+        new(new ScheduledServiceInvocationIdentitySubject(
                 Platform: NormalizeRequired(credential.Platform, nameof(credential.Platform)),
                 Tenant: NormalizeOptional(credential.Tenant) ?? string.Empty,
                 ExternalUserId: NormalizeRequired(credential.ExternalUserId, nameof(credential.ExternalUserId))),

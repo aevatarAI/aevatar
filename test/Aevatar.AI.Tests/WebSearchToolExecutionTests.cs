@@ -19,7 +19,7 @@ public sealed class WebSearchToolExecutionTests
         });
         using var http = new HttpClient(handler);
         var sut = CreateTool(http);
-        using var contextScope = AgentToolContextScope.Push(WithNyxIdAccessToken("token-1"));
+        using var contextScope = AgentToolContextScope.Push(WithAccessToken("token-1"));
 
         var result = await sut.ExecuteAsync("""{"query":"aevatar docs","max_results":3}""");
 
@@ -46,7 +46,7 @@ public sealed class WebSearchToolExecutionTests
         });
         using var http = new HttpClient(handler);
         var sut = CreateTool(http);
-        using var _ = AgentToolContextScope.Push(WithNyxIdAccessToken("token-2"));
+        using var _ = AgentToolContextScope.Push(WithAccessToken("token-2"));
 
         var result = await sut.ExecuteAsync("""{"query":"aevatar docs"}""");
 
@@ -144,12 +144,12 @@ public sealed class WebSearchToolExecutionTests
         return new WebSearchTool(new WebApiClient(options, http), options);
     }
 
-    private static AgentToolExecutionContext WithNyxIdAccessToken(string accessToken) =>
+    private static AgentToolExecutionContext WithAccessToken(string accessToken) =>
         AgentToolExecutionContext.Empty with
         {
             Credentials = AgentToolCredentials.Empty with
             {
-                NyxIdAccessToken = accessToken,
+                AccessToken = accessToken,
             },
         };
 

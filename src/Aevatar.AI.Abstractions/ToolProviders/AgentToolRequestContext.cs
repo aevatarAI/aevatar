@@ -17,9 +17,9 @@ public static class AgentToolRequestContext
         set => s_context.Value = value;
     }
 
-    public static string? NyxIdAccessToken => s_context.Value?.Credentials.NyxIdAccessToken;
-    public static string? NyxIdOrgToken => s_context.Value?.Credentials.NyxIdOrgToken;
-    public static string? SenderNyxIdAccessToken => s_context.Value?.Credentials.SenderNyxIdAccessToken;
+    public static string? AccessToken => s_context.Value?.Credentials.AccessToken;
+    public static string? OrganizationToken => s_context.Value?.Credentials.OrganizationToken;
+    public static string? SenderAccessToken => s_context.Value?.Credentials.SenderAccessToken;
     public static string? ScopeId => s_context.Value?.Caller.ScopeId;
     public static string? OwnerSubject => s_context.Value?.Caller.OwnerSubject;
     public static string? ResponseId => s_context.Value?.Caller.ResponseId;

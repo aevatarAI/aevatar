@@ -140,7 +140,7 @@ public sealed class ToolAuditRecordFactory
     private static AuditCredentialSource MapCredentialSource(AgentToolCredentialSource source) =>
         source switch
         {
-            AgentToolCredentialSource.NyxIdAssertion => AuditCredentialSource.NyxidAssertion,
+            AgentToolCredentialSource.IdentityAssertion => AuditCredentialSource.NyxidAssertion,
             AgentToolCredentialSource.BearerToken => AuditCredentialSource.BearerToken,
             AgentToolCredentialSource.ChannelRegistration => AuditCredentialSource.ChannelRegistration,
             AgentToolCredentialSource.ScheduledRun => AuditCredentialSource.ScheduledRun,

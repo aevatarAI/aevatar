@@ -107,8 +107,8 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (responseMode == null)
             return FileArtifactError("invalid_response_mode", "response_mode must be omitted, text, or file_artifact.");
 
-        var token = AgentToolRequestContext.NyxIdAccessToken;
-        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
+        var token = AgentToolRequestContext.AccessToken;
+        var orgToken = AgentToolRequestContext.OrganizationToken;
         if (string.IsNullOrWhiteSpace(token))
         {
             return responseMode == FileArtifactResponseMode

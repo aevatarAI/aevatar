@@ -194,7 +194,7 @@ public sealed class AevatarInvocationToolSourceTests
         payload.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
         payload.InputParts[0].Text.Should().Be("typed part");
         payload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        payload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        payload.ToolContext.Credentials.AccessToken.Should().Be("access-token");
         payload.LlmControl.NyxIdAccessToken.Should().Be("access-token");
         payload.LlmControl.ModelOverride.Should().Be("model-1");
 
@@ -402,7 +402,7 @@ public sealed class AevatarInvocationToolSourceTests
         ShouldNotCarryTrustedCallerValues(payload.Metadata);
         payload.ScopeId.Should().Be("scope-1");
         payload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        payload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
+        payload.ToolContext.Credentials.AccessToken.Should().Be("access-token");
         payload.LlmControl.NyxIdAccessToken.Should().Be("access-token");
         payload.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
     }
@@ -559,8 +559,8 @@ public sealed class AevatarInvocationToolSourceTests
         chatPayload.InputParts[0].Text.Should().Be("typed input");
         chatPayload.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         chatPayload.ToolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        chatPayload.ToolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        chatPayload.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        chatPayload.ToolContext.Credentials.AccessToken.Should().Be("access-token");
+        chatPayload.ToolContext.Credentials.SenderAccessToken.Should().Be("sender-token");
         chatPayload.LlmControl.ModelOverride.Should().Be("model-1");
         chatPayload.LlmControl.NyxIdRoutePreference.Should().Be("route-1");
         chatPayload.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
@@ -2776,13 +2776,13 @@ public sealed class AevatarInvocationToolSourceTests
         toolContext.Should().NotBeNull();
         toolContext!.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("owner-1");
-        toolContext.Credentials.NyxIdAccessToken.Should().Be("access-token");
-        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        toolContext.Credentials.AccessToken.Should().Be("access-token");
+        toolContext.Credentials.SenderAccessToken.Should().Be("sender-token");
         toolContext.Routing.ModelOverride.Should().Be("model-1");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-1");
 
         llmControl.Should().NotBeNull();
-        llmControl!.NyxIdAccessToken.Should().Be("access-token");
+        llmControl!.AccessToken.Should().Be("access-token");
         llmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
         llmControl.ModelOverride.Should().Be("model-1");
         llmControl.NyxIdRoutePreference.Should().Be("route-1");

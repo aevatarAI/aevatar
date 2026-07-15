@@ -224,12 +224,12 @@ public sealed class ScheduledDispatchCurrentStateProjector
         AddCredentialSourceKind(ResolveOneofCredentialSourceKind(auth), ref sourceCount, ref sourceKind);
         if (auth.SenderNyxId != null)
         {
-            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.SenderNyxId, ref sourceCount, ref sourceKind);
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.SenderIdentity, ref sourceCount, ref sourceKind);
         }
 
         if (auth.ScopeOwnerNyxId != null)
         {
-            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId, ref sourceCount, ref sourceKind);
+            AddCredentialSourceKind(ScheduledDispatchCredentialSourceKind.ScopeOwnerIdentity, ref sourceCount, ref sourceKind);
         }
 
         return sourceCount switch
@@ -246,8 +246,8 @@ public sealed class ScheduledDispatchCurrentStateProjector
         {
             ScheduledServiceInvocationAuthState.SourceOneofCase.NyxId =>
                 auth.NyxId?.Role == ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner
-                    ? ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId
-                    : ScheduledDispatchCredentialSourceKind.SenderNyxId,
+                    ? ScheduledDispatchCredentialSourceKind.ScopeOwnerIdentity
+                    : ScheduledDispatchCredentialSourceKind.SenderIdentity,
             ScheduledServiceInvocationAuthState.SourceOneofCase.Durable =>
                 ScheduledDispatchCredentialSourceKind.DurableCredentialReference,
             ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey =>

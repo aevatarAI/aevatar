@@ -169,7 +169,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.Should().NotBeNull();
         document!.CredentialRequirementTargetKind.Should()
             .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService.ToString());
-        document.CredentialSourceKind.Should().Be(ScheduledDispatchCredentialSourceKind.SenderNyxId.ToString());
+        document.CredentialSourceKind.Should().Be(ScheduledDispatchCredentialSourceKind.SenderIdentity.ToString());
         document.StateVersion.Should().Be(13);
     }
 

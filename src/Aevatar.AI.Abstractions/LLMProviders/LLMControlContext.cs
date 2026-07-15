@@ -20,9 +20,9 @@ public sealed record LLMControlContext(
         {
             Credentials = context.Credentials with
             {
-                NyxIdAccessToken = Normalize(NyxIdAccessToken) ?? context.Credentials.NyxIdAccessToken,
-                NyxIdOrgToken = Normalize(NyxIdOrgToken) ?? context.Credentials.NyxIdOrgToken,
-                SenderNyxIdAccessToken = Normalize(SenderNyxIdAccessToken) ?? context.Credentials.SenderNyxIdAccessToken,
+                AccessToken = Normalize(NyxIdAccessToken) ?? context.Credentials.AccessToken,
+                OrganizationToken = Normalize(NyxIdOrgToken) ?? context.Credentials.OrganizationToken,
+                SenderAccessToken = Normalize(SenderNyxIdAccessToken) ?? context.Credentials.SenderAccessToken,
             },
             Routing = context.Routing with
             {

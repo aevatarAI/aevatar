@@ -172,7 +172,7 @@ public class WorkflowRoleGAgent(
             ToolContext = AgentToolExecutionContextMapper.ToPayload(toolContext),
             LlmControl = new LLMControlContextPayload
             {
-                NyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken ?? string.Empty,
+                NyxIdAccessToken = toolContext.Credentials.AccessToken ?? string.Empty,
                 ModelOverride = intent.Model ?? string.Empty,
                 NyxIdRoutePreference = toolContext.Routing.NyxIdRoutePreference ?? string.Empty,
                 UserMemoryPrompt = intent.UserMemoryPrompt ?? string.Empty,

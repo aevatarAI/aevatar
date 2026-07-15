@@ -881,7 +881,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
             {
-                Credentials = AgentToolCredentials.Empty with { NyxIdAccessToken = token },
+                Credentials = AgentToolCredentials.Empty with { AccessToken = token },
             });
             decision = await port.DecideAsync(
                     new RemoteToolApprovalDecision(requestId, payload.Approved),

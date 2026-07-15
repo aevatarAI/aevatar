@@ -946,7 +946,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         context with
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
-            Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
+            Credentials = context.Credentials with { SenderAccessToken = null },
         };
 
     private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>
@@ -1024,7 +1024,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Credentials = new AgentToolCredentials(
                 NormalizeOptional(ownerControl.NyxIdAccessToken),
                 NormalizeOptional(ownerControl.NyxIdOrgToken),
-                SenderNyxIdAccessToken: null),
+                SenderAccessToken: null),
             Routing = new LLMRequestRoutingContext(
                 NormalizeOptional(ownerControl.ModelOverride),
                 NormalizeOptional(ownerControl.NyxIdRoutePreference),

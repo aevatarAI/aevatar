@@ -135,7 +135,7 @@ message AgentToolExecutionContextPayload {
 
 enum AgentToolCredentialSourcePayload {
   AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_UNSPECIFIED = 0;
-  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_NYXID_ASSERTION = 1;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_IDENTITY_ASSERTION = 1;
   AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_BEARER_TOKEN = 2;
   AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_CHANNEL_REGISTRATION = 3;
   AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SCHEDULED_RUN = 4;
@@ -165,9 +165,9 @@ message AgentToolRequestIdentityPayload {
 }
 
 message AgentToolCredentialsPayload {
-  string nyx_id_access_token = 1;
-  string nyx_id_org_token = 2;
-  string sender_nyx_id_access_token = 3;
+  string access_token = 1;
+  string organization_token = 2;
+  string sender_access_token = 3;
 }
 
 message AgentToolCallerContextPayload {

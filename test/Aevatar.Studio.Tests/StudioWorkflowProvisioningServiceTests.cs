@@ -111,12 +111,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().NotBeNull();
+        auth!.SenderIdentity.Should().NotBeNull();
         auth.SenderNyxId!.Subject.Platform.Should().Be("Lark");
         auth.SenderNyxId.Subject.ExternalUserId.Should().Be("ou-user-1");
         auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-9");
         auth.SenderNyxId.Scope.Should().Be("proxy");
-        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.Sender);
+        auth.NyxId!.Role.Should().Be(ScheduledServiceInvocationIdentityCredentialRole.Sender);
         auth.Durable.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }
@@ -139,7 +139,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth!;
         auth.SenderNyxId!.Subject.Should().BeEquivalentTo(
-            new ScheduledServiceInvocationNyxIdSubjectRef("nyxid-body", "body-tenant", "body-user-42"));
+            new ScheduledServiceInvocationIdentitySubject("nyxid-body", "body-tenant", "body-user-42"));
         auth.SenderNyxId.Scope.Should().Be("sender-proxy");
         schedule.MutationContext.Should().BeNull();
     }
@@ -181,7 +181,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
-        auth!.SenderNyxId.Should().NotBeNull();
+        auth!.SenderIdentity.Should().NotBeNull();
         auth.Durable.Should().BeNull();
         AssertExactlyOneCredentialSource(auth);
     }

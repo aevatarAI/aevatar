@@ -20,7 +20,7 @@ public sealed class NyxIdScheduledDispatchCredentialAdmissionPort : IScheduledDi
         ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
 
-        var ownerSubject = request.ScopeOwnerNyxId.OwnerSubject;
+        var ownerSubject = request.ScopeOwnerIdentity.OwnerSubject;
         if (ownerSubject == null)
         {
             return ScheduledDispatchCredentialAdmissionResult.MissingBinding(

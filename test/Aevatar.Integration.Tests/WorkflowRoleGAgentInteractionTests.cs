@@ -318,8 +318,8 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             request.LlmControl.MaxToolRoundsOverride.Should().Be(3);
             request.LlmControl.UserMemoryPrompt.Should().Be("remember this");
             request.ToolContext.Should().NotBeNull();
-            request.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("token-123");
-            request.ToolContext.Credentials.NyxIdOrgToken.Should().Be("token-123");
+            request.ToolContext!.Credentials.AccessToken.Should().Be("token-123");
+            request.ToolContext.Credentials.OrganizationToken.Should().Be("token-123");
             request.Metadata.Should().NotBeNull();
             request.Metadata!.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
             request.Metadata.Should().ContainKey("annotation").WhoseValue.Should().Be("value");
@@ -438,8 +438,8 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             llm.Requests.Should().ContainSingle();
             var request = llm.Requests[0];
             request.ToolContext.Should().NotBeNull();
-            request.ToolContext!.Credentials.NyxIdAccessToken.Should().BeNull();
-            request.ToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
+            request.ToolContext!.Credentials.AccessToken.Should().BeNull();
+            request.ToolContext.Credentials.OrganizationToken.Should().BeNull();
             request.Metadata.Should().NotBeNull();
             request.Metadata!.Should().NotContainKey("connector.http.authorization");
             request.Metadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");

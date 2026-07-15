@@ -2601,7 +2601,7 @@ public sealed class ChannelConversationTurnRunnerTests
         // above), so scope-scoped tools (e.g. scheduled_agent_creator) work on the bound-sender path too.
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
-        toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        toolContext.Credentials.SenderAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         toolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
         llmControl.SenderNyxIdAccessToken.Should().Be("test-access-token-for-bnd-user-1");
@@ -4845,8 +4845,8 @@ public sealed class ChannelConversationTurnRunnerTests
         {
             var captured = new Dictionary<string, string>(current.ExternalMetadata, StringComparer.Ordinal)
             {
-                [LLMRequestMetadataKeys.NyxIdAccessToken] = current.Credentials.NyxIdAccessToken ?? string.Empty,
-                [LLMRequestMetadataKeys.NyxIdOrgToken] = current.Credentials.NyxIdOrgToken ?? string.Empty,
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = current.Credentials.AccessToken ?? string.Empty,
+                [LLMRequestMetadataKeys.NyxIdOrgToken] = current.Credentials.OrganizationToken ?? string.Empty,
                 [ChannelMetadataKeys.MessageId] = current.Channel.MessageId ?? string.Empty,
             };
             return captured;

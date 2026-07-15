@@ -28,9 +28,9 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         });
 
         observed.Should().NotBeNull();
-        observed!.Credentials.NyxIdAccessToken.Should().Be("sender-token");
-        observed.Credentials.NyxIdOrgToken.Should().Be("sender-token");
-        observed.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        observed!.Credentials.AccessToken.Should().Be("sender-token");
+        observed.Credentials.OrganizationToken.Should().Be("sender-token");
+        observed.Credentials.SenderAccessToken.Should().Be("sender-token");
         context.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         context.Terminate.Should().BeFalse();
     }
@@ -93,7 +93,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         nextCalled.Should().BeTrue();
         context.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
         context.Terminate.Should().BeFalse();
-        AgentToolRequestContext.NyxIdAccessToken.Should().Be("owner-token");
+        AgentToolRequestContext.AccessToken.Should().Be("owner-token");
     }
 
     [Fact]
@@ -117,8 +117,8 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         });
 
         observed.Should().NotBeNull();
-        observed!.Credentials.NyxIdAccessToken.Should().Be("owner-token");
-        observed.Credentials.NyxIdOrgToken.Should().Be("owner-org-token");
+        observed!.Credentials.AccessToken.Should().Be("owner-token");
+        observed.Credentials.OrganizationToken.Should().Be("owner-org-token");
         context.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
         context.Terminate.Should().BeFalse();
     }
@@ -236,7 +236,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         nextCalled.Should().BeTrue();
         context.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
         context.Terminate.Should().BeFalse();
-        AgentToolRequestContext.NyxIdAccessToken.Should().Be("owner-token");
+        AgentToolRequestContext.AccessToken.Should().Be("owner-token");
     }
 
     private static AgentToolExecutionContext ChannelUnboundContext(string ownerToken) =>

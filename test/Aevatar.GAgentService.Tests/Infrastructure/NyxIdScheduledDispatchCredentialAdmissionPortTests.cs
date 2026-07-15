@@ -52,10 +52,10 @@ public sealed class NyxIdScheduledDispatchCredentialAdmissionPortTests
     }
 
     private static ScheduledDispatchCredentialAdmissionRequest CreateRequest(
-        ScheduledServiceInvocationNyxIdSubjectRef? ownerSubject) =>
+        ScheduledServiceInvocationIdentitySubject? ownerSubject) =>
         new(
             new ScheduledDispatchMutationContext("scope-1", ownerSubject),
-            new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy", ownerSubject),
+            new ScheduledServiceInvocationScopeOwnerCredentialSource("owner-proxy", ownerSubject),
             new ServiceIdentity
             {
                 TenantId = "scope-1",
@@ -64,7 +64,7 @@ public sealed class NyxIdScheduledDispatchCredentialAdmissionPortTests
                 ServiceId = "svc",
             });
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef OwnerSubject() =>
+    private static ScheduledServiceInvocationIdentitySubject OwnerSubject() =>
         new("nyxid", "tenant-1", "owner-user-1");
 
     private static void AssertQueriedOwnerSubject(RecordingExternalIdentityBindingQueryPort queryPort)

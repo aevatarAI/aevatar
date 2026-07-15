@@ -238,13 +238,13 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct)
     {
         var serviceInvocation = configuration.Target.ServiceInvocation;
-        var scopeOwnerNyxId = serviceInvocation?.Auth?.ScopeOwnerNyxId;
-        if (serviceInvocation == null || scopeOwnerNyxId == null)
+        var scopeOwnerIdentity = serviceInvocation?.Auth?.ScopeOwnerIdentity;
+        if (serviceInvocation == null || scopeOwnerIdentity == null)
             return configuration;
 
-        var authenticatedOwnerSubject = context.AuthenticatedNyxIdOwnerSubject
+        var authenticatedOwnerSubject = context.AuthenticatedIdentityOwnerSubject
             ?? throw new ArgumentException(
-                "Authenticated NyxID owner subject is required for scope owner schedule auth.",
+                "Authenticated identity owner subject is required for scope owner schedule auth.",
                 nameof(context));
         var authenticatedScopeId = NormalizeRequired(
             context.AuthenticatedScopeId,
@@ -256,15 +256,15 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 nameof(configuration));
         }
 
-        if (scopeOwnerNyxId.OwnerSubject != null &&
-            !SubjectEquals(scopeOwnerNyxId.OwnerSubject, authenticatedOwnerSubject))
+        if (scopeOwnerIdentity.OwnerSubject != null &&
+            !SubjectEquals(scopeOwnerIdentity.OwnerSubject, authenticatedOwnerSubject))
         {
             throw new ArgumentException(
-                "Scope owner NyxID subject must match the authenticated owner subject.",
+                "Scope owner identity subject must match the authenticated owner subject.",
                 nameof(configuration));
         }
 
-        var admittedScopeOwnerNyxId = scopeOwnerNyxId with
+        var admittedScopeOwnerIdentity = scopeOwnerIdentity with
         {
             OwnerSubject = authenticatedOwnerSubject,
         };
@@ -276,10 +276,10 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 {
                     Auth = serviceInvocation.Auth! with
                     {
-                        Source = new ScheduledServiceInvocationNyxIdCredentialSource(
-                            admittedScopeOwnerNyxId.OwnerSubject!,
-                            admittedScopeOwnerNyxId.Scope,
-                            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner),
+                        Source = new ScheduledServiceInvocationIdentityCredentialSource(
+                            admittedScopeOwnerIdentity.OwnerSubject!,
+                            admittedScopeOwnerIdentity.Scope,
+                            ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner),
                     },
                 },
             },
@@ -288,7 +288,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var result = await _credentialAdmissionPort.AdmitAsync(
             new ScheduledDispatchCredentialAdmissionRequest(
                 context,
-                admittedScopeOwnerNyxId,
+                admittedScopeOwnerIdentity,
                 serviceInvocation.Identity),
             ct);
         if (result.Status == ScheduledDispatchCredentialAdmissionStatus.Allowed)
@@ -307,25 +307,25 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return result.Status switch
         {
             ScheduledDispatchCredentialAdmissionStatus.MissingBinding =>
-                "Authenticated NyxID owner binding is required for scope owner schedule auth; complete or refresh NyxID login before creating a scope owner schedule.",
+                "Authenticated identity owner binding is required for scope owner schedule auth; complete or refresh identity login before creating a scope owner schedule.",
             ScheduledDispatchCredentialAdmissionStatus.ScopeMismatch =>
-                "NyxID binding does not grant the requested schedule scope.",
+                "Identity binding does not grant the requested schedule scope.",
             ScheduledDispatchCredentialAdmissionStatus.Unsupported =>
-                "Scheduled dispatch scope owner NyxID admission is not configured.",
-            _ => "Scheduled dispatch scope owner NyxID admission failed.",
+                "Scheduled dispatch scope owner identity admission is not configured.",
+            _ => "Scheduled dispatch scope owner identity admission failed.",
         };
     }
 
     private static ScheduledDispatchMutationContext NormalizeMutationContext(ScheduledDispatchMutationContext context) =>
         new(
             NormalizeNullable(context.AuthenticatedScopeId),
-            context.AuthenticatedNyxIdOwnerSubject == null
+            context.AuthenticatedIdentityOwnerSubject == null
                 ? null
-                : NormalizeSubject(context.AuthenticatedNyxIdOwnerSubject));
+                : NormalizeSubject(context.AuthenticatedIdentityOwnerSubject));
 
     private static bool SubjectEquals(
-        ScheduledServiceInvocationNyxIdSubjectRef left,
-        ScheduledServiceInvocationNyxIdSubjectRef right) =>
+        ScheduledServiceInvocationIdentitySubject left,
+        ScheduledServiceInvocationIdentitySubject right) =>
         string.Equals(left.Platform, right.Platform, StringComparison.Ordinal) &&
         string.Equals(left.Tenant, right.Tenant, StringComparison.Ordinal) &&
         string.Equals(left.ExternalUserId, right.ExternalUserId, StringComparison.Ordinal);
@@ -531,7 +531,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return auth.Source switch
         {
             null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
-            ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
+            ScheduledServiceInvocationIdentityCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
             ScheduledServiceInvocationDurableCredentialReference durable =>
                 new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable)),
             ScheduledInvocationAgentKeyCredentialReference agentKey =>
@@ -541,29 +541,29 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     }
 
     private static ScheduledServiceInvocationAuth NormalizeNyxIdAuth(
-        ScheduledServiceInvocationNyxIdCredentialSource source,
+        ScheduledServiceInvocationIdentityCredentialSource source,
         ScheduledServiceInvocationAuth auth)
     {
         var role = source.Role switch
         {
-            ScheduledServiceInvocationNyxIdCredentialRole.Sender => ScheduledServiceInvocationNyxIdCredentialRole.Sender,
-            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner => ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner,
+            ScheduledServiceInvocationIdentityCredentialRole.Sender => ScheduledServiceInvocationIdentityCredentialRole.Sender,
+            ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner => ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner,
             _ => throw new ArgumentException("Service invocation NyxID credential role is required.", nameof(auth)),
         };
 
         if (source.Subject == null)
         {
-            if (role == ScheduledServiceInvocationNyxIdCredentialRole.Sender)
+            if (role == ScheduledServiceInvocationIdentityCredentialRole.Sender)
                 throw new ArgumentException(ToMissingSubjectMessage(role), nameof(auth));
 
             return new ScheduledServiceInvocationAuth(
-                new ScheduledServiceInvocationNyxIdCredentialSource(
+                new ScheduledServiceInvocationIdentityCredentialSource(
                     null!,
                     NormalizeRequired(source.Scope, nameof(source.Scope)),
                     role));
         }
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationIdentityCredentialSource(
             NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope)),
             role));
@@ -627,13 +627,13 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return new ScheduledInvocationAgentKeyCredentialReference(reference, apiKeyId, expiresAtUnixMs);
     }
 
-    private static string ToMissingSubjectMessage(ScheduledServiceInvocationNyxIdCredentialRole role) =>
-        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
-            ? "Service invocation scope owner NyxID subject is required."
-            : "Service invocation sender NyxID subject is required.";
+    private static string ToMissingSubjectMessage(ScheduledServiceInvocationIdentityCredentialRole role) =>
+        role == ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner
+            ? "Service invocation scope owner identity subject is required."
+            : "Service invocation sender identity subject is required.";
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef NormalizeSubject(
-        ScheduledServiceInvocationNyxIdSubjectRef subject) =>
+    private static ScheduledServiceInvocationIdentitySubject NormalizeSubject(
+        ScheduledServiceInvocationIdentitySubject subject) =>
         new(
             NormalizeRequired(subject.Platform, nameof(subject.Platform)),
             NormalizeOptional(subject.Tenant),

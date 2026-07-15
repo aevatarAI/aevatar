@@ -1368,7 +1368,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         prompt = AppendSystemSkillOverlay(
             prompt,
             ResolveChannelPlatform(toolContext, metadata),
-            toolContext.Credentials.NyxIdAccessToken);
+            toolContext.Credentials.AccessToken);
         prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
         if (!string.IsNullOrWhiteSpace(channelContext))

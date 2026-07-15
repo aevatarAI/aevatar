@@ -45,7 +45,7 @@ public sealed class ChronoTreeTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return "Error: No NyxID access token available. User must be authenticated.";
 

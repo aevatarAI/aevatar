@@ -193,12 +193,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
 
     private static ScheduledServiceInvocationAuth BuildScheduleAuth(
-        ScheduledServiceInvocationNyxIdSubjectRef callerSubject) =>
-        new(SenderNyxId: new ScheduledServiceInvocationNyxIdCredentialSource(
+        ScheduledServiceInvocationIdentitySubject callerSubject) =>
+        new(SenderIdentity: new ScheduledServiceInvocationIdentityCredentialSource(
             callerSubject,
             Scope: ProvisionWorkflowCallerCredential.DefaultScope));
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef BuildCallerSubject(
+    private static ScheduledServiceInvocationIdentitySubject BuildCallerSubject(
         StudioMemberWorkflowScheduleRequest request,
         string callerSubjectExternalUserId) =>
         new(

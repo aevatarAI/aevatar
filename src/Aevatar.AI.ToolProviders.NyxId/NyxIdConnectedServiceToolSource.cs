@@ -39,14 +39,14 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         if (string.IsNullOrWhiteSpace(_options.BaseUrl))
             return [];
 
-        var userToken = AgentToolRequestContext.NyxIdAccessToken;
+        var userToken = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(userToken))
         {
             _logger.LogDebug("NyxID connected-service tools skipped: no access token in request context");
             return [];
         }
 
-        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
+        var orgToken = AgentToolRequestContext.OrganizationToken;
 
         try
         {

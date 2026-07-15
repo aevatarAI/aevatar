@@ -53,9 +53,9 @@ public static class ScheduledServiceInvocationPayloadPolicy
 
         if (chatRequest.ToolContext?.Credentials != null)
         {
-            chatRequest.ToolContext.Credentials.NyxIdAccessToken = string.Empty;
-            chatRequest.ToolContext.Credentials.NyxIdOrgToken = string.Empty;
-            chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken = string.Empty;
+            chatRequest.ToolContext.Credentials.AccessToken = string.Empty;
+            chatRequest.ToolContext.Credentials.OrganizationToken = string.Empty;
+            chatRequest.ToolContext.Credentials.SenderAccessToken = string.Empty;
         }
     }
 }

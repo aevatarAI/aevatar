@@ -43,9 +43,9 @@ internal static class WorkflowScheduleConfigurationMapper
         var context = configuration.MutationContext ?? WorkflowScheduleMutationContext.None;
         return new ScheduledDispatchMutationContext(
             NormalizeOptional(context.AuthenticatedScopeId, string.Empty),
-            context.AuthenticatedNyxIdOwnerSubject == null
+            context.AuthenticatedIdentityOwnerSubject == null
                 ? null
-                : MapNyxIdSubject(context.AuthenticatedNyxIdOwnerSubject));
+                : MapIdentitySubject(context.AuthenticatedIdentityOwnerSubject));
     }
 
     private static ServiceIdentity BuildWorkflowServiceIdentity(WorkflowScheduleConfiguration configuration)
@@ -85,10 +85,10 @@ internal static class WorkflowScheduleConfigurationMapper
         if (configuration.Auth == null)
             return null;
 
-        var hasSenderNyxId = configuration.Auth.SenderNyxId != null;
-        var hasScopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId != null;
+        var hasSenderIdentity = configuration.Auth.SenderIdentity != null;
+        var hasScopeOwnerIdentity = configuration.Auth.ScopeOwnerIdentity != null;
         var hasScheduledInvocationAgentKey = configuration.Auth.ScheduledInvocationAgentKey != null;
-        if (new[] { hasSenderNyxId, hasScopeOwnerNyxId, hasScheduledInvocationAgentKey }.Count(static hasSource => hasSource) != 1)
+        if (new[] { hasSenderIdentity, hasScopeOwnerIdentity, hasScheduledInvocationAgentKey }.Count(static hasSource => hasSource) != 1)
             throw new ArgumentException("Exactly one workflow schedule credential source is required.", nameof(configuration.Auth));
 
         if (hasScheduledInvocationAgentKey)
@@ -100,27 +100,27 @@ internal static class WorkflowScheduleConfigurationMapper
                 agentKey.KeyExpiresAtUnixMs));
         }
 
-        if (hasScopeOwnerNyxId)
+        if (hasScopeOwnerIdentity)
         {
-            var scopeOwnerNyxId = configuration.Auth.ScopeOwnerNyxId!;
+            var scopeOwnerIdentity = configuration.Auth.ScopeOwnerIdentity!;
             return new ScheduledServiceInvocationAuth(
-                new ScheduledServiceInvocationNyxIdCredentialSource(
-                    scopeOwnerNyxId.OwnerSubject == null ? null! : MapNyxIdSubject(scopeOwnerNyxId.OwnerSubject),
-                    NormalizeRequired(scopeOwnerNyxId.Scope, nameof(scopeOwnerNyxId.Scope)),
-                    ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
+                new ScheduledServiceInvocationIdentityCredentialSource(
+                    scopeOwnerIdentity.OwnerSubject == null ? null! : MapIdentitySubject(scopeOwnerIdentity.OwnerSubject),
+                    NormalizeRequired(scopeOwnerIdentity.Scope, nameof(scopeOwnerIdentity.Scope)),
+                    ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner));
         }
 
-        var senderNyxId = configuration.Auth.SenderNyxId!;
-        if (senderNyxId.Subject == null)
-            throw new ArgumentException("Sender NyxID subject is required.", nameof(configuration.Auth));
+        var senderIdentity = configuration.Auth.SenderIdentity!;
+        if (senderIdentity.Subject == null)
+            throw new ArgumentException("Sender identity subject is required.", nameof(configuration.Auth));
 
-        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            MapNyxIdSubject(senderNyxId.Subject),
-            NormalizeRequired(senderNyxId.Scope, nameof(senderNyxId.Scope))));
+        return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationIdentityCredentialSource(
+            MapIdentitySubject(senderIdentity.Subject),
+            NormalizeRequired(senderIdentity.Scope, nameof(senderIdentity.Scope))));
     }
 
-    private static ScheduledServiceInvocationNyxIdSubjectRef MapNyxIdSubject(
-        WorkflowScheduleNyxIdSubjectRef subject) =>
+    private static ScheduledServiceInvocationIdentitySubject MapIdentitySubject(
+        WorkflowScheduleIdentitySubject subject) =>
         new(
             NormalizeRequired(subject.Platform, nameof(subject.Platform)),
             NormalizeOptional(subject.Tenant, string.Empty),

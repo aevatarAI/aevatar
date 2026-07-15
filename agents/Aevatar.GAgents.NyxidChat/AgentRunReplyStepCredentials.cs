@@ -36,8 +36,8 @@ internal static class AgentRunReplyStepCredentials
     private static void ClearCredentialTokens(Aevatar.AI.Abstractions.AgentToolCredentialsPayload? credentials)
     {
         if (credentials is null) return;
-        credentials.NyxIdAccessToken = string.Empty;
-        credentials.NyxIdOrgToken = string.Empty;
-        credentials.SenderNyxIdAccessToken = string.Empty;
+        credentials.AccessToken = string.Empty;
+        credentials.OrganizationToken = string.Empty;
+        credentials.SenderAccessToken = string.Empty;
     }
 }

@@ -44,8 +44,8 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
     }
 
     [Theory]
-    [InlineData(ScheduledDispatchCredentialSourceKind.SenderNyxId)]
-    [InlineData(ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId)]
+    [InlineData(ScheduledDispatchCredentialSourceKind.SenderIdentity)]
+    [InlineData(ScheduledDispatchCredentialSourceKind.ScopeOwnerIdentity)]
     [InlineData(ScheduledDispatchCredentialSourceKind.DurableCredentialReference)]
     [InlineData(ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey)]
     public void Evaluate_ShouldAllowTypedCredentialSources_ForRequiredTargets(
@@ -108,7 +108,7 @@ public sealed class ScheduledDispatchCredentialRequirementPolicyTests
                 {
                     Credentials = new AgentToolCredentialsPayload
                     {
-                        SenderNyxIdAccessToken = "sender-token",
+                        SenderAccessToken = "sender-token",
                     },
                 },
             }));

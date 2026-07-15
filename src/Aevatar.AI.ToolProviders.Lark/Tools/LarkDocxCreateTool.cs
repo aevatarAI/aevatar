@@ -46,7 +46,7 @@ public sealed class LarkDocxCreateTool : AgentToolBase<LarkDocxCreateTool.Parame
         out ValidatedDocxCreateRequest request,
         out string? error)
     {
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         request = default;
         if (string.IsNullOrWhiteSpace(token))
         {

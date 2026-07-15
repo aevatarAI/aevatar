@@ -11,6 +11,6 @@ public sealed class NoopScheduledDispatchCredentialAdmissionPort : IScheduledDis
         ArgumentNullException.ThrowIfNull(request);
         ct.ThrowIfCancellationRequested();
         return Task.FromResult(ScheduledDispatchCredentialAdmissionResult.Unsupported(
-            "Scheduled dispatch scope owner NyxID admission is not configured."));
+            "Scheduled dispatch scope owner identity admission is not configured."));
     }
 }

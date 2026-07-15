@@ -507,7 +507,7 @@ public sealed class ScheduledDispatchGAgentTests
         var previousState = agent.State.Clone();
         var command = CreateEnsureCommand(
             scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
-            target: CreateWorkflowServiceInvocationTarget(CreateSenderNyxIdAuth()));
+            target: CreateWorkflowServiceInvocationTarget(CreateSenderIdentityAuth()));
         command.Headers[ScheduledDispatchCredentialRequirementRequests.LegacyConnectorHttpAuthorizationHeader] =
             "Bearer current-session-token";
 
@@ -528,7 +528,7 @@ public sealed class ScheduledDispatchGAgentTests
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(
             scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
-            target: CreateWorkflowServiceInvocationTarget(CreateSenderNyxIdAuth())));
+            target: CreateWorkflowServiceInvocationTarget(CreateSenderIdentityAuth())));
         var previousState = agent.State.Clone();
         var previousEventCount = eventStore.GetEvents(ScheduleActorId).Count;
 
@@ -1136,11 +1136,11 @@ public sealed class ScheduledDispatchGAgentTests
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().NotBeNull();
-        auth.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
-        auth.SenderNyxId.Subject.Platform.Should().Be("lark");
-        auth.SenderNyxId.Subject.Tenant.Should().Be("tenant-1");
-        auth.SenderNyxId.Scope.Should().Be("proxy");
+        auth!.SenderIdentity.Should().NotBeNull();
+        auth.SenderIdentity!.Subject.ExternalUserId.Should().Be("ou-user-1");
+        auth.SenderIdentity.Subject.Platform.Should().Be("lark");
+        auth.SenderIdentity.Subject.Tenant.Should().Be("tenant-1");
+        auth.SenderIdentity.Scope.Should().Be("proxy");
         var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
         var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
         chatRequest.ConnectorHttpAuthorization.Should().BeEmpty();
@@ -1221,10 +1221,11 @@ public sealed class ScheduledDispatchGAgentTests
                     }),
                     Auth = new ScheduledServiceInvocationAuthState
                     {
-                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        NyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
                         {
+                            Role = ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
                             Scope = " owner-proxy ",
-                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
                             {
                                 Platform = OwnerScope.NyxIdPlatform,
                                 Tenant = string.Empty,
@@ -1244,9 +1245,9 @@ public sealed class ScheduledDispatchGAgentTests
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().BeNull();
-        auth.ScopeOwnerNyxId!.Scope.Should().Be("owner-proxy");
-        auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
+        auth!.SenderIdentity.Should().BeNull();
+        auth.ScopeOwnerIdentity!.Scope.Should().Be("owner-proxy");
+        auth.ScopeOwnerIdentity.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationIdentitySubject(
             OwnerScope.NyxIdPlatform,
             string.Empty,
             "owner-nyx-user"));
@@ -1310,8 +1311,8 @@ public sealed class ScheduledDispatchGAgentTests
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().BeNull();
-        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth!.SenderIdentity.Should().BeNull();
+        auth.ScopeOwnerIdentity.Should().BeNull();
         auth.Durable.Should().NotBeNull();
         auth.Durable!.CredentialId.Should().Be("credential-1");
         auth.Durable.SecretReference.Ref.Should().Be("sec-1");
@@ -1347,10 +1348,11 @@ public sealed class ScheduledDispatchGAgentTests
                     Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
                     Auth = new ScheduledServiceInvocationAuthState
                     {
-                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        NyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
                         {
+                            Role = ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
                             Scope = "proxy",
-                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
                             {
                                 Platform = OwnerScope.NyxIdPlatform,
                                 Tenant = string.Empty,
@@ -1407,10 +1409,11 @@ public sealed class ScheduledDispatchGAgentTests
                     Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
                     Auth = new ScheduledServiceInvocationAuthState
                     {
-                        ScopeOwnerNyxId = new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
+                        NyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
                         {
+                            Role = ScheduledServiceInvocationNyxIdCredentialRoleState.ScopeOwner,
                             Scope = "proxy",
-                            OwnerSubject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                            Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
                             {
                                 Platform = OwnerScope.NyxIdPlatform,
                                 Tenant = string.Empty,
@@ -1447,8 +1450,8 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.Target.ServiceInvocation.Auth.NyxId.Scope.Should().Be("proxy");
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
-        auth!.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
-        auth.ScopeOwnerNyxId.OwnerSubject!.ExternalUserId.Should().Be("owner-nyx-user");
+        auth!.ScopeOwnerIdentity!.Scope.Should().Be("proxy");
+        auth.ScopeOwnerIdentity.OwnerSubject!.ExternalUserId.Should().Be("owner-nyx-user");
     }
 
     [Fact]
@@ -1500,7 +1503,7 @@ public sealed class ScheduledDispatchGAgentTests
         });
 
         serviceInvocationDispatch.Auths.Should().ContainSingle()
-            .Which!.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
+            .Which!.SenderIdentity!.Subject.ExternalUserId.Should().Be("ou-user-1");
         serviceInvocationDispatch.Requests.Should().ContainSingle()
             .Which.Payload.Unpack<ChatRequestEvent>().ConnectorHttpAuthorization.Should().BeEmpty();
         agent.State.FireCount.Should().Be(1);
@@ -1565,8 +1568,8 @@ public sealed class ScheduledDispatchGAgentTests
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
         auth.Should().NotBeNull();
-        auth!.SenderNyxId.Should().BeNull();
-        auth.ScopeOwnerNyxId.Should().BeNull();
+        auth!.SenderIdentity.Should().BeNull();
+        auth.ScopeOwnerIdentity.Should().BeNull();
         auth.ScheduledInvocationAgentKey.Should().NotBeNull();
         auth.ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-schedule");
         auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(expiresAtUnixMs);
@@ -2565,9 +2568,9 @@ public sealed class ScheduledDispatchGAgentTests
             {
                 Credentials = new AgentToolCredentialsPayload
                 {
-                    NyxIdAccessToken = "tool-owner-token",
-                    NyxIdOrgToken = "tool-org-token",
-                    SenderNyxIdAccessToken = "tool-sender-token",
+                    AccessToken = "tool-owner-token",
+                    OrganizationToken = "tool-org-token",
+                    SenderAccessToken = "tool-sender-token",
                 },
             },
             LlmControl = new LLMControlContextPayload
@@ -2591,9 +2594,9 @@ public sealed class ScheduledDispatchGAgentTests
         chatRequest.LlmControl.NyxIdOrgToken.Should().BeEmpty();
         chatRequest.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         chatRequest.LlmControl.ModelOverride.Should().Be("sonnet");
-        chatRequest.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
-        chatRequest.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
-        chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.AccessToken.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.OrganizationToken.Should().BeEmpty();
+        chatRequest.ToolContext.Credentials.SenderAccessToken.Should().BeEmpty();
     }
 
     private static ScheduledDispatchTargetState CreateWorkflowServiceInvocationTarget(
@@ -2612,7 +2615,7 @@ public sealed class ScheduledDispatchGAgentTests
             },
         };
 
-    private static ScheduledServiceInvocationAuthState CreateSenderNyxIdAuth() =>
+    private static ScheduledServiceInvocationAuthState CreateSenderIdentityAuth() =>
         new()
         {
             SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState

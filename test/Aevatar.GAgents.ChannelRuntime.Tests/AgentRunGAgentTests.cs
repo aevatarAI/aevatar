@@ -1482,15 +1482,15 @@ public sealed class AgentRunGAgentTests
         (persisted!.LlmControl?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
         (persisted.LlmControl?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
         (persisted.LlmControl?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.ToolContext?.Credentials?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.ToolContext?.Credentials?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
-        (persisted.ToolContext?.Credentials?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.AccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.OrganizationToken ?? string.Empty).Should().BeEmpty();
+        (persisted.ToolContext?.Credentials?.SenderAccessToken ?? string.Empty).Should().BeEmpty();
         (persisted.OwnerFallbackLlmControl?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
         (persisted.OwnerFallbackLlmControl?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
         (persisted.OwnerFallbackLlmControl?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackToolContext?.Credentials?.NyxIdAccessToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackToolContext?.Credentials?.NyxIdOrgToken ?? string.Empty).Should().BeEmpty();
-        (persisted.OwnerFallbackToolContext?.Credentials?.SenderNyxIdAccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.AccessToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.OrganizationToken ?? string.Empty).Should().BeEmpty();
+        (persisted.OwnerFallbackToolContext?.Credentials?.SenderAccessToken ?? string.Empty).Should().BeEmpty();
 
         // Belt-and-suspenders: no inbound token value survives anywhere in the committed state bytes.
         var persistedText = System.Text.Encoding.UTF8.GetString(persisted.ToByteArray());
@@ -1627,7 +1627,7 @@ public sealed class AgentRunGAgentTests
 
         providerFactory.Requests[1].Tools.Should().BeNull();
         providerFactory.Requests[1].ToolContext!.SenderBinding.BindingId.Should().BeNull();
-        providerFactory.Requests[1].ToolContext!.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        providerFactory.Requests[1].ToolContext!.Credentials.SenderAccessToken.Should().BeNull();
         providerFactory.Requests[1].LlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         providerFactory.Requests[1].LlmControl!.NyxIdAccessToken.Should().Be("owner-token");
         providerFactory.Requests[1].LlmControl!.ModelOverride.Should().BeNull();
@@ -1779,7 +1779,7 @@ public sealed class AgentRunGAgentTests
         request.LlmControl.NyxIdAccessToken.Should().Be("sender-session-jwt");
         request.ToolContext!.Routing.ModelOverride.Should().Be("sender-model");
         request.ToolContext.Routing.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/sender");
-        request.ToolContext.Credentials.NyxIdAccessToken.Should().Be("sender-session-jwt");
+        request.ToolContext.Credentials.AccessToken.Should().Be("sender-session-jwt");
     }
 
     [Fact]
@@ -1858,9 +1858,9 @@ public sealed class AgentRunGAgentTests
                 "sender-session-jwt", $"round {round} must carry the re-supplied sender token");
             roundRequest.LlmControl!.NyxIdAccessToken.Should().Be(
                 "sender-session-jwt", $"round {round} must keep the sender as the LLM credential (no owner drift)");
-            roundRequest.ToolContext!.Credentials.SenderNyxIdAccessToken.Should().Be(
+            roundRequest.ToolContext!.Credentials.SenderAccessToken.Should().Be(
                 "sender-session-jwt", $"round {round} tool credentials must carry the sender token");
-            roundRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().NotBeNullOrEmpty(
+            roundRequest.ToolContext!.Credentials.AccessToken.Should().NotBeNullOrEmpty(
                 $"round {round} tool credentials must not be stripped");
         }
     }

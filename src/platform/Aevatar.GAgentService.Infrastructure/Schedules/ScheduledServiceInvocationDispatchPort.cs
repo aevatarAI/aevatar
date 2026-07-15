@@ -378,9 +378,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             return new CredentialExchange(CredentialRole.DurableSender, durableResult);
         }
 
-        if (dispatch.Auth.Source is ScheduledServiceInvocationNyxIdCredentialSource nyxId)
+        if (dispatch.Auth.Source is ScheduledServiceInvocationIdentityCredentialSource nyxId)
         {
-            var result = await _credentialExchangePort.IssueNyxIdAsync(nyxId, ct);
+            var result = await _credentialExchangePort.IssueAsync(nyxId, ct);
             return new CredentialExchange(ToCredentialRole(nyxId.Role), result);
         }
 
@@ -676,8 +676,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         }
 
         var subject = role == CredentialRole.ScopeOwner
-            ? auth?.ScopeOwnerNyxId?.OwnerSubject
-            : auth?.SenderNyxId?.Subject;
+            ? auth?.ScopeOwnerIdentity?.OwnerSubject
+            : auth?.SenderIdentity?.Subject;
         if (subject == null)
         {
             return role switch
@@ -703,7 +703,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (role is not (CredentialRole.Sender or CredentialRole.ScopeOwner))
             return null;
 
-        var source = auth?.NyxId;
+        var source = auth?.Identity;
         var subject = source?.Subject;
         var platform = subject?.Platform?.Trim() ?? string.Empty;
         var externalUserId = subject?.ExternalUserId?.Trim() ?? string.Empty;
@@ -737,7 +737,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private static CredentialRole ResolveCredentialRole(ScheduledServiceInvocationAuth? auth) =>
         auth?.Source switch
         {
-            ScheduledServiceInvocationNyxIdCredentialSource nyxId => ToCredentialRole(nyxId.Role),
+            ScheduledServiceInvocationIdentityCredentialSource nyxId => ToCredentialRole(nyxId.Role),
             ScheduledServiceInvocationDurableCredentialReference => CredentialRole.DurableSender,
             ScheduledInvocationAgentKeyCredentialReference => CredentialRole.ScheduledInvocationAgentKey,
             _ => CredentialRole.Sender,
@@ -782,8 +782,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 $"Scheduled service invocation {ToErrorSubject(role)} NyxID credential exchange returned an invalid access token.",
         };
 
-    private static CredentialRole ToCredentialRole(ScheduledServiceInvocationNyxIdCredentialRole role) =>
-        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner
+    private static CredentialRole ToCredentialRole(ScheduledServiceInvocationIdentityCredentialRole role) =>
+        role == ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner
             ? CredentialRole.ScopeOwner
             : CredentialRole.Sender;
 }

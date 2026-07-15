@@ -137,9 +137,9 @@ public sealed record AgentToolRequestIdentity(string? RequestId, string? CallId,
 }
 
 public sealed record AgentToolCredentials(
-    string? NyxIdAccessToken,
-    string? NyxIdOrgToken,
-    string? SenderNyxIdAccessToken)
+    string? AccessToken,
+    string? OrganizationToken,
+    string? SenderAccessToken)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }
@@ -147,7 +147,7 @@ public sealed record AgentToolCredentials(
 public enum AgentToolCredentialSource
 {
     Unspecified = 0,
-    NyxIdAssertion = 1,
+    IdentityAssertion = 1,
     BearerToken = 2,
     ChannelRegistration = 3,
     ScheduledRun = 4,

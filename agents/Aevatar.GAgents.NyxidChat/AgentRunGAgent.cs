@@ -1160,8 +1160,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private static bool HasAnyOwnerFallbackToolContext(AgentToolExecutionContext context) =>
         !string.IsNullOrWhiteSpace(context.Request.RequestId) ||
         !string.IsNullOrWhiteSpace(context.Request.CallId) ||
-        !string.IsNullOrWhiteSpace(context.Credentials.NyxIdAccessToken) ||
-        !string.IsNullOrWhiteSpace(context.Credentials.NyxIdOrgToken) ||
+        !string.IsNullOrWhiteSpace(context.Credentials.AccessToken) ||
+        !string.IsNullOrWhiteSpace(context.Credentials.OrganizationToken) ||
         !string.IsNullOrWhiteSpace(context.Caller.ScopeId) ||
         !string.IsNullOrWhiteSpace(context.Caller.OwnerSubject) ||
         !string.IsNullOrWhiteSpace(context.Caller.ResponseId) ||
@@ -1184,7 +1184,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         context with
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
-            Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
+            Credentials = context.Credentials with { SenderAccessToken = null },
             Routing = context.Routing with
             {
                 ModelOverride = null,

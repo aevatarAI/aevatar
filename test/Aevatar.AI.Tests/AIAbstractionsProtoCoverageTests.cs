@@ -24,9 +24,9 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Credentials = AgentToolCredentials.Empty with
             {
-                NyxIdAccessToken = "base-token",
-                NyxIdOrgToken = "base-org",
-                SenderNyxIdAccessToken = "base-sender",
+                AccessToken = "base-token",
+                OrganizationToken = "base-org",
+                SenderAccessToken = "base-sender",
             },
             Routing = LLMRequestRoutingContext.Empty with
             {
@@ -46,9 +46,9 @@ public sealed class AIAbstractionsProtoCoverageTests
         var payload = control.ToPayload();
         var roundTripped = LLMControlContextMapper.FromPayload(payload);
 
-        toolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
-        toolContext.Credentials.NyxIdOrgToken.Should().Be("org-1");
-        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-1");
+        toolContext.Credentials.AccessToken.Should().Be("token-1");
+        toolContext.Credentials.OrganizationToken.Should().Be("org-1");
+        toolContext.Credentials.SenderAccessToken.Should().Be("sender-1");
         toolContext.Routing.ModelOverride.Should().Be("model-a");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-a");
         toolContext.Routing.MaxToolRoundsOverride.Should().Be(7);
@@ -66,8 +66,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Credentials = AgentToolCredentials.Empty with
             {
-                NyxIdAccessToken = "base-token",
-                SenderNyxIdAccessToken = "base-sender",
+                AccessToken = "base-token",
+                SenderAccessToken = "base-sender",
             },
             Routing = LLMRequestRoutingContext.Empty with
             {

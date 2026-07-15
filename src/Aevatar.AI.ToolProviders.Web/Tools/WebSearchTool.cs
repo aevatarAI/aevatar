@@ -49,7 +49,7 @@ public sealed class WebSearchTool : IAgentTool
         // Refactor (iter24/cluster-002-agent-tool-context-generic-metadata-bag):
         //   Old pattern: tool methods pulled NyxID credentials from generic Metadata keys.
         //   New principle: credentials are typed request context fields, not internal Metadata.
-        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var token = AgentToolRequestContext.AccessToken;
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 

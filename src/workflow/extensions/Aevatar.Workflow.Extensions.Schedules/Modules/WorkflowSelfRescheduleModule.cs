@@ -134,8 +134,8 @@ public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecuti
             }
 
             auth = new WorkflowScheduleAuth(
-                SenderNyxId: new WorkflowScheduleNyxIdCredentialSource(
-                    new WorkflowScheduleNyxIdSubjectRef(
+                SenderIdentity: new WorkflowScheduleIdentityCredentialSource(
+                    new WorkflowScheduleIdentitySubject(
                         platform,
                         authority?.Tenant?.Trim() ?? string.Empty,
                         externalUserId),

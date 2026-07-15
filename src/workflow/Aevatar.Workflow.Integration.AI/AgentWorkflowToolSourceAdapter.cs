@@ -87,8 +87,8 @@ public sealed class AgentWorkflowToolSourceAdapter(
                 request.RuntimeContext.ParentRunId ?? string.Empty,
                 request.RuntimeContext.ParentStepId ?? string.Empty,
                 !string.IsNullOrWhiteSpace(request.CallerCredential?.BearerToken),
-                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken),
-                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdOrgToken));
+                !string.IsNullOrWhiteSpace(toolContext.Credentials.AccessToken),
+                !string.IsNullOrWhiteSpace(toolContext.Credentials.OrganizationToken));
             using var scope = AgentToolContextScope.Push(toolContext);
             var toolCallContext = new ToolCallContext
             {

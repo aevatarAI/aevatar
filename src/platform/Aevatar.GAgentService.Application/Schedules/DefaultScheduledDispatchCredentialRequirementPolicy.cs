@@ -27,7 +27,7 @@ public sealed class DefaultScheduledDispatchCredentialRequirementPolicy
                 ScheduledDispatchCredentialRequirementDecision.Deny(
                     credentialRequired,
                     ScheduledDispatchCredentialViolationCode.UnsupportedCredentialSource,
-                    "Durable sender bearer token schedule auth is no longer supported; use senderNyxId or scopeOwnerNyxId."),
+                    "Durable sender bearer token schedule auth is no longer supported; use senderIdentity or scopeOwnerIdentity."),
             ScheduledDispatchCredentialSourceKind.Multiple =>
                 ScheduledDispatchCredentialRequirementDecision.Deny(
                     credentialRequired,

@@ -30,23 +30,23 @@ public sealed record WorkflowScheduleConfiguration(
 
 public sealed record WorkflowScheduleMutationContext(
     string? AuthenticatedScopeId = null,
-    WorkflowScheduleNyxIdSubjectRef? AuthenticatedNyxIdOwnerSubject = null)
+    WorkflowScheduleIdentitySubject? AuthenticatedIdentityOwnerSubject = null)
 {
     public static WorkflowScheduleMutationContext None { get; } = new();
 }
 
-public sealed record WorkflowScheduleNyxIdSubjectRef(
+public sealed record WorkflowScheduleIdentitySubject(
     string Platform,
     string Tenant,
     string ExternalUserId);
 
-public sealed record WorkflowScheduleNyxIdCredentialSource(
-    WorkflowScheduleNyxIdSubjectRef Subject,
+public sealed record WorkflowScheduleIdentityCredentialSource(
+    WorkflowScheduleIdentitySubject Subject,
     string Scope);
 
-public sealed record WorkflowScheduleScopeOwnerNyxIdCredentialSource(
+public sealed record WorkflowScheduleScopeOwnerIdentityCredentialSource(
     string Scope,
-    WorkflowScheduleNyxIdSubjectRef? OwnerSubject = null);
+    WorkflowScheduleIdentitySubject? OwnerSubject = null);
 
 public sealed record WorkflowScheduleAgentKeyCredentialReference(
     SecretReference SecretReference,
@@ -54,8 +54,8 @@ public sealed record WorkflowScheduleAgentKeyCredentialReference(
     long KeyExpiresAtUnixMs);
 
 public sealed record WorkflowScheduleAuth(
-    WorkflowScheduleNyxIdCredentialSource? SenderNyxId = null,
-    WorkflowScheduleScopeOwnerNyxIdCredentialSource? ScopeOwnerNyxId = null,
+    WorkflowScheduleIdentityCredentialSource? SenderIdentity = null,
+    WorkflowScheduleScopeOwnerIdentityCredentialSource? ScopeOwnerIdentity = null,
     WorkflowScheduleAgentKeyCredentialReference? ScheduledInvocationAgentKey = null);
 
 public sealed record WorkflowScheduleSummary(

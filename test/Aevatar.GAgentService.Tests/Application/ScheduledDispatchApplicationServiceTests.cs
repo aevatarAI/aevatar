@@ -156,8 +156,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
             actorPort,
             new RecordingScheduledDispatchQueryPort(),
             new ScheduledDispatchTargetPreparationService(), new NoopScheduledDispatchCredentialAdmissionPort());
-        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+        var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationIdentityCredentialSource(
+            new ScheduledServiceInvocationIdentitySubject("lark", "tenant-1", "ou-user-1"),
             "proxy"));
 
         await service.CreateAsync(new ScheduledDispatchConfiguration(
@@ -177,7 +177,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var created = actorPort.Created.Should().ContainSingle().Which;
         created.Configuration.Target.ServiceInvocation!.Auth.Should().BeEquivalentTo(auth);
-        created.Dispatch.Descriptor.ServiceInvocation!.Auth!.SenderNyxId!.Subject.ExternalUserId.Should().Be("ou-user-1");
+        created.Dispatch.Descriptor.ServiceInvocation!.Auth!.SenderIdentity!.Subject.ExternalUserId.Should().Be("ou-user-1");
     }
 
     [Fact]
@@ -368,7 +368,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 ScheduledDispatchTargetKind.ServiceInvocation,
                 ScheduledDispatchScheduleKind.Workflow,
                 ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
-                ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId),
+                ScheduledDispatchCredentialSourceKind.ScopeOwnerIdentity),
         };
         var service = new ScheduledDispatchApplicationService(
             actorPort,
@@ -745,10 +745,10 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new Empty()),
                     Auth: new ScheduledServiceInvocationAuth(
-                        new ScheduledServiceInvocationNyxIdCredentialSource(
-                            new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                        new ScheduledServiceInvocationIdentityCredentialSource(
+                            new ScheduledServiceInvocationIdentitySubject("lark", "tenant-1", "ou-user-1"),
                             "proxy",
-                            (ScheduledServiceInvocationNyxIdCredentialRole)999)))),
+                            (ScheduledServiceInvocationIdentityCredentialRole)999)))),
             "0 9 * * *",
             "UTC",
             true,
@@ -773,14 +773,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new Empty()),
                     Auth: new ScheduledServiceInvocationAuth(
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource("owner-proxy")))),
+                        ScopeOwnerIdentity: new ScheduledServiceInvocationScopeOwnerCredentialSource("owner-proxy")))),
             "0 9 * * *",
             "UTC",
             true,
             new Dictionary<string, string>()));
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*Authenticated NyxID owner subject*");
+            .WithMessage("*Authenticated identity owner subject*");
     }
 
     [Fact]
@@ -795,7 +795,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             admissionPort);
         var context = new ScheduledDispatchMutationContext(
             "tenant",
-            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+            new ScheduledServiceInvocationIdentitySubject(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
 
         await service.CreateAsync(new ScheduledDispatchConfiguration(
             "schedule-owner-auth",
@@ -807,7 +807,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
                     Auth: new ScheduledServiceInvocationAuth(
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                        ScopeOwnerIdentity: new ScheduledServiceInvocationScopeOwnerCredentialSource(
                             " owner-proxy ")))),
             "0 9 * * *",
             "UTC",
@@ -816,18 +816,18 @@ public sealed class ScheduledDispatchApplicationServiceTests
             context);
 
         var created = actorPort.Created.Should().ContainSingle().Which;
-        var configurationOwnerAuth = created.Configuration.Target.ServiceInvocation!.Auth!.NyxId!;
-        configurationOwnerAuth.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
+        var configurationOwnerAuth = created.Configuration.Target.ServiceInvocation!.Auth!.Identity!;
+        configurationOwnerAuth.Role.Should().Be(ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner);
         configurationOwnerAuth.Scope.Should().Be("owner-proxy");
         configurationOwnerAuth.Subject.Should().BeEquivalentTo(
-            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
-        var dispatchOwnerAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.NyxId!;
-        dispatchOwnerAuth.Role.Should().Be(ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner);
+            new ScheduledServiceInvocationIdentitySubject(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+        var dispatchOwnerAuth = created.Dispatch.Descriptor.ServiceInvocation!.Auth!.Identity!;
+        dispatchOwnerAuth.Role.Should().Be(ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner);
         dispatchOwnerAuth.Scope.Should().Be("owner-proxy");
         dispatchOwnerAuth.Subject.Should().BeEquivalentTo(
-            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+            new ScheduledServiceInvocationIdentitySubject(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
         admissionPort.Requests.Should().ContainSingle()
-            .Which.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(context.AuthenticatedNyxIdOwnerSubject);
+            .Which.ScopeOwnerIdentity.OwnerSubject.Should().BeEquivalentTo(context.AuthenticatedIdentityOwnerSubject);
     }
 
     [Theory]
@@ -923,7 +923,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             CreateScopeOwnerContext());
 
         await act.Should().ThrowAsync<ArgumentException>()
-            .WithMessage("*NyxID binding does not grant the requested schedule scope*");
+            .WithMessage("*Identity binding does not grant the requested schedule scope*");
         admissionPort.Requests.Should().ContainSingle();
         AssertNoActorMutationDispatch(actorPort);
         AssertNoScheduleQuery(queryPort);
@@ -996,7 +996,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
             new ScheduledDispatchTargetPreparationService(),
             admissionPort);
         var configuration = CreateScopeOwnerConfiguration(
-            ownerSubject: new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "evil-owner"));
+            ownerSubject: new ScheduledServiceInvocationIdentitySubject(OwnerScope.NyxIdPlatform, string.Empty, "evil-owner"));
 
         var act = () => service.CreateAsync(configuration, CreateScopeOwnerContext());
 
@@ -1011,14 +1011,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
     {
         var port = new NoopScheduledServiceInvocationCredentialExchangePort();
 
-        var result = await port.IssueNyxIdAsync(new ScheduledServiceInvocationNyxIdCredentialSource(
-            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"),
+        var result = await port.IssueAsync(new ScheduledServiceInvocationIdentityCredentialSource(
+            new ScheduledServiceInvocationIdentitySubject(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"),
             "owner-proxy",
-            ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner));
+            ScheduledServiceInvocationIdentityCredentialRole.ScopeOwner));
 
         result.Succeeded.Should().BeFalse();
         result.AccessToken.Should().BeNull();
-        result.Error.Should().Be("Scheduled service invocation scope owner NyxID credential exchange is not configured.");
+        result.Error.Should().Be("Scheduled service invocation scope owner identity credential exchange is not configured.");
     }
 
     [Fact]
@@ -1038,8 +1038,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     Any.Pack(new StringValue { Value = "invoke" }),
                     "rev-1",
                     new ServiceInvocationCaller { ServiceKey = "tenant:app:default:caller", TenantId = "tenant", AppId = "app" },
-                    new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
-                        new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
+                    new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationIdentityCredentialSource(
+                        new ScheduledServiceInvocationIdentitySubject("lark", "tenant-1", "ou-user-1"),
                         "proxy")))),
             "0 9 * * *",
             "UTC",
@@ -1071,7 +1071,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
-    public async Task ScheduledDispatchActorPort_ShouldPersistScopeOwnerNyxIdAuth()
+    public async Task ScheduledDispatchActorPort_ShouldPersistScopeOwnerIdentityAuth()
     {
         var dispatchPort = new RecordingActorDispatchPort();
         var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
@@ -1085,9 +1085,9 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
                     Auth: new ScheduledServiceInvocationAuth(
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                        ScopeOwnerIdentity: new ScheduledServiceInvocationScopeOwnerCredentialSource(
                             "proxy",
-                            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
+                            new ScheduledServiceInvocationIdentitySubject(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"))))),
             "0 9 * * *",
             "UTC",
             true,
@@ -1748,7 +1748,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     private static ScheduledDispatchConfiguration CreateScopeOwnerConfiguration(
         string scheduleId = "scope-owner-schedule",
         string tenantId = "scope-1",
-        ScheduledServiceInvocationNyxIdSubjectRef? ownerSubject = null) =>
+        ScheduledServiceInvocationIdentitySubject? ownerSubject = null) =>
         new(
             scheduleId,
             "Invoke",
@@ -1765,7 +1765,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
                     Auth: new ScheduledServiceInvocationAuth(
-                        ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
+                        ScopeOwnerIdentity: new ScheduledServiceInvocationScopeOwnerCredentialSource(
                             "proxy",
                             ownerSubject)))),
             "0 9 * * *",
@@ -1790,7 +1790,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
     private static ScheduledDispatchMutationContext CreateScopeOwnerContext() =>
         new(
             "scope-1",
-            new ScheduledServiceInvocationNyxIdSubjectRef(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
+            new ScheduledServiceInvocationIdentitySubject(OwnerScope.NyxIdPlatform, string.Empty, "owner-nyx-user"));
 
     private static Task<ScheduledDispatchMutationReceipt> ExecuteMutationAsync(
         ScheduledDispatchApplicationService service,
