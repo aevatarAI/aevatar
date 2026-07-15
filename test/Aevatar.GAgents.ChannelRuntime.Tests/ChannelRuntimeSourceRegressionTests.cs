@@ -95,14 +95,15 @@ public sealed class ChannelRuntimeSourceRegressionTests
     {
         var source = ReadRepositorySources("agents/Aevatar.GAgents.Scheduled") +
                      ReadRepositoryFile("agents/Aevatar.GAgents.Scheduled/Aevatar.GAgents.Scheduled.csproj");
+        var outboundMetadataSource = source + ReadRepositoryFile("agents/Aevatar.GAgents.NyxidChat/ChannelConversationTurnRunner.cs");
         source.Should().NotContain("Aevatar.GAgents.Platform.Lark",
             "generic scheduled authoring must work without referencing the Lark platform package");
         source.Should().NotContain("Aevatar.AI.ToolProviders.Lark",
             "generic scheduled authoring must work without referencing any Lark package");
         source.Should().NotContain("LarkConversationTargets",
             "Lark receive-target inference belongs to the Lark adapter boundary");
-        source.Should().NotContain("ChannelMetadataKeys.LarkOutboundProxySlug",
-            "generic scheduled runtime must consume normalized outbound provider metadata, not Lark fallback keys");
+        outboundMetadataSource.Should().NotContain("ChannelMetadataKeys.LarkOutboundProxySlug",
+            "generic scheduled/runtime paths must consume normalized outbound provider metadata, not Lark fallback keys");
     }
 
     [Fact]
