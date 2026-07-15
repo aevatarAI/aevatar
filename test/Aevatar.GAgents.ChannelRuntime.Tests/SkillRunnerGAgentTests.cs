@@ -123,6 +123,27 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleInitializeAsync_WithChannelAddress_ShouldLeaveDeprecatedLarkAddressFieldsEmpty()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
+        initialized.OutboundConfig.ChannelAddress.Primary.AddressId.Should().Be("oc_chat_1");
+        initialized.OutboundConfig.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+#pragma warning disable CS0612
+        initialized.OutboundConfig.LarkReceiveId.Should().BeEmpty();
+        initialized.OutboundConfig.LarkReceiveIdType.Should().BeEmpty();
+        initialized.OutboundConfig.LarkReceiveIdFallback.Should().BeEmpty();
+        initialized.OutboundConfig.LarkReceiveIdTypeFallback.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveId.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveIdType.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveIdFallback.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveIdTypeFallback.Should().BeEmpty();
+#pragma warning restore CS0612
+    }
+
+    [Fact]
     public async Task HandleInitializeAsync_WithSkillRefOnly_ShouldPersistTypedReferenceAndNoInlineContent()
     {
         var command = CreateInitializeCommand();
