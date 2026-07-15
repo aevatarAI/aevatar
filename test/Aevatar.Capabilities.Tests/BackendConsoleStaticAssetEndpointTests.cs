@@ -72,6 +72,19 @@ public sealed class BackendConsoleStaticAssetEndpointTests
             "if(!AUDIT_LOADED||AUDIT_LOADING){ if(!AUDIT_LOADING) loadAuditTrail(); }");
     }
 
+    [Fact]
+    public async Task AdminShell_ObservatoryPolling_ShouldKeepCachedDetailVisible()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function loadObsDetail(runId,rerender,refresh)");
+        html.Should().Contain("detail:previousDetail");
+        html.Should().Contain("if(cache&&cache.loading&&!d)");
+        html.Should().Contain("loadObsDetail(selected.id,function(){ reList();");
+        html.Should().NotContain("delete OBS_DETAIL[selected.id]");
+    }
+
     private static async Task<WebApplication> CreateAppAsync()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
