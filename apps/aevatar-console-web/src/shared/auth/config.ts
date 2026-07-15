@@ -9,12 +9,6 @@ export interface NyxIDRuntimeConfig {
 }
 
 const DEFAULT_REDIRECT_PATH = '/auth/callback';
-const DEFAULT_SERVICE_SLUGS = [
-  'aevatar',
-  'ornn-api',
-  'chrono-llm-public',
-  'chrono-sandbox',
-] as const;
 const SERVICE_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function trimOptional(value?: string): string | undefined {
@@ -128,7 +122,7 @@ function parseDefaultServiceSlugs(value?: string): {
   readonly error?: string;
 } {
   if (value === undefined) {
-    return { slugs: DEFAULT_SERVICE_SLUGS };
+    return { slugs: [] };
   }
 
   let normalized = value.trim();
@@ -147,7 +141,7 @@ function parseDefaultServiceSlugs(value?: string): {
       sensitivity: 'accent',
     }) === 0
   ) {
-    return { slugs: DEFAULT_SERVICE_SLUGS };
+    return { slugs: [] };
   }
 
   if (!normalized) {

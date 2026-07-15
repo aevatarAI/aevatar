@@ -24,7 +24,7 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: `${window.location.origin}/auth/callback`,
       scope: '',
-      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
+      defaultServiceSlugs: [],
       configurationError: undefined,
     });
   });
@@ -38,7 +38,7 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: 'http://localhost:5173/auth/callback',
       scope: '',
-      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
+      defaultServiceSlugs: [],
       configurationError: undefined,
     });
   });
@@ -55,7 +55,7 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: `${window.location.origin}/auth/callback`,
       scope: '',
-      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
+      defaultServiceSlugs: [],
       configurationError: undefined,
     });
   });
@@ -69,19 +69,22 @@ describe('NyxID runtime config', () => {
       clientId: '',
       redirectUri: '',
       scope: '',
-      defaultServiceSlugs: ['aevatar', 'ornn-api', 'chrono-llm-public', 'chrono-sandbox'],
+      defaultServiceSlugs: [],
       configurationError:
         'NYXID_REDIRECT_URI must be a valid http(s) URL or a root-relative path such as /auth/callback.',
     });
   });
 
   it('normalizes configured default services and removes duplicates', () => {
-    process.env.NYXID_DEFAULT_SERVICE_SLUGS = '" aevatar, ornn-api,chrono-sandbox,ornn-api "';
+    process.env.NYXID_DEFAULT_SERVICE_SLUGS =
+      '" aevatar, ornn-api,chrono-llm-public,chrono-sandbox,api-lark-bot,ornn-api "';
 
     expect(getNyxIDRuntimeConfig().defaultServiceSlugs).toEqual([
       'aevatar',
       'ornn-api',
+      'chrono-llm-public',
       'chrono-sandbox',
+      'api-lark-bot',
     ]);
   });
 
