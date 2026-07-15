@@ -190,6 +190,18 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void CreateBuiltInAutoYaml_ShouldUseSharedAuthorableRootSchema()
+    {
+        var autoYaml = WorkflowDefinitionCatalog.CreateBuiltInAutoYaml();
+
+        autoYaml.Should().Contain(
+            $"Authorable top-level keys: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}");
+        autoYaml.Should().Contain(
+            $"Do NOT use top-level keys from other workflow dialects, including {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}");
+        autoYaml.Should().NotContain("Top-level keys: name, description, roles, steps");
+    }
+
+    [Fact]
     public void BuiltInStudioYaml_ShouldParseAsMemberProvisionStudioRoleWithToolAllowlist()
     {
         var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);

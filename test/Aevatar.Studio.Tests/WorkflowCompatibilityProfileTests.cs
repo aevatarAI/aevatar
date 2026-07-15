@@ -28,6 +28,15 @@ public sealed class WorkflowCompatibilityProfileTests
         _profile.FormatRejectedDialectRootFields().Should().Be(WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields());
     }
 
+    [Fact]
+    public void WorkflowYamlRootSchema_ShouldKeepAuthorableRootFieldsParserAccepted()
+    {
+        WorkflowYamlRootSchema.AuthorableRootFieldOrder.Should()
+            .OnlyContain(field => WorkflowYamlRootSchema.IsAcceptedRootField(field));
+        WorkflowYamlRootSchema.AuthorableRootFields.Should()
+            .BeSubsetOf(WorkflowYamlRootSchema.AcceptedRootFields);
+    }
+
     [Theory]
     [MemberData(nameof(SharedAcceptedRootFields))]
     public void AevatarV1_ShouldKeepStudioValidationAndParserAlignedOnAcceptedRootFields(string rootField)

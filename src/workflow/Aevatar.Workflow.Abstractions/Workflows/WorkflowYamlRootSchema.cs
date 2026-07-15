@@ -43,7 +43,7 @@ public static class WorkflowYamlRootSchema
         ImmutableHashSet.CreateRange(Comparer, AcceptedRootFieldOrder);
 
     public static ImmutableHashSet<string> AuthorableRootFields { get; } =
-        ImmutableHashSet.CreateRange(Comparer, AuthorableRootFieldOrder);
+        CreateAuthorableRootFields();
 
     public static ImmutableHashSet<string> UnsupportedDialectRootFields { get; } =
         ImmutableHashSet.CreateRange(Comparer, UnsupportedDialectRootFieldOrder);
@@ -56,4 +56,18 @@ public static class WorkflowYamlRootSchema
     public static string FormatAuthorableRootFields() => string.Join(", ", AuthorableRootFieldOrder);
 
     public static string FormatUnsupportedDialectRootFields() => string.Join(", ", UnsupportedDialectRootFieldOrder);
+
+    private static ImmutableHashSet<string> CreateAuthorableRootFields()
+    {
+        var authorableRootFields = ImmutableHashSet.CreateRange(Comparer, AuthorableRootFieldOrder);
+        var unsupportedAuthorableFields = authorableRootFields.Except(AcceptedRootFields, Comparer).ToArray();
+
+        if (unsupportedAuthorableFields.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Authorable workflow YAML root fields must be parser-accepted: {string.Join(", ", unsupportedAuthorableFields)}.");
+        }
+
+        return authorableRootFields;
+    }
 }
