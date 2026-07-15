@@ -45,6 +45,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 "https://nyx-api.example/api/v1/proxy/s/aevatar",
                 "https://nyx-api.example/api/v1/proxy/s/chrono-llm-public",
                 "https://nyx-api.example/api/v1/proxy/s/ornn-api",
+                "https://nyx-api.example/api/v1/proxy/s/chrono-sandbox-service",
             ]));
     }
 
@@ -578,7 +579,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         Options.Create(new NyxIdBrokerOptions
         {
             RequiredLlmServiceSlug = "chrono-llm-public",
-            AdditionalRequiredServiceSlugs = ["ornn-api"],
+            AdditionalRequiredServiceSlugs = ["ornn-api", "chrono-sandbox-service"],
         });
 
     private sealed class FailingCapabilityBroker : StubCapabilityBroker

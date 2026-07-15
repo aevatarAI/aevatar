@@ -233,6 +233,7 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("Ornn service");
+        reply.Text.Should().Contain("Sandbox service");
         reply.Text.Should().Contain("/init");
         reply.Text.Should().NotContain("/unbind");
         dispatchPort.Dispatched.Should().BeEmpty();

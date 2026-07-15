@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Microsoft.Extensions.Configuration;
@@ -8,7 +9,8 @@ namespace Aevatar.Mainnet.Host.Api.Hosting;
 
 internal sealed class MainnetNyxIdResourcePolicyValidator(
     IConfiguration configuration,
-    OrnnOptions ornnOptions) : IValidateOptions<NyxIdBrokerOptions>
+    OrnnOptions ornnOptions,
+    NyxIdToolOptions nyxIdToolOptions) : IValidateOptions<NyxIdBrokerOptions>
 {
     public ValidateOptionsResult Validate(string? name, NyxIdBrokerOptions options)
     {
@@ -40,6 +42,14 @@ internal sealed class MainnetNyxIdResourcePolicyValidator(
             failures.Add(
                 $"{nameof(NyxIdBrokerOptions.AdditionalRequiredServiceSlugs)} must contain the Ornn provider route " +
                 $"'{providerOrnnSlug}' resolved from Aevatar:Ornn:NyxIdSlug.");
+        }
+
+        var providerSandboxSlug = nyxIdToolOptions.SandboxServiceSlug?.Trim() ?? string.Empty;
+        if (!requiredAdditionalSlugs.Contains(providerSandboxSlug))
+        {
+            failures.Add(
+                $"{nameof(NyxIdBrokerOptions.AdditionalRequiredServiceSlugs)} must contain the sandbox provider route " +
+                $"'{providerSandboxSlug}' resolved from Aevatar:NyxId:SandboxServiceSlug.");
         }
 
         return failures.Count == 0

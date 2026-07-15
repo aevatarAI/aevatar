@@ -157,6 +157,10 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
+        var configuredSandboxServiceSlug = builder.Configuration["Aevatar:NyxId:SandboxServiceSlug"];
+        var sandboxServiceSlug = string.IsNullOrWhiteSpace(configuredSandboxServiceSlug)
+            ? NyxIdToolOptions.DefaultSandboxServiceSlug
+            : configuredSandboxServiceSlug.Trim();
         builder.Services.Configure<NyxIdBrokerOptions>(options =>
         {
             var configuredRoute = builder.Configuration["Aevatar:NyxId:DefaultRoute"];
@@ -174,6 +178,7 @@ public static class MainnetHostBuilderExtensions
                 .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
                 .Select(static serviceSlug => serviceSlug!.Trim())
                 .Append(ornnSlug)
+                .Append(sandboxServiceSlug)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
         });
@@ -301,6 +306,7 @@ public static class MainnetHostBuilderExtensions
                                ?? builder.Configuration["Aevatar:Authentication:Authority"];
             if (!string.IsNullOrWhiteSpace(nyxAuthority))
                 o.BaseUrl = nyxAuthority;
+            o.SandboxServiceSlug = sandboxServiceSlug;
             // Opt-in: only the mainnet host (which runs the channel relay's approval-aware
             // tool execution pipeline) advertises ssh_exec to the LLM. Other hosts that pull
             // in NyxId tools (CLI, workflow runner) leave this off so a generic agent can't

@@ -22,11 +22,13 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     private const string OAuthAuthority = "https://nyx-ui.test";
     private const string RequiredLlmServiceSlug = "chrono-llm-public";
     private const string RequiredOrnnServiceSlug = "ornn-api";
+    private const string RequiredSandboxServiceSlug = "chrono-sandbox-service";
     private const string RequiredAevatarResource = $"{OAuthAuthority}/api/v1/proxy/s/aevatar";
     private const string RequiredLlmResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredLlmServiceSlug}";
     private const string RequiredOrnnResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredOrnnServiceSlug}";
+    private const string RequiredSandboxResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredSandboxServiceSlug}";
     private static readonly string[] RequiredResources =
-        [RequiredAevatarResource, RequiredLlmResource, RequiredOrnnResource];
+        [RequiredAevatarResource, RequiredLlmResource, RequiredOrnnResource, RequiredSandboxResource];
 
     private readonly string? _savedOverride;
 
@@ -262,7 +264,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             {
                 Scope = $"{AevatarOAuthClientScopes.AuthorizationScope} email",
                 RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug],
+                AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
             });
 
         var challenge = await broker.StartExternalBindingAsync(SampleSubject());
@@ -322,7 +324,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
                 HttpStatusCode.OK,
                 JsonSerializer.Serialize(new
                 {
-                    access_token = CreateAccessToken([RequiredAevatarResource, RequiredLlmResource]),
+                    access_token = CreateAccessToken(
+                        [RequiredAevatarResource, RequiredLlmResource, RequiredSandboxResource]),
                     token_type = "Bearer",
                     expires_in = 300,
                     scope = "proxy",
@@ -376,7 +379,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         options ??= new NyxIdBrokerOptions
         {
             RequiredLlmServiceSlug = RequiredLlmServiceSlug,
-            AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug],
+            AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
         };
         return new NyxIdRemoteCapabilityBroker(
             new FakeHttpClientFactory(httpHandler),

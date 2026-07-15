@@ -5,6 +5,7 @@ public sealed class NyxIdToolOptions
 {
     public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
     public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
+    public const string DefaultSandboxServiceSlug = "chrono-sandbox-service";
 
     /// <summary>
     /// The single default NyxID base URL (the identity/OIDC authority AND the proxy host — the
@@ -16,6 +17,13 @@ public sealed class NyxIdToolOptions
 
     /// <summary>NyxID base URL. Defaults to <see cref="DefaultBaseUrl"/>; set via config to override.</summary>
     public string? BaseUrl { get; set; } = DefaultBaseUrl;
+
+    /// <summary>
+    /// NyxID service slug used by <c>code_execute</c>. Hosts that expose the
+    /// tool through a per-user OAuth binding must request this same service as
+    /// an RFC 8707 resource.
+    /// </summary>
+    public string SandboxServiceSlug { get; set; } = DefaultSandboxServiceSlug;
 
     /// <summary>
     /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. Off by default

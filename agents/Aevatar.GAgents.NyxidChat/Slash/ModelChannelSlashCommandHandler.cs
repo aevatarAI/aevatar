@@ -115,7 +115,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
         {
             return new MessageContent
             {
-                Text = "当前 NyxID 绑定缺少 Aevatar、默认 LLM 或 Ornn service 授权。请发送 /init 更新现有绑定的服务授权。",
+                Text = "当前 NyxID 绑定缺少 Aevatar、默认 LLM、Ornn service 或 Sandbox service 授权。请发送 /init 更新现有绑定的服务授权。",
             };
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or HttpRequestException or NotSupportedException)

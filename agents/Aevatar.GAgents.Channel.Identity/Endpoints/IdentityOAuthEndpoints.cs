@@ -165,7 +165,7 @@ public static class IdentityOAuthEndpoints
             return Results.Json(new
             {
                 error = "required_service_access_missing",
-                detail = "NyxID 授权未包含 Aevatar 或默认 LLM service。请回到 Lark 重新发送 /init,并在授权页保留这两个 services。",
+                detail = "NyxID 授权未包含 Aevatar、默认 LLM、Ornn service 或 Sandbox service。请回到 Lark 重新发送 /init,并在授权页保留这些必需 services。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception ex)
