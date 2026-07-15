@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import CallbackPage from './index';
 import { NyxIDAuthClient } from '@/shared/auth/client';
@@ -108,5 +108,26 @@ describe('NyxID callback page', () => {
       expect(replaceLocation).toHaveBeenCalledWith(CONSOLE_HOME_ROUTE);
     });
     expect(handleRedirectCallback).not.toHaveBeenCalled();
+  });
+
+  it('shows an actionable authorization error without exposing the machine code', async () => {
+    handleRedirectCallback.mockRejectedValue(
+      new Error(
+        'Return to login and allow access to the Aevatar service in NyxID.',
+      ),
+    );
+
+    render(React.createElement(CallbackPage));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'Return to login and allow access to the Aevatar service in NyxID.',
+        ),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText('required_service_access_missing'),
+    ).not.toBeInTheDocument();
   });
 });

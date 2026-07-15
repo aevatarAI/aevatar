@@ -284,6 +284,27 @@ public sealed class WorkflowExecutionRuntimeContextTests
     }
 
     [Fact]
+    public async Task WorkflowCallerCredentialRuntimeAccess_ShouldPersistAndRecoverAuthorityWithoutSecretReference()
+    {
+        var host = new RecordingStateHost();
+
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            host,
+            new WorkflowCallerCredential { NyxIdAuthority = CreateCallerAuthority() });
+
+        host.ExecutionContextState.CallerCredential.Should().NotBeNull();
+        host.ExecutionContextState.CallerCredential!.RuntimeSecretReference.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.DurableCallerCredential.Should().BeNull();
+        host.ExecutionContextState.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(CreateCallerAuthority());
+
+        var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(host);
+
+        credential.Found.Should().BeTrue();
+        credential.Credential.BearerToken.Should().BeEmpty();
+        credential.Credential.NyxIdAuthority.Should().BeEquivalentTo(CreateCallerAuthority());
+    }
+
+    [Fact]
     public async Task WorkflowCallerCredentialRuntimeAccess_ShouldResolveDurableHandleThroughVault()
     {
         var vault = new InMemorySecretVault();

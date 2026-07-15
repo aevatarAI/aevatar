@@ -656,6 +656,37 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldReconcileProjectionIndicesBeforeStartupReaders()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://127.0.0.1:9200",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var hostedServices = builder.Services
+            .Where(static descriptor => descriptor.ServiceType == typeof(IHostedService))
+            .ToList();
+        var reconcileIndex = hostedServices.FindIndex(static descriptor =>
+            descriptor.ImplementationType == typeof(ElasticsearchProjectionIndexReconcileHostedService));
+        var revocationMigrationIndex = hostedServices.FindIndex(static descriptor =>
+            descriptor.ImplementationType?.Name == "UserAgentApiKeyRevocationReadModelKeyMigrationService");
+
+        reconcileIndex.Should().BeGreaterThanOrEqualTo(0);
+        revocationMigrationIndex.Should().BeGreaterThan(reconcileIndex);
+        hostedServices.Should().ContainSingle(static descriptor =>
+            descriptor.ImplementationType == typeof(ElasticsearchProjectionIndexReconcileHostedService));
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldAssertChannelIdentityElasticsearchAcl()
     {
         using var home = new TemporaryAevatarHomeScope();
