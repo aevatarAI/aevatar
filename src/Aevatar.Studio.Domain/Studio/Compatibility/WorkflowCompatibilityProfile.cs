@@ -174,7 +174,7 @@ public sealed class WorkflowCompatibilityProfile
             Version = WorkflowYamlRootSchema.Version,
             AuthorableRootFieldOrder = WorkflowYamlRootSchema.AuthorableRootFieldOrder,
             RootFieldOrder = WorkflowYamlRootSchema.AcceptedRootFieldOrder,
-            AllowedRootFields = WorkflowYamlRootSchema.AcceptedRootFields,
+            AllowedRootFields = WorkflowYamlRootSchema.AuthorableRootFields,
             AllowedConfigurationFields = ImmutableHashSet.Create(comparer, "closed_world_mode"),
             AllowedRoleFields = ImmutableHashSet.Create(
                 comparer,

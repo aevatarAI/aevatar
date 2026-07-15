@@ -23,7 +23,7 @@ public sealed class WorkflowCompatibilityProfileTests
     {
         _profile.RootFieldOrder.Should().Equal(WorkflowYamlRootSchema.AcceptedRootFieldOrder);
         _profile.AuthorableRootFieldOrder.Should().Equal(WorkflowYamlRootSchema.AuthorableRootFieldOrder);
-        _profile.AllowedRootFields.Should().BeEquivalentTo(WorkflowYamlRootSchema.AcceptedRootFields);
+        _profile.AllowedRootFields.Should().BeEquivalentTo(WorkflowYamlRootSchema.AuthorableRootFields);
         _profile.FormatRootFields().Should().Be(WorkflowYamlRootSchema.FormatAuthorableRootFields());
         _profile.FormatRejectedDialectRootFields().Should().Be(WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields());
     }
@@ -38,8 +38,8 @@ public sealed class WorkflowCompatibilityProfileTests
     }
 
     [Theory]
-    [MemberData(nameof(SharedAcceptedRootFields))]
-    public void AevatarV1_ShouldKeepStudioValidationAndParserAlignedOnAcceptedRootFields(string rootField)
+    [MemberData(nameof(AuthorableRootFields))]
+    public void AevatarV1_ShouldAcceptAuthorableRootFields(string rootField)
     {
         var yaml = BuildYamlWithRootField(rootField);
 
@@ -47,6 +47,21 @@ public sealed class WorkflowCompatibilityProfileTests
         Action parserParse = () => new WorkflowParser().Parse(yaml);
 
         studioParse.Findings.Should().NotContain(finding =>
+            string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase) &&
+            finding.Path == $"/{rootField}");
+        parserParse.Should().NotThrow();
+    }
+
+    [Theory]
+    [MemberData(nameof(ParserOnlyRootFields))]
+    public void AevatarV1_ShouldRejectParserOnlyRootFieldsInStudio(string rootField)
+    {
+        var yaml = BuildYamlWithRootField(rootField);
+
+        var studioParse = new YamlWorkflowDocumentService(_profile).Parse(yaml);
+        Action parserParse = () => new WorkflowParser().Parse(yaml);
+
+        studioParse.Findings.Should().Contain(finding =>
             string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase) &&
             finding.Path == $"/{rootField}");
         parserParse.Should().NotThrow();
@@ -65,8 +80,13 @@ public sealed class WorkflowCompatibilityProfileTests
         _profile.AllowedRootFields.Should().NotContain(field);
     }
 
-    public static IEnumerable<object[]> SharedAcceptedRootFields() =>
-        WorkflowYamlRootSchema.AcceptedRootFieldOrder.Select(static field => new object[] { field });
+    public static IEnumerable<object[]> AuthorableRootFields() =>
+        WorkflowYamlRootSchema.AuthorableRootFieldOrder.Select(static field => new object[] { field });
+
+    public static IEnumerable<object[]> ParserOnlyRootFields() =>
+        WorkflowYamlRootSchema.AcceptedRootFieldOrder
+            .Where(static field => !WorkflowYamlRootSchema.AuthorableRootFields.Contains(field))
+            .Select(static field => new object[] { field });
 
     private static string BuildYamlWithRootField(string rootField) =>
         rootField switch
