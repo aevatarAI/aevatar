@@ -4,6 +4,8 @@ import {
   refreshNyxIDTokenSet,
 } from "./backend";
 
+const requiredResource = "https://nyx-api.example/api/v1/proxy/s/aevatar";
+
 describe("NyxID backend auth API", () => {
   const originalFetch = global.fetch;
 
@@ -24,6 +26,7 @@ describe("NyxID backend auth API", () => {
         baseUrl: "https://nyx.example/",
         clientId: "broker-client-1",
         scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+        resources: [requiredResource],
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -32,6 +35,7 @@ describe("NyxID backend auth API", () => {
       baseUrl: "https://nyx.example",
       clientId: "broker-client-1",
       scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+      resources: [requiredResource],
     });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/auth/nyxid/config", {
@@ -49,6 +53,7 @@ describe("NyxID backend auth API", () => {
         baseUrl: "https://nyx.example/",
         clientId: "broker-client-1",
         scope: "openid urn:nyxid:scope:broker_binding proxy",
+        Resources: [requiredResource],
         redirectUri: "https://backend.example/auth/callback",
         RedirectUri: "https://backend.example/AuthCallback",
       }),
@@ -59,7 +64,24 @@ describe("NyxID backend auth API", () => {
       baseUrl: "https://nyx.example",
       clientId: "broker-client-1",
       scope: "openid urn:nyxid:scope:broker_binding proxy",
+      resources: [requiredResource],
     });
+  });
+
+  it("rejects login config that omits the required OAuth resources", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        baseUrl: "https://nyx.example/",
+        clientId: "broker-client-1",
+        scope: "openid proxy",
+      }),
+    } as Response) as typeof global.fetch;
+
+    await expect(loadBackendNyxIDLoginConfig()).rejects.toThrow(
+      "resources must be a non-empty string array",
+    );
   });
 
   it("finalizes an authorization code through the backend and preserves accepted-dispatch semantics", async () => {
@@ -147,6 +169,7 @@ describe("NyxID backend auth API", () => {
         baseUrl: "https://nyx.example/",
         clientId: "broker-client-1",
         refreshToken: "refresh-token-1",
+        resources: [requiredResource],
       }),
     ).resolves.toEqual({
       accessToken: "access-token-2",
@@ -166,7 +189,7 @@ describe("NyxID backend auth API", () => {
       "Content-Type": "application/x-www-form-urlencoded",
     });
     expect(String(init.body)).toBe(
-      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1",
+      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1&resource=https%3A%2F%2Fnyx-api.example%2Fapi%2Fv1%2Fproxy%2Fs%2Faevatar",
     );
   });
 
@@ -187,6 +210,7 @@ describe("NyxID backend auth API", () => {
         baseUrl: "https://nyx.example",
         clientId: "broker-client-1",
         refreshToken: "refresh-token-1",
+        resources: [requiredResource],
       }),
     ).resolves.toEqual(
       expect.objectContaining({
