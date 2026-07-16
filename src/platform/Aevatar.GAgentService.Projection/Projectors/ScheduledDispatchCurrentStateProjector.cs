@@ -174,7 +174,6 @@ public sealed class ScheduledDispatchCurrentStateProjector
         stateKind switch
         {
             ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
-            ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
 

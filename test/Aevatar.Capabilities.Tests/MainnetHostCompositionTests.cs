@@ -118,7 +118,7 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(19);
+        readModelDescriptors.Should().HaveCount(18);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()

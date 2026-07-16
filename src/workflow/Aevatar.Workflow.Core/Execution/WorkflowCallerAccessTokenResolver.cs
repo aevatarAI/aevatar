@@ -19,6 +19,10 @@ internal static class WorkflowCallerAccessTokenResolver
             throw new InvalidOperationException("Workflow caller NyxID access token provider is unavailable.");
 
         var token = await provider.IssueAsync(credential.NyxIdAuthority, ct);
-        return new WorkflowCallerCredential { BearerToken = token };
+        return new WorkflowCallerCredential
+        {
+            BearerToken = token,
+            NyxIdAuthority = credential.NyxIdAuthority.Clone(),
+        };
     }
 }

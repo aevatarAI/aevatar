@@ -66,11 +66,6 @@ public sealed class ScheduledAgentCreatorToolTests
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("error").GetString().Should().Contain("access token");
         harness.Handler.Requests.Should().BeEmpty();
-        await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-            Arg.Any<string>(),
-            Arg.Any<InitializeSkillRunnerCommand>(),
-            Arg.Any<bool>(),
-            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -107,11 +102,6 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -137,11 +127,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().Contain(expectedDetailFragment);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -163,11 +148,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().StartWith(expectedDetailPrefix);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -211,11 +191,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("output_format");
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -235,11 +210,6 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Contain(expectedErrorFragment);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -303,11 +273,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().Be(expectedDetail);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -331,11 +296,6 @@ public sealed class ScheduledAgentCreatorToolTests
             handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -507,11 +467,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("owner_llm_config_unavailable");
             document.RootElement.GetProperty("detail").GetString().Should().Be("owner config unavailable");
             handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -551,11 +506,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("required_service_not_found:tavily-search");
             handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -580,11 +530,6 @@ public sealed class ScheduledAgentCreatorToolTests
             handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
             handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Post);
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -612,11 +557,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("detail").GetString().Should().Contain("not owned by user");
             document.RootElement.GetProperty("hint").GetString().Should().Contain("organization");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -696,11 +636,6 @@ public sealed class ScheduledAgentCreatorToolTests
             handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
             handler.Requests.Should().NotContain(request =>
                 request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -730,11 +665,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("detail").GetString().Should().Contain("api-lark-bot");
             document.RootElement.GetProperty("hint").GetString().Should().Contain("member");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -811,7 +741,7 @@ public sealed class ScheduledAgentCreatorToolTests
             agentKey.SecretReference.Ref.Should().NotBe("full-secret-key");
             captured.Schedule.Headers["scheduled_agent.agent_type"].Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
             captured.Schedule.Headers["scheduled_agent.conversation_id"].Should().Be("oc_conversation");
-            captured.Schedule.Headers["scheduled_agent.output_format"].Should().Be(SkillRunnerOutputFormat.FeishuDoc.ToString());
+            captured.Schedule.Headers["scheduled_agent.output_format"].Should().Be(ScheduledAgentOutputFormat.FeishuDoc.ToString());
             captured.Schedule.Headers["scheduled_agent.api_key_id"].Should().Be("key-created");
             captured.Schedule.Headers["scheduled_agent.nyx_provider_slug"].Should().Be("api-lark-bot");
             captured.Schedule.Headers["workflow.llm.model"].Should().Be("gpt-5.1");
@@ -845,13 +775,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.LarkReceiveIdFallback.Should().BeEmpty();
             captured.CatalogEntry.LarkReceiveIdTypeFallback.Should().BeEmpty();
 #pragma warning restore CS0612
-            captured.CatalogEntry.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+            captured.CatalogEntry.OutputFormat.Should().Be(ScheduledAgentOutputFormat.FeishuDoc);
             captured.CatalogEntry.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
 
             var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
@@ -1148,11 +1073,6 @@ public sealed class ScheduledAgentCreatorToolTests
                         ScheduledCredentialVaultReferenceAvailability.NotApplicable),
                 Arg.Any<CancellationToken>(),
                 "session-token");
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -1185,11 +1105,6 @@ public sealed class ScheduledAgentCreatorToolTests
                         ScheduledCredentialVaultReferenceAvailability.NotApplicable),
                 Arg.Any<CancellationToken>(),
                 "session-token");
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -1267,13 +1182,6 @@ public sealed class ScheduledAgentCreatorToolTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var nyxClientFactory = new TestNyxIdApiClientFactory(nyxClient);
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        skillRunnerPort.InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
         var creationPort = Substitute.For<IScheduledWorkflowAgentCreationPort>();
         creationPort.CreateAsync(
                 Arg.Any<ScheduledWorkflowAgentCreateRequest>(),
@@ -1303,7 +1211,6 @@ public sealed class ScheduledAgentCreatorToolTests
 
         var services = new ServiceCollection();
         services.AddSingleton<INyxIdApiClientFactory>(nyxClientFactory);
-        services.AddSingleton(skillRunnerPort);
         services.AddSingleton(creationPort);
         services.AddSingleton(resolver);
         services.AddSingleton(queryPort);
@@ -1324,7 +1231,7 @@ public sealed class ScheduledAgentCreatorToolTests
             provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
             provider.GetRequiredService<ScheduledAgentCredentialLifecycle>());
 
-        return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort, catalogCommandPort);
+        return new CreatorHarness(tool, handler, creationPort, queryPort, catalogCommandPort);
     }
 
     private const string DefaultServiceListJson = """
@@ -1425,7 +1332,6 @@ public sealed class ScheduledAgentCreatorToolTests
     private sealed record CreatorHarness(
         ScheduledAgentCreatorTool Tool,
         RoutingJsonHandler Handler,
-        ISkillRunnerCommandPort SkillRunnerPort,
         IScheduledWorkflowAgentCreationPort CreationPort,
         IUserAgentCatalogQueryPort CatalogQueryPort,
         IUserAgentCatalogCommandPort CatalogCommandPort);

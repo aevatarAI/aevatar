@@ -1784,8 +1784,8 @@ var SCHED_LOADED=false, SCHED_ERR=null, SCHED_BUSY=null, SCHED_PREVIEW=null;
 var SCHED_FILTER='all';        /* all | enabled | disabled | failing —— 真实页无过滤，此为增强项 */
 var SCHED_TIMER=null;          /* 3s 轮询句柄（对齐真实页 startSchedulePolling 的 3000ms） */
 var SCHED_OPEN={};             /* 展开了详情（serviceKey/serviceId/payloadTypeUrl）的行 id 集合 */
-/* scheduleKind 0=Generic 1=Workflow 2=SkillRunner（数值，后端无 string 枚举转换器） */
-var SCHED_KIND_LABEL={0:'Generic',1:'Workflow',2:'SkillRunner'};
+/* scheduleKind 0=Generic 1=Workflow（数值，后端无 string 枚举转换器） */
+var SCHED_KIND_LABEL={0:'Generic',1:'Workflow'};
 function _schKind(k){ return SCHED_KIND_LABEL[k]!=null?SCHED_KIND_LABEL[k]:('kind '+k); }
 /* targetKind 0=Envelope 1=ServiceInvocation */
 var SCHED_TARGET_LABEL={0:'Envelope',1:'ServiceInvocation'};

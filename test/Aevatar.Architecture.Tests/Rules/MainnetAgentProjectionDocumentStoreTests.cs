@@ -49,7 +49,6 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, InMemoryProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, InMemoryProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, InMemoryProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
-        AssertProviderStore<SkillRunnerExecutionDocument, InMemoryProjectionDocumentStore<SkillRunnerExecutionDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogNyxCredentialDocument, InMemoryProjectionDocumentStore<UserAgentCatalogNyxCredentialDocument, string>>(provider);
         AssertProviderStore<HealthProbeTargetDocument, InMemoryProjectionDocumentStore<HealthProbeTargetDocument, string>>(provider);
         AssertProviderStore<StreamingProxyChatSessionTerminalSnapshot, InMemoryProjectionDocumentStore<StreamingProxyChatSessionTerminalSnapshot, string>>(provider);
@@ -80,7 +79,6 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         AssertProviderStore<ChatRoutePolicyCurrentStateDocument, ElasticsearchProjectionDocumentStore<ChatRoutePolicyCurrentStateDocument, string>>(provider);
         AssertProviderStore<DeviceRegistrationDocument, ElasticsearchProjectionDocumentStore<DeviceRegistrationDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogDocument, string>>(provider);
-        AssertProviderStore<SkillRunnerExecutionDocument, ElasticsearchProjectionDocumentStore<SkillRunnerExecutionDocument, string>>(provider);
         AssertProviderStore<UserAgentCatalogNyxCredentialDocument, ElasticsearchProjectionDocumentStore<UserAgentCatalogNyxCredentialDocument, string>>(provider);
         AssertProviderStore<HealthProbeTargetDocument, ElasticsearchProjectionDocumentStore<HealthProbeTargetDocument, string>>(provider);
         AssertProviderStore<StreamingProxyChatSessionTerminalSnapshot, ElasticsearchProjectionDocumentStore<StreamingProxyChatSessionTerminalSnapshot, string>>(provider);

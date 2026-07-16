@@ -12,8 +12,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     //   Old pattern: tool source captures root IServiceProvider; tools resolve business ports via service locator in ExecuteAsync
     //   New principle: tool source + tools constructor-inject typed contracts; no root provider lookup
     private readonly IUserAgentCatalogQueryPort _queryPort;
-    private readonly ISkillRunnerExecutionQueryPort _executionQueryPort;
-    private readonly ISkillRunnerCommandPort _skillRunnerPort;
     private readonly IScheduledDispatchApplicationService _scheduledDispatchService;
     private readonly IScheduledWorkflowAgentCreationPort _scheduledWorkflowAgentCreationPort;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
@@ -25,8 +23,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
 
     internal AgentBuilderToolSource(
         IUserAgentCatalogQueryPort queryPort,
-        ISkillRunnerExecutionQueryPort executionQueryPort,
-        ISkillRunnerCommandPort skillRunnerPort,
         IScheduledDispatchApplicationService scheduledDispatchService,
         IScheduledWorkflowAgentCreationPort scheduledWorkflowAgentCreationPort,
         IUserAgentCatalogCommandPort catalogCommandPort,
@@ -37,8 +33,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
-        _executionQueryPort = executionQueryPort ?? throw new ArgumentNullException(nameof(executionQueryPort));
-        _skillRunnerPort = skillRunnerPort ?? throw new ArgumentNullException(nameof(skillRunnerPort));
         _scheduledDispatchService = scheduledDispatchService ?? throw new ArgumentNullException(nameof(scheduledDispatchService));
         _scheduledWorkflowAgentCreationPort = scheduledWorkflowAgentCreationPort ?? throw new ArgumentNullException(nameof(scheduledWorkflowAgentCreationPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
@@ -57,8 +51,6 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         [
             new AgentBuilderTool(
                 _queryPort,
-                _executionQueryPort,
-                _skillRunnerPort,
                 _scheduledDispatchService,
                 _catalogCommandPort,
                 _callerScopeResolver,

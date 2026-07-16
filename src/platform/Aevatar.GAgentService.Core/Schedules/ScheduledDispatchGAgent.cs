@@ -737,7 +737,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         scheduleKind switch
         {
             ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
-            ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
 

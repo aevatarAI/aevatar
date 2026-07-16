@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -106,9 +108,48 @@ public sealed class ToolProviderHttpClientRegistrationTests
         sshExec.RequiresApproval("""{"service":"host","command":"uptime","principal":"ubuntu"}""")
             .Should()
             .BeFalse();
-        codexExec.RequiresApproval("""{"service":"host","principal":"ubuntu","prompt":"check"}""")
+        codexExec.RequiresApproval("""{"target":{"kind":"private_ssh","private_ssh":{"service":"host","principal":"ubuntu"}},"prompt":"check"}""")
             .Should()
             .BeFalse();
+    }
+
+    [Fact]
+    public async Task AddNyxIdTools_WithManagedPort_DiscoversCodexWithoutSshTool()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ICodexExecutionPort>(new ManagedCodexPortStub());
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.test";
+            options.EnableManagedCodexExecTool = true;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().NotContain(tool => tool is NyxIdSshExecTool);
+        var codexExec = tools.Should().ContainSingle(tool => tool is NyxIdCodexExecTool).Subject;
+        codexExec.RequiresApproval("""{"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"check"}""")
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AddNyxIdTools_WhenManagedEnabledWithoutPort_FailsClosed()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.test";
+            options.EnableManagedCodexExecTool = true;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+
+        var act = () => source.DiscoverToolsAsync();
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*exactly one managed-sandbox ICodexExecutionPort*");
     }
 
     [Fact]
@@ -191,4 +232,18 @@ file sealed class StubWorkflowFileIngressPort : IFileArtifactIngressPort
             ArtifactId = "artifact-1",
             SourceKind = request.SourceKind,
         }));
+}
+
+file sealed class ManagedCodexPortStub : ICodexExecutionPort
+{
+    public CodexExecutionTarget.TargetOneofCase TargetKind =>
+        CodexExecutionTarget.TargetOneofCase.ManagedSandbox;
+
+    public async IAsyncEnumerable<CodexExecutionEvent> ExecuteAsync(
+        CodexExecutionRequest request,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await Task.CompletedTask;
+        yield break;
+    }
 }

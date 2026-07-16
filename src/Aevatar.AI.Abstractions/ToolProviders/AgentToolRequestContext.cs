@@ -22,6 +22,8 @@ public static class AgentToolRequestContext
     public static string? SenderNyxIdAccessToken => s_context.Value?.Credentials.SenderNyxIdAccessToken;
     public static string? ScopeId => s_context.Value?.Caller.ScopeId;
     public static string? OwnerSubject => s_context.Value?.Caller.OwnerSubject;
+    public static AgentToolNyxIdAuthorityContext NyxIdAuthority =>
+        s_context.Value?.NyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty;
     public static string? ResponseId => s_context.Value?.Caller.ResponseId;
     public static string? RequestId => s_context.Value?.Request.RequestId;
     public static string? CallId => s_context.Value?.Request.CallId;

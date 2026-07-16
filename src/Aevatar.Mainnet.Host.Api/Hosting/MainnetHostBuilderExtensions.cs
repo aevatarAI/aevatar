@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Infrastructure.OpenSandbox;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -260,8 +261,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesUserSkillsToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
-        // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model
-        // + route (issue #509). The bridge lives here, not in any agent or AI package, so
+        // scheduled workflow dispatch, workflow agents, and NyxidChat honor the bot owner's
+        // pre-configured LLM model + route (issue #509). The bridge lives here, not in any agent or AI package, so
         // neither side has to depend on Studio.Application — the host is the natural composition
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();
@@ -288,6 +289,7 @@ public static class MainnetHostBuilderExtensions
         deviceEventOptions.EnsureNotSkippingHmacInProduction(builder.Environment.IsProduction());
         // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
+        builder.Services.AddOpenSandboxCodexExecution(builder.Configuration);
         builder.Services.AddNyxIdTools(o =>
         {
             // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
@@ -309,6 +311,8 @@ public static class MainnetHostBuilderExtensions
             else
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
+            o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
+                $"{OpenSandboxCodexOptions.SectionName}:Enabled");
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
         });

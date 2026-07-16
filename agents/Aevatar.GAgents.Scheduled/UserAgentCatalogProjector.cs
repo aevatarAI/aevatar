@@ -7,9 +7,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
-// Refactor (iter94/cluster-094a):
-//   Old: catalog projection/query surfaces could carry runner execution facts beside membership facts.
-//   New: this projector only materializes UserAgentCatalog authority membership; SkillRunner execution has its own projector/read port.
+// Catalog projection only materializes UserAgentCatalog authority membership.
 public sealed class UserAgentCatalogProjector
     : ICurrentStateProjectionMaterializer<UserAgentCatalogMaterializationContext>
 {

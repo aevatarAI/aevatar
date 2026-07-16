@@ -1881,8 +1881,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
 
-        // Inbound channel-bot's NyxID provider slug. SkillRunner agent-builder captures this on
-        // SkillRunnerOutboundConfig.FailureNotificationProviderSlug so a failed outbound delivery
+        // Inbound channel-bot's NyxID provider slug. Scheduled workflow creation captures this
+        // as the failure-notification provider so a failed outbound delivery
         // (e.g. cross-tenant Lark 99992364) can still notify the user via the bot they just
         // successfully messaged. See issue #423 §C and ChannelMetadataKeys.InboundChannelBotProxySlug.
         if (!string.IsNullOrWhiteSpace(inboundEvent.NyxProviderSlug))

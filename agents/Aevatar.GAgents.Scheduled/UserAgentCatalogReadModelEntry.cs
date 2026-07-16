@@ -20,7 +20,7 @@ public sealed class UserAgentCatalogReadModelEntry
     public string ApiKeyId { get; init; } = string.Empty;
     public string ScheduleCron { get; init; } = string.Empty;
     public string ScheduleTimezone { get; init; } = string.Empty;
-    public SkillRunnerScheduleMode ScheduleMode { get; init; } = SkillRunnerScheduleMode.Cron;
+    public ScheduledAgentScheduleMode ScheduleMode { get; init; } = ScheduledAgentScheduleMode.Cron;
     public Timestamp? RunAt { get; init; }
     public Timestamp? RetiredAt { get; init; }
     public string RetirementReason { get; init; } = string.Empty;
@@ -33,7 +33,7 @@ public sealed class UserAgentCatalogReadModelEntry
     public Timestamp? UpdatedAt { get; init; }
     public bool Tombstoned { get; init; }
     public ChannelAddressModel ChannelAddress { get; init; } = ChannelAddressModel.Empty;
-    public SkillRunnerOutputFormat OutputFormat { get; init; } = SkillRunnerOutputFormat.Auto;
+    public ScheduledAgentOutputFormat OutputFormat { get; init; } = ScheduledAgentOutputFormat.Auto;
     public OwnerScope? OwnerScope { get; init; }
     public ScheduledAgentSharingGrant? SharingGrant { get; init; }
     public string TargetPlatform { get; init; } = string.Empty;

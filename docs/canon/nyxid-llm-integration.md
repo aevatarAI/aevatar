@@ -81,10 +81,10 @@ Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴
 这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。集群自举注册的 OAuth client 以及 `/oauth/authorize` 必须使用同一 canonical scope：
 
 ```text
-openid urn:nyxid:scope:broker_binding proxy
+openid profile email offline_access urn:nyxid:scope:broker_binding proxy llm:proxy
 ```
 
-如果旧 binding 对应的 OAuth client 未包含 `proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 完成绑定刷新；Aevatar 不会降级到 bot-owner credential 或缓存 token。
+如果旧 binding 对应的 OAuth client 未包含 `proxy` 或 `llm:proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
 
 ---
 
