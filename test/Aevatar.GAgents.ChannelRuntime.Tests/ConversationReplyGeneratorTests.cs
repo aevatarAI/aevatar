@@ -2239,7 +2239,7 @@ public sealed class ConversationReplyGeneratorTests
             Substitute.For<IUserAgentCatalogQueryPort>(),
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
             Substitute.For<ISkillRunnerCommandPort>(),
-            Substitute.For<IWorkflowScheduleApplicationService>(),
+            Substitute.For<IScheduledDispatchApplicationService>(),
             Substitute.For<IScheduledWorkflowAgentCreationPort>(),
             catalogCommandPort,
             Substitute.For<ICallerScopeResolver>(),

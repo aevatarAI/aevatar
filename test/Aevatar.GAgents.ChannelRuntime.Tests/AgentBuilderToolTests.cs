@@ -20,7 +20,6 @@ using NSubstitute;
 using Xunit;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.Workflow.Application.Abstractions.Schedules;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -33,7 +32,7 @@ public sealed class AgentBuilderToolTests
             Substitute.For<IUserAgentCatalogQueryPort>(),
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
             Substitute.For<ISkillRunnerCommandPort>(),
-            Substitute.For<IWorkflowScheduleApplicationService>(),
+            Substitute.For<IScheduledDispatchApplicationService>(),
             Substitute.For<IUserAgentCatalogCommandPort>(),
             Substitute.For<ICallerScopeResolver>());
 
@@ -1534,7 +1533,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ScheduledWorkflowLifecycle_RoutesToScheduleService()
+    public async Task ExecuteAsync_ScheduledWorkflowLifecycle_RoutesToScheduledDispatchService()
     {
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var scheduledWorkflowEntry = new UserAgentCatalogReadModelEntry
@@ -1554,9 +1553,9 @@ public sealed class AgentBuilderToolTests
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowScheduleService = Substitute.For<IWorkflowScheduleApplicationService>();
-        workflowScheduleService.RunNowAsync("scheduled-workflow-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new WorkflowScheduleRunNowReceipt(
+        var scheduledDispatchService = Substitute.For<IScheduledDispatchApplicationService>();
+        scheduledDispatchService.RunNowAsync("scheduled-workflow-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ScheduledDispatchRunNowReceipt(
                 "scheduled-workflow-1",
                 "actor:scheduled-workflow-1",
                 DateTimeOffset.UtcNow,
@@ -1566,18 +1565,18 @@ public sealed class AgentBuilderToolTests
                 "correlation-1",
                 DateTimeOffset.UtcNow,
                 "accepted")));
-        workflowScheduleService.DisableAsync("scheduled-workflow-1", "disable_agent", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(BuildWorkflowScheduleMutationReceipt("scheduled-workflow-1")));
-        workflowScheduleService.EnableAsync("scheduled-workflow-1", "enable_agent", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(BuildWorkflowScheduleMutationReceipt("scheduled-workflow-1")));
-        workflowScheduleService.DeleteAsync("scheduled-workflow-1", "delete_agent", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(BuildWorkflowScheduleMutationReceipt("scheduled-workflow-1")));
+        scheduledDispatchService.DisableAsync("scheduled-workflow-1", "disable_agent", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(BuildScheduledDispatchMutationReceipt("scheduled-workflow-1")));
+        scheduledDispatchService.EnableAsync("scheduled-workflow-1", "enable_agent", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(BuildScheduledDispatchMutationReceipt("scheduled-workflow-1")));
+        scheduledDispatchService.DeleteAsync("scheduled-workflow-1", "delete_agent", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(BuildScheduledDispatchMutationReceipt("scheduled-workflow-1")));
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
 
         var services = new ServiceCollection();
         services.AddSingleton(queryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowScheduleService);
+        services.AddSingleton(scheduledDispatchService);
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory());
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
@@ -1599,10 +1598,10 @@ public sealed class AgentBuilderToolTests
 
             using var document = JsonDocument.Parse(deleteResult);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-            await workflowScheduleService.Received(1).RunNowAsync("scheduled-workflow-1", Arg.Any<CancellationToken>());
-            await workflowScheduleService.Received(1).DisableAsync("scheduled-workflow-1", "disable_agent", Arg.Any<CancellationToken>());
-            await workflowScheduleService.Received(1).EnableAsync("scheduled-workflow-1", "enable_agent", Arg.Any<CancellationToken>());
-            await workflowScheduleService.Received(1).DeleteAsync("scheduled-workflow-1", "delete_agent", Arg.Any<CancellationToken>());
+            await scheduledDispatchService.Received(1).RunNowAsync("scheduled-workflow-1", Arg.Any<CancellationToken>());
+            await scheduledDispatchService.Received(1).DisableAsync("scheduled-workflow-1", "disable_agent", Arg.Any<CancellationToken>());
+            await scheduledDispatchService.Received(1).EnableAsync("scheduled-workflow-1", "enable_agent", Arg.Any<CancellationToken>());
+            await scheduledDispatchService.Received(1).DeleteAsync("scheduled-workflow-1", "delete_agent", Arg.Any<CancellationToken>());
             await catalogCommandPort.Received(1).TombstoneAsync(
                 "scheduled-workflow-1",
                 Arg.Any<CancellationToken>(),
@@ -1683,7 +1682,7 @@ public sealed class AgentBuilderToolTests
         var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
         var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowScheduleService = Substitute.For<IWorkflowScheduleApplicationService>();
+        var scheduledDispatchService = Substitute.For<IScheduledDispatchApplicationService>();
         var scheduledWorkflowAgentCreationPort = Substitute.For<IScheduledWorkflowAgentCreationPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
@@ -1696,32 +1695,32 @@ public sealed class AgentBuilderToolTests
             catalogCommandPort,
             scheduledAgentApiKeyIssuer);
 
-        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, skillRunnerPort, workflowScheduleService, catalogCommandPort, callerScopeResolver);
-        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, workflowScheduleService, catalogCommandPort, callerScopeResolver);
-        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, workflowScheduleService, catalogCommandPort, callerScopeResolver);
-        var missingWorkflowSchedule = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, null!, catalogCommandPort, callerScopeResolver);
-        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, workflowScheduleService, null!, callerScopeResolver);
-        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, workflowScheduleService, catalogCommandPort, null!);
-        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, skillRunnerPort, workflowScheduleService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
-        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, workflowScheduleService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
-        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, workflowScheduleService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
-        var missingSourceWorkflowSchedule = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, null!, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
-        var missingSourceCreationPort = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, workflowScheduleService, null!, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
-        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, workflowScheduleService, scheduledWorkflowAgentCreationPort, null!, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
-        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, workflowScheduleService, scheduledWorkflowAgentCreationPort, catalogCommandPort, null!, scheduledAgentMapper, credentialLifecycle);
-        var missingSourceMapper = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, workflowScheduleService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, null!, credentialLifecycle);
-        var missingSourceLifecycle = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, workflowScheduleService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, null!);
+        var missingQuery = () => new AgentBuilderTool(null!, executionQueryPort, skillRunnerPort, scheduledDispatchService, catalogCommandPort, callerScopeResolver);
+        var missingExecutionQuery = () => new AgentBuilderTool(queryPort, null!, skillRunnerPort, scheduledDispatchService, catalogCommandPort, callerScopeResolver);
+        var missingSkillRunner = () => new AgentBuilderTool(queryPort, executionQueryPort, null!, scheduledDispatchService, catalogCommandPort, callerScopeResolver);
+        var missingScheduledDispatch = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, null!, catalogCommandPort, callerScopeResolver);
+        var missingCatalogCommand = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, null!, callerScopeResolver);
+        var missingCallerScope = () => new AgentBuilderTool(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, catalogCommandPort, null!);
+        var missingSourceQuery = () => new AgentBuilderToolSource(null!, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceExecutionQuery = () => new AgentBuilderToolSource(queryPort, null!, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceSkillRunner = () => new AgentBuilderToolSource(queryPort, executionQueryPort, null!, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceScheduledDispatch = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, null!, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceCreationPort = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, null!, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceCatalogCommand = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, null!, callerScopeResolver, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceCallerScope = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, null!, scheduledAgentMapper, credentialLifecycle);
+        var missingSourceMapper = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, null!, credentialLifecycle);
+        var missingSourceLifecycle = () => new AgentBuilderToolSource(queryPort, executionQueryPort, skillRunnerPort, scheduledDispatchService, scheduledWorkflowAgentCreationPort, catalogCommandPort, callerScopeResolver, scheduledAgentMapper, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
         missingSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
-        missingWorkflowSchedule.Should().Throw<ArgumentNullException>().WithParameterName("workflowScheduleService");
+        missingScheduledDispatch.Should().Throw<ArgumentNullException>().WithParameterName("scheduledDispatchService");
         missingCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
         missingSourceQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingSourceExecutionQuery.Should().Throw<ArgumentNullException>().WithParameterName("executionQueryPort");
         missingSourceSkillRunner.Should().Throw<ArgumentNullException>().WithParameterName("skillRunnerPort");
-        missingSourceWorkflowSchedule.Should().Throw<ArgumentNullException>().WithParameterName("workflowScheduleService");
+        missingSourceScheduledDispatch.Should().Throw<ArgumentNullException>().WithParameterName("scheduledDispatchService");
         missingSourceCreationPort.Should().Throw<ArgumentNullException>().WithParameterName("scheduledWorkflowAgentCreationPort");
         missingSourceCatalogCommand.Should().Throw<ArgumentNullException>().WithParameterName("catalogCommandPort");
         missingSourceCallerScope.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
@@ -1772,7 +1771,7 @@ public sealed class AgentBuilderToolTests
             new HttpClient(new RoutingJsonHandler()) { BaseAddress = new Uri("https://nyx.example.com") });
         var nyxClientFactory = new TestNyxIdApiClientFactory(nyxClient);
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowScheduleService = Substitute.For<IWorkflowScheduleApplicationService>();
+        var scheduledDispatchService = Substitute.For<IScheduledDispatchApplicationService>();
         var scheduledWorkflowAgentCreationPort = Substitute.For<IScheduledWorkflowAgentCreationPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
@@ -1786,7 +1785,7 @@ public sealed class AgentBuilderToolTests
             queryPort,
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
             skillRunnerPort,
-            workflowScheduleService,
+            scheduledDispatchService,
             scheduledWorkflowAgentCreationPort,
             catalogCommandPort,
             callerScopeResolver,
@@ -1831,7 +1830,7 @@ public sealed class AgentBuilderToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var executionQueryPort = Substitute.For<ISkillRunnerExecutionQueryPort>();
         var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        var workflowScheduleService = Substitute.For<IWorkflowScheduleApplicationService>();
+        var scheduledDispatchService = Substitute.For<IScheduledDispatchApplicationService>();
         var scheduledWorkflowAgentCreationPort = Substitute.For<IScheduledWorkflowAgentCreationPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
@@ -1839,7 +1838,7 @@ public sealed class AgentBuilderToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(executionQueryPort);
         services.AddSingleton(skillRunnerPort);
-        services.AddSingleton(workflowScheduleService);
+        services.AddSingleton(scheduledDispatchService);
         services.AddSingleton(scheduledWorkflowAgentCreationPort);
         services.AddSingleton(catalogCommandPort);
         services.AddSingleton<INyxIdApiClientFactory>(new TestNyxIdApiClientFactory(nyxClient));
@@ -1867,7 +1866,7 @@ public sealed class AgentBuilderToolTests
             .Should().Be(ToolApprovalMode.NeverRequire);
     }
 
-    private static WorkflowScheduleMutationReceipt BuildWorkflowScheduleMutationReceipt(string scheduleId) =>
+    private static ScheduledDispatchMutationReceipt BuildScheduledDispatchMutationReceipt(string scheduleId) =>
         new(
             scheduleId,
             $"actor:{scheduleId}",
@@ -1888,7 +1887,7 @@ public sealed class AgentBuilderToolTests
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
             provider.GetService<ISkillRunnerExecutionQueryPort>() ?? Substitute.For<ISkillRunnerExecutionQueryPort>(),
             provider.GetRequiredService<ISkillRunnerCommandPort>(),
-            provider.GetService<IWorkflowScheduleApplicationService>() ?? Substitute.For<IWorkflowScheduleApplicationService>(),
+            provider.GetService<IScheduledDispatchApplicationService>() ?? Substitute.For<IScheduledDispatchApplicationService>(),
             provider.GetRequiredService<IUserAgentCatalogCommandPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetService<ILogger<AgentBuilderTool>>());
