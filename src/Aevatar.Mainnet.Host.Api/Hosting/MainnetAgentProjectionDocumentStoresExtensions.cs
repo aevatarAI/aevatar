@@ -57,10 +57,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         if (documentProvider.ElasticsearchEnabled)
         {
             AddElasticsearchStores(services, configuration);
-            services.Configure<AevatarOAuthClientEsAclOptions>(options =>
-            {
-                options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict;
-            });
+            // Keep the operator-bound enforcement mode. The conservative built-in
+            // HTTP probe cannot prove that every other Elasticsearch identity is
+            // denied, so forcing Strict here would make the stock Mainnet
+            // composition impossible to start. Warn remains the deployable default;
+            // Strict is an explicit deployment policy paired with a stronger probe.
             // Replace only the identity module's Unavailable fallback. A deployment may
             // pre-register a stronger verifier that can positively prove the effective
             // grant; Mainnet must not overwrite it with the conservative built-in probe.

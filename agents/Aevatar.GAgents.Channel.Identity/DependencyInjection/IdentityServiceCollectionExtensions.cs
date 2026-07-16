@@ -103,10 +103,12 @@ public static class IdentityServiceCollectionExtensions
         // ─── Cluster-singleton OAuth client projection ───
         // Refactor (iter97/cluster-526): Old pattern: AevatarOAuthClientDocument
         // carries state-token HMAC bytes but ES startup did not require an
-        // explicit ACL assertion. New principle: when ChannelIdentity uses ES,
-        // AevatarOAuthClientEsAclStartupGuard fails closed unless a live probe
-        // confirms the restricted grant and the operator separately attests that
-        // it matches grain/event-store internal read access.
+        // explicit ACL check. New principle: when ChannelIdentity uses ES,
+        // AevatarOAuthClientEsAclStartupGuard always inspects the configured
+        // enforcement policy. Warn reports an unconfirmed grant without blocking
+        // startup; Strict fails closed unless a live probe confirms the restricted
+        // grant and the operator separately attests that it matches grain/event-store
+        // internal read access.
         services.AddProjectionMaterializationRuntimeCore<
             AevatarOAuthClientMaterializationContext,
             AevatarOAuthClientMaterializationRuntimeLease,
