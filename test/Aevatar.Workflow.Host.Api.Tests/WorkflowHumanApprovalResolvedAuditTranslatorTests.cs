@@ -1,9 +1,11 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.Audit.Core.Sanitization;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Audit;
 using Aevatar.Workflow.Projection.DependencyInjection;
@@ -65,6 +67,7 @@ public sealed class WorkflowHumanApprovalResolvedAuditTranslatorTests
         record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Restricted);
         record.Target.Kind.Should().Be("workflow_run");
         record.Target.Id.Should().Be("run-1");
+        record.ScopeId.Should().Be("scope-context");
         record.Annotations.Should().Contain("approved", approved ? "true" : "false");
         record.Annotations.Should().Contain("resolution_source", expectedSourceLabel);
         record.Annotations.Should().Contain("step_id", "step-7");
@@ -73,6 +76,7 @@ public sealed class WorkflowHumanApprovalResolvedAuditTranslatorTests
         // The approval payload must never enter the audit artifact.
         var serialized = record.ToString();
         serialized.Should().NotContain("SENSITIVE");
+        new AuditRecordSanitizer().Sanitize(record).Should().NotBeNull();
     }
 
     [Fact]
@@ -118,7 +122,13 @@ public sealed class WorkflowHumanApprovalResolvedAuditTranslatorTests
                     CorrelationId = "corr-1",
                 },
             },
-            new CommittedStateEventPublished(),
+            new CommittedStateEventPublished
+            {
+                StateRoot = Any.Pack(new WorkflowRunState
+                {
+                    ScopeId = "scope-context",
+                }),
+            },
             new StateEvent
             {
                 AgentId = "workflow-run-actor-1",

@@ -1,6 +1,7 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Audit.Core.CommittedFacts;
@@ -22,7 +23,16 @@ public sealed record CommittedAuditSeed(
     // record factory then HMAC-hashes the origin actor id through
     // IAuditActorIdentityHasher before stamping it, so no raw subject can enter
     // the audit artifact (docs/canon/audit-trail.md §4 structural exclusion).
-    bool SubjectBearing = false);
+    bool SubjectBearing = false,
+    AuditLifecyclePhase LifecyclePhase = AuditLifecyclePhase.Terminal,
+    AuditTerminalOutcome TerminalOutcome = AuditTerminalOutcome.Succeeded,
+    AuditFailure? Failure = null,
+    string TeamId = "",
+    string MemberId = "",
+    string WorkflowId = "",
+    string PublishedServiceId = "",
+    string RunId = "",
+    IReadOnlyList<string>? OmittedFields = null);
 
 public static class CommittedAuditRecordFactory
 {
@@ -56,14 +66,23 @@ public static class CommittedAuditRecordFactory
         }
 
         var auditId = BuildAuditId(context, originActorId, seed.OperationName, seed.TargetKind, seed.TargetId);
+        var correlationId = FirstNonBlank(seed.CorrelationId, context.CorrelationId);
+        var causationId = FirstNonBlank(context.CausationId, context.StateEvent.EventId);
         var record = new AuditRecord
         {
             AuditId = auditId,
             OccurredAt = Timestamp.FromDateTimeOffset(context.ObservedAt),
+            RecordedAt = Timestamp.FromDateTimeOffset(context.RecordedAt ?? context.ObservedAt),
+            EventKind = seed.OperationName,
+            Subject = BuildSubject(seed.TargetKind, seed.TargetId),
+            SchemaVersion = AuditContractSemantics.CurrentSchemaVersion,
+            Source = "urn:aevatar:audit:projection-artifact",
             OperationName = seed.OperationName,
             OperationKind = AuditOperationKind.System,
             SensitivityLevel = seed.SensitivityLevel,
-            Outcome = AuditOutcome.Success,
+            Outcome = MapLegacyOutcome(seed.LifecyclePhase, seed.TerminalOutcome),
+            LifecyclePhase = seed.LifecyclePhase,
+            TerminalOutcome = seed.TerminalOutcome,
             ScopeId = seed.ScopeId ?? string.Empty,
             AuditActorId = "system",
             IdentityKeyId = "system",
@@ -78,7 +97,11 @@ public static class CommittedAuditRecordFactory
             {
                 RequestId = FirstNonBlank(seed.RequestId, context.RequestId),
                 CommandId = FirstNonBlank(seed.CommandId, context.CommandId, context.Envelope.Id),
-                TraceId = FirstNonBlank(seed.CorrelationId, context.CorrelationId),
+                TraceId = context.TraceId?.Trim().ToLowerInvariant() ?? string.Empty,
+                SpanId = context.SpanId?.Trim().ToLowerInvariant() ?? string.Empty,
+                Traceparent = BuildTraceparent(context.TraceId, context.SpanId, context.TraceFlags),
+                CorrelationId = correlationId,
+                CausationId = causationId,
             },
             CapturePlane = AuditCapturePlane.ProjectionArtifact,
             CommittedFactRef = new AuditCommittedFactReference
@@ -89,7 +112,33 @@ public static class CommittedAuditRecordFactory
                 StateVersion = context.StateEvent.Version,
             },
             ResultSummary = seed.ResultSummary ?? string.Empty,
+            Provenance = new AuditExecutionProvenance
+            {
+                ScopeId = seed.ScopeId ?? string.Empty,
+                TeamId = seed.TeamId ?? string.Empty,
+                MemberId = seed.MemberId ?? string.Empty,
+                WorkflowId = seed.WorkflowId ?? string.Empty,
+                PublishedServiceId = seed.PublishedServiceId ?? string.Empty,
+                RunId = FirstNonBlank(seed.RunId, seed.TargetKind == "workflow_run" ? seed.TargetId : string.Empty),
+                CausationId = causationId,
+                CorrelationId = correlationId,
+                ActorId = originActorId,
+                ActorStateVersion = context.StateEvent.Version,
+                ActorEventId = context.StateEvent.EventId ?? string.Empty,
+            },
+            Redaction = new AuditRedaction
+            {
+                Policy = "aevatar.audit.safe-fields.v1",
+                ValuesSanitized = true,
+            },
         };
+        record.Redaction.OmittedFields.Add(seed.OmittedFields ?? ["source_event.payload"]);
+        if (seed.Failure is not null)
+        {
+            record.Failure = seed.Failure.Clone();
+            record.ErrorCode = seed.Failure.Code;
+            record.ErrorSummary = seed.Failure.SanitizedMessage;
+        }
         if (seed.IsDestructive)
             record.Annotations.Add("is_destructive", "true");
         record.Annotations.Add("source_event_type_url", context.EventTypeUrl);
@@ -124,4 +173,36 @@ public static class CommittedAuditRecordFactory
 
     private static string FirstNonBlank(params string?[] values) =>
         values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
+
+    private static string BuildSubject(string targetKind, string targetId) =>
+        $"{targetKind?.Trim()}/{targetId?.Trim()}";
+
+    private static AuditOutcome MapLegacyOutcome(
+        AuditLifecyclePhase lifecyclePhase,
+        AuditTerminalOutcome terminalOutcome)
+    {
+        if (lifecyclePhase != AuditLifecyclePhase.Terminal)
+            return AuditOutcome.Accepted;
+
+        return terminalOutcome switch
+        {
+            AuditTerminalOutcome.Succeeded => AuditOutcome.Success,
+            AuditTerminalOutcome.Cancelled => AuditOutcome.Cancelled,
+            _ => AuditOutcome.Error,
+        };
+    }
+
+    private static string BuildTraceparent(string? traceId, string? spanId, string? traceFlags)
+    {
+        var normalizedTraceId = traceId?.Trim().ToLowerInvariant() ?? string.Empty;
+        var normalizedSpanId = spanId?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (normalizedTraceId.Length != 32 || normalizedSpanId.Length != 16)
+            return string.Empty;
+
+        var normalizedFlags = traceFlags?.Trim().ToLowerInvariant();
+        if (normalizedFlags is not { Length: 2 })
+            normalizedFlags = "00";
+
+        return $"00-{normalizedTraceId}-{normalizedSpanId}-{normalizedFlags}";
+    }
 }

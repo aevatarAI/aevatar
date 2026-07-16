@@ -11,4 +11,9 @@ public sealed record CommittedAuditTranslationContext(
     DateTimeOffset ObservedAt,
     string CommandId,
     string RequestId,
-    string CorrelationId);
+    string CorrelationId,
+    string TraceId = "",
+    string SpanId = "",
+    string TraceFlags = "",
+    string CausationId = "",
+    DateTimeOffset? RecordedAt = null);

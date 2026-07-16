@@ -32,14 +32,18 @@ public sealed class InMemoryAuditTrailStoreTests
     {
         var store = new InMemoryAuditTrailStore();
         var record = CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success);
+        var retry = record.Clone();
+        retry.RecordedAt = Timestamp.FromDateTimeOffset(
+            record.RecordedAt.ToDateTimeOffset().AddMinutes(1));
 
         var first = await store.AppendAsync(record);
-        var second = await store.AppendAsync(record.Clone());
+        var second = await store.AppendAsync(retry);
         var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
 
         first.Status.ShouldBe(AuditTrailAppendStatus.Appended);
         second.Status.ShouldBe(AuditTrailAppendStatus.Duplicate);
         page.Records.Select(static item => item.AuditId).ShouldBe(["audit-1"]);
+        page.Records.Single().RecordedAt.ShouldBe(record.RecordedAt);
     }
 
     [Fact]
@@ -92,7 +96,8 @@ public sealed class InMemoryAuditTrailStoreTests
 
         page.Records.Select(static record => record.AuditId).ShouldBe(["audit-2"]);
         page.NextCursor.ShouldBeNull();
-        page.Watermark.ShouldNotBeNull();
+        page.Coverage.IngestionWatermark.ShouldNotBeNull();
+        page.Coverage.SchemaCompatibility.ShouldBe(AuditSchemaCompatibility.Current);
     }
 
     [Theory]
@@ -105,11 +110,15 @@ public sealed class InMemoryAuditTrailStoreTests
     [InlineData("operation_name")]
     [InlineData("operation_kind")]
     [InlineData("outcome")]
+    [InlineData("lifecycle_phase")]
+    [InlineData("terminal_outcome")]
     [InlineData("sensitivity_level")]
     [InlineData("capture_plane")]
     [InlineData("target_kind")]
     [InlineData("target_id")]
     [InlineData("trace_id")]
+    [InlineData("correlation_id")]
+    [InlineData("causation_id")]
     [InlineData("request_id")]
     [InlineData("command_id")]
     [InlineData("call_id")]
@@ -154,10 +163,35 @@ public sealed class InMemoryAuditTrailStoreTests
 
         first.Records.Select(static record => record.AuditId).ShouldBe(["audit-3", "audit-2"]);
         first.NextCursor.ShouldNotBeNull();
-        first.Watermark.ShouldBe(DateTimeOffset.Parse("2026-01-02T03:04:08Z"));
+        first.Coverage.IngestionWatermark.ShouldBe(DateTimeOffset.Parse("2026-01-02T03:04:15Z"));
+        first.Coverage.Truncated.ShouldBeTrue();
         second.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
         second.NextCursor.ShouldBeNull();
-        second.Watermark.ShouldBe(first.Watermark);
+        second.Coverage.IngestionWatermark.ShouldBe(first.Coverage.IngestionWatermark);
+        second.Coverage.Truncated.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenBoundedWindowExtendsPastIngestionWatermark_ReportsBehindWatermark()
+    {
+        var store = new InMemoryAuditTrailStore();
+        await store.AppendAsync(
+            CreateRecord("audit-1", "scope-a", "actor-a", "api.call", AuditOutcome.Success));
+        var from = DateTimeOffset.Parse("2026-01-02T03:04:00Z");
+        var to = DateTimeOffset.Parse("2026-01-02T03:04:10Z");
+
+        var page = await store.QueryAsync(new AuditTrailQuery
+        {
+            OccurredFrom = from,
+            OccurredTo = to,
+            Take = 10,
+        });
+
+        page.Coverage.RequestedWindow.ShouldBe(new AuditQueryWindow(from, to));
+        page.Coverage.EffectiveWindow.ShouldBe(new AuditQueryWindow(from, to));
+        page.Coverage.IngestionWatermark.ShouldBe(DateTimeOffset.Parse("2026-01-02T03:04:05Z"));
+        page.Coverage.CompleteThrough.ShouldBeNull();
+        page.Coverage.WindowCompleteness.ShouldBe(AuditWindowCompleteness.BehindIngestionWatermark);
     }
 
     [Fact]
@@ -239,10 +273,23 @@ public sealed class InMemoryAuditTrailStoreTests
         AuditOutcome outcome,
         int seconds = 0)
     {
-        return new AuditRecord
+        var occurredAt = DateTimeOffset.Parse("2026-01-02T03:04:05Z").AddSeconds(seconds);
+        var terminalOutcome = outcome switch
+        {
+            AuditOutcome.Success => AuditTerminalOutcome.Succeeded,
+            AuditOutcome.Cancelled => AuditTerminalOutcome.Cancelled,
+            AuditOutcome.Accepted => AuditTerminalOutcome.Unspecified,
+            _ => AuditTerminalOutcome.Failed,
+        };
+        var record = new AuditRecord
         {
             AuditId = auditId,
-            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:05Z").AddSeconds(seconds)),
+            OccurredAt = Timestamp.FromDateTimeOffset(occurredAt),
+            RecordedAt = Timestamp.FromDateTimeOffset(occurredAt),
+            EventKind = operationName,
+            Subject = $"workflow/wf-{auditId}",
+            SchemaVersion = "1.0",
+            Source = "urn:aevatar:audit:test",
             ScopeId = scopeId,
             AuditActorId = auditActorId,
             IdentityKeyId = "key-1",
@@ -252,6 +299,10 @@ public sealed class InMemoryAuditTrailStoreTests
             OperationName = operationName,
             SensitivityLevel = AuditSensitivityLevel.Confidential,
             Outcome = outcome,
+            LifecyclePhase = outcome == AuditOutcome.Accepted
+                ? AuditLifecyclePhase.Accepted
+                : AuditLifecyclePhase.Terminal,
+            TerminalOutcome = terminalOutcome,
             CapturePlane = operationName.StartsWith("tool.", StringComparison.Ordinal)
                 ? AuditCapturePlane.ToolExecution
                 : AuditCapturePlane.BoundaryEndpoint,
@@ -259,6 +310,8 @@ public sealed class InMemoryAuditTrailStoreTests
             Correlation = new AuditCorrelation
             {
                 TraceId = $"trace-{auditId}",
+                CorrelationId = $"correlation-{auditId}",
+                CausationId = $"causation-{auditId}",
                 RequestId = $"req-{auditId}",
                 CommandId = $"cmd-{auditId}",
                 CallId = $"call-{auditId}",
@@ -275,8 +328,34 @@ public sealed class InMemoryAuditTrailStoreTests
                 StateVersion = seconds == 0 ? 20 : seconds
             },
             RequestSummary = "request summary",
-            ResultSummary = "result summary"
+            ResultSummary = "result summary",
+            Provenance = new AuditExecutionProvenance
+            {
+                ScopeId = scopeId,
+                RunId = $"run-{auditId}",
+                ActorId = $"actor-ref-{auditId}",
+                ActorStateVersion = seconds == 0 ? 20 : seconds,
+                ActorEventId = $"event-{auditId}",
+            },
+            Redaction = new AuditRedaction
+            {
+                Policy = "aevatar.audit.test.v1",
+                ValuesSanitized = true,
+            },
         };
+        if (terminalOutcome == AuditTerminalOutcome.Failed)
+        {
+            record.Failure = new AuditFailure
+            {
+                Code = "test_failed",
+                Category = AuditFailureCategory.Execution,
+                Retryability = AuditRetryability.Unknown,
+                FailedPhase = AuditLifecyclePhase.Running,
+                SanitizedMessage = "Test execution failed.",
+            };
+        }
+
+        return record;
     }
 
     private static AuditTrailDocument CreateDocument(string auditId, string contentHash = "content-a") =>
@@ -297,7 +376,7 @@ public sealed class InMemoryAuditTrailStoreTests
             TargetId = $"wf-{auditId}",
             RequestId = $"req-{auditId}",
             CommandId = $"cmd-{auditId}",
-            CorrelationId = $"trace-{auditId}",
+            CorrelationId = $"correlation-{auditId}",
             SessionId = $"session-{auditId}",
             WorkflowRunId = $"run-{auditId}",
             CommittedEventId = $"event-{auditId}",
@@ -309,42 +388,41 @@ public sealed class InMemoryAuditTrailStoreTests
 
     private static AuditRecord CreateFocusedRecord(string auditId)
     {
-        return new AuditRecord
+        var record = CreateRecord(auditId, "scope-match", "actor-match", "tool.match", AuditOutcome.Denied);
+        record.IdentityKeyId = "key-match";
+        record.Target = new AuditTarget { Kind = "workflow", Id = "workflow-match" };
+        record.Subject = "workflow/workflow-match";
+        record.Correlation = new AuditCorrelation
         {
-            AuditId = auditId,
-            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:05Z")),
-            ScopeId = "scope-match",
-            AuditActorId = "actor-match",
-            IdentityKeyId = "key-match",
-            ActorKind = AuditActorKind.NyxidUser,
-            CredentialSource = AuditCredentialSource.NyxidAssertion,
-            OperationKind = AuditOperationKind.Tool,
-            OperationName = "tool.match",
-            SensitivityLevel = AuditSensitivityLevel.Confidential,
-            Outcome = AuditOutcome.Denied,
-            CapturePlane = AuditCapturePlane.ToolExecution,
-            Target = new AuditTarget { Kind = "workflow", Id = "workflow-match" },
-            Correlation = new AuditCorrelation
-            {
-                TraceId = "trace-match",
-                RequestId = "request-match",
-                CommandId = "command-match",
-                CallId = "call-match",
-                SessionId = "session-match",
-                WorkflowRunId = "workflow-run-match",
-                ApprovalId = "approval-match"
-            },
-            CommittedFactRef = new AuditCommittedFactReference
-            {
-                CommittedEventId = "event-match",
-                ActorId = "committed-actor-match",
-                ActorType = "CommittedActorTypeMatch",
-                EventTypeUrl = "type.googleapis.com/aevatar.audit.MatchEvent",
-                StateVersion = 42
-            },
-            RequestSummary = "request summary",
-            ResultSummary = "result summary"
+            TraceId = "trace-match",
+            CorrelationId = "correlation-match",
+            CausationId = "causation-match",
+            RequestId = "request-match",
+            CommandId = "command-match",
+            CallId = "call-match",
+            SessionId = "session-match",
+            WorkflowRunId = "workflow-run-match",
+            ApprovalId = "approval-match",
         };
+        record.CommittedFactRef = new AuditCommittedFactReference
+        {
+            CommittedEventId = "event-match",
+            ActorId = "committed-actor-match",
+            ActorType = "CommittedActorTypeMatch",
+            EventTypeUrl = "type.googleapis.com/aevatar.audit.MatchEvent",
+            StateVersion = 42,
+        };
+        record.Provenance = new AuditExecutionProvenance
+        {
+            ScopeId = "scope-match",
+            RunId = "workflow-run-match",
+            CorrelationId = "correlation-match",
+            CausationId = "causation-match",
+            ActorId = "committed-actor-match",
+            ActorStateVersion = 42,
+            ActorEventId = "event-match",
+        };
+        return record;
     }
 
     private static AuditTrailQuery BuildSingleFilterQuery(string filterName, AuditRecord decoyRecord)
@@ -361,7 +439,11 @@ public sealed class InMemoryAuditTrailStoreTests
                 new AuditTrailQuery { OccurredTo = DateTimeOffset.Parse("2026-01-02T03:04:05Z"), Take = 10 }),
             "scope_id" => ChangeDecoyAndQuery(
                 decoyRecord,
-                static record => record.ScopeId = "scope-decoy",
+                static record =>
+                {
+                    record.ScopeId = "scope-decoy";
+                    record.Provenance.ScopeId = "scope-decoy";
+                },
                 new AuditTrailQuery { ScopeId = "scope-match", Take = 10 }),
             "audit_actor_id" => ChangeDecoyAndQuery(
                 decoyRecord,
@@ -387,6 +469,25 @@ public sealed class InMemoryAuditTrailStoreTests
                 decoyRecord,
                 static record => record.Outcome = AuditOutcome.Success,
                 new AuditTrailQuery { Outcome = AuditOutcome.Denied, Take = 10 }),
+            "lifecycle_phase" => ChangeDecoyAndQuery(
+                decoyRecord,
+                static record =>
+                {
+                    record.Outcome = AuditOutcome.Accepted;
+                    record.LifecyclePhase = AuditLifecyclePhase.Accepted;
+                    record.TerminalOutcome = AuditTerminalOutcome.Unspecified;
+                    record.Failure = null;
+                },
+                new AuditTrailQuery { LifecyclePhase = AuditLifecyclePhase.Terminal, Take = 10 }),
+            "terminal_outcome" => ChangeDecoyAndQuery(
+                decoyRecord,
+                static record =>
+                {
+                    record.Outcome = AuditOutcome.Cancelled;
+                    record.TerminalOutcome = AuditTerminalOutcome.Cancelled;
+                    record.Failure = null;
+                },
+                new AuditTrailQuery { TerminalOutcome = AuditTerminalOutcome.Failed, Take = 10 }),
             "sensitivity_level" => ChangeDecoyAndQuery(
                 decoyRecord,
                 static record => record.SensitivityLevel = AuditSensitivityLevel.Internal,
@@ -407,6 +508,22 @@ public sealed class InMemoryAuditTrailStoreTests
                 decoyRecord,
                 static record => record.Correlation.TraceId = "trace-decoy",
                 new AuditTrailQuery { TraceId = "trace-match", Take = 10 }),
+            "correlation_id" => ChangeDecoyAndQuery(
+                decoyRecord,
+                static record =>
+                {
+                    record.Correlation.CorrelationId = "correlation-decoy";
+                    record.Provenance.CorrelationId = "correlation-decoy";
+                },
+                new AuditTrailQuery { CorrelationId = "correlation-match", Take = 10 }),
+            "causation_id" => ChangeDecoyAndQuery(
+                decoyRecord,
+                static record =>
+                {
+                    record.Correlation.CausationId = "causation-decoy";
+                    record.Provenance.CausationId = "causation-decoy";
+                },
+                new AuditTrailQuery { CausationId = "causation-match", Take = 10 }),
             "request_id" => ChangeDecoyAndQuery(
                 decoyRecord,
                 static record => record.Correlation.RequestId = "request-decoy",
@@ -425,7 +542,11 @@ public sealed class InMemoryAuditTrailStoreTests
                 new AuditTrailQuery { SessionId = "session-match", Take = 10 }),
             "workflow_run_id" => ChangeDecoyAndQuery(
                 decoyRecord,
-                static record => record.Correlation.WorkflowRunId = "workflow-run-decoy",
+                static record =>
+                {
+                    record.Correlation.WorkflowRunId = "workflow-run-decoy";
+                    record.Provenance.RunId = "workflow-run-decoy";
+                },
                 new AuditTrailQuery { WorkflowRunId = "workflow-run-match", Take = 10 }),
             "approval_id" => ChangeDecoyAndQuery(
                 decoyRecord,
@@ -433,11 +554,19 @@ public sealed class InMemoryAuditTrailStoreTests
                 new AuditTrailQuery { ApprovalId = "approval-match", Take = 10 }),
             "committed_event_id" => ChangeDecoyAndQuery(
                 decoyRecord,
-                static record => record.CommittedFactRef.CommittedEventId = "event-decoy",
+                static record =>
+                {
+                    record.CommittedFactRef.CommittedEventId = "event-decoy";
+                    record.Provenance.ActorEventId = "event-decoy";
+                },
                 new AuditTrailQuery { CommittedEventId = "event-match", Take = 10 }),
             "committed_actor_id" => ChangeDecoyAndQuery(
                 decoyRecord,
-                static record => record.CommittedFactRef.ActorId = "committed-actor-decoy",
+                static record =>
+                {
+                    record.CommittedFactRef.ActorId = "committed-actor-decoy";
+                    record.Provenance.ActorId = "committed-actor-decoy";
+                },
                 new AuditTrailQuery { CommittedActorId = "committed-actor-match", Take = 10 }),
             "committed_actor_type" => ChangeDecoyAndQuery(
                 decoyRecord,
@@ -449,7 +578,11 @@ public sealed class InMemoryAuditTrailStoreTests
                 new AuditTrailQuery { CommittedEventTypeUrl = "type.googleapis.com/aevatar.audit.MatchEvent", Take = 10 }),
             "committed_state_version" => ChangeDecoyAndQuery(
                 decoyRecord,
-                static record => record.CommittedFactRef.StateVersion = 43,
+                static record =>
+                {
+                    record.CommittedFactRef.StateVersion = 43;
+                    record.Provenance.ActorStateVersion = 43;
+                },
                 new AuditTrailQuery { CommittedStateVersion = 42, Take = 10 }),
             _ => throw new ArgumentOutOfRangeException(nameof(filterName), filterName, "Unknown audit query filter.")
         };
