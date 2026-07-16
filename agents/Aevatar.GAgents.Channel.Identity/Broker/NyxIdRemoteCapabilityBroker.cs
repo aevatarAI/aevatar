@@ -78,9 +78,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
     private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_logger);
 
-    private string[] RequiredResourceUris(AevatarOAuthClientSnapshot snapshot) =>
+    private string[] RequiredResourceUris() =>
         AevatarOAuthClientResources.RequiredResourceUris(
-            snapshot.NyxIdAuthority,
+            _options.ResourceServerBaseUrl,
             _options.RequiredLlmServiceSlug,
             _options.AdditionalRequiredServiceSlugs);
 
@@ -191,7 +191,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ArgumentNullException.ThrowIfNull(scope);
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
-        var requiredResources = RequiredResourceUris(snapshot);
+        var requiredResources = RequiredResourceUris();
 
         var form = new List<KeyValuePair<string, string>>
         {
@@ -320,7 +320,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         if (requireProvisionedRedirectUri)
             EnsureClientCurrent(snapshot, redirectUri);
-        var requiredResources = RequiredResourceUris(snapshot);
+        var requiredResources = RequiredResourceUris();
 
         var form = new List<KeyValuePair<string, string>>
         {
@@ -391,7 +391,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
             "prompt=consent",
         };
-        queryParts.AddRange(RequiredResourceUris(snapshot)
+        queryParts.AddRange(RequiredResourceUris()
             .Select(static resource => $"resource={Uri.EscapeDataString(resource)}"));
         queryParts.AddRange(
         [

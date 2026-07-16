@@ -38,8 +38,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
+        if (path == "/cqrs")
+        {
+            html.Should().Contain("const NYXID_API = CFG.nyxidApi");
+            html.Should().Contain("const NYXID_USER_API = NYXID_API");
+            html.Should().NotContain("const NYXID_AUTHORITY = CFG.authority");
+        }
         if (path == "/admin")
         {
+            html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
+            html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
+            html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
             html.Should().Contain("searchParams.append('resource'");
             html.Should().Contain("id=\"obs-run-in\"");
             html.Should().Contain("/api/workflow/observatory/admin/runs/");

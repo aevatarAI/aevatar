@@ -143,6 +143,64 @@ public sealed class ResponsesCallerScopeResolverTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WithAssertionPastRawExpiryButInsideSkew_ShouldRejectSecondUse()
+    {
+        using var fixture = new IdentityAssertionFixture(clockSkewSeconds: 60);
+        var currentUserResolver = new StubUserResolver(returnUserId: "fallback-user");
+        var validator = fixture.CreateValidator();
+        var resolver = new NyxIdResponsesCallerScopeResolver(currentUserResolver, validator);
+        var token = fixture.CreateToken(
+            subject: "identity-user",
+            jti: "inside-skew-jti",
+            notBeforeUtc: DateTime.UtcNow.AddMinutes(-5),
+            expiresAtUtc: DateTime.UtcNow.AddSeconds(-5));
+
+        var first = await resolver.ResolveAsync(CreateContext("bearer-token", identityToken: token));
+        var replay = () => resolver.ResolveAsync(CreateContext("bearer-token", identityToken: token));
+
+        first.ScopeId.Should().Be("identity-user");
+        await replay.Should().ThrowAsync<ResponsesCallerScopeUnavailableException>();
+        currentUserResolver.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRetainReplayEntryThroughAcceptedClockSkewBoundary()
+    {
+        const int clockSkewSeconds = 75;
+        using var fixture = new IdentityAssertionFixture(clockSkewSeconds);
+        var replayGuard = new RecordingIdentityAssertionReplayGuard();
+        var token = fixture.CreateToken(
+            subject: "identity-user",
+            jti: "retention-boundary-jti",
+            expiresAtUtc: DateTime.UtcNow.AddMinutes(5));
+        var rawExpiresUtc = new DateTimeOffset(
+            DateTime.SpecifyKind(new JwtSecurityTokenHandler().ReadJwtToken(token).ValidTo, DateTimeKind.Utc));
+
+        var result = await fixture.CreateValidator(replayGuard).ValidateAsync(token);
+
+        result.Succeeded.Should().BeTrue();
+        replayGuard.AcceptedUntilUtc.Should().Be(rawExpiresUtc.AddSeconds(clockSkewSeconds));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithNegativeClockSkew_ShouldRetainOnlyThroughRawExpiry()
+    {
+        using var fixture = new IdentityAssertionFixture(clockSkewSeconds: -30);
+        var replayGuard = new RecordingIdentityAssertionReplayGuard();
+        var token = fixture.CreateToken(
+            subject: "identity-user",
+            jti: "negative-skew-jti",
+            expiresAtUtc: DateTime.UtcNow.AddMinutes(5));
+        var rawExpiresUtc = new DateTimeOffset(
+            DateTime.SpecifyKind(new JwtSecurityTokenHandler().ReadJwtToken(token).ValidTo, DateTimeKind.Utc));
+
+        var result = await fixture.CreateValidator(replayGuard).ValidateAsync(token);
+
+        result.Succeeded.Should().BeTrue();
+        replayGuard.AcceptedUntilUtc.Should().Be(rawExpiresUtc);
+    }
+
+    [Fact]
     public async Task ResolveAsync_WithFreshJtiAfterPriorUse_ShouldStillResolve()
     {
         // Positive control for the replay guard: a distinct jti (a re-minted assertion) still
@@ -408,7 +466,8 @@ public sealed class ResponsesCallerScopeResolverTests
 
         public string Audience { get; } = "aevatar/responses";
 
-        public NyxIdIdentityAssertionValidator CreateValidator()
+        public NyxIdIdentityAssertionValidator CreateValidator(
+            IIdentityAssertionReplayGuard? replayGuard = null)
         {
             var options = Options.Create(new ResponsesNyxIdIdentityAssertionOptions
             {
@@ -420,7 +479,8 @@ public sealed class ResponsesCallerScopeResolverTests
             });
             return new NyxIdIdentityAssertionValidator(
                 new StaticHttpClientFactory(_jwksJson),
-                options);
+                options,
+                replayGuard: replayGuard);
         }
 
         public NyxIdIdentityAssertionValidator CreateValidatorWithAuthorityFallback()
@@ -484,6 +544,21 @@ public sealed class ResponsesCallerScopeResolverTests
         }
 
         public void Dispose() => _rsa.Dispose();
+    }
+
+    private sealed class RecordingIdentityAssertionReplayGuard : IIdentityAssertionReplayGuard
+    {
+        public DateTimeOffset? AcceptedUntilUtc { get; private set; }
+
+        public ValueTask<bool> TryConsumeAsync(
+            string jti,
+            DateTimeOffset acceptedUntilUtc,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            AcceptedUntilUtc = acceptedUntilUtc;
+            return ValueTask.FromResult(true);
+        }
     }
 
     private sealed class StaticHttpClientFactory : IHttpClientFactory

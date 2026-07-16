@@ -84,19 +84,25 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         ArgumentNullException.ThrowIfNull(document.Record);
         ct.ThrowIfCancellationRequested();
 
+        var sanitizedRecord = _sanitizer.Sanitize(document.Record);
+        var sanitizedDocument = ToDocument(sanitizedRecord);
+
         lock (_records)
         {
             var existing = _documents.FirstOrDefault(candidate =>
-                string.Equals(candidate.AuditId, document.AuditId, StringComparison.Ordinal));
+                string.Equals(candidate.AuditId, sanitizedDocument.AuditId, StringComparison.Ordinal));
             if (existing is not null)
             {
-                return Task.FromResult(string.Equals(existing.ContentHash, document.ContentHash, StringComparison.Ordinal)
+                return Task.FromResult(string.Equals(
+                    existing.ContentHash,
+                    sanitizedDocument.ContentHash,
+                    StringComparison.Ordinal)
                     ? AuditTrailArtifactWriteResult.Duplicate()
                     : AuditTrailArtifactWriteResult.Conflict());
             }
 
-            _records.Add(document.Record.Clone());
-            _documents.Add(document.Clone());
+            _records.Add(sanitizedRecord.Clone());
+            _documents.Add(sanitizedDocument);
         }
 
         return Task.FromResult(AuditTrailArtifactWriteResult.Applied());

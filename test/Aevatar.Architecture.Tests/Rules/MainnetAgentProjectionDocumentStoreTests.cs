@@ -90,9 +90,43 @@ public sealed class MainnetAgentProjectionDocumentStoreTests
         Assert.Equal(
             AevatarOAuthClientEsAclEnforcementMode.Strict,
             provider.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value.EnforcementMode);
+        Assert.IsType<HttpOAuthClientEsAclProbe>(provider.GetRequiredService<IOAuthClientEsAclProbe>());
         Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
+    }
+
+    [Fact]
+    public void AddMainnetAgentProjectionDocumentStores_WithCustomAclVerifier_PreservesVerifier()
+    {
+        var services = BuildAgentServices();
+        var verifier = new FakeOAuthClientEsAclProbe(
+            EsAclProbeResult.Restricted("Deployment verifier proved the effective grant."));
+        services.AddSingleton<IOAuthClientEsAclProbe>(verifier);
+
+        services.AddMainnetAgentProjectionDocumentStores(BuildElasticsearchConfiguration());
+
+        using var provider = services.BuildServiceProvider();
+        Assert.Same(verifier, provider.GetRequiredService<IOAuthClientEsAclProbe>());
+        Assert.DoesNotContain(
+            services,
+            descriptor => descriptor.ImplementationType == typeof(UnavailableOAuthClientEsAclProbe));
+    }
+
+    [Fact]
+    public void AddMainnetAgentProjectionDocumentStores_WithMultipleCustomAclVerifiers_FailsComposition()
+    {
+        var services = BuildAgentServices();
+        services.AddSingleton<IOAuthClientEsAclProbe>(
+            new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted("first verifier")));
+        services.AddSingleton<IOAuthClientEsAclProbe>(
+            new FakeOAuthClientEsAclProbe(EsAclProbeResult.Restricted("second verifier")));
+
+        var act = () => services.AddMainnetAgentProjectionDocumentStores(
+            BuildElasticsearchConfiguration());
+
+        var exception = Assert.Throws<InvalidOperationException>(act);
+        Assert.Contains("exactly one custom IOAuthClientEsAclProbe", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

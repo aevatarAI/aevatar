@@ -184,15 +184,6 @@ public static class MainnetHostBuilderExtensions
         });
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, MainnetNyxIdResourcePolicyValidator>());
-        builder.Services.Configure<AevatarOAuthClientEsAclOptions>(options =>
-        {
-            // Mainnet stores the cluster-singleton OAuth client readmodel in Elasticsearch.
-            // Its read grant is intentionally scoped to the same internal services that can
-            // read actor events, so the module-level fail-closed ES ACL guard may pass.
-            options.GrantMatchesGrainEventStoreInternal = true;
-            options.GrantDescription =
-                "Mainnet aevatar-oauth-clients read grant matches grain/event-store internal services.";
-        });
         builder.Services.AddDeviceRegistration(builder.Configuration);
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.Services.AddStatusDashboard(builder.Configuration);

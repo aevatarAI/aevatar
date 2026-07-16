@@ -292,12 +292,11 @@ public static class AuditTrailEndpoints
         PlatformCaller admin,
         string? reason) =>
         logger.LogInformation(
-            "audit_trail_admin_read outcome={Outcome} action={Action} adminUserId={AdminUserId} adminEmail={AdminEmail} " +
+            "audit_trail_admin_read outcome={Outcome} action={Action} adminUserId={AdminUserId} " +
             "role={Role} grantSource={GrantSource} callerScope={CallerScope} targetScope={TargetScope} reason={Reason} correlationId={CorrelationId}",
             outcome,
             action,
             admin.UserId,
-            admin.Email,
             admin.Role,
             admin.GrantSource,
             callerScope,

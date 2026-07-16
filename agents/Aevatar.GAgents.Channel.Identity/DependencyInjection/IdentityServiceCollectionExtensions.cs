@@ -104,9 +104,9 @@ public static class IdentityServiceCollectionExtensions
         // Refactor (iter97/cluster-526): Old pattern: AevatarOAuthClientDocument
         // carries state-token HMAC bytes but ES startup did not require an
         // explicit ACL assertion. New principle: when ChannelIdentity uses ES,
-        // AevatarOAuthClientEsAclStartupGuard fails closed unless the host
-        // declares the aevatar-oauth-clients index grant matches grain/event-store
-        // internal read access.
+        // AevatarOAuthClientEsAclStartupGuard fails closed unless a live probe
+        // confirms the restricted grant and the operator separately attests that
+        // it matches grain/event-store internal read access.
         services.AddProjectionMaterializationRuntimeCore<
             AevatarOAuthClientMaterializationContext,
             AevatarOAuthClientMaterializationRuntimeLease,
@@ -142,11 +142,10 @@ public static class IdentityServiceCollectionExtensions
         var aclOptions = services.AddOptions<AevatarOAuthClientEsAclOptions>();
         if (configuration is not null)
             aclOptions.Bind(configuration.GetSection(AevatarOAuthClientEsAclOptions.SectionName));
-        // Default ES ACL probe: reports Unavailable (no cluster to inspect) so the
-        // startup guard resolves and never blocks on the InMemory projection
-        // provider (dev/tests). A host that runs the Elasticsearch projection store
-        // replaces this with a real HTTP-backed probe that inspects the cluster
-        // security API using the same endpoint/credentials as the projection store.
+        // Default ES ACL probe: reports Unavailable when there is no cluster to
+        // inspect. Warn mode logs it; Strict mode fails closed. A host that runs
+        // the Elasticsearch projection store replaces this with a real HTTP-backed
+        // probe using the same endpoint/credentials as the projection store.
         services.TryAddSingleton<IOAuthClientEsAclProbe, UnavailableOAuthClientEsAclProbe>();
 
         // Endpoint filter for the operator /rebuild path — rejects unauthenticated
@@ -191,6 +190,16 @@ public static class IdentityServiceCollectionExtensions
         // silently defeated the 2-min handler rotation, so long-running
         // silos would never pick up DNS / TLS-cert changes.
         services.AddOptions<NyxIdBrokerOptions>().ValidateOnStart();
+        if (configuration is not null)
+        {
+            services.Configure<NyxIdBrokerOptions>(options =>
+            {
+                options.ResourceServerBaseUrl =
+                    (configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] ?? string.Empty)
+                    .Trim()
+                    .TrimEnd('/');
+            });
+        }
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, NyxIdBrokerOptionsValidator>());
         services.TryAddSingleton<StateTokenCodec>();

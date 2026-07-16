@@ -33,7 +33,8 @@ household event
 Use deployment-specific values for the placeholders below:
 
 - `AEVATAR_BASE_URL`: public aevatar Mainnet Host URL.
-- `NYXID_BASE_URL`: NyxID API base URL.
+- `NYXID_OIDC_AUTHORITY`: NyxID browser OAuth authority.
+- `NYXID_API_BASE_URL`: NyxID backend API and RFC 8707 resource-server base URL.
 - `NYXID_WS_URL`: NyxID node WebSocket URL, normally
   `wss://<nyxid-host>/api/v1/nodes/ws`.
 - `NYXID_API_KEY`: caller key or token with `proxy` access to the aevatar
@@ -63,8 +64,9 @@ environment variables. These are the voice-specific values for the existing
 OpenAI realtime broker path:
 
 ```bash
-export AEVATAR_Aevatar__NyxId__Authority="$NYXID_BASE_URL"
-export AEVATAR_Aevatar__Authentication__Authority="$NYXID_BASE_URL"
+export AEVATAR_Aevatar__NyxId__Authority="$NYXID_OIDC_AUTHORITY"
+export AEVATAR_Aevatar__NyxId__ApiBaseUrl="$NYXID_API_BASE_URL"
+export AEVATAR_Aevatar__Authentication__Authority="$NYXID_OIDC_AUTHORITY"
 
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Nyxid__ServiceSlug="openai-realtime"
 export AEVATAR_Aevatar__VoicePresence__OpenAI__Nyxid__MintPath="v1/realtime/client_secrets"
@@ -157,7 +159,7 @@ discovery; do not create a local service catalog in aevatar.
 Verify node routing from outside the LAN:
 
 ```bash
-curl -sf "$NYXID_BASE_URL/api/v1/proxy/s/$EDGE_SERVICE_SLUG/edge-tools/openapi.json" \
+curl -sf "$NYXID_API_BASE_URL/api/v1/proxy/s/$EDGE_SERVICE_SLUG/edge-tools/openapi.json" \
   -H "Authorization: Bearer $NYXID_API_KEY" \
   | jq '.openapi, .paths'
 ```

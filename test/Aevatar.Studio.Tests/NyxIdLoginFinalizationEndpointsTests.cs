@@ -28,7 +28,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 HmacKid: "kid",
                 HmacKey: [1, 2, 3],
                 HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
-                NyxIdAuthority: "https://nyx-api.example/",
+                NyxIdAuthority: "https://id.example.test/",
                 BrokerCapabilityObserved: true,
                 BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
                 OauthScope: "openid broker proxy")),
@@ -38,14 +38,14 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         payload.Should().BeEquivalentTo(new NyxIdLoginConfigurationResponse(
-            "https://nyx-api.example",
+            "https://id.example.test",
             "broker-client-1",
             "openid broker proxy",
             [
-                "https://nyx-api.example/api/v1/proxy/s/aevatar",
-                "https://nyx-api.example/api/v1/proxy/s/chrono-llm-public",
-                "https://nyx-api.example/api/v1/proxy/s/ornn-api",
-                "https://nyx-api.example/api/v1/proxy/s/chrono-sandbox",
+                "https://api.example.test/api/v1/proxy/s/aevatar",
+                "https://api.example.test/api/v1/proxy/s/chrono-llm-public",
+                "https://api.example.test/api/v1/proxy/s/ornn-api",
+                "https://api.example.test/api/v1/proxy/s/chrono-sandbox",
             ]));
     }
 
@@ -262,7 +262,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         var broker = new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(null, null, null))
         {
             ExchangeError = new NyxIdRequiredServiceAccessException(
-                ["https://nyx.example/api/v1/proxy/s/aevatar"]),
+                ["https://api.example.test/api/v1/proxy/s/aevatar"]),
         };
 
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
@@ -572,12 +572,13 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             CancellationToken ct = default) =>
             throw new BindingServiceAccessMismatchException(
                 externalSubject,
-                ["https://nyx.example/api/v1/proxy/s/aevatar"]);
+                ["https://api.example.test/api/v1/proxy/s/aevatar"]);
     }
 
     private static IOptions<NyxIdBrokerOptions> BrokerOptions() =>
         Options.Create(new NyxIdBrokerOptions
         {
+            ResourceServerBaseUrl = " https://api.example.test/// ",
             RequiredLlmServiceSlug = "chrono-llm-public",
             AdditionalRequiredServiceSlugs = ["ornn-api", "chrono-sandbox"],
         });

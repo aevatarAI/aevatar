@@ -34,8 +34,9 @@ public sealed class DistributedIdentityAssertionReplayGuardTests
     {
         var store = new CoordinatedReplayStore(expectedCalls: 1);
         var guard = new DistributedIdentityAssertionReplayGuard(store, new FakeTimeProvider(Now));
+        var acceptedUntilUtc = Now.AddMinutes(3);
 
-        var admitted = await guard.TryConsumeAsync("sensitive-jti", Now.AddMinutes(3));
+        var admitted = await guard.TryConsumeAsync("sensitive-jti", acceptedUntilUtc);
 
         admitted.Should().BeTrue();
         store.Keys.Should().ContainSingle()

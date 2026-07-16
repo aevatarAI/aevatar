@@ -48,7 +48,7 @@ Nyx/OIDC deployment facts are host configuration, not page source:
 
 Each configurable HTML asset contains `__BACKEND_CONSOLE_CONFIG__`. The serving helper replaces that placeholder with JSON rendered from `BackendConsoleOptions`. The six `HOST_BACKEND_CONSOLE_*` environment variables are optional overrides for host deployment, but `.refactor-loop/host.env` is not a production configuration source.
 
-The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
+The OIDC client id and resource indicators are public browser values, not secrets. Every configurable console page appends each injected resource to both `/oauth/authorize` and the authorization-code exchange at `/oauth/token`; the shared `/auto/callback` follows the same contract. The OIDC authority owns browser authorization, while `NyxApiBaseUrl` owns RFC 8707 resource identity and NyxID REST/admin routing; these hosts may differ and must not be substituted for each other. Secrets still belong in the existing host secret/config mechanisms and must not be injected into page assets.
 
 ## 3. Endpoint Boundary
 

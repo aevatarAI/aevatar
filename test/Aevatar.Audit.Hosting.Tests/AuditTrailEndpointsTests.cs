@@ -18,6 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -176,11 +177,13 @@ public sealed class AuditTrailEndpointsTests
         var queryPort = new RecordingAuditTrailQueryPort();
         var authorizer = new FakeAuthorizer(elevated: true);
         var http = BuildHttpContext(CallerScope, bearer: "token", queryPort, authorizer);
+        using var loggerProvider = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
 
         var result = await AuditTrailEndpoints.QueryAuditTrail(
             http,
             BuildEndpointDependencies(queryPort, authorizer: authorizer),
-            NullLoggerFactory.Instance,
+            loggerFactory,
             scope: OtherScope,
             take: 10);
         var status = await ExecuteAsync(result, http);
@@ -191,6 +194,10 @@ public sealed class AuditTrailEndpointsTests
         query.AuditActorId.Should().BeNull();
         query.Take.Should().Be(10);
         authorizer.Calls.Should().Be(1);
+        loggerProvider.Messages.Should().Contain(message => message.Contains("admin-1", StringComparison.Ordinal));
+        loggerProvider.Messages.Should().NotContain(message =>
+            message.Contains("admin@example.test", StringComparison.Ordinal) ||
+            message.Contains("adminEmail", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -628,6 +635,32 @@ public sealed class AuditTrailEndpointsTests
             return Task.FromResult(_elevated
                 ? new PlatformCaller(true, "admin", "admin@example.test", "admin-1")
                 : PlatformCaller.NotElevated);
+        }
+    }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        public List<string> Messages { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(Messages);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(List<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                messages.Add(formatter(state, exception));
         }
     }
 

@@ -785,11 +785,20 @@ public sealed class MainnetHostCompositionTests
             descriptor.ImplementationType == typeof(ElasticsearchProjectionIndexReconcileHostedService));
     }
 
-    [Fact]
-    public void AddAevatarMainnetHost_ShouldAssertChannelIdentityElasticsearchAcl()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AddAevatarMainnetHost_ShouldUseOperatorChannelIdentityElasticsearchAclAttestation(
+        bool configuredAttestation)
     {
         using var home = new TemporaryAevatarHomeScope();
-        var builder = CreateBuilder();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            [$"{AevatarOAuthClientEsAclOptions.SectionName}:GrantMatchesGrainEventStoreInternal"] =
+                configuredAttestation.ToString(),
+            [$"{AevatarOAuthClientEsAclOptions.SectionName}:GrantDescription"] =
+                "operator supplied ACL attestation",
+        });
 
         builder.AddAevatarMainnetHost(options =>
         {
@@ -800,8 +809,8 @@ public sealed class MainnetHostCompositionTests
         using var app = builder.Build();
         var aclOptions = app.Services.GetRequiredService<IOptions<AevatarOAuthClientEsAclOptions>>().Value;
 
-        aclOptions.GrantMatchesGrainEventStoreInternal.Should().BeTrue();
-        aclOptions.GrantDescription.Should().Contain("aevatar-oauth-clients");
+        aclOptions.GrantMatchesGrainEventStoreInternal.Should().Be(configuredAttestation);
+        aclOptions.GrantDescription.Should().Be("operator supplied ACL attestation");
     }
 
     [Fact]

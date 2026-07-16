@@ -22,6 +22,14 @@ owner: eanzhao
 - 授权确认后 NyxID 以 optimistic rotation 原地替换 binding 背后的 refresh grant,返回 `binding_updated=true`,不返回新 `binding_id`. aevatar callback 校验本地 binding 哈希未变化后直接成功,不提交新的 binding actor 事件.
 - `invalid_target`、`invalid_scope` 或缺失 resource claim 表示 grant 不足,不是 binding 已撤销;调用侧必须保留本地 binding 并引导 `/init` 原地审阅. 只有 NyxID 明确返回 `invalid_grant`、binding revoked 或 not-found 时才事件化清理本地 binding.
 
+## Update 2026-07-14 - OAuth client projection ACL verification
+
+`AevatarOAuthClientDocument` contains the state-token HMAC key, so an Elasticsearch-backed Mainnet host uses `AevatarOAuthClientEsAclStartupGuard` in `Strict` mode. `Strict` has two independent requirements: the live `IOAuthClientEsAclProbe` must return `Restricted`, and the operator-provided `ChannelIdentity:OAuthClient:ElasticsearchAcl:GrantMatchesGrainEventStoreInternal` attestation must be `true`. `Unverifiable` / `Unavailable` never pass by attestation alone, and Mainnet does not hardcode the attestation.
+
+The built-in `HttpOAuthClientEsAclProbe` calls `_has_privileges` with the same Elasticsearch identity as the projection store. That proves only the current identity's access; it cannot prove that other identities, wildcard roles, file realms, API keys, or service accounts are denied. It therefore reports `Unverifiable` for a security-enabled success response instead of fabricating `Restricted`.
+
+An Elasticsearch deployment that needs a positive result must pre-register exactly one stronger `IOAuthClientEsAclProbe` before `AddAevatarMainnetHost`. That verifier owns the environment-specific effective-permission or infrastructure-policy audit and may return `Restricted` only after proving the index grant. Mainnet replaces only the module's `UnavailableOAuthClientEsAclProbe` fallback; it preserves the deployment verifier and rejects multiple custom registrations. Without such a verifier, the stock Elasticsearch path intentionally fails closed at startup.
+
 ## Update 2026-07-10 - NyxID service access 使用 RFC 8707 resource
 
 NyxID 2026-07-06 至 2026-07-08 的 OAuth 更新把第三方应用 service access 改为 default-deny,并新增两种语义不同的入口:
@@ -31,7 +39,7 @@ NyxID 2026-07-06 至 2026-07-08 的 OAuth 更新把第三方应用 service acces
 
 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service 是 Studio 登录、channel binding 和后续对话/skill/code execution 正常工作的必要资源,不是可选 UI 偏好. 因此最终 contract 为:
 
-- 控制台登录与 channel `/init` 的 `/oauth/authorize` 请求都显式携带 `resource={nyxid_authority}/api/v1/proxy/s/aevatar`、`resource={nyxid_authority}/api/v1/proxy/s/{default_llm_service_slug}`、`resource={nyxid_authority}/api/v1/proxy/s/{ornn_service_slug}` 与 `resource={nyxid_authority}/api/v1/proxy/s/{sandbox_service_slug}`. `nyxid_authority` 是 `AevatarOAuthClient` actor 持有的 NyxID backend `BASE_URL` / issuer 权威事实；各 service slug 由对应 provider 配置注入.
+- 控制台登录与 channel `/init` 的 `/oauth/authorize` 请求都显式携带 `resource={nyxid_api_base_url}/api/v1/proxy/s/aevatar`、`resource={nyxid_api_base_url}/api/v1/proxy/s/{default_llm_service_slug}`、`resource={nyxid_api_base_url}/api/v1/proxy/s/{ornn_service_slug}` 与 `resource={nyxid_api_base_url}/api/v1/proxy/s/{sandbox_service_slug}`. `nyxid_api_base_url` 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:ApiBaseUrl`,不得从浏览器 OAuth authority 或 JWT issuer 派生；各 service slug 由对应 provider 配置注入.
 - NyxID authorization decision 必须从用户仍选中的 `resource` 在服务端解析并合并对应 service ID;前端异步加载的 service picker 只是展示与附加选择,不能成为授权事实源. 用户只有明确取消某个 resource 才会把对应 service 从本次 grant 中移除.
 - authorization-code exchange、控制台 refresh 和 broker token-exchange 同样携带完整 resource 集合. 如果用户明确取消任一必需 resource,token exchange 会以 `invalid_target` 失败,不会生成一个表面登录成功但无法工作的 binding.
 - broker 每次拿到短期 access token 后校验 `resources` claim. 旧 binding、allow-all grandfather grant 或缺少任一必需 service 的 grant会被归类为 service-access mismatch;调用侧保留 binding 并引导 `/init` 原地更新 grant.

@@ -7,18 +7,18 @@ public static class AevatarOAuthClientResources
 {
     public const string RequiredServiceSlug = "aevatar";
 
-    public static string RequiredServiceResourceUri(string nyxIdAuthority)
-        => ServiceResourceUri(nyxIdAuthority, RequiredServiceSlug);
+    public static string RequiredServiceResourceUri(string nyxIdApiBaseUrl)
+        => ServiceResourceUri(nyxIdApiBaseUrl, RequiredServiceSlug);
 
-    public static string ServiceResourceUri(string nyxIdAuthority, string serviceSlug)
+    public static string ServiceResourceUri(string nyxIdApiBaseUrl, string serviceSlug)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(nyxIdAuthority);
+        ArgumentException.ThrowIfNullOrWhiteSpace(nyxIdApiBaseUrl);
         var normalizedServiceSlug = NormalizeServiceSlug(serviceSlug);
-        return $"{nyxIdAuthority.Trim().TrimEnd('/')}/api/v1/proxy/s/{normalizedServiceSlug}";
+        return $"{nyxIdApiBaseUrl.Trim().TrimEnd('/')}/api/v1/proxy/s/{normalizedServiceSlug}";
     }
 
     public static string[] RequiredResourceUris(
-        string nyxIdAuthority,
+        string nyxIdApiBaseUrl,
         string? requiredLlmServiceSlug,
         IEnumerable<string>? additionalRequiredServiceSlugs = null)
     {
@@ -32,7 +32,7 @@ public static class AevatarOAuthClientResources
         }
 
         return serviceSlugs
-            .Select(serviceSlug => ServiceResourceUri(nyxIdAuthority, serviceSlug))
+            .Select(serviceSlug => ServiceResourceUri(nyxIdApiBaseUrl, serviceSlug))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
     }

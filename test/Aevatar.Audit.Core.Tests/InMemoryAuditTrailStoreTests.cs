@@ -165,6 +165,7 @@ public sealed class InMemoryAuditTrailStoreTests
     {
         var store = new InMemoryAuditTrailStore();
         var document = CreateDocument("audit-1");
+        document.Record.RequestSummary = "  request   summary  ";
 
         var result = await store.UpsertAsync(document);
         document.ScopeId = "mutated";
@@ -178,18 +179,21 @@ public sealed class InMemoryAuditTrailStoreTests
         result.Disposition.ShouldBe(AuditTrailArtifactWriteDisposition.Applied);
         saved.ShouldNotBeSameAs(document);
         saved.Record.ScopeId.ShouldBe("scope-a");
+        saved.Record.RequestSummary.ShouldBe("request summary");
+        saved.ContentHash.ShouldNotBe(document.ContentHash);
         reread!.ScopeId.ShouldBe("scope-a");
-        page.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
+        page.Records.ShouldHaveSingleItem().RequestSummary.ShouldBe("request summary");
     }
 
     [Fact]
-    public async Task UpsertAsync_WhenSameAuditAndContentHashExists_ShouldReturnDuplicate()
+    public async Task UpsertAsync_WhenSameSanitizedContentHasDifferentCallerHash_ShouldReturnDuplicate()
     {
         var store = new InMemoryAuditTrailStore();
-        var document = CreateDocument("audit-1");
+        var document = CreateDocument("audit-1", "caller-hash-a");
+        var duplicate = CreateDocument("audit-1", "caller-hash-b");
 
         var first = await store.UpsertAsync(document);
-        var second = await store.UpsertAsync(document.Clone());
+        var second = await store.UpsertAsync(duplicate);
         var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
 
         first.Disposition.ShouldBe(AuditTrailArtifactWriteDisposition.Applied);
@@ -198,17 +202,21 @@ public sealed class InMemoryAuditTrailStoreTests
     }
 
     [Fact]
-    public async Task UpsertAsync_WhenSameAuditAndDifferentContentHashExists_ShouldReturnConflict()
+    public async Task UpsertAsync_WhenSameAuditAndDifferentSanitizedContentExists_ShouldReturnConflict()
     {
         var store = new InMemoryAuditTrailStore();
-        await store.UpsertAsync(CreateDocument("audit-1", "content-a"));
+        var original = CreateDocument("audit-1", "caller-hash-a");
+        var conflicting = CreateDocument("audit-1", "caller-hash-b");
+        conflicting.Record.RequestSummary = "different request";
+        await store.UpsertAsync(original);
 
-        var result = await store.UpsertAsync(CreateDocument("audit-1", "content-b"));
+        var result = await store.UpsertAsync(conflicting);
         var saved = await store.GetAsync("audit-1");
         var page = await store.QueryAsync(new AuditTrailQuery { Take = 10 });
 
         result.Disposition.ShouldBe(AuditTrailArtifactWriteDisposition.Conflict);
-        saved!.ContentHash.ShouldBe("content-a");
+        saved!.ContentHash.ShouldNotBe(original.ContentHash);
+        saved.Record.RequestSummary.ShouldBe("request summary");
         page.Records.Select(static record => record.AuditId).ShouldBe(["audit-1"]);
     }
 

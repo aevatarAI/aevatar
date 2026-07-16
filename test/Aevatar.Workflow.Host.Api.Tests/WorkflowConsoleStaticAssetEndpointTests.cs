@@ -43,6 +43,8 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
         if (endpoint == "observatory")
         {
+            html.Should().Contain("const url = CFG.nyxidApi + \"/api/v1/admin/users");
+            html.Should().NotContain("const url = CFG.authority + \"/api/v1/admin/users");
             html.Should().Contain("\"aria-label\":\"完整 run id\"");
             html.Should().Contain("/api/workflow/observatory/admin/runs/");
             html.Should().Contain("detail.diagnostics");

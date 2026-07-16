@@ -19,14 +19,15 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 {
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    private const string OAuthAuthority = "https://nyx-ui.test";
+    private const string OAuthAuthority = "https://id.example.test";
+    private const string ResourceServerBaseUrl = "https://api.example.test";
     private const string RequiredLlmServiceSlug = "chrono-llm-public";
     private const string RequiredOrnnServiceSlug = "ornn-api";
     private const string RequiredSandboxServiceSlug = "chrono-sandbox";
-    private const string RequiredAevatarResource = $"{OAuthAuthority}/api/v1/proxy/s/aevatar";
-    private const string RequiredLlmResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredLlmServiceSlug}";
-    private const string RequiredOrnnResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredOrnnServiceSlug}";
-    private const string RequiredSandboxResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredSandboxServiceSlug}";
+    private const string RequiredAevatarResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/aevatar";
+    private const string RequiredLlmResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/{RequiredLlmServiceSlug}";
+    private const string RequiredOrnnResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/{RequiredOrnnServiceSlug}";
+    private const string RequiredSandboxResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/{RequiredSandboxServiceSlug}";
     private static readonly string[] RequiredResources =
         [RequiredAevatarResource, RequiredLlmResource, RequiredOrnnResource, RequiredSandboxResource];
 
@@ -378,9 +379,12 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
         {
+            ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ",
             RequiredLlmServiceSlug = RequiredLlmServiceSlug,
             AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
         };
+        if (string.IsNullOrWhiteSpace(options.ResourceServerBaseUrl))
+            options.ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ";
         return new NyxIdRemoteCapabilityBroker(
             new FakeHttpClientFactory(httpHandler),
             provider,

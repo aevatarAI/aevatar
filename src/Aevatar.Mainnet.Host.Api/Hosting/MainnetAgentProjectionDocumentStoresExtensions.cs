@@ -61,14 +61,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             {
                 options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict;
             });
-            // Replace the identity module's default Unavailable probe with a real
-            // HTTP-backed probe that inspects the Elasticsearch security API using
-            // the SAME endpoint/credentials the projection store uses, so the ACL
-            // startup guard verifies the cluster instead of self-attesting a flag.
-            services.Replace(ServiceDescriptor.Singleton<IOAuthClientEsAclProbe>(
-                sp => new HttpOAuthClientEsAclProbe(
-                    ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
-                    sp.GetService<ILogger<HttpOAuthClientEsAclProbe>>())));
+            // Replace only the identity module's Unavailable fallback. A deployment may
+            // pre-register a stronger verifier that can positively prove the effective
+            // grant; Mainnet must not overwrite it with the conservative built-in probe.
+            RegisterDefaultOAuthClientEsAclProbe(services, configuration);
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
             // Self-heal projection-index schema drift at startup (reindex + atomic alias swap)
@@ -88,6 +84,35 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         services.TryAddSingleton<IProjectionReadModelInventoryQueryPort, ProjectionReadModelInventoryQueryPort>();
 
         return services;
+    }
+
+    private static void RegisterDefaultOAuthClientEsAclProbe(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var registrations = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(IOAuthClientEsAclProbe))
+            .ToArray();
+        var customRegistrations = registrations
+            .Where(static descriptor =>
+                descriptor.ImplementationType != typeof(UnavailableOAuthClientEsAclProbe))
+            .ToArray();
+        if (customRegistrations.Length > 1)
+        {
+            throw new InvalidOperationException(
+                "Mainnet requires exactly one custom IOAuthClientEsAclProbe registration.");
+        }
+
+        foreach (var fallback in registrations.Except(customRegistrations))
+            services.Remove(fallback);
+
+        if (customRegistrations.Length == 1)
+            return;
+
+        services.AddSingleton<IOAuthClientEsAclProbe>(sp =>
+            new HttpOAuthClientEsAclProbe(
+                ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                sp.GetService<ILogger<HttpOAuthClientEsAclProbe>>()));
     }
 
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)

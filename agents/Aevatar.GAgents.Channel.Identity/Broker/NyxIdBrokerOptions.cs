@@ -9,6 +9,14 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// </summary>
 public sealed class NyxIdBrokerOptions
 {
+    public const string ResourceServerBaseUrlConfigurationKey = "Aevatar:NyxId:ApiBaseUrl";
+
+    /// <summary>
+    /// Canonical NyxID backend base URL used for RFC 8707 resource indicators.
+    /// This is independent from the OAuth authority stored by the OAuth client actor.
+    /// </summary>
+    public string ResourceServerBaseUrl { get; set; } = string.Empty;
+
     /// <summary>
     /// Deprecated compatibility hook. The effective OAuth scope requested at
     /// <c>/oauth/authorize</c> and registered through DCR is always
