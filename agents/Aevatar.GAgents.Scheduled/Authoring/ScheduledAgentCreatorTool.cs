@@ -120,30 +120,6 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
               "enum": ["auto", "text", "feishu_doc"],
               "description": "Optional scheduled-run output format. auto keeps length-based delivery, text forces chat text chunks, feishu_doc forces Feishu cloud document delivery."
             },
-            "external_trigger_sources": {
-              "type": "array",
-              "description": "Optional external trigger source declarations. For channel run_agent, use source_id channel:<platform>:<registration_scope_id> and kind channel_inbound.",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "source_id": {
-                    "type": "string"
-                  },
-                  "kind": {
-                    "type": "string",
-                    "enum": ["webhook", "channel_inbound"]
-                  },
-                  "enabled": {
-                    "type": "boolean"
-                  },
-                  "display_name": {
-                    "type": "string"
-                  }
-                },
-                "required": ["source_id", "kind"]
-              }
-            },
             "run_immediately": {
               "type": "boolean",
               "description": "When true, trigger the first run after initialization is accepted."

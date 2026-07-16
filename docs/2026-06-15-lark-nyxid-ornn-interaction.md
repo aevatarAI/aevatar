@@ -221,7 +221,7 @@ sequenceDiagram
 | 手动 / UI 按钮 | 自定义 | `ISkillRunnerCommandPort.TriggerAsync` 发新 Envelope |
 | 创建时立即跑 | `"create_agent"` | Initialize 时 `runImmediately=true` |
 | one-shot（一次性，非 cron） | `"one_shot"` | `ScheduleOneShotRunAsync` → `ScheduleSelfDurableTimeoutAsync`（actor 自提醒），**不注册 cron** |
-| 外部（webhook / NyxID 中继） | `"external_trigger"` | `AdmitExternalTriggerAsync` → actor 内 `SendToAsync(Id, ...)` |
+| External webhook / relay | Unsupported for scheduled workflow agents through `SkillRunnerGAgent` | Use workflow/team-owned webhook ingress instead of `SkillRunner` admission |
 
 ### 2.3 投递目标解析：UserAgentCatalog + OutboundConfig
 

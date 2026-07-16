@@ -296,104 +296,6 @@ public sealed class SkillRunnerCommandPortTests
         scheduleId.Should().MatchRegex("^[A-Za-z0-9._-]+$");
     }
 
-    [Fact]
-    public async Task AdmitExternalTriggerAsync_WhenRunnerExists_DispatchesAdmissionAndReturnsAcceptedOnlyReceipt()
-    {
-        var fixture = new Fixture();
-        fixture.Runtime.GetAsync(AgentId).Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        var command = CreateExternalTriggerAdmission("webhook-main", "delivery-1", "admission-1");
-
-        var receipt = await fixture.Port.AdmitExternalTriggerAsync(AgentId, command, CancellationToken.None);
-
-        fixture.Captured.Should().ContainSingle();
-        var envelope = fixture.Captured[0];
-        envelope.Id.Should().Be("admission-1");
-        envelope.Propagation.CorrelationId.Should().Be("admission-1");
-        envelope.Payload.Is(AdmitSkillRunnerExternalTriggerCommand.Descriptor).Should().BeTrue();
-        envelope.Route.PublisherActorId.Should().Be(ExpectedPublisher);
-        envelope.Route.Direct.TargetActorId.Should().Be(AgentId);
-        var dispatched = envelope.Payload.Unpack<AdmitSkillRunnerExternalTriggerCommand>();
-        dispatched.Identity.SourceId.Should().Be("webhook-main");
-        dispatched.Identity.DeliveryId.Should().Be("delivery-1");
-
-        receipt.ActorId.Should().Be(AgentId);
-        receipt.CommandId.Should().Be("admission-1");
-        receipt.CorrelationId.Should().Be("admission-1");
-        receipt.AdmissionId.Should().Be("admission-1");
-        receipt.SourceId.Should().Be("webhook-main");
-        receipt.DeliveryId.Should().Be("delivery-1");
-    }
-
-    [Fact]
-    public async Task AdmitExternalTriggerAsync_WhenRunnerMissing_ShouldThrowTypedNotFoundAndNotCreateRunner()
-    {
-        var fixture = new Fixture();
-        fixture.Runtime.GetAsync(AgentId).Returns(Task.FromResult<IActor?>(null));
-        var command = CreateExternalTriggerAdmission("webhook-main", "delivery-1", "admission-1");
-
-        var act = () => fixture.Port.AdmitExternalTriggerAsync(AgentId, command, CancellationToken.None);
-
-        var assertion = await act.Should().ThrowAsync<SkillRunnerExternalTriggerAdmissionException>();
-        assertion.Which.Error.Should().Be(SkillRunnerExternalTriggerAdmissionError.RunnerNotFound);
-        assertion.Which.AgentId.Should().Be(AgentId);
-        await fixture.Runtime.DidNotReceive()
-            .CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await fixture.Dispatch.DidNotReceive()
-            .DispatchAsync(Arg.Any<string>(), Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task AdmitExternalTriggerAsync_WithUnknownSource_ShouldStillReturnAcceptedDispatch()
-    {
-        var fixture = new Fixture();
-        fixture.Runtime.GetAsync(AgentId).Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        var command = CreateExternalTriggerAdmission("unknown-source", "delivery-unknown", "admission-unknown");
-
-        var receipt = await fixture.Port.AdmitExternalTriggerAsync(AgentId, command, CancellationToken.None);
-
-        receipt.CommandId.Should().Be("admission-unknown");
-        receipt.SourceId.Should().Be("unknown-source");
-        fixture.Captured.Should().ContainSingle();
-        fixture.Captured[0].Payload.Unpack<AdmitSkillRunnerExternalTriggerCommand>()
-            .Identity.SourceId.Should().Be("unknown-source");
-        await fixture.Runtime.DidNotReceive()
-            .CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task AdmitExternalTriggerAsync_WithInvalidAgentId_Throws(string? agentId)
-    {
-        var fixture = new Fixture();
-        var command = CreateExternalTriggerAdmission("webhook-main", "delivery-1", "admission-1");
-
-        var act = () => fixture.Port.AdmitExternalTriggerAsync(agentId!, command, CancellationToken.None);
-
-        await act.Should().ThrowAsync<ArgumentException>();
-    }
-
-    [Fact]
-    public async Task AdmitExternalTriggerAsync_WithMissingAdmissionId_ShouldGenerateStableEnvelopeIdAndNormalizeIdentity()
-    {
-        var fixture = new Fixture();
-        fixture.Runtime.GetAsync(AgentId).Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        var command = CreateExternalTriggerAdmission(" webhook-main ", " delivery-2 ", admissionId: string.Empty);
-
-        var receipt = await fixture.Port.AdmitExternalTriggerAsync(AgentId, command, CancellationToken.None);
-
-        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
-        receipt.CommandId.Should().Be(receipt.CorrelationId);
-        receipt.CommandId.Should().Be(receipt.AdmissionId);
-        receipt.SourceId.Should().Be("webhook-main");
-        receipt.DeliveryId.Should().Be("delivery-2");
-        fixture.Captured.Should().ContainSingle();
-        fixture.Captured[0].Id.Should().Be(receipt.CommandId);
-        fixture.Captured[0].Payload.Unpack<AdmitSkillRunnerExternalTriggerCommand>()
-            .Identity.AdmissionId.Should().Be(receipt.CommandId);
-    }
-
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -467,20 +369,6 @@ public sealed class SkillRunnerCommandPortTests
         ctor4.Should().Throw<ArgumentNullException>();
     }
 
-    private static AdmitSkillRunnerExternalTriggerCommand CreateExternalTriggerAdmission(
-        string sourceId,
-        string deliveryId,
-        string? admissionId) => new()
-    {
-        Identity = new SkillRunnerExternalTriggerIdentity
-        {
-            SourceId = sourceId,
-            DeliveryId = deliveryId,
-            AdmissionId = admissionId ?? string.Empty,
-            Kind = ExternalTriggerSourceKind.Webhook,
-        },
-    };
-
     private sealed class Fixture
     {
         public IActorRuntime Runtime { get; }
@@ -539,9 +427,6 @@ public sealed class SkillRunnerCommandPortTests
                 return "trigger";
             if (envelope.Payload.Is(InitializeSkillRunnerCommand.Descriptor))
                 return "initialize";
-            if (envelope.Payload.Is(AdmitSkillRunnerExternalTriggerCommand.Descriptor))
-                return "admit";
-
             return "unknown";
         }
     }
