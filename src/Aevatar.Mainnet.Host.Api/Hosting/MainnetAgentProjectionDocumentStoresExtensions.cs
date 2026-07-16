@@ -382,21 +382,39 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                         $"Elasticsearch audit artifact index '{_indexName}' was not found.");
                 }
 
-                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, null);
+                return new AuditTrailPage(
+                    [],
+                    null,
+                    DateTimeOffset.UtcNow,
+                    AuditQueryCoverage.Create(
+                        query,
+                        truncated: false,
+                        ingestionWatermark: null,
+                        completeThrough: null,
+                        schemaCompatibility: AuditSchemaCompatibility.Current));
             }
 
             await EnsureSuccessAsync(response, "audit artifact query", cancellationToken);
             var payload = await response.Content.ReadAsStringAsync(cancellationToken);
             using var jsonDocument = JsonDocument.Parse(payload);
-            var watermark = ParseAuditQueryWatermark(jsonDocument.RootElement);
+            var ingestionWatermark = ParseAuditIngestionWatermark(jsonDocument.RootElement);
+            var schemaCompatibility = ParseAuditSchemaCompatibility(jsonDocument.RootElement);
             if (!jsonDocument.RootElement.TryGetProperty("hits", out var hitsNode) ||
                 !hitsNode.TryGetProperty("hits", out var hitItems))
             {
-                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, watermark);
+                return new AuditTrailPage(
+                    [],
+                    null,
+                    DateTimeOffset.UtcNow,
+                    AuditQueryCoverage.Create(
+                        query,
+                        truncated: false,
+                        ingestionWatermark: ingestionWatermark,
+                        completeThrough: null,
+                        schemaCompatibility: schemaCompatibility));
             }
 
-            var records = new List<AuditRecord>();
-            string? nextCursor = null;
+            var recordsWithCursors = new List<(AuditRecord Record, string? Cursor)>();
             foreach (var hit in hitItems.EnumerateArray())
             {
                 if (!hit.TryGetProperty("_source", out var sourceNode))
@@ -406,15 +424,24 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 if (storageDocument.Artifact?.Record is not { } record)
                     continue;
 
-                records.Add(record.Clone());
-                nextCursor = BuildSearchAfterCursor(hit);
+                recordsWithCursors.Add((record.Clone(), BuildSearchAfterCursor(hit)));
             }
+
+            var truncated = recordsWithCursors.Count > boundedTake;
+            var pageItems = recordsWithCursors.Take(boundedTake).ToArray();
+            var records = pageItems.Select(static item => item.Record).ToArray();
+            var nextCursor = truncated ? pageItems.LastOrDefault().Cursor : null;
 
             return new AuditTrailPage(
                 records,
-                records.Count == boundedTake ? nextCursor : null,
+                nextCursor,
                 DateTimeOffset.UtcNow,
-                watermark);
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated,
+                    ingestionWatermark,
+                    completeThrough: null,
+                    schemaCompatibility: schemaCompatibility));
         }
 
         public async Task<AuditTrailArtifactWriteResult> UpsertAsync(
@@ -549,7 +576,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             var filters = BuildAuditQueryFilters(query);
             var root = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                ["size"] = boundedTake,
+                ["size"] = boundedTake + 1,
                 ["sort"] = new object[]
                 {
                     new Dictionary<string, object?>
@@ -571,11 +598,55 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 },
                 ["aggs"] = new Dictionary<string, object?>
                 {
-                    ["query_watermark"] = new Dictionary<string, object?>
+                    ["ingestion"] = new Dictionary<string, object?>
                     {
-                        ["max"] = new Dictionary<string, object?>
+                        ["global"] = new Dictionary<string, object?>(),
+                        ["aggs"] = new Dictionary<string, object?>
                         {
-                            ["field"] = "artifact.occurred_at",
+                            ["watermark"] = new Dictionary<string, object?>
+                            {
+                                ["max"] = new Dictionary<string, object?>
+                                {
+                                    ["field"] = "artifact.recorded_at",
+                                },
+                            },
+                        },
+                    },
+                    ["incompatible_schema_records"] = new Dictionary<string, object?>
+                    {
+                        ["filter"] = new Dictionary<string, object?>
+                        {
+                            ["bool"] = new Dictionary<string, object?>
+                            {
+                                ["filter"] = new object[]
+                                {
+                                    new Dictionary<string, object?>
+                                    {
+                                        ["exists"] = new Dictionary<string, object?>
+                                        {
+                                            ["field"] = "artifact.schema_version",
+                                        },
+                                    },
+                                },
+                                ["must_not"] = new object[]
+                                {
+                                    new Dictionary<string, object?>
+                                    {
+                                        ["term"] = new Dictionary<string, object?>
+                                        {
+                                            ["artifact.schema_version.keyword"] =
+                                                AuditContractSemantics.CurrentSchemaVersion,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    ["legacy_schema_records"] = new Dictionary<string, object?>
+                    {
+                        ["missing"] = new Dictionary<string, object?>
+                        {
+                            ["field"] = "artifact.schema_version",
                         },
                     },
                 },
@@ -611,7 +682,9 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddTerm(filters, "artifact.operation_name.keyword", query.OperationName);
             AddTerm(filters, "artifact.target_kind.keyword", query.TargetKind);
             AddTerm(filters, "artifact.target_id.keyword", query.TargetId);
-            AddTerm(filters, "artifact.correlation_id.keyword", query.TraceId);
+            AddTerm(filters, "artifact.trace_id.keyword", query.TraceId);
+            AddTerm(filters, "artifact.correlation_id.keyword", query.CorrelationId);
+            AddTerm(filters, "artifact.record.correlation.causation_id.keyword", query.CausationId);
             AddTerm(filters, "artifact.request_id.keyword", query.RequestId);
             AddTerm(filters, "artifact.command_id.keyword", query.CommandId);
             AddTerm(filters, "artifact.record.correlation.call_id.keyword", query.CallId);
@@ -625,6 +698,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddEnumTerm(filters, "artifact.record.actor_kind.keyword", query.ActorKind);
             AddEnumTerm(filters, "artifact.record.operation_kind.keyword", query.OperationKind);
             AddEnumTerm(filters, "artifact.outcome.keyword", query.Outcome);
+            AddEnumTerm(filters, "artifact.lifecycle_phase.keyword", query.LifecyclePhase);
+            AddEnumTerm(filters, "artifact.terminal_outcome.keyword", query.TerminalOutcome);
             AddEnumTerm(filters, "artifact.sensitivity_level.keyword", query.SensitivityLevel);
             AddEnumTerm(filters, "artifact.record.capture_plane.keyword", query.CapturePlane);
             if (query.CommittedStateVersion.HasValue)
@@ -751,10 +826,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             return Convert.ToBase64String(Encoding.UTF8.GetBytes(sortNode.GetRawText()));
         }
 
-        private static DateTimeOffset? ParseAuditQueryWatermark(JsonElement root)
+        private static DateTimeOffset? ParseAuditIngestionWatermark(JsonElement root)
         {
             if (!root.TryGetProperty("aggregations", out var aggregations) ||
-                !aggregations.TryGetProperty("query_watermark", out var watermark) ||
+                !aggregations.TryGetProperty("ingestion", out var ingestion) ||
+                !ingestion.TryGetProperty("watermark", out var watermark) ||
                 !watermark.TryGetProperty("value_as_string", out var value) ||
                 value.ValueKind != JsonValueKind.String)
             {
@@ -768,6 +844,36 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 out var parsed)
                 ? parsed
                 : null;
+        }
+
+        private static AuditSchemaCompatibility ParseAuditSchemaCompatibility(JsonElement root)
+        {
+            if (!root.TryGetProperty("aggregations", out var aggregations))
+                return AuditSchemaCompatibility.Incompatible;
+
+            if (!aggregations.TryGetProperty("incompatible_schema_records", out var incompatible) ||
+                !incompatible.TryGetProperty("doc_count", out var incompatibleCountNode) ||
+                !incompatibleCountNode.TryGetInt64(out var incompatibleCount))
+            {
+                return AuditSchemaCompatibility.Incompatible;
+            }
+
+            if (incompatibleCount > 0)
+                return AuditSchemaCompatibility.Incompatible;
+
+            if (!aggregations.TryGetProperty("legacy_schema_records", out var legacy) ||
+                !legacy.TryGetProperty("doc_count", out var count) ||
+                !count.TryGetInt64(out var legacyCount))
+            {
+                return AuditSchemaCompatibility.Incompatible;
+            }
+
+            if (legacyCount > 0)
+            {
+                return AuditSchemaCompatibility.ContainsLegacyRecords;
+            }
+
+            return AuditSchemaCompatibility.Current;
         }
 
         private static AuditTrailArtifactWriteResult EvaluateExisting(

@@ -41,11 +41,12 @@ public sealed class ServiceRegistrationFailedAuditTranslator
             evt.Identity?.ServiceId ?? string.Empty,
             evt.CredentialKid,
             $"Service registration failed for {evt.Identity?.ServiceId ?? string.Empty}.",
-            AuditSensitivityLevel.Confidential,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["error_summary"] = evt.LastError ?? string.Empty,
-            });
+            sensitivityLevel: AuditSensitivityLevel.Confidential,
+            terminalOutcome: AuditTerminalOutcome.Failed,
+            failure: Failure(
+                "service_registration_failed",
+                AuditFailureCategory.Dependency,
+                AuditLifecyclePhase.Running));
 }
 
 public sealed class ServiceRegistrationRetiredAuditTranslator
@@ -305,7 +306,13 @@ public sealed class ServiceRunRegisteredAuditTranslator
             CommandId: record?.CommandId ?? string.Empty,
             CorrelationId: record?.CorrelationId ?? string.Empty,
             ResultSummary: $"Service run {runId} registered for service {serviceId} (status {status}).",
-            Annotations: annotations);
+            Annotations: annotations,
+            LifecyclePhase: LifecyclePhase(record?.Status ?? ServiceRunStatus.Unspecified),
+            TerminalOutcome: TerminalOutcome(record?.Status ?? ServiceRunStatus.Unspecified),
+            Failure: BuildRunFailure(record?.Status ?? ServiceRunStatus.Unspecified),
+            PublishedServiceId: serviceId,
+            RunId: runId,
+            OmittedFields: ["service_run.last_output", "service_run.last_error"]);
     }
 }
 
@@ -316,9 +323,7 @@ public sealed class ServiceRunStatusUpdatedAuditTranslator
         AuditCommittedEventTypeUrl.FromDescriptor(ServiceRunStatusUpdatedEvent.Descriptor);
 
     // The event carries only run id, status and the free-text last_output /
-    // last_error terminal bodies. Only the run id, status and a bounded safe
-    // error class are recorded — never the last_output / last_error body, which
-    // may embed business payload.
+    // last_error terminal bodies. Only the run id and status are recorded.
     protected override CommittedAuditSeed BuildSeed(
         CommittedAuditTranslationContext context,
         ServiceRunStatusUpdatedEvent evt)
@@ -328,9 +333,6 @@ public sealed class ServiceRunStatusUpdatedAuditTranslator
         {
             ["status"] = status,
         };
-        var errorClass = RunAuditAnnotations.SafeErrorClass(evt.LastError);
-        if (!string.IsNullOrWhiteSpace(errorClass))
-            annotations["error_class"] = errorClass;
 
         return new CommittedAuditSeed(
             "service.run.status-updated",
@@ -338,7 +340,12 @@ public sealed class ServiceRunStatusUpdatedAuditTranslator
             evt.RunId ?? string.Empty,
             SensitivityLevel: AuditSensitivityLevel.Confidential,
             ResultSummary: $"Service run {evt.RunId} status updated to {status}.",
-            Annotations: annotations);
+            Annotations: annotations,
+            LifecyclePhase: LifecyclePhase(evt.Status),
+            TerminalOutcome: TerminalOutcome(evt.Status),
+            Failure: BuildRunFailure(evt.Status),
+            RunId: evt.RunId ?? string.Empty,
+            OmittedFields: ["service_run.last_output", "service_run.last_error"]);
     }
 }
 
@@ -369,7 +376,9 @@ public sealed class ScheduledDispatchFireDispatchedAuditTranslator
                 ["target_actor_id"] = evt.TargetActorId ?? string.Empty,
                 ["idempotency_key"] = evt.IdempotencyKey ?? string.Empty,
                 ["manual"] = evt.Manual ? "true" : "false",
-            });
+            },
+            LifecyclePhase: AuditLifecyclePhase.Accepted,
+            TerminalOutcome: AuditTerminalOutcome.Unspecified);
 }
 
 public sealed class ScheduledDispatchFireFailedAuditTranslator
@@ -378,9 +387,8 @@ public sealed class ScheduledDispatchFireFailedAuditTranslator
     public override string EventTypeUrl =>
         AuditCommittedEventTypeUrl.FromDescriptor(ScheduledDispatchFireFailedEvent.Descriptor);
 
-    // Only a bounded safe error class is recorded, never the free-text error
-    // body which may embed dispatch payload detail. Fire failure is a terminal
-    // outcome, not a delete/retire, so it is not marked destructive.
+    // The free-text error body is omitted because it may embed dispatch payload
+    // detail. Fire failure is terminal but is not a delete/retire operation.
     protected override CommittedAuditSeed BuildSeed(
         CommittedAuditTranslationContext context,
         ScheduledDispatchFireFailedEvent evt)
@@ -390,17 +398,19 @@ public sealed class ScheduledDispatchFireFailedAuditTranslator
             ["idempotency_key"] = evt.IdempotencyKey ?? string.Empty,
             ["manual"] = evt.Manual ? "true" : "false",
         };
-        var errorClass = RunAuditAnnotations.SafeErrorClass(evt.Error);
-        if (!string.IsNullOrWhiteSpace(errorClass))
-            annotations["error_class"] = errorClass;
 
         return new CommittedAuditSeed(
             "scheduled.dispatch.fire.failed",
             "scheduled_dispatch",
             context.OriginActorId,
             SensitivityLevel: AuditSensitivityLevel.Confidential,
-            ResultSummary: $"Scheduled dispatch {context.OriginActorId} fire failed ({errorClass}).",
-            Annotations: annotations);
+            ResultSummary: $"Scheduled dispatch {context.OriginActorId} fire failed.",
+            Annotations: annotations,
+            TerminalOutcome: AuditTerminalOutcome.Failed,
+            Failure: Failure(
+                "scheduled_dispatch_failed",
+                AuditFailureCategory.Execution,
+                AuditLifecyclePhase.Running));
     }
 }
 
@@ -416,21 +426,6 @@ internal static class RunAuditAnnotations
             _ => "unspecified",
         };
 
-    // Reduces a free-text error to a bounded, safe class token: the exception
-    // type-like head before the first ':' or newline, capped in length so no
-    // full error body (which may embed business payload) can enter the audit
-    // artifact.
-    public static string SafeErrorClass(string? error)
-    {
-        if (string.IsNullOrWhiteSpace(error))
-            return string.Empty;
-
-        var trimmed = error.Trim();
-        var separatorIndex = trimmed.IndexOfAny([':', '\n', '\r']);
-        var head = (separatorIndex >= 0 ? trimmed[..separatorIndex] : trimmed).Trim();
-        const int maxLength = 80;
-        return head.Length <= maxLength ? head : head[..maxLength];
-    }
 }
 
 public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslator
@@ -457,7 +452,10 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
         string resultSummary,
         AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         IReadOnlyDictionary<string, string>? annotations = null,
-        bool isDestructive = false)
+        bool isDestructive = false,
+        AuditLifecyclePhase lifecyclePhase = AuditLifecyclePhase.Terminal,
+        AuditTerminalOutcome terminalOutcome = AuditTerminalOutcome.Succeeded,
+        AuditFailure? failure = null)
     {
         var merged = new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -482,7 +480,11 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
             sensitivityLevel,
             isDestructive,
             ResultSummary: resultSummary,
-            Annotations: merged);
+            Annotations: merged,
+            LifecyclePhase: lifecyclePhase,
+            TerminalOutcome: terminalOutcome,
+            Failure: failure,
+            PublishedServiceId: identity?.ServiceId ?? string.Empty);
     }
 
     protected static CommittedAuditSeed ScheduleSeed(
@@ -530,4 +532,41 @@ public abstract class AuditTranslatorBase<TEvent> : IAuditCommittedEventTranslat
 
         return string.Empty;
     }
+
+    protected static AuditLifecyclePhase LifecyclePhase(ServiceRunStatus status) => status switch
+    {
+        ServiceRunStatus.Accepted => AuditLifecyclePhase.Accepted,
+        ServiceRunStatus.Completed or ServiceRunStatus.Failed or ServiceRunStatus.Stopped =>
+            AuditLifecyclePhase.Terminal,
+        _ => AuditLifecyclePhase.Running,
+    };
+
+    protected static AuditTerminalOutcome TerminalOutcome(ServiceRunStatus status) => status switch
+    {
+        ServiceRunStatus.Completed => AuditTerminalOutcome.Succeeded,
+        ServiceRunStatus.Failed => AuditTerminalOutcome.Failed,
+        ServiceRunStatus.Stopped => AuditTerminalOutcome.Cancelled,
+        _ => AuditTerminalOutcome.Unspecified,
+    };
+
+    protected static AuditFailure? BuildRunFailure(ServiceRunStatus status) =>
+        status == ServiceRunStatus.Failed
+            ? Failure(
+                "service_run_failed",
+                AuditFailureCategory.Execution,
+                AuditLifecyclePhase.Running)
+            : null;
+
+    protected static AuditFailure Failure(
+        string code,
+        AuditFailureCategory category,
+        AuditLifecyclePhase failedPhase) =>
+        new()
+        {
+            Code = code,
+            Category = category,
+            Retryability = AuditRetryability.Unknown,
+            FailedPhase = failedPhase,
+            SanitizedMessage = code,
+        };
 }

@@ -87,7 +87,7 @@ public sealed class ServiceCommittedAuditTranslatorTests
         var record = Translate(translator, evt);
 
         record.OperationName.Should().Be(operationName);
-        record.Outcome.Should().Be(AuditOutcome.Success);
+        AssertLifecycle(record, translator);
         record.ActorKind.Should().Be(AuditActorKind.System);
         record.Target.Kind.Should().Be(targetKind);
         record.Target.Id.Should().Be(targetId);
@@ -95,7 +95,8 @@ public sealed class ServiceCommittedAuditTranslatorTests
         record.SensitivityLevel.Should().Be(expected.SensitivityLevel);
         record.Correlation.CommandId.Should().Be(expected.CommandId);
         record.Correlation.RequestId.Should().Be(expected.RequestId);
-        record.Correlation.TraceId.Should().Be("corr-1");
+        record.Correlation.TraceId.Should().BeEmpty();
+        record.Correlation.CorrelationId.Should().Be("corr-1");
         record.CommittedFactRef.StateVersion.Should().Be(17);
         AssertDestructiveAnnotation(record, expected.IsDestructive);
         AssertAnnotations(record, expected.Annotations);
@@ -136,7 +137,9 @@ public sealed class ServiceCommittedAuditTranslatorTests
         record.ScopeId.Should().Be("scope-1");
         record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
         record.Correlation.CommandId.Should().Be("cmd-run");
-        record.Correlation.TraceId.Should().Be("corr-run");
+        record.Correlation.CorrelationId.Should().Be("corr-run");
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Succeeded);
         record.Annotations.Should().Contain("service_id", "svc-a");
         record.Annotations.Should().Contain("status", "completed");
         record.Annotations.Should().Contain("target_actor_id", "target-1");
@@ -144,14 +147,14 @@ public sealed class ServiceCommittedAuditTranslatorTests
     }
 
     [Fact]
-    public void ServiceRunStatusUpdatedTranslator_ShouldRecordStatusAndSafeErrorClassWithoutBody()
+    public void ServiceRunStatusUpdatedTranslator_ShouldRecordStatusWithoutErrorBody()
     {
         var evt = new ServiceRunStatusUpdatedEvent
         {
             RunId = "run-1",
             Status = ServiceRunStatus.Failed,
             LastOutput = "sensitive business output body",
-            LastError = "System.InvalidOperationException: secret detail must not leak",
+            LastError = "compactSecretToken123",
         };
 
         var record = Translate(new ServiceRunStatusUpdatedAuditTranslator(), evt);
@@ -161,10 +164,14 @@ public sealed class ServiceCommittedAuditTranslatorTests
         record.Target.Id.Should().Be("run-1");
         record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
         record.Annotations.Should().Contain("status", "failed");
-        record.Annotations.Should().Contain("error_class", "System.InvalidOperationException");
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.Failure.Code.Should().Be("service_run_failed");
+        record.Annotations.Should().NotContainKey("error_class");
         record.Annotations.Should().NotContainKey("last_output");
         record.Annotations.Should().NotContainKey("last_error");
-        record.Annotations.Values.Should().NotContain(value => value.Contains("secret detail", StringComparison.Ordinal));
+        record.ToString().Should().NotContain("compactSecretToken123");
         record.Annotations.Values.Should().NotContain(value => value.Contains("business output", StringComparison.Ordinal));
         record.ResultSummary.Should().NotContain("business output");
     }
@@ -188,19 +195,21 @@ public sealed class ServiceCommittedAuditTranslatorTests
         record.Target.Id.Should().Be("actor-1");
         record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
         record.Correlation.CommandId.Should().Be("cmd-fire");
-        record.Correlation.TraceId.Should().Be("corr-fire");
+        record.Correlation.CorrelationId.Should().Be("corr-fire");
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Accepted);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
         record.Annotations.Should().Contain("target_actor_id", "target-1");
         record.Annotations.Should().Contain("idempotency_key", "idem-1");
         record.Annotations.Should().Contain("manual", "true");
     }
 
     [Fact]
-    public void ScheduledDispatchFireFailedTranslator_ShouldRecordSafeErrorClassWithoutBody()
+    public void ScheduledDispatchFireFailedTranslator_ShouldOmitErrorBody()
     {
         var evt = new ScheduledDispatchFireFailedEvent
         {
             IdempotencyKey = "idem-1",
-            Error = "System.TimeoutException: downstream secret payload should not leak",
+            Error = "compactSecretToken123",
             Manual = false,
         };
 
@@ -210,10 +219,13 @@ public sealed class ServiceCommittedAuditTranslatorTests
         record.Target.Kind.Should().Be("scheduled_dispatch");
         record.Target.Id.Should().Be("actor-1");
         record.SensitivityLevel.Should().Be(AuditSensitivityLevel.Confidential);
-        record.Annotations.Should().Contain("error_class", "System.TimeoutException");
+        record.Annotations.Should().NotContainKey("error_class");
         record.Annotations.Should().Contain("idempotency_key", "idem-1");
         record.Annotations.Should().Contain("manual", "false");
-        record.Annotations.Values.Should().NotContain(value => value.Contains("secret payload", StringComparison.Ordinal));
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.Failure.Code.Should().Be("scheduled_dispatch_failed");
+        record.ToString().Should().NotContain("compactSecretToken123");
     }
 
     [Fact]
@@ -319,7 +331,6 @@ public sealed class ServiceCommittedAuditTranslatorTests
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
                         ["credential_kid"] = "kid-1",
-                        ["error_summary"] = "provider rejected",
                     })),
         ];
         yield return
@@ -636,7 +647,6 @@ public sealed class ServiceCommittedAuditTranslatorTests
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
                         ["rollout_id"] = "rollout-1",
-                        ["failure_reason"] = "activation error",
                     })),
         ];
         yield return
@@ -772,6 +782,36 @@ public sealed class ServiceCommittedAuditTranslatorTests
     {
         foreach (var annotation in expectedAnnotations)
             record.Annotations.Should().Contain(annotation.Key, annotation.Value);
+    }
+
+    private static void AssertLifecycle(AuditRecord record, IAuditCommittedEventTranslator translator)
+    {
+        if (translator is ServiceRegistrationFailedAuditTranslator or ServiceRolloutFailedAuditTranslator)
+        {
+            record.Outcome.Should().Be(AuditOutcome.Error);
+            record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+            record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+            record.Failure.Should().NotBeNull();
+            record.Failure.SanitizedMessage.Should().Be(record.Failure.Code);
+            record.Annotations.Should().NotContainKey("error_summary");
+            record.Annotations.Should().NotContainKey("failure_reason");
+            return;
+        }
+
+        if (translator is ServiceRolloutStartedAuditTranslator or
+            ServiceRolloutStageAdvancedAuditTranslator or
+            ServiceRolloutPausedAuditTranslator or
+            ServiceRolloutResumedAuditTranslator)
+        {
+            record.Outcome.Should().Be(AuditOutcome.Accepted);
+            record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Running);
+            record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
+            return;
+        }
+
+        record.Outcome.Should().Be(AuditOutcome.Success);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Succeeded);
     }
 
     private static AuditRecord Translate(IAuditCommittedEventTranslator translator, IMessage evt)

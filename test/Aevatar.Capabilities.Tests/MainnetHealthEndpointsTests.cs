@@ -173,7 +173,12 @@ public sealed class MainnetHealthEndpointsTests
                 [],
                 null,
                 DateTimeOffset.UnixEpoch,
-                DateTimeOffset.UnixEpoch));
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated: false,
+                    ingestionWatermark: null,
+                    completeThrough: null,
+                    schemaCompatibility: AuditSchemaCompatibility.Current)));
         }
     }
 

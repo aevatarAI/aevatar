@@ -186,9 +186,12 @@ public sealed class StudioMemberBindingFailedAuditTranslator
             Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["binding_run_id"] = evt.BindingRunId,
-                ["failure_code"] = evt.Failure?.Code ?? string.Empty,
-                ["failure_message"] = evt.Failure?.Message ?? string.Empty,
-            });
+            },
+            TerminalOutcome: AuditTerminalOutcome.Failed,
+            Failure: BindingFailure(
+                "studio_member_binding_failed",
+                AuditFailureCategory.Execution,
+                "Studio member binding failed."));
 }
 
 public sealed class StudioMemberBindingRejectedAuditTranslator
@@ -209,9 +212,12 @@ public sealed class StudioMemberBindingRejectedAuditTranslator
             Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["binding_run_id"] = evt.BindingRunId,
-                ["failure_code"] = evt.Failure?.Code ?? string.Empty,
-                ["failure_message"] = evt.Failure?.Message ?? string.Empty,
-            });
+            },
+            TerminalOutcome: AuditTerminalOutcome.Failed,
+            Failure: BindingFailure(
+                "studio_member_binding_rejected",
+                AuditFailureCategory.Validation,
+                "Studio member binding was rejected."));
 }
 
 public sealed class StudioTeamEntryMemberChangedAuditTranslator
@@ -259,7 +265,10 @@ public abstract class StudioAuditTranslatorBase<TEvent> : IAuditCommittedEventTr
         string resultSummary,
         AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         bool isDestructive = false,
-        IReadOnlyDictionary<string, string>? Annotations = null) =>
+        IReadOnlyDictionary<string, string>? Annotations = null,
+        AuditLifecyclePhase LifecyclePhase = AuditLifecyclePhase.Terminal,
+        AuditTerminalOutcome TerminalOutcome = AuditTerminalOutcome.Succeeded,
+        AuditFailure? Failure = null) =>
         new(
             operationName,
             targetKind,
@@ -268,5 +277,21 @@ public abstract class StudioAuditTranslatorBase<TEvent> : IAuditCommittedEventTr
             sensitivityLevel,
             isDestructive,
             ResultSummary: resultSummary,
-            Annotations: Annotations);
+            Annotations: Annotations,
+            LifecyclePhase: LifecyclePhase,
+            TerminalOutcome: TerminalOutcome,
+            Failure: Failure);
+
+    protected static AuditFailure BindingFailure(
+        string? code,
+        AuditFailureCategory category,
+        string sanitizedMessage) =>
+        new()
+        {
+            Code = code,
+            Category = category,
+            Retryability = AuditRetryability.Unknown,
+            FailedPhase = AuditLifecyclePhase.Running,
+            SanitizedMessage = sanitizedMessage,
+        };
 }

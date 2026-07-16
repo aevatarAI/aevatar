@@ -19,6 +19,7 @@ public static class AuditTrailCapabilityHostBuilderExtensions
             RequiredRoutes =
             [
                 "/api/audit/trail",
+                "/api/audit/trail/cloudevents",
                 "/api/audit/actor-resolutions",
             ],
             Critical = false,

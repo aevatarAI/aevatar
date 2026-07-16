@@ -1,7 +1,5 @@
-using System.Security.Cryptography;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Sanitization;
-using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -47,7 +45,7 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
 
         try
         {
-            var contentHash = ComputeContentHash(sanitized);
+            var contentHash = AuditRecordContentHasher.Compute(sanitized);
             var existing = await _store.GetAsync(auditId, ct);
             if (existing != null)
             {
@@ -70,13 +68,6 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
             _logger.LogError(ex, "Audit trail append failed. auditId={AuditId}", auditId);
             return AuditTrailAppendResult.StoreUnavailable(auditId, ex.Message);
         }
-    }
-
-    private static string ComputeContentHash(Audit.AuditRecord record)
-    {
-        var bytes = record.ToByteArray();
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private static AuditTrailAppendResult ToAppendResult(

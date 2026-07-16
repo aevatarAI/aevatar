@@ -51,16 +51,22 @@ public sealed class CommittedAuditArtifactMaterializer<TContext>
         if (!_registry.TryGet(eventTypeUrl, out var translator))
             return;
 
+        var recordedAt = _clock.UtcNow;
         var translationContext = new CommittedAuditTranslationContext(
             envelope,
             published,
             stateEvent,
             string.IsNullOrWhiteSpace(stateEvent.AgentId) ? context.RootActorId : stateEvent.AgentId,
             eventTypeUrl,
-            CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
+            CommittedStateEventEnvelope.ResolveTimestamp(envelope, recordedAt),
             ResolveBaggage(envelope, CommandIdBaggageKey, CommandIdCamelBaggageKey),
             ResolveBaggage(envelope, RequestIdBaggageKey, RequestIdCamelBaggageKey),
-            envelope.Propagation?.CorrelationId ?? string.Empty);
+            envelope.Propagation?.CorrelationId ?? string.Empty,
+            envelope.Propagation?.Trace?.TraceId ?? string.Empty,
+            envelope.Propagation?.Trace?.SpanId ?? string.Empty,
+            envelope.Propagation?.Trace?.TraceFlags ?? string.Empty,
+            envelope.Propagation?.CausationEventId ?? string.Empty,
+            RecordedAt: recordedAt);
 
         IReadOnlyList<Audit.AuditRecord> records;
         try

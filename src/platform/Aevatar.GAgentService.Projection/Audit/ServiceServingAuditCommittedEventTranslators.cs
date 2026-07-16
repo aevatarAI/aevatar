@@ -50,7 +50,9 @@ public sealed class ServiceRolloutStartedAuditTranslator
             {
                 ["rollout_id"] = evt.Plan?.RolloutId ?? string.Empty,
                 ["stage_count"] = (evt.Plan?.Stages.Count ?? 0).ToString(),
-            });
+            },
+            lifecyclePhase: AuditLifecyclePhase.Running,
+            terminalOutcome: AuditTerminalOutcome.Unspecified);
 }
 
 public sealed class ServiceRolloutStageAdvancedAuditTranslator
@@ -74,7 +76,9 @@ public sealed class ServiceRolloutStageAdvancedAuditTranslator
                 ["rollout_id"] = evt.RolloutId ?? string.Empty,
                 ["stage_index"] = evt.StageIndex.ToString(),
                 ["stage_id"] = evt.StageId ?? string.Empty,
-            });
+            },
+            lifecyclePhase: AuditLifecyclePhase.Running,
+            terminalOutcome: AuditTerminalOutcome.Unspecified);
 }
 
 public sealed class ServiceRolloutPausedAuditTranslator
@@ -97,7 +101,9 @@ public sealed class ServiceRolloutPausedAuditTranslator
             {
                 ["rollout_id"] = evt.RolloutId ?? string.Empty,
                 ["reason"] = evt.Reason ?? string.Empty,
-            });
+            },
+            lifecyclePhase: AuditLifecyclePhase.Running,
+            terminalOutcome: AuditTerminalOutcome.Unspecified);
 }
 
 public sealed class ServiceRolloutResumedAuditTranslator
@@ -119,7 +125,9 @@ public sealed class ServiceRolloutResumedAuditTranslator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["rollout_id"] = evt.RolloutId ?? string.Empty,
-            });
+            },
+            lifecyclePhase: AuditLifecyclePhase.Running,
+            terminalOutcome: AuditTerminalOutcome.Unspecified);
 }
 
 public sealed class ServiceRolloutCompletedAuditTranslator
@@ -188,6 +196,10 @@ public sealed class ServiceRolloutFailedAuditTranslator
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["rollout_id"] = evt.RolloutId ?? string.Empty,
-                ["failure_reason"] = evt.FailureReason ?? string.Empty,
-            });
+            },
+            terminalOutcome: AuditTerminalOutcome.Failed,
+            failure: Failure(
+                "service_rollout_failed",
+                AuditFailureCategory.Execution,
+                AuditLifecyclePhase.Running));
 }

@@ -19,7 +19,7 @@ public sealed class CommittedAuditArtifactMaterializerTests
         var materializer = new CommittedAuditArtifactMaterializer<TestContext>(
             new AuditCommittedEventTranslatorRegistry([translator]),
             appender,
-            new FixedClock(DateTimeOffset.Parse("2026-07-03T08:00:00+00:00")));
+            new FixedClock(DateTimeOffset.Parse("2026-07-03T08:02:00+00:00")));
 
         await materializer.ProjectAsync(
             new TestContext(),
@@ -30,7 +30,11 @@ public sealed class CommittedAuditArtifactMaterializerTests
                 new StringValue { Value = "payload" },
                 commandId: "cmd-from-baggage",
                 requestId: "req-from-baggage",
-                correlationId: "corr-1"));
+                correlationId: "corr-1",
+                traceId: "0123456789abcdef0123456789abcdef",
+                spanId: "0123456789abcdef",
+                traceFlags: "01",
+                causationId: "cause-1"));
 
         appender.Records.Should().ContainSingle();
         var record = appender.Records[0];
@@ -38,9 +42,15 @@ public sealed class CommittedAuditArtifactMaterializerTests
         record.OperationKind.Should().Be(AuditOperationKind.System);
         record.CapturePlane.Should().Be(AuditCapturePlane.ProjectionArtifact);
         record.CommittedFactRef.StateVersion.Should().Be(42);
+        record.OccurredAt.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-07-03T08:01:00+00:00"));
+        record.RecordedAt.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-07-03T08:02:00+00:00"));
         record.Correlation.CommandId.Should().Be("cmd-from-baggage");
         record.Correlation.RequestId.Should().Be("req-from-baggage");
-        record.Correlation.TraceId.Should().Be("corr-1");
+        record.Correlation.CorrelationId.Should().Be("corr-1");
+        record.Correlation.TraceId.Should().Be("0123456789abcdef0123456789abcdef");
+        record.Correlation.SpanId.Should().Be("0123456789abcdef");
+        record.Correlation.Traceparent.Should().Be("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
+        record.Correlation.CausationId.Should().Be("cause-1");
         record.ActorKind.Should().Be(AuditActorKind.System);
         record.Annotations["source_event_type_url"].Should().Be(StringValueAuditTranslator.TypeUrl);
     }
@@ -106,7 +116,11 @@ public sealed class CommittedAuditArtifactMaterializerTests
         IMessage payload,
         string commandId = "",
         string requestId = "",
-        string correlationId = "")
+        string correlationId = "",
+        string traceId = "",
+        string spanId = "",
+        string traceFlags = "",
+        string causationId = "")
     {
         var envelope = new EventEnvelope
         {
@@ -115,6 +129,13 @@ public sealed class CommittedAuditArtifactMaterializerTests
             Propagation = new EnvelopePropagation
             {
                 CorrelationId = correlationId,
+                CausationEventId = causationId,
+                Trace = new TraceContext
+                {
+                    TraceId = traceId,
+                    SpanId = spanId,
+                    TraceFlags = traceFlags,
+                },
             },
             Payload = Any.Pack(new CommittedStateEventPublished
             {

@@ -51,11 +51,19 @@ public sealed class WorkflowHumanApprovalResolvedAuditTranslator : IAuditCommitt
             "workflow.human-approval.resolved",
             "workflow_run",
             runId,
+            ScopeId: WorkflowAuditScopeResolver.Resolve(context),
             SensitivityLevel: AuditSensitivityLevel.Restricted,
             ResultSummary: evt.Approved
                 ? $"Human approval granted for run {runId} ({resolutionSource})."
                 : $"Human approval denied for run {runId} ({resolutionSource}).",
-            Annotations: annotations);
+            Annotations: annotations,
+            RunId: runId,
+            OmittedFields: [
+                "approval.user_input",
+                "approval.edited_content",
+                "approval.feedback",
+                "approval.resolved_content",
+            ]);
     }
 
     private static string ResolutionSourceLabel(WorkflowHumanApprovalResolutionSource source) =>

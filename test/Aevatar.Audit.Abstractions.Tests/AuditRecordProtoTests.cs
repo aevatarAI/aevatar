@@ -21,8 +21,12 @@ public sealed class AuditRecordProtoTests
         parsed.SensitivityLevel.ShouldBe(AuditSensitivityLevel.Confidential);
         parsed.Outcome.ShouldBe(AuditOutcome.Success);
         parsed.CapturePlane.ShouldBe(AuditCapturePlane.ToolExecution);
+        parsed.LifecyclePhase.ShouldBe(AuditLifecyclePhase.Terminal);
+        parsed.TerminalOutcome.ShouldBe(AuditTerminalOutcome.Succeeded);
+        parsed.SchemaVersion.ShouldBe("1.0");
         parsed.Target.Kind.ShouldBe("workflow");
         parsed.Correlation.RequestId.ShouldBe("req-1");
+        parsed.Correlation.Traceparent.ShouldBe("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
         parsed.CommittedFactRef.CommittedEventId.ShouldBe("event-1");
         parsed.CommittedFactRef.StateVersion.ShouldBe(42);
         parsed.Annotations["risk"].ShouldBe("low");
@@ -70,6 +74,11 @@ public sealed class AuditRecordProtoTests
 
         auditRecordFields.ShouldContain("capture_plane");
         auditRecordFields.ShouldContain("committed_fact_ref");
+        auditRecordFields.ShouldContain("lifecycle_phase");
+        auditRecordFields.ShouldContain("terminal_outcome");
+        auditRecordFields.ShouldContain("failure");
+        auditRecordFields.ShouldContain("provenance");
+        auditRecordFields.ShouldContain("redaction");
         committedFactFields.ShouldBe(
         [
             "committed_event_id",
@@ -86,6 +95,11 @@ public sealed class AuditRecordProtoTests
         {
             AuditId = "audit-1",
             OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:05Z")),
+            RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T03:04:06Z")),
+            EventKind = "tools.invoke",
+            Subject = "workflow/wf-1",
+            SchemaVersion = "1.0",
+            Source = "urn:aevatar:audit:tool-execution",
             ScopeId = "scope-1",
             AuditActorId = "audit_actor:hmac-sha256:abc",
             IdentityKeyId = "key-1",
@@ -95,9 +109,18 @@ public sealed class AuditRecordProtoTests
             OperationName = "tools.invoke",
             SensitivityLevel = AuditSensitivityLevel.Confidential,
             Outcome = AuditOutcome.Success,
+            LifecyclePhase = AuditLifecyclePhase.Terminal,
+            TerminalOutcome = AuditTerminalOutcome.Succeeded,
             CapturePlane = AuditCapturePlane.ToolExecution,
             Target = new AuditTarget { Kind = "workflow", Id = "wf-1", DisplayName = "Workflow One" },
-            Correlation = new AuditCorrelation { TraceId = "trace-1", RequestId = "req-1" },
+            Correlation = new AuditCorrelation
+            {
+                TraceId = "0123456789abcdef0123456789abcdef",
+                SpanId = "0123456789abcdef",
+                Traceparent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                RequestId = "req-1",
+                CorrelationId = "corr-1",
+            },
             CommittedFactRef = new AuditCommittedFactReference
             {
                 CommittedEventId = "event-1",
@@ -107,8 +130,22 @@ public sealed class AuditRecordProtoTests
                 StateVersion = 42
             },
             RequestSummary = "started workflow",
-            ResultSummary = "accepted"
+            ResultSummary = "accepted",
+            Provenance = new AuditExecutionProvenance
+            {
+                ScopeId = "scope-1",
+                WorkflowId = "wf-1",
+                ActorId = "actor-1",
+                ActorStateVersion = 42,
+                ActorEventId = "event-1",
+            },
+            Redaction = new AuditRedaction
+            {
+                Policy = "aevatar.audit.safe-fields.v1",
+                ValuesSanitized = true,
+            },
         };
+        record.Redaction.OmittedFields.Add("tool.arguments");
         record.Annotations.Add("risk", "low");
         return record;
     }

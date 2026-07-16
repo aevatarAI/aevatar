@@ -31,7 +31,7 @@ public sealed class ProjectionAuditTrailAppenderTests
         document.Record.Should().NotBeSameAs(record);
         document.Record.Should().Be(record);
         document.OccurredAt.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00"));
-        document.UpdatedAt.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00"));
+        document.UpdatedAt.ToDateTimeOffset().Should().Be(DateTimeOffset.Parse("2026-07-03T08:09:11+00:00"));
         document.AuditActorId.Should().Be("actor-audit-1");
         document.ScopeId.Should().Be("scope-audit-1");
         document.OperationName.Should().Be("audit.operation");
@@ -41,7 +41,8 @@ public sealed class ProjectionAuditTrailAppenderTests
         document.TargetId.Should().Be("target-audit-1");
         document.RequestId.Should().Be("request-audit-1");
         document.CommandId.Should().Be("command-audit-1");
-        document.CorrelationId.Should().Be("trace-audit-1");
+        document.CorrelationId.Should().Be("correlation-audit-1");
+        document.TraceId.Should().Be("trace-audit-1");
         document.SessionId.Should().Be("session-audit-1");
         document.WorkflowRunId.Should().Be("run-audit-1");
         document.CommittedEventId.Should().Be("event-audit-1");
@@ -110,6 +111,29 @@ public sealed class ProjectionAuditTrailAppenderTests
 
         result.Status.Should().Be(AuditTrailAppendStatus.Duplicate);
         result.AuditId.Should().Be("audit-1");
+        store.Documents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AppendAsync_WhenRetryHasLaterRecordedAt_ShouldRemainDuplicate()
+    {
+        var original = CreateRecord("audit-1");
+        var retry = original.Clone();
+        retry.RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:10:11+00:00"));
+        var store = new RecordingAuditTrailArtifactStore
+        {
+            Existing = new AuditTrailDocument
+            {
+                AuditId = "audit-1",
+                ContentHash = ComputeContentHash(original),
+                Record = original,
+            },
+        };
+        var appender = new ProjectionAuditTrailAppender([store]);
+
+        var result = await appender.AppendAsync(retry);
+
+        result.Status.Should().Be(AuditTrailAppendStatus.Duplicate);
         store.Documents.Should().BeEmpty();
     }
 
@@ -198,6 +222,11 @@ public sealed class ProjectionAuditTrailAppenderTests
         {
             AuditId = auditId,
             OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:09:10+00:00")),
+            RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T08:09:11+00:00")),
+            EventKind = "audit.operation",
+            Subject = $"workflow/target-{auditId}",
+            SchemaVersion = "1.0",
+            Source = "urn:aevatar:audit:projection-artifact",
             ScopeId = $"scope-{auditId}",
             AuditActorId = $"actor-{auditId}",
             IdentityKeyId = "identity-key-1",
@@ -206,6 +235,8 @@ public sealed class ProjectionAuditTrailAppenderTests
             OperationKind = AuditOperationKind.Api,
             OperationName = "audit.operation",
             Outcome = AuditOutcome.Success,
+            LifecyclePhase = AuditLifecyclePhase.Terminal,
+            TerminalOutcome = AuditTerminalOutcome.Succeeded,
             SensitivityLevel = AuditSensitivityLevel.Confidential,
             CapturePlane = AuditCapturePlane.ProjectionArtifact,
             Target = new AuditTarget
@@ -216,6 +247,7 @@ public sealed class ProjectionAuditTrailAppenderTests
             Correlation = new AuditCorrelation
             {
                 TraceId = $"trace-{auditId}",
+                CorrelationId = $"correlation-{auditId}",
                 RequestId = $"request-{auditId}",
                 CommandId = $"command-{auditId}",
                 SessionId = $"session-{auditId}",
@@ -229,10 +261,27 @@ public sealed class ProjectionAuditTrailAppenderTests
                 EventTypeUrl = "type.googleapis.com/aevatar.audit.TestEvent",
                 StateVersion = 42,
             },
+            Provenance = new AuditExecutionProvenance
+            {
+                ScopeId = $"scope-{auditId}",
+                RunId = $"run-{auditId}",
+                ActorId = $"committed-actor-{auditId}",
+                ActorStateVersion = 42,
+                ActorEventId = $"event-{auditId}",
+            },
+            Redaction = new AuditRedaction
+            {
+                Policy = "aevatar.audit.safe-fields.v1",
+                ValuesSanitized = true,
+            },
         };
 
-    private static string ComputeContentHash(AuditRecord record) =>
-        Convert.ToHexString(SHA256.HashData(record.ToByteArray())).ToLowerInvariant();
+    private static string ComputeContentHash(AuditRecord record)
+    {
+        var semanticRecord = record.Clone();
+        semanticRecord.RecordedAt = null;
+        return Convert.ToHexString(SHA256.HashData(semanticRecord.ToByteArray())).ToLowerInvariant();
+    }
 
     private sealed class RecordingAuditTrailArtifactStore : IAuditTrailArtifactStore
     {

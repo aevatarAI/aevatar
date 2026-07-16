@@ -85,7 +85,24 @@ public sealed class StudioAuditTranslatorTests
         var record = translator.Translate(Context(), Any.Pack(evt)).Should().ContainSingle().Subject;
 
         record.OperationName.Should().Be(operationName);
-        record.Outcome.Should().Be(AuditOutcome.Success);
+        if (translator is StudioMemberBindingFailedAuditTranslator or StudioMemberBindingRejectedAuditTranslator)
+        {
+            record.Outcome.Should().Be(AuditOutcome.Error);
+            record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+            record.Failure.Should().NotBeNull();
+            record.Annotations.Should().NotContainKey("failure_code");
+            record.Annotations.Should().NotContainKey("failure_message");
+            record.Failure.Code.Should().Be(translator is StudioMemberBindingFailedAuditTranslator
+                ? "studio_member_binding_failed"
+                : "studio_member_binding_rejected");
+            record.ToString().Should().NotContain("compactSecretToken123");
+        }
+        else
+        {
+            record.Outcome.Should().Be(AuditOutcome.Success);
+            record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Succeeded);
+        }
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
         record.ActorKind.Should().Be(AuditActorKind.System);
         record.Target.Kind.Should().Be(targetKind);
         record.Target.Id.Should().Be(targetId);
@@ -93,7 +110,8 @@ public sealed class StudioAuditTranslatorTests
         record.SensitivityLevel.Should().Be(expected.SensitivityLevel);
         record.Correlation.CommandId.Should().Be("cmd-1");
         record.Correlation.RequestId.Should().Be("req-1");
-        record.Correlation.TraceId.Should().Be("corr-1");
+        record.Correlation.TraceId.Should().BeEmpty();
+        record.Correlation.CorrelationId.Should().Be("corr-1");
         record.CommittedFactRef.StateVersion.Should().Be(9);
         AssertDestructiveAnnotation(record, expected.IsDestructive);
         foreach (var annotation in expected.Annotations)
@@ -300,7 +318,11 @@ public sealed class StudioAuditTranslatorTests
             new StudioMemberBindingFailedEvent
             {
                 BindingRunId = "run-1",
-                Failure = new StudioMemberBindingFailure { Code = "ERR", Message = "boom" },
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "compactSecretToken123",
+                    Message = "compactSecretToken123",
+                },
             },
             "studio.member.binding.failed",
             "studio_member",
@@ -312,8 +334,6 @@ public sealed class StudioAuditTranslatorTests
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["binding_run_id"] = "run-1",
-                    ["failure_code"] = "ERR",
-                    ["failure_message"] = "boom",
                 }),
         ];
         yield return
@@ -324,7 +344,11 @@ public sealed class StudioAuditTranslatorTests
                 BindingRunId = "run-1",
                 ScopeId = "scope-alpha",
                 MemberId = "m-alpha",
-                Failure = new StudioMemberBindingFailure { Code = "STALE", Message = "rejected" },
+                Failure = new StudioMemberBindingFailure
+                {
+                    Code = "compactSecretToken123",
+                    Message = "compactSecretToken123",
+                },
             },
             "studio.member.binding.rejected",
             "studio_member",
@@ -336,8 +360,6 @@ public sealed class StudioAuditTranslatorTests
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["binding_run_id"] = "run-1",
-                    ["failure_code"] = "STALE",
-                    ["failure_message"] = "rejected",
                 }),
         ];
         yield return

@@ -9,6 +9,7 @@ using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Capabilities.Tests;
 
@@ -108,14 +109,16 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
     }
 
     [Fact]
-    public async Task QueryAsync_ShouldSearchNewestAuditArtifactsAndReturnCursorAndWatermark()
+    public async Task QueryAsync_ShouldSearchNewestAuditArtifactsAndReturnCursorAndCoverage()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             BuildSearchPayload(
                 BuildDocument("audit-1", "hash-1"),
-                """["2026-07-03T09:00:00Z","audit-1"]""")));
+                """["2026-07-03T09:00:00Z","audit-1"]""",
+                BuildDocument("audit-2", "hash-2"),
+                """["2026-07-03T08:00:00Z","audit-2"]""")));
         using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
 
         var page = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery
@@ -125,6 +128,10 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
             IdentityKeyId = "identity-key-1",
             OperationName = "audit.test",
             Outcome = AuditOutcome.Success,
+            LifecyclePhase = AuditLifecyclePhase.Terminal,
+            TerminalOutcome = AuditTerminalOutcome.Succeeded,
+            TraceId = "trace-1",
+            CorrelationId = "correlation-1",
             OccurredFrom = DateTimeOffset.Parse("2026-07-03T00:00:00+00:00"),
             OccurredTo = DateTimeOffset.Parse("2026-07-04T00:00:00+00:00"),
             Take = 1,
@@ -133,7 +140,9 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         page.Records.Should().ContainSingle()
             .Which.AuditId.Should().Be("audit-1");
         page.NextCursor.Should().NotBeNullOrWhiteSpace();
-        page.Watermark.Should().Be(DateTimeOffset.Parse("2026-07-03T09:00:00Z"));
+        page.Coverage.IngestionWatermark.Should().Be(DateTimeOffset.Parse("2026-07-03T09:01:00Z"));
+        page.Coverage.Truncated.Should().BeTrue();
+        page.Coverage.SchemaCompatibility.Should().Be(AuditSchemaCompatibility.Current);
         handler.CapturedRequests.Should().ContainSingle()
             .Which.PathAndQuery.Should().Be("/audit-tests-audit-trail/_search");
         using var requestBody = JsonDocument.Parse(handler.CapturedRequests[0].Body);
@@ -152,19 +161,34 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         filterJson.Should().Contain("audit.test");
         filterJson.Should().Contain("artifact.outcome.keyword");
         filterJson.Should().Contain("AUDIT_OUTCOME_SUCCESS");
+        filterJson.Should().Contain("artifact.lifecycle_phase.keyword");
+        filterJson.Should().Contain("AUDIT_LIFECYCLE_PHASE_TERMINAL");
+        filterJson.Should().Contain("artifact.terminal_outcome.keyword");
+        filterJson.Should().Contain("AUDIT_TERMINAL_OUTCOME_SUCCEEDED");
+        filterJson.Should().Contain("artifact.trace_id.keyword");
+        filterJson.Should().Contain("artifact.correlation_id.keyword");
         filterJson.Should().Contain("artifact.occurred_at");
-        requestBody.RootElement.GetProperty("size").GetInt32().Should().Be(1);
+        requestBody.RootElement.GetProperty("size").GetInt32().Should().Be(2);
         var sort = requestBody.RootElement.GetProperty("sort");
         sort[0].GetProperty("artifact.occurred_at").GetProperty("order").GetString().Should().Be("desc");
         sort[1].GetProperty("id.keyword").GetProperty("order").GetString().Should().Be("asc");
         requestBody.RootElement
             .GetProperty("aggs")
-            .GetProperty("query_watermark")
+            .GetProperty("ingestion")
+            .GetProperty("aggs")
+            .GetProperty("watermark")
             .GetProperty("max")
             .GetProperty("field")
             .GetString()
             .Should()
-            .Be("artifact.occurred_at");
+            .Be("artifact.recorded_at");
+        requestBody.RootElement
+            .GetProperty("aggs")
+            .GetProperty("incompatible_schema_records")
+            .GetProperty("filter")
+            .GetRawText()
+            .Should()
+            .Contain(AuditContractSemantics.CurrentSchemaVersion);
     }
 
     [Fact]
@@ -186,6 +210,29 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
             .Should().Be("2026-07-03T09:00:00Z");
         requestBody.RootElement.GetProperty("search_after")[1].GetString()
             .Should().Be("audit-1");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenAnyNonCurrentSchemaExists_ShouldReportIncompatible()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """
+            {
+              "aggregations": {
+                "ingestion": { "watermark": { "value": null } },
+                "incompatible_schema_records": { "doc_count": 1 },
+                "legacy_schema_records": { "doc_count": 0 }
+              },
+              "hits": { "hits": [] }
+            }
+            """));
+        using var store = CreateStore(new ElasticsearchProjectionDocumentStoreOptions(), handler);
+
+        var page = await ((IAuditTrailQueryPort)store).QueryAsync(new AuditTrailQuery());
+
+        page.Coverage.SchemaCompatibility.Should().Be(AuditSchemaCompatibility.Incompatible);
     }
 
     [Fact]
@@ -222,24 +269,38 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
             AuditId = auditId,
             ContentHash = contentHash,
             OperationName = "audit.test",
+            EventKind = "audit.test",
+            SchemaVersion = "1.0",
+            LifecyclePhase = AuditLifecyclePhase.Terminal,
+            TerminalOutcome = AuditTerminalOutcome.Succeeded,
+            Subject = "test-target/target-1",
+            Source = "urn:aevatar:audit:test",
             ScopeId = "scope-1",
             TargetKind = "test-target",
             TargetId = "target-1",
             Record = new AuditRecord
             {
                 AuditId = auditId,
+                EventKind = "audit.test",
+                Subject = "test-target/target-1",
+                SchemaVersion = "1.0",
+                Source = "urn:aevatar:audit:test",
                 OperationName = "audit.test",
                 ScopeId = "scope-1",
                 AuditActorId = "audit_actor:abc",
                 IdentityKeyId = "identity-key-1",
                 Outcome = AuditOutcome.Success,
+                LifecyclePhase = AuditLifecyclePhase.Terminal,
+                TerminalOutcome = AuditTerminalOutcome.Succeeded,
                 Target = new AuditTarget
                 {
                     Kind = "test-target",
                     Id = "target-1",
                 },
+                Correlation = new AuditCorrelation { CorrelationId = "correlation-1" },
             },
             OccurredAtDateTimeOffset = DateTimeOffset.Parse("2026-07-03T09:00:00+00:00"),
+            RecordedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-03T09:01:00+00:00")),
             UpdatedAtDateTimeOffset = DateTimeOffset.Parse("2026-07-03T09:01:00+00:00"),
         };
     }
@@ -255,18 +316,27 @@ public sealed class ElasticsearchAuditTrailArtifactStoreTests
         return "{\"_source\":" + formatter.Format(storageDocument) + "}";
     }
 
-    private static string BuildSearchPayload(AuditTrailDocument document, string sortJson)
+    private static string BuildSearchPayload(
+        AuditTrailDocument firstDocument,
+        string firstSortJson,
+        AuditTrailDocument secondDocument,
+        string secondSortJson)
     {
-        var storageDocument = AuditTrailArtifactStorageDocument.FromArtifact(document);
+        var firstStorageDocument = AuditTrailArtifactStorageDocument.FromArtifact(firstDocument);
+        var secondStorageDocument = AuditTrailArtifactStorageDocument.FromArtifact(secondDocument);
         var formatter = new JsonFormatter(
             JsonFormatter.Settings.Default
                 .WithPreserveProtoFieldNames(true)
                 .WithFormatDefaultValues(true));
 
-        return "{\"aggregations\":{\"query_watermark\":{\"value\":1783069200000,\"value_as_string\":\"2026-07-03T09:00:00.000Z\"}},\"hits\":{\"hits\":[{\"_source\":"
-            + formatter.Format(storageDocument)
+        return "{\"aggregations\":{\"ingestion\":{\"watermark\":{\"value\":1783069260000,\"value_as_string\":\"2026-07-03T09:01:00.000Z\"}},\"incompatible_schema_records\":{\"doc_count\":0},\"legacy_schema_records\":{\"doc_count\":0}},\"hits\":{\"hits\":[{\"_source\":"
+            + formatter.Format(firstStorageDocument)
             + ",\"sort\":"
-            + sortJson
+            + firstSortJson
+            + "},{\"_source\":"
+            + formatter.Format(secondStorageDocument)
+            + ",\"sort\":"
+            + secondSortJson
             + "}]}}";
     }
 
