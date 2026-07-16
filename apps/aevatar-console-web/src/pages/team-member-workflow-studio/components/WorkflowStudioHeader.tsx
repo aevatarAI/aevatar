@@ -865,7 +865,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
               )
         }
       >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+        <span className="workflow-studio-header__action-label">
           {t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
         </span>
       </Button>

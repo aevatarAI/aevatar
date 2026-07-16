@@ -130,9 +130,11 @@ const editorShellStyle: React.CSSProperties = {
   border: "1px solid #d9dce3",
   borderRadius: 6,
   display: "grid",
+  flex: "1 1 0%",
   gridTemplateColumns: "44px minmax(0, 1fr)",
   minHeight: 0,
   overflow: "hidden",
+  width: "100%",
 };
 
 const lineNumberGutterStyle: React.CSSProperties = {
@@ -238,7 +240,9 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
         "Workflow YAML panel",
       )}
       bodyStyle={{
-        gridTemplateRows: "auto auto minmax(0, 1fr) auto",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
       }}
       closeAriaLabel={t(
         "teamMemberWorkflowStudio.yamlPanel.closeAria",
@@ -342,36 +346,38 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
           wrap="off"
         />
       </div>
-      <Space align="center" style={{ justifyContent: "flex-end" }}>
-        <Button disabled={applying} onClick={onClose}>
-          {t("teamMemberWorkflowStudio.yamlPanel.cancel", "Cancel")}
-        </Button>
-        <Button
-          disabled={applyDisabled}
-          icon={<CheckOutlined />}
-          loading={applying}
-          onClick={() => void onApply()}
-          title={
-            hasConflict
-              ? t(
-                  "teamMemberWorkflowStudio.yamlPanel.conflictTitle",
-                  "Reopen Edit YAML from the current canvas before applying.",
-                )
-              : hasBlockingFindings
+      <footer style={{ flex: "0 0 auto" }}>
+        <Space align="center" style={{ justifyContent: "flex-end", width: "100%" }}>
+          <Button disabled={applying} onClick={onClose}>
+            {t("teamMemberWorkflowStudio.yamlPanel.cancel", "Cancel")}
+          </Button>
+          <Button
+            disabled={applyDisabled}
+            icon={<CheckOutlined />}
+            loading={applying}
+            onClick={() => void onApply()}
+            title={
+              hasConflict
                 ? t(
-                    "teamMemberWorkflowStudio.yamlPanel.fixErrors",
-                    "Resolve error-level diagnostics before applying.",
+                    "teamMemberWorkflowStudio.yamlPanel.conflictTitle",
+                    "Reopen Edit YAML from the current canvas before applying.",
                   )
-                : undefined
-          }
-          type="primary"
-        >
-          {t(
-            "teamMemberWorkflowStudio.yamlPanel.apply",
-            "Apply to draft",
-          )}
-        </Button>
-      </Space>
+                : hasBlockingFindings
+                  ? t(
+                      "teamMemberWorkflowStudio.yamlPanel.fixErrors",
+                      "Resolve error-level diagnostics before applying.",
+                    )
+                  : undefined
+            }
+            type="primary"
+          >
+            {t(
+              "teamMemberWorkflowStudio.yamlPanel.apply",
+              "Apply to draft",
+            )}
+          </Button>
+        </Space>
+      </footer>
     </WorkflowStudioSidePanel>
   );
 };

@@ -1420,6 +1420,18 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect((yamlView as HTMLElement).style.height).toBe("100%");
     expect((yamlView as HTMLElement).style.minHeight).toBe("0");
     expect((yamlView as HTMLElement).style.overflow).toBe("auto");
+    const yamlEditorShell = yamlView.parentElement as HTMLElement;
+    const yamlPanelBody = yamlEditorShell.parentElement as HTMLElement;
+    const yamlPanelFooter = screen
+      .getByRole("button", { name: "Apply to draft" })
+      .closest("footer") as HTMLElement;
+    expect(yamlEditorShell).toHaveStyle({ flex: "1 1 0%", minHeight: 0 });
+    expect(yamlPanelBody).toHaveStyle({
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+    });
+    expect(yamlPanelFooter).toHaveStyle({ flex: "0 0 auto" });
     expect(screen.queryByText("Wrap")).toBeNull();
     expect(screen.queryByText("Refresh")).toBeNull();
 
@@ -4206,7 +4218,11 @@ describe("TeamMemberWorkflowStudioPage", () => {
       screen.queryByRole("menuitem", { name: "Delete selected node" }),
     ).toBeNull();
 
-    expect(screen.getByRole("button", { name: "Edit YAML" })).toBeTruthy();
+    const editYamlButton = screen.getByRole("button", { name: "Edit YAML" });
+    expect(editYamlButton).toBeTruthy();
+    expect(within(editYamlButton).getByText("Edit YAML")).not.toHaveClass(
+      "workflow-studio-header__action-label--secondary",
+    );
     expect(screen.queryByRole("menuitem", { name: "View YAML" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Paste YAML" })).toBeNull();
 
