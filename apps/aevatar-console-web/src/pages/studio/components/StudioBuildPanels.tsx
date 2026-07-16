@@ -179,6 +179,18 @@ function createScriptStarterPackage() {
   return createSingleSourcePackage(SCRIPT_STARTER_SOURCE);
 }
 
+export const STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING = {
+  issue: 'github-devloop/issue/aevatarAI/aevatar/2747',
+  legacySurface:
+    'apps/aevatar-console-web/src/pages/studio/components/StudioBuildPanels.tsx',
+  canonicalSurfaces: [
+    '/scopes/:scopeId/teams/:teamId/members/:memberId/workflow',
+    '/scopes/:scopeId/teams/:teamId/members/new/workflow',
+  ],
+  removalCondition:
+    'Delete this raw draft YAML editor after pages/studio workflow authoring is migrated to the canonical Team member workflow editor.',
+} as const;
+
 const workflowWorkspaceRowStyle: React.CSSProperties = {
   alignItems: 'stretch',
   display: 'flex',
@@ -1468,6 +1480,12 @@ export const StudioWorkflowBuildPanel: React.FC<StudioWorkflowBuildPanelProps> =
             ) : (
               <section
                 data-testid="workflow-yaml-panel"
+                data-canonical-yaml-authoring-surface={STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING.canonicalSurfaces.join(
+                  ' ',
+                )}
+                data-deletion-tracking-id={
+                  STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING.issue
+                }
                 style={{ ...buildSurfaceCardStyle, flex: '1 1 auto', minHeight: 0 }}
               >
                 <div

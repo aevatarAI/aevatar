@@ -21,6 +21,7 @@ import {
   StudioGAgentBuildPanel,
   StudioScriptBuildPanel,
   StudioWorkflowBuildPanel,
+  STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING,
 } from './StudioBuildPanels';
 
 type WorkflowPrimitiveParameterTestDescriptor = {
@@ -524,6 +525,35 @@ describe('StudioWorkflowBuildPanel', () => {
         type: AGUIEventType.TEXT_MESSAGE_CONTENT,
         delta: 'workflow draft output',
       };
+    });
+  });
+
+  it('tracks the legacy pages/studio YAML authoring surface for deletion', () => {
+    render(
+      <WorkflowBuildHarness
+        onContinueToBind={jest.fn()}
+        onSaveDraft={jest.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'YAML' }));
+
+    const yamlPanel = screen.getByTestId('workflow-yaml-panel');
+    expect(yamlPanel).toHaveAttribute(
+      'data-deletion-tracking-id',
+      STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING.issue,
+    );
+    expect(yamlPanel).toHaveAttribute(
+      'data-canonical-yaml-authoring-surface',
+      STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING.canonicalSurfaces.join(
+        ' ',
+      ),
+    );
+    expect(STUDIO_WORKFLOW_YAML_AUTHORING_DELETION_TRACKING).toMatchObject({
+      legacySurface:
+        'apps/aevatar-console-web/src/pages/studio/components/StudioBuildPanels.tsx',
+      removalCondition:
+        'Delete this raw draft YAML editor after pages/studio workflow authoring is migrated to the canonical Team member workflow editor.',
     });
   });
 
