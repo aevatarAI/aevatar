@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
@@ -189,6 +190,18 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void CreateBuiltInAutoYaml_ShouldUseSharedAuthorableRootSchema()
+    {
+        var autoYaml = WorkflowDefinitionCatalog.CreateBuiltInAutoYaml();
+
+        autoYaml.Should().Contain(
+            $"Authorable top-level keys: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}");
+        autoYaml.Should().Contain(
+            $"Do NOT use top-level keys from other workflow dialects, including {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}");
+        autoYaml.Should().NotContain("Top-level keys: name, description, roles, steps");
+    }
+
+    [Fact]
     public void BuiltInStudioYaml_ShouldParseAsMemberProvisionStudioRoleWithToolAllowlist()
     {
         var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
@@ -214,8 +227,10 @@ public class WorkflowDefinitionCatalogTests
         // dialects (GitHub-Actions-style version:/inputs:) that the strict parser
         // rejects. Pin the load-bearing pieces: the closed top-level key list,
         // the foreign-dialect counter-examples, and a runnable example.
-        role.SystemPrompt.Should().Contain("Top-level keys are EXACTLY");
-        role.SystemPrompt.Should().Contain("no version, inputs, outputs, triggers");
+        role.SystemPrompt.Should().Contain(
+            $"Authorable top-level keys are EXACTLY: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}");
+        role.SystemPrompt.Should().Contain(
+            $"no {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}");
         role.SystemPrompt.Should().Contain("name: daily_digest");
         // Retry semantics: same display_name converges on the same resources;
         // reusing it for a different automation replaces the previous one.

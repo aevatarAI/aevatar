@@ -591,7 +591,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort
         {
             Throw = new InvalidOperationException(
-                "workflow_yaml is not a valid workflow definition: Property 'version' not found on type 'Raw'"),
+                "workflow_yaml is not a valid workflow definition: Unsupported workflow YAML root field 'version'."),
         };
         var tool = await DiscoverToolAsync(port);
 
@@ -607,7 +607,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         // The message is the load-bearing half of the repair loop: the tool
         // description tells the model to fix the YAML "per the error message",
         // so the parser text naming the rejected key must survive the mapping.
-        ErrorMessage(output).Should().Contain("Property 'version' not found on type 'Raw'");
+        ErrorMessage(output).Should().Contain("Unsupported workflow YAML root field 'version'");
     }
 
     [Fact]

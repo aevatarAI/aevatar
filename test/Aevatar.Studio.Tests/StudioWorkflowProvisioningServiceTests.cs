@@ -314,7 +314,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
         var parser = new RecordingWorkflowDefinitionParser
         {
-            Error = "Property 'version' not found on type 'Raw'",
+            Error = "Unsupported workflow YAML root field 'version'.",
         };
         var sut = NewService(member, schedule, parser);
 
@@ -329,7 +329,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
         // repair the YAML — and nothing was provisioned: no member, no bind, no
         // schedule to fire against a member that never bound.
         (await act.Should().ThrowAsync<InvalidOperationException>())
-            .Which.Message.Should().Contain("Property 'version' not found on type 'Raw'");
+            .Which.Message.Should().Contain("Unsupported workflow YAML root field 'version'");
         member.CreateInvoked.Should().BeFalse();
         member.BindScopeId.Should().BeNull();
         schedule.Ensured.Should().BeFalse();
