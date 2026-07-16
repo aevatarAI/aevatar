@@ -35,13 +35,15 @@ owner: eanzhao
 - 授权确认后 NyxID 以 optimistic rotation 原地替换 binding 背后的 refresh grant,返回 `binding_updated=true`,不返回新 `binding_id`. aevatar callback 校验本地 binding 哈希未变化后直接成功,不提交新的 binding actor 事件.
 - `invalid_target`、`invalid_scope` 或缺失 resource claim 表示 grant 不足,不是 binding 已撤销;调用侧必须保留本地 binding 并引导 `/init` 原地审阅. 只有 NyxID 明确返回 `invalid_grant`、binding revoked 或 not-found 时才事件化清理本地 binding.
 
-## Update 2026-07-14 - OAuth client projection ACL verification
+## Update 2026-07-16 - OAuth client projection ACL verification
 
-`AevatarOAuthClientDocument` contains the state-token HMAC key, so an Elasticsearch-backed Mainnet host uses `AevatarOAuthClientEsAclStartupGuard` in `Strict` mode. `Strict` has two independent requirements: the live `IOAuthClientEsAclProbe` must return `Restricted`, and the operator-provided `ChannelIdentity:OAuthClient:ElasticsearchAcl:GrantMatchesGrainEventStoreInternal` attestation must be `true`. `Unverifiable` / `Unavailable` never pass by attestation alone, and Mainnet does not hardcode the attestation.
+`AevatarOAuthClientDocument` contains the state-token HMAC key, so an Elasticsearch-backed Mainnet host always registers `AevatarOAuthClientEsAclStartupGuard`. The deployable default is `Warn`: the guard verifies the internal projection wiring, runs the live `IOAuthClientEsAclProbe`, and emits an actionable warning when the grant cannot be confirmed without turning an otherwise healthy rollout into a crash loop. Mainnet does not overwrite the operator-bound enforcement mode or hardcode the ACL attestation.
+
+`Strict` is an explicit deployment policy with two independent requirements: the live `IOAuthClientEsAclProbe` must return `Restricted`, and the operator-provided `ChannelIdentity:OAuthClient:ElasticsearchAcl:GrantMatchesGrainEventStoreInternal` attestation must be `true`. `Unverifiable` / `Unavailable` never pass by attestation alone. A deployment must not enable `Strict` until both prerequisites are installed.
 
 The built-in `HttpOAuthClientEsAclProbe` calls `_has_privileges` with the same Elasticsearch identity as the projection store. That proves only the current identity's access; it cannot prove that other identities, wildcard roles, file realms, API keys, or service accounts are denied. It therefore reports `Unverifiable` for a security-enabled success response instead of fabricating `Restricted`.
 
-An Elasticsearch deployment that needs a positive result must pre-register exactly one stronger `IOAuthClientEsAclProbe` before `AddAevatarMainnetHost`. That verifier owns the environment-specific effective-permission or infrastructure-policy audit and may return `Restricted` only after proving the index grant. Mainnet replaces only the module's `UnavailableOAuthClientEsAclProbe` fallback; it preserves the deployment verifier and rejects multiple custom registrations. Without such a verifier, the stock Elasticsearch path intentionally fails closed at startup.
+An Elasticsearch deployment that enables `Strict` must pre-register exactly one stronger `IOAuthClientEsAclProbe` before `AddAevatarMainnetHost`. That verifier owns the environment-specific effective-permission or infrastructure-policy audit and may return `Restricted` only after proving the index grant. Mainnet replaces only the module's `UnavailableOAuthClientEsAclProbe` fallback; it preserves the deployment verifier and rejects multiple custom registrations. Without such a verifier, the stock Elasticsearch path stays in `Warn` and reports the unconfirmed restriction at startup.
 
 ## Update 2026-07-10 - NyxID service access 使用 RFC 8707 resource
 

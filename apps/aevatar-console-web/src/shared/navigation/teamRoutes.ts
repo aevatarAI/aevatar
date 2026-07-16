@@ -230,6 +230,7 @@ export function buildTeamMemberPublishedRunsHref(options: {
   actorId?: string;
   memberId?: string;
   runId?: string;
+  scheduleId?: string;
   scopeId: string;
   teamId: string;
 }): string {
@@ -253,6 +254,7 @@ export function buildTeamMemberPublishedRunsHref(options: {
     {
       runId: options.runId,
       actorId: options.actorId,
+      scheduleId: options.scheduleId,
     },
   );
 }

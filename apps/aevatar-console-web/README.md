@@ -61,6 +61,8 @@ and RFC 8707 `resources`, so the client id and required Aevatar service match
 backend token finalization.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
+Default service preselection is owned by the NyxID OAuth Client
+`default_service_catalog_slugs`; the browser does not send OAuth `resource` parameters.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 

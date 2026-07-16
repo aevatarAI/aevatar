@@ -112,9 +112,6 @@ export class NyxIDAuthClient {
     url.searchParams.set('client_id', loginConfig.clientId);
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('scope', scope);
-    for (const resource of loginConfig.resources) {
-      url.searchParams.append('resource', resource);
-    }
     url.searchParams.set('code_challenge', codeChallenge);
     url.searchParams.set('code_challenge_method', 'S256');
     url.searchParams.set('state', state);
@@ -261,7 +258,6 @@ async function refreshStoredAuthSession(
     baseUrl: loginConfig.baseUrl,
     clientId: loginConfig.clientId,
     refreshToken,
-    resources: loginConfig.resources,
   });
   const currentSession = readStoredAuthSession();
   if (currentSession?.tokens.refreshToken !== refreshToken) {
