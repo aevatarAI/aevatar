@@ -210,12 +210,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return new ToolMiddlewareChain(combined, counter, interactiveDeliverySignals);
     }
 
-    protected override async Task OnActivateAsync(CancellationToken ct)
-    {
-        await base.OnActivateAsync(ct);
-        await RecoverExternalTriggerDeliveriesAsync(ct);
-    }
-
     protected override AIAgentConfigStateOverrides ExtractStateConfigOverrides(SkillRunnerState state)
     {
         return new AIAgentConfigStateOverrides
@@ -330,66 +324,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         await UpsertRegistryAsync(CancellationToken.None);
     }
 
-    [EventHandler]
-    public async Task HandleAdmitExternalTriggerAsync(AdmitSkillRunnerExternalTriggerCommand command)
-    {
-        var now = _clock.UtcNow;
-        var identity = NormalizeExternalTriggerIdentity(command.Identity, now);
-        if (!IsValidExternalTriggerIdentity(identity))
-        {
-            await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
-            {
-                Identity = identity,
-                RejectedAt = Timestamp.FromDateTimeOffset(now),
-                Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonMalformedDelivery,
-            });
-            return;
-        }
-
-        var source = State.FindExternalTriggerSource(identity.SourceId);
-        if (source is null)
-        {
-            await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
-            {
-                Identity = identity,
-                RejectedAt = Timestamp.FromDateTimeOffset(now),
-                Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonUnknownSource,
-            });
-            return;
-        }
-
-        if (!source.Enabled)
-        {
-            await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
-            {
-                Identity = NormalizeExternalTriggerIdentity(identity, source, now),
-                RejectedAt = Timestamp.FromDateTimeOffset(now),
-                Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonDisabledSource,
-            });
-            return;
-        }
-
-        identity = NormalizeExternalTriggerIdentity(identity, source, now);
-        if (State.FindExternalTriggerDelivery(identity) is not null)
-        {
-            await PersistDomainEventAsync(new SkillRunnerExternalTriggerDuplicateIgnoredEvent
-            {
-                Identity = identity,
-                IgnoredAt = Timestamp.FromDateTimeOffset(now),
-                Reason = SkillRunnerDefaults.ExternalTriggerDuplicateReasonAlreadyAdmitted,
-            });
-            return;
-        }
-
-        await PersistDomainEventAsync(new SkillRunnerExternalTriggerAdmittedEvent
-        {
-            Identity = identity,
-            AdmittedAt = Timestamp.FromDateTimeOffset(now),
-        });
-
-        await DispatchExternalTriggerExecutionAsync(identity, dispatchAttempt: 1, ct: CancellationToken.None);
-    }
-
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleTriggerAsync(TriggerSkillRunnerExecutionCommand command)
     {
@@ -404,19 +338,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         }
 
-        var externalIdentity = NormalizeExternalTriggerIdentity(command.ExternalTriggerIdentity, _clock.UtcNow);
-        var hasExternalTrigger = IsValidExternalTriggerIdentity(externalIdentity);
-        if (hasExternalTrigger && State.IsExternalTriggerTerminal(externalIdentity))
-        {
-            await PersistDomainEventAsync(new SkillRunnerExternalTriggerDuplicateIgnoredEvent
-            {
-                Identity = externalIdentity,
-                IgnoredAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
-                Reason = SkillRunnerDefaults.ExternalTriggerDuplicateReasonAlreadyAdmitted,
-            });
-            return;
-        }
-
         if (!State.Enabled)
         {
             Logger.LogInformation("Skill runner {ActorId} ignored trigger because it is disabled", Id);
@@ -424,10 +345,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             {
                 RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
                 Reason = SkillRunnerDefaults.RejectionReasonRunnerDisabled,
-                ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
                 CronOccurrenceKey = cronOccurrenceKey,
             });
-            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
+            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot)
                 await RetireOneShotAsync(_clock.UtcNow, SkillRunnerDefaults.OneShotRetirementReasonRejected, CancellationToken.None);
             return;
         }
@@ -453,12 +373,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 WorkflowName = result.WorkflowReceipt?.WorkflowName ?? string.Empty,
                 WorkflowCommandId = result.WorkflowReceipt?.CommandId ?? string.Empty,
                 WorkflowCorrelationId = result.WorkflowReceipt?.CorrelationId ?? string.Empty,
-                ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
                 CronOccurrenceKey = cronOccurrenceKey,
             });
 
             await CancelRetryLeaseAsync(CancellationToken.None);
-            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
+            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot)
             {
                 await RetireOneShotAsync(now, SkillRunnerDefaults.OneShotRetirementReasonCompleted, CancellationToken.None);
                 return;
@@ -494,12 +413,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 SkillVersion = executionFailure?.SkillVersion ?? string.Empty,
                 WorkflowId = executionFailure?.WorkflowId ?? string.Empty,
                 ErrorCode = executionFailure?.ErrorCode ?? SkillRunnerExecutionErrorCode.Unspecified,
-                ExternalTriggerIdentity = hasExternalTrigger ? externalIdentity : null,
                 CronOccurrenceKey = cronOccurrenceKey,
             });
 
             await TrySendFailureAsync(ex.Message, CancellationToken.None);
-            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot && !hasExternalTrigger)
+            if (State.ScheduleMode == SkillRunnerScheduleMode.OneShot)
             {
                 await RetireOneShotAsync(now, SkillRunnerDefaults.OneShotRetirementReasonFailed, CancellationToken.None);
                 return;
@@ -576,8 +494,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     }
 
     private static bool IsCronScheduleTrigger(TriggerSkillRunnerExecutionCommand command) =>
-        string.Equals(command.Reason?.Trim(), SkillRunnerDefaults.ScheduleTriggerReason, StringComparison.Ordinal) &&
-        !IsValidExternalTriggerIdentity(command.ExternalTriggerIdentity);
+        string.Equals(command.Reason?.Trim(), SkillRunnerDefaults.ScheduleTriggerReason, StringComparison.Ordinal);
 
     private static EventEnvelopePublishOptions CreateCronOccurrencePropagationOptions(string cronOccurrenceKey)
     {
@@ -660,52 +577,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return;
         await CancelDurableCallbackAsync(_oneShotLease, ct);
         _oneShotLease = null;
-    }
-
-    private async Task RecoverExternalTriggerDeliveriesAsync(CancellationToken ct)
-    {
-        foreach (var record in State.RecoverableExternalTriggerDeliveries())
-        {
-            var identity = NormalizeExternalTriggerIdentity(record.Identity, _clock.UtcNow);
-            if (!IsValidExternalTriggerIdentity(identity))
-                continue;
-
-            var nextAttempt = record.DispatchAttempt + 1;
-            if (nextAttempt > SkillRunnerDefaults.ExternalTriggerMaxDispatchAttempts)
-            {
-                await PersistDomainEventAsync(new SkillRunnerExternalTriggerRejectedEvent
-                {
-                    Identity = identity,
-                    RejectedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
-                    Reason = SkillRunnerDefaults.ExternalTriggerRejectedReasonDispatchAttemptsExhausted,
-                }, ct);
-                continue;
-            }
-
-            await DispatchExternalTriggerExecutionAsync(identity, nextAttempt, ct);
-        }
-    }
-
-    private async Task DispatchExternalTriggerExecutionAsync(
-        SkillRunnerExternalTriggerIdentity identity,
-        int dispatchAttempt,
-        CancellationToken ct)
-    {
-        await SendToAsync(
-            Id,
-            new TriggerSkillRunnerExecutionCommand
-            {
-                Reason = SkillRunnerDefaults.ExternalTriggerReason,
-                ExternalTriggerIdentity = identity.Clone(),
-            },
-            ct);
-
-        await PersistDomainEventAsync(new SkillRunnerExternalTriggerDispatchRequestedEvent
-        {
-            Identity = identity.Clone(),
-            RequestedAt = Timestamp.FromDateTimeOffset(_clock.UtcNow),
-            DispatchAttempt = dispatchAttempt,
-        }, ct);
     }
 
     private async Task<SkillRunnerExecutionResult> ExecuteSkillAsync(DateTimeOffset now, string? reason, CancellationToken ct)
@@ -2324,36 +2195,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         normalized.DisplayName = normalized.DisplayName?.Trim() ?? string.Empty;
         if (normalized.Kind == ExternalTriggerSourceKind.Unspecified)
             normalized.Kind = ExternalTriggerSourceKind.Webhook;
-        return normalized;
-    }
-
-    private static SkillRunnerExternalTriggerIdentity NormalizeExternalTriggerIdentity(
-        SkillRunnerExternalTriggerIdentity? identity,
-        DateTimeOffset now)
-    {
-        var normalized = identity?.Clone() ?? new SkillRunnerExternalTriggerIdentity();
-        normalized.SourceId = normalized.SourceId?.Trim() ?? string.Empty;
-        normalized.DeliveryId = normalized.DeliveryId?.Trim() ?? string.Empty;
-        normalized.AdmissionId = string.IsNullOrWhiteSpace(normalized.AdmissionId)
-            ? Guid.NewGuid().ToString("N")
-            : normalized.AdmissionId.Trim();
-        normalized.PayloadSummary = normalized.PayloadSummary?.Trim() ?? string.Empty;
-        normalized.PayloadRef = normalized.PayloadRef?.Trim() ?? string.Empty;
-        if (normalized.Kind == ExternalTriggerSourceKind.Unspecified)
-            normalized.Kind = ExternalTriggerSourceKind.Webhook;
-        normalized.ReceivedAt ??= Timestamp.FromDateTimeOffset(now);
-        return normalized;
-    }
-
-    private static SkillRunnerExternalTriggerIdentity NormalizeExternalTriggerIdentity(
-        SkillRunnerExternalTriggerIdentity identity,
-        ExternalTriggerSource source,
-        DateTimeOffset now)
-    {
-        var normalized = NormalizeExternalTriggerIdentity(identity, now);
-        normalized.Kind = source.Kind == ExternalTriggerSourceKind.Unspecified
-            ? ExternalTriggerSourceKind.Webhook
-            : source.Kind;
         return normalized;
     }
 

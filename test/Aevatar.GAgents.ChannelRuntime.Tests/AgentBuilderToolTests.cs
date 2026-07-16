@@ -630,12 +630,9 @@ public sealed class AgentBuilderToolTests
     public async Task ExecuteAsync_RunAgent_FromChannelInbound_DispatchesManualTriggerNotAdmission()
     {
         // Regression (prod 2026-06-11): run_agent used to route channel-context calls through
-        // the external-trigger admission protocol. Admission requires a pre-registered
-        // ExternalTriggerSource on the runner, and scheduled_agent_creator registers none,
-        // so every owner-issued /run-agent ended as a committed-but-silent
-        // SkillRunnerExternalTriggerRejectedEvent(unknown_source) while the tool replied
-        // "accepted". The owner's management-plane trigger is authorized by the caller-scope
-        // check and must dispatch TriggerAsync directly even when channel metadata is present.
+        // SkillRunner external trigger admission. The owner's management-plane trigger is
+        // authorized by the caller-scope check and must dispatch TriggerAsync directly even
+        // when channel metadata is present.
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         queryPort.GetTriggerableForCallerAsync("skill-runner-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
@@ -683,10 +680,6 @@ public sealed class AgentBuilderToolTests
             await skillRunnerPort.Received(1).TriggerAsync(
                 "skill-runner-1",
                 "run_agent",
-                Arg.Any<CancellationToken>());
-            await skillRunnerPort.DidNotReceive().AdmitExternalTriggerAsync(
-                Arg.Any<string>(),
-                Arg.Any<AdmitSkillRunnerExternalTriggerCommand>(),
                 Arg.Any<CancellationToken>());
         }
         finally

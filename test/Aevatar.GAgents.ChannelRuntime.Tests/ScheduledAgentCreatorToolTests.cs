@@ -51,13 +51,7 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("output_format", out var outputFormat).Should().BeTrue();
         outputFormat.GetProperty("enum").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEquivalentTo("auto", "text", "feishu_doc");
-        properties.TryGetProperty("external_trigger_sources", out var externalSources).Should().BeTrue();
-        externalSources.GetProperty("items").GetProperty("properties")
-            .GetProperty("kind")
-            .GetProperty("enum")
-            .EnumerateArray()
-            .Select(static x => x.GetString())
-            .Should().BeEquivalentTo("webhook", "channel_inbound");
+        properties.TryGetProperty("external_trigger_sources", out _).Should().BeFalse();
         schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEmpty();
     }
@@ -101,6 +95,7 @@ public sealed class ScheduledAgentCreatorToolTests
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","nyx_api_key":"bad"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":"tavily-search"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":["tavily-search",123]}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","external_trigger_sources":[{"source_id":"webhook-main","kind":"webhook"}]}""")]
     public async Task ExecuteAsync_InvalidRequests_ShouldFailBeforeKeyCreation(string argumentsJson)
     {
         var harness = CreateHarness();

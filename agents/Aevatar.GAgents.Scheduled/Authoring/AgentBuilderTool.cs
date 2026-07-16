@@ -305,14 +305,9 @@ public sealed class AgentBuilderTool : IAgentTool
 
         var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
         // run_agent is a catalog-admitted management-plane trigger: owners and trigger-granted
-        // channel peers dispatch TriggerAsync directly. It must NOT go
-        // through the external-trigger admission protocol (#1790): admission requires a
-        // pre-registered ExternalTriggerSource on the runner, and agents created via
-        // scheduled_agent_creator register none — routing the owner's own /run-agent through
-        // admission made every manual run end as a committed-but-silent
-        // SkillRunnerExternalTriggerRejectedEvent(unknown_source) while the tool reported
-        // "accepted" (prod 2026-06-11). Admission stays reserved for genuine external
-        // sources (webhook endpoint), which carry their own delivery dedup needs.
+        // channel peers dispatch TriggerAsync directly. It must not use SkillRunner external
+        // trigger admission: scheduled workflow agents do not declare external trigger sources,
+        // and workflow/team webhook ingress owns external delivery dedupe.
         var dispatch = await TryDispatchLifecycleAsync(entry, "run_agent", LifecycleAction.Run, revisionFeedback, skillRunnerPort, scheduledDispatchService, ct);
         if (dispatch.error != null)
             return dispatch.error;

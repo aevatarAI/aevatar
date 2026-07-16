@@ -6,46 +6,46 @@ owner: eanzhao
 
 # Scheduled Skill Runners
 
-本文固化 scheduled skill runner 的触发与所有权边界。`SkillRunnerGAgent` 是 runner 配置、trigger source declaration、delivery ledger、执行结果事实的唯一权威 actor。
+This canon fixes scheduled skill runner trigger and ownership boundaries. `SkillRunnerGAgent` owns runner configuration and execution-result facts for the legacy runner. It no longer owns external trigger admission for scheduled workflow/team automation.
 
 ## External Trigger Admission
 
-外部触发只通过 `ISkillRunnerCommandPort.AdmitExternalTriggerAsync` 进入已有 runner。该端口只检查 runner 是否存在并投递 `AdmitSkillRunnerExternalTriggerCommand`；它不创建 runner、不校验 source 是否声明或启用、不读 read model、不启动 projection priming，也不维护 delivery cache。
+Scheduled workflow/team external triggers are not admitted through `SkillRunnerGAgent`, `ISkillRunnerCommandPort`, or runner delivery ledgers. The former Mainnet `SkillRunner` delivery endpoint is retired.
 
-同步返回的 `SkillRunnerExternalTriggerAdmissionReceipt` 只表示 `accepted for dispatch`。它提供稳定 `command_id / correlation_id / admission_id / source_id / delivery_id`，不得暗示 source validation、execution committed 或 read model observed。
+When external trigger support is required, use workflow/team-owned ingress such as `WorkflowWebhookIngressEndpoints` and its replay/admission store. That path owns stable delivery identity, payload-conflict handling, and durable dedupe. Scheduled workflow agent creation rejects `external_trigger_sources` explicitly instead of silently routing them to `SkillRunnerGAgent`.
 
 ## Runner-Owned Source Facts
 
-创建 runner 时，`InitializeSkillRunnerCommand.external_trigger_sources` 声明允许的 external trigger source。source 的启用状态、未知 source、disabled source、duplicate delivery 都由 `SkillRunnerGAgent` 在 actor turn 内判定，并通过 committed events 表达：
+New scheduled workflow/team creation does not declare runner external trigger sources. Historical `SkillRunner` committed event types may still exist for old actor state until the legacy runner runtime is removed, but they are not a supported admission surface:
 
 - `SkillRunnerExternalTriggerAdmittedEvent`
 - `SkillRunnerExternalTriggerDispatchRequestedEvent`
 - `SkillRunnerExternalTriggerRejectedEvent`
 - `SkillRunnerExternalTriggerDuplicateIgnoredEvent`
 
-已有 runner 的 unknown 或 disabled source 不是同步 HTTP `409`。Host/webhook caller 收到 `202 Accepted` 后，runner 自己提交 `SkillRunnerExternalTriggerRejectedEvent`，原因分别为 `unknown` 或 `disabled`。
+Do not add new HTTP, command-port, tool, or test surfaces that send `AdmitSkillRunnerExternalTriggerCommand` to `SkillRunnerGAgent`.
 
 ## Identity And Ledger
 
-每个 external delivery 使用 `SkillRunnerExternalTriggerIdentity` 表达 `source_id`、`delivery_id`、`admission_id`、`kind`、`received_at`、`payload_summary`、`payload_ref`。这些字段随 admission、self-dispatch command、terminal execution event 和 ledger record 传递，避免在多个消息形状里复制散落字段。
+`SkillRunnerExternalTriggerIdentity` and `recent_external_trigger_deliveries` are legacy runtime state shapes. They must not be used as the admission or dedupe owner for new scheduled workflow/team external triggers.
 
-delivery ledger 保存在 runner state 的 `recent_external_trigger_deliveries`。默认只承诺 retained window 内去重：terminal delivery 保留最多 `1000` 条或 `30 days`；non-terminal delivery 不被窗口裁剪。
+Workflow/team-owned ingress must define its own stable delivery identity and durable replay semantics instead of depending on runner state.
 
 ## Outbound Delivery Facts
 
-外部触发 admission ledger 只描述 inbound delivery。runner 执行后对用户可见的 outbound delivery 是独立事实：`SkillRunnerGAgent` 在 actor turn 内提交共享 `DeliveryProducedEvent`，并把最近结果维护到 `recent_deliveries`，把最近一次成功维护到 `last_successful_delivery`。
+Outbound delivery facts remain separate from inbound trigger admission. `SkillRunnerGAgent` may still publish execution delivery facts for legacy runner execution, but inbound external trigger admission is no longer its responsibility.
 
 这些字段随 `SkillRunnerExecutionDocument` current-state read model 覆盖复制。查询侧只能读取该 read model；不得扫描 tool result、重放 event store 或在 query path 启动 projection priming 来推断是否已经回复用户。交互式 tool middleware 只收集当前 actor turn 内的 typed delivery signal，不持有跨 run bool 事实源。
 
 ## Wake And Recovery
 
-accepted delivery 先提交 `SkillRunnerExternalTriggerAdmittedEvent`，再通过 self-message 请求执行，随后提交 `SkillRunnerExternalTriggerDispatchRequestedEvent`。runner activation 会扫描未 terminal 的 admitted / dispatch-requested delivery，并按 bounded dispatch attempts 恢复 self-dispatch；超过上限后提交 terminal rejected event，避免无限恢复循环。
+Do not rely on `SkillRunnerExternalTriggerAdmittedEvent` or `SkillRunnerExternalTriggerDispatchRequestedEvent` as a wake/recovery protocol for new scheduled workflow/team external triggers. Use workflow/team-owned ingress, admission, replay, and dispatch contracts.
 
 ## Boundary With Creation And Ornn Execution
 
-`scheduled_agent_creator` 是 runner creation surface；它可以声明 `external_trigger_sources`，但不引入第二套 runner 创建工具。Ornn skill reference / workflow execution 仍按 Ornn skill fetch 与 workflow dispatch 的既有链路执行；external trigger admission 只决定“何时请求已有 runner 执行”，不改变 Ornn repository、Ornn runtime 或外部仓库能力。
+`scheduled_agent_creator` is the runner creation surface. It rejects `external_trigger_sources` for scheduled workflow agents and does not introduce a second runner creation tool. Ornn skill reference / workflow execution still follows the existing Ornn skill fetch and workflow dispatch path.
 
-Channel-originated `agent_builder.run_agent` uses the same admission command instead of the manual trigger path when the typed tool context carries a stable channel message id. The channel source id is deterministic: `channel:<platform>:<registration_scope_id>`. Creation must declare that id with `kind=channel_inbound`; if it is missing or disabled, the runner accepts the delivery command and then commits `SkillRunnerExternalTriggerRejectedEvent`.
+Channel-originated `agent_builder.run_agent` uses the catalog-admitted management trigger path and dispatches `TriggerSkillRunnerExecutionCommand`; it must not use external trigger admission.
 
 ## Scheduled credential lifecycle
 
