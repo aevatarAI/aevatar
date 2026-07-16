@@ -34,6 +34,69 @@ public sealed class ChatConversationGAgentAppendTests
     }
 
     [Fact]
+    public async Task AppendChatTurnCommand_ShouldSynthesizeTitleFromFirstUserText_WhenTitleIsMissing()
+    {
+        var agent = await CreateAgentAsync();
+
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-1",
+            "  Please verify\n\nchat history\tlist index mapping  ",
+            "done",
+            ChatTurnTerminalStatus.Completed)));
+
+        agent.State.Title.Should().Be("Please verify chat history list index mapping");
+    }
+
+    [Fact]
+    public async Task AppendChatTurnCommand_ShouldPreferExplicitTitleOverSynthesizedTitle()
+    {
+        var agent = await CreateAgentAsync();
+        var command = CreateAppend(
+            "turn-1",
+            "user text should not become title",
+            "done",
+            ChatTurnTerminalStatus.Completed);
+        command.Title = "Explicit title";
+
+        await agent.HandleEventAsync(Envelope(command));
+
+        agent.State.Title.Should().Be("Explicit title");
+    }
+
+    [Fact]
+    public async Task AppendChatTurnCommand_ShouldNotReplaceExistingTitleFromLaterUserText()
+    {
+        var agent = await CreateAgentAsync();
+
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-1",
+            "first user title",
+            "done",
+            ChatTurnTerminalStatus.Completed)));
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-2",
+            "second user text should not replace title",
+            "done again",
+            ChatTurnTerminalStatus.Completed)));
+
+        agent.State.Title.Should().Be("first user title");
+    }
+
+    [Fact]
+    public async Task AppendChatTurnCommand_ShouldTruncateSynthesizedTitleToStableDisplayLength()
+    {
+        var agent = await CreateAgentAsync();
+
+        await agent.HandleEventAsync(Envelope(CreateAppend(
+            "turn-1",
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "done",
+            ChatTurnTerminalStatus.Completed)));
+
+        agent.State.Title.Should().Be("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU…");
+    }
+
+    [Fact]
     public async Task AppendChatTurnCommand_ShouldDeduplicateSameTurnPayload()
     {
         var agent = await CreateAgentAsync();

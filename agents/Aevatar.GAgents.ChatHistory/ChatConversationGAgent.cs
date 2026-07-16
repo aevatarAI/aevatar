@@ -6,6 +6,8 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using System.Globalization;
+using System.Text;
 
 namespace Aevatar.GAgents.ChatHistory;
 
@@ -19,6 +21,8 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
     public static string ProjectionKind => "chat-conversation";
 
     public const int MaxTurns = 250;
+    private const int MaxSynthesizedConversationTitleLength = 48;
+    private const string TitleEllipsis = "…";
 
     [EventHandler(EndpointName = "appendChatTurn")]
     public async Task HandleAppendChatTurn(AppendChatTurnCommand command)
@@ -58,7 +62,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
         {
             ScopeId = command.ScopeId,
             ConversationId = command.ConversationId,
-            Title = command.Title,
+            Title = ResolveAppendTitle(command, turn),
             ServiceId = command.ServiceId,
             ServiceKind = command.ServiceKind,
             Turn = turn,
@@ -172,6 +176,69 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
         string.Equals(existing.LlmRoute, candidate.LlmRoute, StringComparison.Ordinal) &&
         string.Equals(existing.LlmModel, candidate.LlmModel, StringComparison.Ordinal) &&
         Equals(existing.TerminalTime, candidate.TerminalTime);
+
+    private string ResolveAppendTitle(AppendChatTurnCommand command, ChatTurn turn)
+    {
+        if (!string.IsNullOrWhiteSpace(command.Title))
+            return command.Title;
+
+        if (!string.IsNullOrWhiteSpace(State.Title) || State.Turns.Count > 0)
+            return string.Empty;
+
+        return SynthesizeInitialTitle(turn.UserText);
+    }
+
+    private static string SynthesizeInitialTitle(string? userText)
+    {
+        var normalized = NormalizeTitleSource(userText);
+        if (normalized.Length == 0)
+            return string.Empty;
+
+        var textElements = new List<string>(MaxSynthesizedConversationTitleLength + 1);
+        var enumerator = StringInfo.GetTextElementEnumerator(normalized);
+        while (enumerator.MoveNext())
+        {
+            textElements.Add((string)enumerator.Current);
+            if (textElements.Count > MaxSynthesizedConversationTitleLength)
+                break;
+        }
+
+        if (textElements.Count <= MaxSynthesizedConversationTitleLength)
+            return normalized;
+
+        return string.Concat(textElements.Take(MaxSynthesizedConversationTitleLength - 1)) + TitleEllipsis;
+    }
+
+    private static string NormalizeTitleSource(string? userText)
+    {
+        if (string.IsNullOrWhiteSpace(userText))
+            return string.Empty;
+
+        var builder = new StringBuilder(userText.Length);
+        var pendingSpace = false;
+        foreach (var ch in userText)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                if (builder.Length > 0)
+                    pendingSpace = true;
+                continue;
+            }
+
+            if (char.IsControl(ch))
+                continue;
+
+            if (pendingSpace)
+            {
+                builder.Append(' ');
+                pendingSpace = false;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
 
     private static ChatConversationState ApplyChatTurnAppended(
         ChatConversationState state,

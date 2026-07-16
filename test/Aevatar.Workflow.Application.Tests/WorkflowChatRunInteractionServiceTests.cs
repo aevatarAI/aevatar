@@ -198,6 +198,52 @@ public sealed class WorkflowChatRunInteractionServiceTests
         notificationTarget.ActorId.Should().NotBe(notificationTarget.DeliveryId);
         notificationTarget.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         deliveryPort.Bindings.Should().ContainSingle();
+        deliveryPort.Bindings[0].WorkflowActorId.Should().Be("run-1");
+        deliveryPort.Bindings[0].WorkflowCommandId.Should().Be(inner.Requests[0].CommandIdSeed);
+        deliveryPort.Abandons.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldContinueWithoutNotificationTarget_WhenChatHistoryReservationIsUnavailable()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort
+        {
+            ReturnNullReservation = true,
+        };
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "execution prompt",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ScopeId: "scope-a",
+                ChatHistory: new WorkflowChatHistoryWriteIntent(
+                    "conversation-1",
+                    "turn-1",
+                    "original user text")),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        deliveryPort.Reservations.Should().ContainSingle();
+        inner.Requests.Should().ContainSingle();
+        inner.Requests[0].CompletionNotificationTarget.Should().BeNull();
+        deliveryPort.Bindings.Should().BeEmpty();
         deliveryPort.Abandons.Should().BeEmpty();
     }
 
@@ -808,6 +854,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
     private sealed class RecordingChatHistoryTerminalDeliveryPort : IWorkflowChatHistoryTerminalDeliveryPort
     {
         public string ReservedDeliveryActorId { get; } = "chat-history-delivery-actor-alpha";
+        public bool ReturnNullReservation { get; init; }
         public List<WorkflowChatHistoryTerminalDeliveryReservationRequest> Reservations { get; } = [];
         public List<WorkflowChatHistoryTerminalDeliveryReservation> Bindings { get; } = [];
         public List<WorkflowChatHistoryTerminalDeliveryReservation> Abandons { get; } = [];
@@ -818,6 +865,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         {
             ct.ThrowIfCancellationRequested();
             Reservations.Add(request);
+            if (ReturnNullReservation)
+                return Task.FromResult<WorkflowChatHistoryTerminalDeliveryReservation?>(null);
+
             return Task.FromResult<WorkflowChatHistoryTerminalDeliveryReservation?>(new WorkflowChatHistoryTerminalDeliveryReservation(
                 ReservedDeliveryActorId,
                 request.DeliveryId,
