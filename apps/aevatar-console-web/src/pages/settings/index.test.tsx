@@ -27,6 +27,45 @@ const { studioApi: mockStudioApi } = jest.requireMock(
   };
 };
 
+const originalFetch = global.fetch;
+const originalLocationDescriptor = Object.getOwnPropertyDescriptor(
+  window,
+  "location",
+);
+const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  "crypto",
+);
+
+function installLocationAssignSpy() {
+  const assign = jest.fn();
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: {
+      ...window.location,
+      assign,
+      href: window.location.href,
+      origin: window.location.origin,
+    },
+  });
+  return assign;
+}
+
+function installDeterministicCrypto() {
+  Object.defineProperty(globalThis, "crypto", {
+    configurable: true,
+    value: {
+      getRandomValues: (array: Uint8Array) => {
+        array.fill(7);
+        return array;
+      },
+      subtle: {
+        digest: jest.fn(async () => new Uint8Array(32).fill(9).buffer),
+      },
+    },
+  });
+}
+
 function createLlmSettings(overrides: Record<string, unknown> = {}) {
   return {
     savedRoute: "",
@@ -147,6 +186,15 @@ describe("SettingsPage", () => {
   });
 
   afterEach(() => {
+    global.fetch = originalFetch;
+    if (originalLocationDescriptor) {
+      Object.defineProperty(window, "location", originalLocationDescriptor);
+    }
+    if (originalCryptoDescriptor) {
+      Object.defineProperty(globalThis, "crypto", originalCryptoDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "crypto");
+    }
     cleanupTestQueryClients();
   });
 
@@ -198,6 +246,62 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("Profile")).toBeTruthy();
     expect(screen.getByText("Ada Lovelace")).toBeTruthy();
     expect(screen.getByText("Authentication")).toBeTruthy();
+  });
+
+  it("starts NyxID service access review from Account settings", async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: "token",
+        tokenType: "Bearer",
+        expiresIn: 3600,
+        expiresAt: Date.now() + 60_000,
+      },
+      user: {
+        sub: "user-123",
+        email: "ada@example.com",
+        email_verified: true,
+        name: "Ada Lovelace",
+      },
+    });
+    installDeterministicCrypto();
+    window.history.replaceState({}, "", "/settings?section=account");
+    const assign = installLocationAssignSpy();
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        baseUrl: "https://nyx.example",
+        clientId: "broker-client-1",
+        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage service access" }),
+    );
+
+    await waitFor(() => {
+      expect(assign).toHaveBeenCalledTimes(1);
+    });
+    const authorizeUrl = new URL(assign.mock.calls[0][0]);
+    expect(authorizeUrl.searchParams.get("prompt")).toBe("consent");
+    expect(authorizeUrl.searchParams.getAll("resource")).toEqual([]);
+
+    const pending = JSON.parse(
+      window.localStorage.getItem(
+        "aevatar-console:nyxid:pending:broker-client-1",
+      ) ?? "{}",
+    );
+    expect(pending).toEqual(
+      expect.objectContaining({
+        flow: "serviceAccessReview",
+        returnTo: "/settings?section=account",
+        state: authorizeUrl.searchParams.get("state"),
+      }),
+    );
   });
 
   it("shows gateway models from backend model groups", async () => {

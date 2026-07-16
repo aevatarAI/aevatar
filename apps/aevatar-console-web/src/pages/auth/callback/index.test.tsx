@@ -99,6 +99,59 @@ describe('NyxID callback page', () => {
     expect(replaceLocation).toHaveBeenCalledWith('/runtime/runs');
   });
 
+  it('returns to Account settings after service access review succeeds', async () => {
+    handleRedirectCallback.mockResolvedValue({
+      flow: 'serviceAccessReview',
+      returnTo: '/settings?section=account',
+      session: {
+        tokens: {
+          accessToken: 'review-access-token',
+          expiresAt: Date.now() + 60_000,
+          expiresIn: 60,
+          tokenType: 'Bearer',
+        },
+        user: {
+          sub: 'user-1',
+        },
+      },
+    });
+
+    render(React.createElement(CallbackPage));
+
+    await waitFor(() => {
+      expect(replaceLocation).toHaveBeenCalledWith('/settings?section=account');
+    });
+  });
+
+  it('shows retryable service access review cancellation without replacing the session route', async () => {
+    handleRedirectCallback.mockRejectedValue(
+      Object.assign(
+        new Error(
+          'NyxID service access review was cancelled or denied. Your current Studio session is still active; choose Manage service access to try again.',
+        ),
+        {
+          flow: 'serviceAccessReview',
+          returnTo: '/settings?section=account',
+        },
+      ),
+    );
+
+    const { findByRole, findByText } = render(React.createElement(CallbackPage));
+
+    expect(
+      await findByText(
+        'NyxID service access review was cancelled or denied. Your current Studio session is still active; choose Manage service access to try again.',
+      ),
+    ).toBeTruthy();
+    expect(
+      await findByRole('button', { name: 'Retry service access review' }),
+    ).toBeTruthy();
+    expect(
+      await findByRole('link', { name: 'Back to Account settings' }),
+    ).toHaveAttribute('href', '/settings?section=account');
+    expect(replaceLocation).not.toHaveBeenCalled();
+  });
+
   it('skips callback finalization when no callback payload is present and a session exists', async () => {
     mockLocationReplace('/auth/callback');
     persistAuthSession({

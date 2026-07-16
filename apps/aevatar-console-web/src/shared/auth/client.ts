@@ -25,20 +25,43 @@ interface PendingAuthState {
   readonly scope: string;
   readonly returnTo: string;
   readonly clientId: string;
+  readonly flow: AuthFlow;
 }
+
+export type AuthFlow = "signIn" | "serviceAccessReview";
 
 export interface LoginRedirectOptions {
   readonly returnTo?: string;
-  readonly prompt?: 'none' | 'consent' | 'login' | (string & {});
+  readonly flow?: AuthFlow;
 }
 
 export interface AuthCallbackResult {
   readonly session: NyxIDAuthSession;
   readonly returnTo: string;
+  readonly flow: AuthFlow;
 }
 
 const PENDING_KEY_PREFIX = 'aevatar-console:nyxid:pending:';
+export const SERVICE_ACCESS_REVIEW_RETURN_TO = "/settings?section=account";
 let pendingRefreshPromise: Promise<NyxIDAuthSession | null> | null = null;
+
+export class NyxIDAuthCallbackError extends Error {
+  readonly flow: AuthFlow;
+  readonly returnTo: string;
+
+  constructor(
+    message: string,
+    options: {
+      readonly flow: AuthFlow;
+      readonly returnTo: string;
+    },
+  ) {
+    super(message);
+    this.name = "NyxIDAuthCallbackError";
+    this.flow = options.flow;
+    this.returnTo = options.returnTo;
+  }
+}
 
 function base64UrlEncode(input: Uint8Array): string {
   let binary = '';
@@ -61,6 +84,30 @@ async function sha256Base64Url(input: string): Promise<string> {
     new TextEncoder().encode(input),
   );
   return base64UrlEncode(new Uint8Array(digest));
+}
+
+function readAuthFlow(value: unknown): AuthFlow {
+  return value === "serviceAccessReview" ? "serviceAccessReview" : "signIn";
+}
+
+function resolveReturnToForFlow(flow: AuthFlow, returnTo?: string | null): string {
+  if (flow === "serviceAccessReview") {
+    return SERVICE_ACCESS_REVIEW_RETURN_TO;
+  }
+
+  return sanitizeReturnTo(returnTo);
+}
+
+function describeOAuthCallbackError(
+  oauthError: string,
+  description: string | null,
+  flow: AuthFlow,
+): string {
+  if (flow === "serviceAccessReview") {
+    return "NyxID service access review was cancelled or denied. Your current Studio session is still active; choose Manage service access to try again.";
+  }
+
+  return description?.trim() || `OAuth error: ${oauthError}`;
 }
 
 export class NyxIDAuthClient {
@@ -95,7 +142,8 @@ export class NyxIDAuthClient {
     const loginConfig = await loadBackendNyxIDLoginConfig();
     const redirectUri = this.config.redirectUri;
     const scope = loginConfig.scope;
-    const returnTo = sanitizeReturnTo(options.returnTo);
+    const flow = readAuthFlow(options.flow);
+    const returnTo = resolveReturnToForFlow(flow, options.returnTo);
 
     const pending: PendingAuthState = {
       state,
@@ -104,6 +152,7 @@ export class NyxIDAuthClient {
       scope,
       returnTo,
       clientId: loginConfig.clientId,
+      flow,
     };
     this.storage.setItem(this.resolvePendingKey(loginConfig), JSON.stringify(pending));
 
@@ -115,8 +164,8 @@ export class NyxIDAuthClient {
     url.searchParams.set('code_challenge', codeChallenge);
     url.searchParams.set('code_challenge_method', 'S256');
     url.searchParams.set('state', state);
-    if (options.prompt) {
-      url.searchParams.set('prompt', options.prompt);
+    if (flow === "serviceAccessReview") {
+      url.searchParams.set('prompt', 'consent');
     }
 
     window.location.assign(url.toString());
@@ -161,19 +210,36 @@ export class NyxIDAuthClient {
   ): Promise<AuthCallbackResult> {
     const callback = new URL(currentUrl);
     const oauthError = callback.searchParams.get('error');
+    const state = callback.searchParams.get('state');
+    const storedPending = state ? this.loadPendingState(state) : null;
+    const pendingFlow = readAuthFlow(storedPending?.pending.flow);
+    const pendingReturnTo = resolveReturnToForFlow(
+      pendingFlow,
+      storedPending?.pending.returnTo,
+    );
     if (oauthError) {
-      throw new Error(
-        callback.searchParams.get('error_description') ?? `OAuth error: ${oauthError}`,
+      if (storedPending) {
+        this.storage.removeItem(storedPending.key);
+      }
+
+      throw new NyxIDAuthCallbackError(
+        describeOAuthCallbackError(
+          oauthError,
+          callback.searchParams.get('error_description'),
+          pendingFlow,
+        ),
+        {
+          flow: pendingFlow,
+          returnTo: pendingReturnTo,
+        },
       );
     }
 
     const code = callback.searchParams.get('code');
-    const state = callback.searchParams.get('state');
     if (!code || !state) {
       throw new Error('Missing authorization code or state');
     }
 
-    const storedPending = this.loadPendingState(state);
     if (!storedPending) {
       throw new Error('Missing PKCE state in storage');
     }
@@ -184,10 +250,14 @@ export class NyxIDAuthClient {
     }
 
     try {
+      const flow = readAuthFlow(pending.flow);
       const result = await finalizeBackendNyxIDLogin({
         code,
         codeVerifier: pending.codeVerifier,
         redirectUri: pending.redirectUri,
+        ...(flow === "serviceAccessReview"
+          ? { serviceAccessReview: true }
+          : {}),
       });
       const { session } = result;
 
@@ -196,7 +266,8 @@ export class NyxIDAuthClient {
 
       return {
         session,
-        returnTo: sanitizeReturnTo(pending.returnTo),
+        returnTo: resolveReturnToForFlow(flow, pending.returnTo),
+        flow,
       };
     } catch (error) {
       this.storage.removeItem(pendingKey);

@@ -127,6 +127,87 @@ describe("NyxID backend auth API", () => {
     });
   });
 
+  it("sends the service access review finalization flag only when requested", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        tokens: {
+          accessToken: "access-token",
+          tokenType: "Bearer",
+          expiresIn: 1800,
+        },
+        user: {
+          sub: "owner-user-1",
+        },
+        bindingDispatchAccepted: true,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await finalizeBackendNyxIDLogin({
+      code: "auth-code",
+      codeVerifier: "pkce-verifier",
+      redirectUri: "http://localhost:8000/auth/callback",
+      serviceAccessReview: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      code: "auth-code",
+      codeVerifier: "pkce-verifier",
+      redirectUri: "http://localhost:8000/auth/callback",
+      serviceAccessReview: true,
+    });
+  });
+
+  it.each([
+    [
+      409,
+      "required_service_access_missing",
+      "NyxID service access is still missing. Open Account settings, choose Manage service access, and try again.",
+    ],
+    [
+      409,
+      "issued_binding_invalid",
+      "NyxID returned a service binding that could not be accepted. Open Account settings, choose Manage service access, and try again.",
+    ],
+    [
+      502,
+      "issued_binding_probe_failed",
+      "NyxID service binding verification failed after the review. The service may be temporarily unavailable; try Manage service access again.",
+    ],
+    [
+      503,
+      "binding_probe_failed",
+      "NyxID service binding verification failed. The service may be temporarily unavailable; try Manage service access again.",
+    ],
+  ])(
+    "returns retry guidance for service access review backend error %s %s",
+    async (status, code, message) => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status,
+        statusText: status === 409 ? "Conflict" : "Service Unavailable",
+        text: async () =>
+          JSON.stringify({
+            code,
+            message: "backend raw message",
+          }),
+      } as Response);
+      global.fetch = fetchMock as typeof global.fetch;
+
+      await expect(
+        finalizeBackendNyxIDLogin({
+          code: "auth-code",
+          codeVerifier: "pkce-verifier",
+          redirectUri: "http://localhost:8000/auth/callback",
+          serviceAccessReview: true,
+        }),
+      ).rejects.toThrow(message);
+    },
+  );
+
   it("refreshes a NyxID token set through the OAuth refresh grant", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
