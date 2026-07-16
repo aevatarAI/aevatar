@@ -115,13 +115,6 @@ export class NyxIDAuthClient {
     url.searchParams.set('code_challenge', codeChallenge);
     url.searchParams.set('code_challenge_method', 'S256');
     url.searchParams.set('state', state);
-    for (const serviceSlug of this.config.defaultServiceSlugs) {
-      const resourceUri = new URL(
-        `/api/v1/proxy/s/${encodeURIComponent(serviceSlug)}`,
-        loginConfig.baseUrl,
-      );
-      url.searchParams.append('resource', resourceUri.toString());
-    }
     if (options.prompt) {
       url.searchParams.set('prompt', options.prompt);
     }

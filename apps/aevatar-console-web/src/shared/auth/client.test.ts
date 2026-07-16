@@ -13,12 +13,6 @@ const runtimeConfig: NyxIDRuntimeConfig = {
   clientId: "console-client-1",
   redirectUri: "http://localhost:8000/auth/callback",
   scope: "openid profile email",
-  defaultServiceSlugs: [
-    "aevatar",
-    "ornn-api",
-    "chrono-llm-public",
-    "chrono-sandbox",
-  ],
 };
 
 function installLocationAssignSpy() {
@@ -106,12 +100,7 @@ describe("NyxIDAuthClient", () => {
     expect(authorizeUrl.searchParams.get("scope")).toBe(
       "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
     );
-    expect(authorizeUrl.searchParams.getAll("resource")).toEqual([
-      "https://nyx.example/api/v1/proxy/s/aevatar",
-      "https://nyx.example/api/v1/proxy/s/ornn-api",
-      "https://nyx.example/api/v1/proxy/s/chrono-llm-public",
-      "https://nyx.example/api/v1/proxy/s/chrono-sandbox",
-    ]);
+    expect(authorizeUrl.searchParams.getAll("resource")).toEqual([]);
 
     const pending = JSON.parse(
       window.localStorage.getItem(
