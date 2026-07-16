@@ -722,7 +722,7 @@ function mergeToolCalls(msg, calls){
 
 /* ---- Schedules (GET /api/schedules) ------------------------------------ */
 const TARGET_KIND_LABEL = { 0:"Envelope", 1:"ServiceInvocation" };
-const SCHEDULE_KIND_LABEL = { 0:"Generic", 1:"Workflow", 2:"SkillRunner" };
+const SCHEDULE_KIND_LABEL = { 0:"Generic", 1:"Workflow" };
 function targetKindLabel(k){ return TARGET_KIND_LABEL[k] != null ? TARGET_KIND_LABEL[k] : ("kind " + k); }
 function scheduleKindLabel(k){ return SCHEDULE_KIND_LABEL[k] != null ? SCHEDULE_KIND_LABEL[k] : ("kind " + k); }
 

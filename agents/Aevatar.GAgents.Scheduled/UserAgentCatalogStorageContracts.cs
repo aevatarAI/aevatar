@@ -7,7 +7,6 @@ internal static class UserAgentCatalogStorageContracts
     // to avoid colliding with the legacy AgentRegistry materialization scope actor type.
     public const string StoreActorId = "agent-registry-store";
     public const string ReadModelIndexName = "agent-registry";
-    public const string RunnerExecutionReadModelIndexName = "skill-runner-execution";
     public const string LegacyDurableProjectionKind = "agent-registry";
     public const string DurableProjectionKind = "user-agent-catalog-read-model";
 }

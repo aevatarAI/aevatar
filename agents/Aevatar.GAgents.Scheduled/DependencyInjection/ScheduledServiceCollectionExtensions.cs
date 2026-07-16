@@ -67,29 +67,22 @@ public static class ScheduledServiceCollectionExtensions
             UserAgentCatalogProjector>();
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
-            SkillRunnerExecutionProjector>();
-        services.AddCurrentStateProjectionMaterializer<
-            UserAgentCatalogMaterializationContext,
             UserAgentCatalogNyxCredentialProjector>();
         services.AddCurrentStateProjectionMaterializer<
             UserAgentCatalogMaterializationContext,
             UserAgentApiKeyRevocationProjector>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogDocument>,
             UserAgentCatalogDocumentMetadataProvider>();
-        services.TryAddSingleton<IProjectionDocumentMetadataProvider<SkillRunnerExecutionDocument>,
-            SkillRunnerExecutionDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentCatalogNyxCredentialDocument>,
             UserAgentCatalogNyxCredentialDocumentMetadataProvider>();
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<UserAgentApiKeyRevocationDocument>,
             UserAgentApiKeyRevocationDocumentMetadataProvider>();
         services.TryAddSingleton<IUserAgentCatalogQueryPort, UserAgentCatalogQueryPort>();
-        services.TryAddSingleton<ISkillRunnerExecutionQueryPort, SkillRunnerExecutionQueryPort>();
         // Internal-only credential-bearing reader for outbound delivery (issue #466 §D).
         // Architecture rule: NEVER inject IUserAgentDeliveryTargetReader into an
         // IAgentTool implementation; LLM tools see only the caller-scoped public port
         // (which excludes NyxApiKey by DTO shape).
         services.TryAddSingleton<IUserAgentDeliveryTargetReader, UserAgentDeliveryTargetReader>();
-        services.TryAddSingleton<ISkillRunnerOutboundDeliveryPort, ChannelNativeSkillRunnerOutboundDeliveryPort>();
         services.TryAddSingleton<UserAgentCatalogProjectionBootstrapActivator>();
         services.TryAddSingleton<IUserAgentCatalogCommandPort, UserAgentCatalogCommandPort>();
         services.AddEventSinkProjectionRuntimeCore<
@@ -119,8 +112,6 @@ public static class ScheduledServiceCollectionExtensions
             UserAgentCatalogCredentialRepairObservationPort>();
         services.TryAddSingleton<IUserAgentCatalogCredentialRepairPort, UserAgentCatalogCredentialRepairPort>();
         services.TryAddSingleton<IScheduledWorkflowAgentCreationPort, ScheduledWorkflowAgentCreationPort>();
-        services.TryAddSingleton<ISkillRunnerCronSchedulePort, SkillRunnerCronSchedulePort>();
-        services.TryAddSingleton<ISkillRunnerCommandPort, SkillRunnerCommandPort>();
         services.TryAddSingleton<ScheduledAgentCreatorOptions>();
         services.TryAddSingleton<ScheduledAgentCreateRequestMapper>();
         services.TryAddSingleton<ScheduledAgentApiKeyIssuer>();
@@ -151,9 +142,6 @@ public static class ScheduledServiceCollectionExtensions
             ServiceDescriptor.Singleton<ITombstoneCompactionTarget, UserAgentCatalogTombstoneCompactionTarget>());
 
         // ─── Committed-fact audit translators (lifecycle / authorization) ───
-        // Both the user-agent catalog and skill-runner committed state events route
-        // through UserAgentCatalogMaterializationContext, so a single audit
-        // materializer for that context covers both event families.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IAuditCommittedEventTranslator, UserAgentCatalogUpsertedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
@@ -162,24 +150,6 @@ public static class ScheduledServiceCollectionExtensions
             IAuditCommittedEventTranslator, UserAgentCatalogSharedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IAuditCommittedEventTranslator, UserAgentCatalogUnsharedAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerInitializedAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerEnabledAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerDisabledAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerOneShotRetiredAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerExternalTriggerAdmittedAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerExternalTriggerRejectedAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerExecutionCompletedAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerExecutionFailedAuditTranslator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            IAuditCommittedEventTranslator, SkillRunnerExecutionRejectedAuditTranslator>());
         services.AddAuditCommittedFactMaterializer<UserAgentCatalogMaterializationContext>();
 
         return services;
@@ -193,8 +163,6 @@ public static class ScheduledServiceCollectionExtensions
     private static object CreateAgentBuilderToolSource(IServiceProvider sp) =>
         new AgentBuilderToolSource(
             sp.GetRequiredService<IUserAgentCatalogQueryPort>(),
-            sp.GetRequiredService<ISkillRunnerExecutionQueryPort>(),
-            sp.GetRequiredService<ISkillRunnerCommandPort>(),
             sp.GetRequiredService<IScheduledDispatchApplicationService>(),
             sp.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             sp.GetRequiredService<IUserAgentCatalogCommandPort>(),

@@ -28,6 +28,8 @@ target_repo: aevatarAI/aevatar
 
 **当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
 
+**Scheduled runner retirement note**：Any later reference in this RFC to `SkillRunnerGAgent`, `SkillRunner`, `SkillRunnerState`, `SkillRunnerScheduleCalculator`, or `skill_runner_id` is also historical. Scheduled workflow/team automation now uses `ScheduledDispatchGAgent` plus workflow/team service invocation. Generic skill loading remains on the normal AI/tool-provider path and NyxidChat slash-skill recovery.
+
 直接在这个大包里继续加 channel 会让边界进一步模糊。需要引入 **channel-agnostic 抽象层**，把业务逻辑和 channel 细节隔离，并把 ChannelRuntime 的多职责按概念拆成独立包。
 
 ## 2. 目标

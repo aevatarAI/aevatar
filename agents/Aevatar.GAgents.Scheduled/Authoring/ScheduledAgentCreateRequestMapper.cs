@@ -57,7 +57,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
         var skillRefText = Normalize(args.Str("skill_ref"));
         var hasSkillRef = skillRefText is not null;
-        if (scheduleMode == SkillRunnerScheduleMode.Cron && !hasSkillRef)
+        if (scheduleMode == ScheduledAgentScheduleMode.Cron && !hasSkillRef)
             return ScheduledAgentCreatePlanResult.Failed("skill_ref is required");
 
         var referenceParse = hasSkillRef
@@ -69,11 +69,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
         var reference = referenceParse.Reference!;
         var nowUtc = DateTimeOffset.UtcNow;
         var cron = Normalize(args.Str("schedule_cron")) ?? string.Empty;
-        var timezone = Normalize(args.Str("schedule_timezone")) ?? SkillRunnerDefaults.DefaultTimezone;
+        var timezone = Normalize(args.Str("schedule_timezone")) ?? ScheduledWorkflowAgentDefaults.DefaultTimezone;
         DateTimeOffset? oneShotRunAt = null;
         string? oneShotMessage = Normalize(args.Str("one_shot_message"));
 
-        if (scheduleMode == SkillRunnerScheduleMode.OneShot)
+        if (scheduleMode == ScheduledAgentScheduleMode.OneShot)
         {
             if (args.Bool("run_immediately") == true)
                 return ScheduledAgentCreatePlanResult.Failed("run_immediately is not supported for one_shot schedules");
@@ -111,8 +111,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (!TryParseOutputFormat(args.Str("output_format"), out var outputFormat, out var outputFormatError))
             return ScheduledAgentCreatePlanResult.Failed(outputFormatError);
 
-        var externalTriggerSources = args.ExternalTriggerSources("external_trigger_sources");
-        if (externalTriggerSources.Count > 0)
+        if (args.HasNonEmptyArray("external_trigger_sources"))
             return ScheduledAgentCreatePlanResult.Failed("external_trigger_sources are not supported for scheduled workflow agents");
 
         if (!args.TryStringArray("required_service_slugs", out var requiredServiceSlugs, out var requiredServiceSlugsError))
@@ -188,7 +187,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             DisplayName: request.DisplayName ?? request.Reference.Name,
             WorkflowName: ResolveWorkflowName(request),
             Prompt: ResolveWorkflowPrompt(request),
-            CronExpression: request.ScheduleMode == SkillRunnerScheduleMode.OneShot
+            CronExpression: request.ScheduleMode == ScheduledAgentScheduleMode.OneShot
                 ? string.Empty
                 : request.ScheduleCron,
             Timezone: request.ScheduleTimezone,
@@ -196,7 +195,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             Headers: BuildWorkflowHeaders(request, issuedKey),
             ScopeId: request.ScopeId,
             Auth: BuildWorkflowScheduleAuth(secretReference, issuedKey),
-            ScheduleMode: request.ScheduleMode == SkillRunnerScheduleMode.OneShot
+            ScheduleMode: request.ScheduleMode == ScheduledAgentScheduleMode.OneShot
                 ? WorkflowScheduleMode.OneShotAtUtc
                 : WorkflowScheduleMode.RecurringCron,
             OneShotFireAt: request.OneShotRunAtUtc);
@@ -269,25 +268,25 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
     private static bool TryParseScheduleMode(
         string? value,
-        out SkillRunnerScheduleMode scheduleMode,
+        out ScheduledAgentScheduleMode scheduleMode,
         out string error)
     {
         error = string.Empty;
         var normalized = Normalize(value);
         if (normalized is null || normalized.Equals("cron", StringComparison.OrdinalIgnoreCase))
         {
-            scheduleMode = SkillRunnerScheduleMode.Cron;
+            scheduleMode = ScheduledAgentScheduleMode.Cron;
             return true;
         }
 
         if (normalized.Equals("one_shot", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("one-shot", StringComparison.OrdinalIgnoreCase))
         {
-            scheduleMode = SkillRunnerScheduleMode.OneShot;
+            scheduleMode = ScheduledAgentScheduleMode.OneShot;
             return true;
         }
 
-        scheduleMode = SkillRunnerScheduleMode.Unspecified;
+        scheduleMode = ScheduledAgentScheduleMode.Unspecified;
         error = "schedule_mode must be one of: cron, one_shot";
         return false;
     }
@@ -375,7 +374,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
             : request.Reference.Name;
 
     private static string ResolveWorkflowPrompt(ScheduledAgentCreatePlannedRequest request) =>
-        request.ScheduleMode == SkillRunnerScheduleMode.OneShot && string.IsNullOrWhiteSpace(request.Reference.Name)
+        request.ScheduleMode == ScheduledAgentScheduleMode.OneShot && string.IsNullOrWhiteSpace(request.Reference.Name)
             ? request.OneShotMessage ?? string.Empty
             : request.ExecutionPrompt ?? "Execute the configured workflow and return plain text only.";
 
@@ -444,10 +443,10 @@ internal sealed class ScheduledAgentCreateRequestMapper
 
     private static bool TryParseOutputFormat(
         string? value,
-        out SkillRunnerOutputFormat outputFormat,
+        out ScheduledAgentOutputFormat outputFormat,
         out string error)
     {
-        outputFormat = SkillRunnerOutputFormat.Auto;
+        outputFormat = ScheduledAgentOutputFormat.Auto;
         error = string.Empty;
         var normalized = Normalize(value);
         if (normalized is null)
@@ -456,14 +455,14 @@ internal sealed class ScheduledAgentCreateRequestMapper
         switch (normalized.ToLowerInvariant())
         {
             case "auto":
-                outputFormat = SkillRunnerOutputFormat.Auto;
+                outputFormat = ScheduledAgentOutputFormat.Auto;
                 return true;
             case "text":
-                outputFormat = SkillRunnerOutputFormat.Text;
+                outputFormat = ScheduledAgentOutputFormat.Text;
                 return true;
             case "feishu_doc":
             case "feishu-doc":
-                outputFormat = SkillRunnerOutputFormat.FeishuDoc;
+                outputFormat = ScheduledAgentOutputFormat.FeishuDoc;
                 return true;
             default:
                 error = "output_format must be one of: auto, text, feishu_doc";
@@ -616,72 +615,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
             return true;
         }
 
-        public IReadOnlyList<ExternalTriggerSource> ExternalTriggerSources(string name)
-        {
-            if (!Properties.TryGetValue(name, out var element) ||
-                element.ValueKind != JsonValueKind.Array)
-            {
-                return [];
-            }
+        public bool HasNonEmptyArray(string name) =>
+            Properties.TryGetValue(name, out var element) &&
+            element.ValueKind == JsonValueKind.Array &&
+            element.GetArrayLength() > 0;
 
-            var sources = new List<ExternalTriggerSource>();
-            foreach (var sourceElement in element.EnumerateArray())
-            {
-                if (sourceElement.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                var sourceId = ReadString(sourceElement, "source_id")?.Trim();
-                if (string.IsNullOrWhiteSpace(sourceId))
-                    continue;
-
-                sources.Add(new ExternalTriggerSource
-                {
-                    SourceId = sourceId,
-                    Kind = ParseKind(ReadString(sourceElement, "kind")),
-                    Enabled = ReadBool(sourceElement, "enabled") ?? true,
-                    DisplayName = ReadString(sourceElement, "display_name")?.Trim() ?? string.Empty,
-                });
-            }
-
-            return sources;
-        }
-
-        private static ExternalTriggerSourceKind ParseKind(string? value) =>
-            value?.Trim().ToLowerInvariant() switch
-            {
-                "channel_inbound" or "channel-inbound" => ExternalTriggerSourceKind.ChannelInbound,
-                "webhook" => ExternalTriggerSourceKind.Webhook,
-                _ => ExternalTriggerSourceKind.Webhook,
-            };
-
-        private static string? ReadString(JsonElement element, string name)
-        {
-            if (!element.TryGetProperty(name, out var value))
-                return null;
-
-            return value.ValueKind switch
-            {
-                JsonValueKind.String => value.GetString(),
-                JsonValueKind.Number => value.GetRawText(),
-                JsonValueKind.True => "true",
-                JsonValueKind.False => "false",
-                _ => null,
-            };
-        }
-
-        private static bool? ReadBool(JsonElement element, string name)
-        {
-            if (!element.TryGetProperty(name, out var value))
-                return null;
-
-            return value.ValueKind switch
-            {
-                JsonValueKind.True => true,
-                JsonValueKind.False => false,
-                JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
-                _ => null,
-            };
-        }
     }
 }
 
@@ -723,7 +661,7 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     string? ExecutionPrompt,
     string ScheduleCron,
     string ScheduleTimezone,
-    SkillRunnerScheduleMode ScheduleMode,
+    ScheduledAgentScheduleMode ScheduleMode,
     DateTimeOffset? OneShotRunAtUtc,
     string? OneShotMessage,
     string ScopeId,
@@ -734,7 +672,7 @@ internal sealed record ScheduledAgentCreatePlannedRequest(
     int? MaxToolRounds,
     int? MaxHistoryMessages,
     bool RequiresNyxidProxySuccess,
-    SkillRunnerOutputFormat OutputFormat,
+    ScheduledAgentOutputFormat OutputFormat,
     bool RunImmediately,
     string ConversationId,
     string PrimaryOutboundSlug,

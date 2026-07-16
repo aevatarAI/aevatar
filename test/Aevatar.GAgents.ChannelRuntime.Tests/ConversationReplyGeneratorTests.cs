@@ -2237,8 +2237,6 @@ public sealed class ConversationReplyGeneratorTests
         var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions());
         var agentBuilderSource = new AgentBuilderToolSource(
             Substitute.For<IUserAgentCatalogQueryPort>(),
-            Substitute.For<ISkillRunnerExecutionQueryPort>(),
-            Substitute.For<ISkillRunnerCommandPort>(),
             Substitute.For<IScheduledDispatchApplicationService>(),
             Substitute.For<IScheduledWorkflowAgentCreationPort>(),
             catalogCommandPort,

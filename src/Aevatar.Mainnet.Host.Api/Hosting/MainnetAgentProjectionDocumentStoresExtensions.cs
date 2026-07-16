@@ -127,7 +127,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<ChatRoutePolicyCurrentStateDocument>(services, configuration, static document => document.ActorId);
         TryAddElasticsearchStore<DeviceRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogDocument>(services, configuration, static document => document.Id);
-        TryAddElasticsearchStore<SkillRunnerExecutionDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogNyxCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentApiKeyRevocationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<HealthProbeTargetDocument>(services, configuration, static document => document.Id);
@@ -147,7 +146,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddInMemoryStore<ChatRoutePolicyCurrentStateDocument>(services, static document => document.ActorId);
         TryAddInMemoryStore<DeviceRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogDocument>(services, static document => document.Id);
-        TryAddInMemoryStore<SkillRunnerExecutionDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogNyxCredentialDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentApiKeyRevocationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<HealthProbeTargetDocument>(services, static document => document.Id);
@@ -180,7 +178,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<ChatRoutePolicyCurrentStateDocument>(services, "chat-route-policy-current-state", "ChatRoutePolicyGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<DeviceRegistrationDocument>(services, "device-registration", "DeviceGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);
-        TryAddReadModelDescriptor<SkillRunnerExecutionDocument>(services, "skill-runner-execution", "SkillRunnerGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogNyxCredentialDocument>(services, "user-agent-catalog-nyx-credential", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentApiKeyRevocationDocument>(services, "user-agent-api-key-revocation", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<HealthProbeTargetDocument>(services, "health-probe-target", "HealthProbeGAgent", engineLabel, shape);

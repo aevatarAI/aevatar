@@ -206,7 +206,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         // sends, and HttpClient sends none by default, so without this every GitHub call lands
         // as 403 "Request forbidden by administrative rules". Inject a default for *all* proxy
         // targets — non-GitHub services don't care about UA either way, and pinning it at the
-        // proxy boundary means SkillRunner / agent-builder / preflight all benefit without
+        // proxy boundary means scheduled agents, agent-builder, and preflight all benefit without
         // every call site remembering to pass it.
         if (!callerSpecifiedUserAgent)
             request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);

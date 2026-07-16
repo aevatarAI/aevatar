@@ -34,7 +34,6 @@ scope_service_script_stream_hits="$(
 
 command_path_hits="$(
   rg -n "EnsureProjectionForActorAsync|EnsureChatProjectionAsync|EnsureSubscriptionProjectionAsync|EnsureAndAttachLeaseAsync|ActivateAsync|PrimeAsync" \
-    agents/Aevatar.GAgents.Scheduled/SkillRunnerCommandPort.cs \
     agents/Aevatar.GAgents.Scheduled/UserAgentCatalogCommandPort.cs \
     agents/Aevatar.GAgents.StreamingProxy/Application/Rooms/StreamingProxyRoomCommandService.cs \
     || true

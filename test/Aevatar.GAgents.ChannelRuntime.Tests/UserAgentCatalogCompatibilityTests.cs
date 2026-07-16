@@ -27,7 +27,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                 new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-1",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = ScheduledWorkflowAgentDefaults.AgentType,
                     TemplateName = "summary",
                 },
             },
@@ -71,7 +71,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                 Entry = new UserAgentCatalogEntry
                 {
                     AgentId = "agent-compat-2",
-                    AgentType = SkillRunnerDefaults.AgentType,
+                    AgentType = ScheduledWorkflowAgentDefaults.AgentType,
                     TemplateName = "legacy-template",
                 },
             });
@@ -106,7 +106,7 @@ public sealed class UserAgentCatalogCompatibilityTests
                     Entry = new UserAgentCatalogEntry
                     {
                         AgentId = "agent-compat-3",
-                        AgentType = SkillRunnerDefaults.AgentType,
+                        AgentType = ScheduledWorkflowAgentDefaults.AgentType,
                         TemplateName = "summary",
                     },
                 }),

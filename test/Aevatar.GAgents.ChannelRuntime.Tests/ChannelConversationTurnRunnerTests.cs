@@ -2406,8 +2406,6 @@ public sealed class ChannelConversationTurnRunnerTests
         var callerScopeResolver = new CapturingCallerScopeResolver();
         var services = new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
             .AddSingleton(Substitute.For<IWorkflowScheduleApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
@@ -4563,8 +4561,6 @@ public sealed class ChannelConversationTurnRunnerTests
 
         var services = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
             .AddSingleton(Substitute.For<IWorkflowScheduleApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())

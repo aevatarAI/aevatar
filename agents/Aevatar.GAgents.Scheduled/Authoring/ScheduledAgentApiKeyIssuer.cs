@@ -181,7 +181,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         }
 
         // The scheduled run pins the bot owner's pre-configured NyxID LLM route
-        // (OwnerLlmConfigApplier, mirrored by SkillRunnerGAgent/WorkflowAgentGAgent). When that
+        // (OwnerLlmConfigApplier, mirrored by scheduled workflow execution). When that
         // route is a custom proxy service (e.g. `/api/v1/proxy/s/chrono-llm`) rather than the
         // shared gateway, the scoped key must be authorized for that UserService — otherwise
         // NyxID's proxy scope check rejects every run with HTTP 403 api_key_scope_forbidden
