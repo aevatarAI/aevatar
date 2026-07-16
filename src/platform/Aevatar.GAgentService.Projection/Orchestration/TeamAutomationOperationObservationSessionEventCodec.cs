@@ -64,7 +64,16 @@ public sealed class TeamAutomationOperationObservationSessionEventCodec
             ToCredentialReference(observed.PendingRevocationCredential),
             ToAuthorizationOwner(observed.PendingRevocationOwner),
             observed.NyxidRevocationPending,
-            observed.VaultRevocationPending);
+            observed.VaultRevocationPending,
+            observed.EffectAttemptId ?? string.Empty,
+            observed.EffectAttemptGeneration,
+            observed.EffectAttemptExpiresAt?.ToDateTimeOffset(),
+            ToCredentialReference(observed.CandidateCredential),
+            ToAuthorizationOwner(observed.CandidateOwner),
+            ToCredentialEffectLocator(observed.CredentialEffectLocator),
+            observed.MutationDigest ?? string.Empty,
+            observed.ObservationRequestId ?? string.Empty,
+            ToObservationStatus(observed.ObservationStatus));
     }
 
     private static TeamAutomationOperationObservedEvent ToProto(
@@ -85,7 +94,78 @@ public sealed class TeamAutomationOperationObservationSessionEventCodec
             PendingRevocationOwner = ToAuthorizationOwnerState(outcome.PendingRevocationOwner),
             NyxidRevocationPending = outcome.NyxIdRevocationPending,
             VaultRevocationPending = outcome.VaultRevocationPending,
+            EffectAttemptId = outcome.EffectAttemptId ?? string.Empty,
+            EffectAttemptGeneration = outcome.EffectAttemptGeneration,
+            EffectAttemptExpiresAt = outcome.EffectAttemptExpiresAtUtc.HasValue
+                ? Timestamp.FromDateTimeOffset(outcome.EffectAttemptExpiresAtUtc.Value.ToUniversalTime())
+                : null,
+            CandidateCredential = ToCredentialReferenceState(outcome.CandidateCredential),
+            CandidateOwner = ToAuthorizationOwnerState(outcome.CandidateOwner),
+            CredentialEffectLocator = ToCredentialEffectLocatorState(outcome.CredentialEffectLocator),
+            MutationDigest = outcome.MutationDigest ?? string.Empty,
+            ObservationRequestId = outcome.ObservationRequestId ?? string.Empty,
+            ObservationStatus = ToObservationStatusState(outcome.Status),
         };
+
+    private static TeamAutomationOperationObservationStatus ToObservationStatus(
+        TeamAutomationOperationObservationStatusState status) => status switch
+    {
+        TeamAutomationOperationObservationStatusState.Unspecified or
+            TeamAutomationOperationObservationStatusState.Committed =>
+            TeamAutomationOperationObservationStatus.Committed,
+        TeamAutomationOperationObservationStatusState.RejectedInvalidRequest =>
+            TeamAutomationOperationObservationStatus.RejectedInvalidRequest,
+        TeamAutomationOperationObservationStatusState.RejectedConflict =>
+            TeamAutomationOperationObservationStatus.RejectedConflict,
+        TeamAutomationOperationObservationStatusState.RejectedUnauthorized =>
+            TeamAutomationOperationObservationStatus.RejectedUnauthorized,
+        TeamAutomationOperationObservationStatusState.RejectedNotFound =>
+            TeamAutomationOperationObservationStatus.RejectedNotFound,
+        _ => throw new InvalidOperationException(
+            $"Unknown Team automation operation observation status '{status}'."),
+    };
+
+    private static TeamAutomationOperationObservationStatusState ToObservationStatusState(
+        TeamAutomationOperationObservationStatus status) => status switch
+    {
+        TeamAutomationOperationObservationStatus.Committed =>
+            TeamAutomationOperationObservationStatusState.Committed,
+        TeamAutomationOperationObservationStatus.RejectedInvalidRequest =>
+            TeamAutomationOperationObservationStatusState.RejectedInvalidRequest,
+        TeamAutomationOperationObservationStatus.RejectedConflict =>
+            TeamAutomationOperationObservationStatusState.RejectedConflict,
+        TeamAutomationOperationObservationStatus.RejectedUnauthorized =>
+            TeamAutomationOperationObservationStatusState.RejectedUnauthorized,
+        TeamAutomationOperationObservationStatus.RejectedNotFound =>
+            TeamAutomationOperationObservationStatusState.RejectedNotFound,
+        _ => throw new InvalidOperationException(
+            $"Unknown Team automation operation observation status '{status}'."),
+    };
+
+    private static ScheduledCredentialEffectLocator? ToCredentialEffectLocator(
+        ScheduledCredentialEffectLocatorState? locator) =>
+        locator == null
+            ? null
+            : new ScheduledCredentialEffectLocator(
+                locator.CredentialName ?? string.Empty,
+                locator.RequestedSecretReference ?? string.Empty,
+                locator.SecretPurpose ?? string.Empty,
+                locator.SecretOwnerScopeKey ?? string.Empty,
+                ToAuthorizationOwner(locator.CredentialOwner)
+                    ?? new ScheduledInvocationAuthorizationOwner(string.Empty, string.Empty, string.Empty));
+
+    private static ScheduledCredentialEffectLocatorState? ToCredentialEffectLocatorState(
+        ScheduledCredentialEffectLocator? locator) =>
+        locator == null
+            ? null
+            : new ScheduledCredentialEffectLocatorState
+            {
+                CredentialName = locator.CredentialName ?? string.Empty,
+                RequestedSecretReference = locator.RequestedSecretReference ?? string.Empty,
+                SecretPurpose = locator.SecretPurpose ?? string.Empty,
+                SecretOwnerScopeKey = locator.SecretOwnerScopeKey ?? string.Empty,
+                CredentialOwner = ToAuthorizationOwnerState(locator.CredentialOwner),
+            };
 
     private static ScheduledInvocationAgentKeyCredentialReference? ToCredentialReference(
         ScheduledInvocationAgentKeyCredentialReferenceState? credential) =>

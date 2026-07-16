@@ -16,6 +16,25 @@ public sealed class NyxIdAuthorizationCatalogGAgent
 
     public static string ProjectionKind => DurableProjectionKind;
 
+    [EventHandler(EndpointName = "activateCatalog")]
+    public async Task HandleActivateAsync(ActivateNyxIdAuthorizationCatalogCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateOwner(command.Owner);
+        EnsureCurrentOwner(command.Owner);
+        if (command.ActivatedAt == null)
+            throw new InvalidOperationException("Catalog activation time is required.");
+        if (State.Activated)
+            return;
+
+        await PersistDomainEventAsync(new NyxIdAuthorizationCatalogActivatedEvent
+        {
+            Owner = command.Owner.Clone(),
+            ActivatedAt = command.ActivatedAt.Clone(),
+            LifecycleFence = State.LifecycleFence,
+        });
+    }
+
     [EventHandler(EndpointName = "observeCatalog")]
     public async Task HandleObserveAsync(ObserveNyxIdAuthorizationCatalogCommand command)
     {
@@ -23,6 +42,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         ValidateOwner(command.Owner);
         ValidateObservation(command);
         EnsureCurrentOwner(command.Owner);
+        EnsureLifecycleFence(State.LifecycleFence, command.ExpectedLifecycleFence);
 
         if (State.ObservedAt != null)
         {
@@ -50,6 +70,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             FreshUntil = command.FreshUntil.Clone(),
             ExternalRevision = command.ExternalRevision.Trim(),
             ContentDigest = command.ContentDigest.Trim(),
+            LifecycleFence = State.LifecycleFence,
         };
         observed.Services.Add(command.Services.Select(static service => service.Clone()));
         await PersistDomainEventAsync(observed);
@@ -93,6 +114,30 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             Owner = command.Owner.Clone(),
             InvalidatedAt = command.InvalidatedAt.Clone(),
             Reason = command.Reason.Trim(),
+            LifecycleFence = checked(State.LifecycleFence + 1),
+        });
+    }
+
+    [EventHandler(EndpointName = "cleanupCatalog")]
+    public async Task HandleCleanupAsync(CleanupNyxIdAuthorizationCatalogCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateOwner(command.Owner);
+        EnsureCurrentOwner(command.Owner);
+        if (command.CleanedAt == null || string.IsNullOrWhiteSpace(command.Reason))
+            throw new InvalidOperationException("Cleanup time and reason are required.");
+        if (State.Cleaned &&
+            string.Equals(State.CleanupReason, command.Reason.Trim(), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new NyxIdAuthorizationCatalogCleanedEvent
+        {
+            Owner = command.Owner.Clone(),
+            CleanedAt = command.CleanedAt.Clone(),
+            Reason = command.Reason.Trim(),
+            LifecycleFence = checked(State.LifecycleFence + 1),
         });
     }
 
@@ -100,10 +145,24 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         NyxIdAuthorizationCatalogState current,
         IMessage evt) => StateTransitionMatcher
         .Match(current, evt)
+        .On<NyxIdAuthorizationCatalogActivatedEvent>(ApplyActivated)
         .On<NyxIdAuthorizationCatalogObservedEvent>(ApplyObserved)
         .On<NyxIdAuthorizationCatalogRefreshFailedEvent>(ApplyRefreshFailed)
         .On<NyxIdAuthorizationCatalogInvalidatedEvent>(ApplyInvalidated)
+        .On<NyxIdAuthorizationCatalogCleanedEvent>(ApplyCleaned)
         .OrCurrent();
+
+    private static NyxIdAuthorizationCatalogState ApplyActivated(
+        NyxIdAuthorizationCatalogState state,
+        NyxIdAuthorizationCatalogActivatedEvent evt)
+    {
+        var next = state.Clone();
+        next.Owner ??= evt.Owner.Clone();
+        next.Activated = true;
+        next.ActivatedAt = evt.ActivatedAt.Clone();
+        next.LifecycleFence = evt.LifecycleFence;
+        return next;
+    }
 
     private static NyxIdAuthorizationCatalogState ApplyObserved(
         NyxIdAuthorizationCatalogState state,
@@ -120,6 +179,11 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             InvalidationReason = string.Empty,
             LastRefreshFailedAt = state.LastRefreshFailedAt?.Clone(),
             LastRefreshFailureCode = state.LastRefreshFailureCode,
+            LifecycleFence = evt.LifecycleFence,
+            Activated = true,
+            ActivatedAt = state.ActivatedAt?.Clone() ?? evt.ObservedAt.Clone(),
+            Cleaned = false,
+            CleanupReason = string.Empty,
         };
         next.Services.Add(evt.Services.Select(static service => service.Clone()));
         return next;
@@ -145,13 +209,38 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Invalidated = true;
         next.InvalidationReason = evt.Reason;
         next.InvalidatedAt = evt.InvalidatedAt.Clone();
+        next.LifecycleFence = evt.LifecycleFence;
         return next;
     }
+
+    private static NyxIdAuthorizationCatalogState ApplyCleaned(
+        NyxIdAuthorizationCatalogState state,
+        NyxIdAuthorizationCatalogCleanedEvent evt) => new()
+    {
+        Owner = evt.Owner.Clone(),
+        Invalidated = true,
+        InvalidationReason = evt.Reason,
+        InvalidatedAt = evt.CleanedAt.Clone(),
+        LifecycleFence = evt.LifecycleFence,
+        Activated = false,
+        Cleaned = true,
+        CleanedAt = evt.CleanedAt.Clone(),
+        CleanupReason = evt.Reason,
+    };
 
     private void EnsureCurrentOwner(AuthorizationOwnerIdentity owner)
     {
         if (State.Owner != null && !OwnerEquals(State.Owner, owner))
             throw new InvalidOperationException("NyxID authorization catalog owner cannot change.");
+    }
+
+    internal static void EnsureLifecycleFence(long currentLifecycleFence, long expectedLifecycleFence)
+    {
+        if (expectedLifecycleFence < 0 || expectedLifecycleFence != currentLifecycleFence)
+        {
+            throw new InvalidOperationException(
+                "NyxID authorization catalog observation was superseded by a lifecycle change.");
+        }
     }
 
     private static void ValidateObservation(ObserveNyxIdAuthorizationCatalogCommand command)

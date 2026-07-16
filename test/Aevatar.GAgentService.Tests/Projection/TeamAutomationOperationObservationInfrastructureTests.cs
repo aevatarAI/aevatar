@@ -44,7 +44,15 @@ public sealed class TeamAutomationOperationObservationInfrastructureTests
                 1_800_000_000_000),
             new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "user-1"),
             true,
-            false);
+            false,
+            CredentialEffectLocator: new ScheduledCredentialEffectLocator(
+                "studio-schedule-abc",
+                "sec_studio_schedule_abc",
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                "schedule:schedule-1",
+                new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "user-1")),
+            MutationDigest: "mutation-digest-1",
+            ObservationRequestId: "observation-request-1");
 
         var eventType = codec.GetEventType(outcome);
         var decoded = codec.Deserialize(eventType, codec.Serialize(outcome));
@@ -54,6 +62,57 @@ public sealed class TeamAutomationOperationObservationInfrastructureTests
         decoded.Should().BeEquivalentTo(outcome);
         codec.Deserialize("different-event", codec.Serialize(outcome)).Should().BeNull();
         codec.Deserialize(eventType, ByteString.CopyFrom(new byte[] { 0x0A, 0x05 })).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(TeamAutomationOperationObservationStatus.RejectedInvalidRequest)]
+    [InlineData(TeamAutomationOperationObservationStatus.RejectedConflict)]
+    [InlineData(TeamAutomationOperationObservationStatus.RejectedUnauthorized)]
+    [InlineData(TeamAutomationOperationObservationStatus.RejectedNotFound)]
+    public void Codec_ShouldRoundTripTypedRejectedOutcome(
+        TeamAutomationOperationObservationStatus status)
+    {
+        var codec = new TeamAutomationOperationObservationSessionEventCodec();
+        var outcome = new TeamAutomationOperationCommittedOutcome(
+            "schedule-1",
+            "operation-1",
+            "idempotency-1",
+            TeamAutomationOperationObservationStages.Begin,
+            OwnsEffectAttempt: false,
+            StateVersion: 9,
+            ErrorCode: "team_automation_operation_conflict",
+            ErrorMessage: string.Empty,
+            ObservedAtUtc: DateTimeOffset.Parse("2026-07-16T08:30:00+00:00"),
+            PendingRevocationCredential: null,
+            PendingRevocationOwner: null,
+            NyxIdRevocationPending: false,
+            VaultRevocationPending: false,
+            ObservationRequestId: "request-1",
+            Status: status);
+
+        var decoded = codec.Deserialize(codec.GetEventType(outcome), codec.Serialize(outcome));
+
+        decoded.Should().BeEquivalentTo(outcome);
+    }
+
+    [Fact]
+    public void Codec_ShouldTreatLegacyUnspecifiedObservationAsCommitted()
+    {
+        var codec = new TeamAutomationOperationObservationSessionEventCodec();
+        var legacy = new TeamAutomationOperationObservedEvent
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-1",
+            IdempotencyKey = "idempotency-1",
+            Stage = TeamAutomationOperationObservationStages.Begin,
+            ObservedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UnixEpoch),
+        };
+
+        var decoded = codec.Deserialize(
+            TeamAutomationOperationObservedEvent.Descriptor.FullName,
+            legacy.ToByteString());
+
+        decoded!.Status.Should().Be(TeamAutomationOperationObservationStatus.Committed);
     }
 
     [Fact]

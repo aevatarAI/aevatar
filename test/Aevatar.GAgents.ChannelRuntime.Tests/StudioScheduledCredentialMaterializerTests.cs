@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
+using System.Text;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -29,6 +30,9 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "bearer-alpha",
             plan,
             "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         credential.ApiKeyId.Should().Be("api-key-alpha");
@@ -38,13 +42,24 @@ public sealed class StudioScheduledCredentialMaterializerTests
         var issue = issuer.Issues.Should().ContainSingle().Which;
         issue.Token.Should().Be("bearer-alpha");
         issue.Plan.Should().BeSameAs(plan);
-        issue.CredentialName.Should().Be("studio-schedule-schedule-alpha");
+        issue.CredentialName.Should().Be(StudioScheduledCredentialMaterializer.BuildCredentialName(
+            "schedule-alpha",
+            "operation-alpha"));
+        var reconciliation = issuer.Reconciliations.Should().ContainSingle().Which;
+        reconciliation.Should().Be(new ReconcileRequest(
+            "bearer-alpha",
+            plan,
+            issue.CredentialName));
+        issuer.Events.Should().Equal("lookup", "issue");
         var store = vault.Stores.Should().ContainSingle().Which;
         store.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
         store.OwnerScopeKey.Should().Be("schedule:schedule-alpha");
         store.SubjectId.Should().Be("api-key-alpha");
         store.Secret.Should().Be("secret-value");
         store.ExpiresAt.Should().Be(ExpiresAt);
+        store.RequestedRef.Should().Be(StudioScheduledCredentialMaterializer.BuildRequestedSecretReference(
+            "schedule-alpha",
+            "operation-alpha"));
     }
 
     [Fact]
@@ -60,6 +75,9 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "bearer-alpha",
             Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
             "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
         await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("issuer-rejected");
@@ -83,10 +101,237 @@ public sealed class StudioScheduledCredentialMaterializerTests
             "bearer-alpha",
             Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
             "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
             OwnerScope.ForNyxIdNative("owner-alpha"));
 
-        await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("vault-failed");
+        var failure = await action.Should()
+            .ThrowAsync<StudioScheduledCredentialMaterializationException>()
+            .WithMessage("vault-failed");
+        failure.Which.EffectsCleaned.Should().BeTrue();
+        vault.Revocations.Should().ContainSingle().Which.Ref.Should().Be(
+            StudioScheduledCredentialMaterializer.BuildRequestedSecretReference(
+                "schedule-alpha",
+                "operation-alpha"));
         issuer.Revocations.Should().ContainSingle().Which.Should().Be(("bearer-alpha", "api-key-alpha"));
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenReconciliationFails_ShouldNotIssueOrStore()
+    {
+        var issuer = new RecordingIssuer
+        {
+            LookupResult = ScheduledAgentApiKeyLookupResult.Pending(
+                503,
+                "list-failed",
+                UserAgentApiKeyRevocationFailureKind.Transient),
+            IssueResult = ScheduledAgentApiKeyIssueResult.Succeeded(
+                "api-key-alpha",
+                "secret-value",
+                ExpiresAt.ToUnixTimeMilliseconds()),
+        };
+        var vault = new RecordingSecretVault();
+
+        var action = () => new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("scheduled_credential_reconciliation_failed");
+        issuer.Events.Should().Equal("lookup");
+        issuer.Issues.Should().BeEmpty();
+        issuer.Revocations.Should().BeEmpty();
+        vault.Stores.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenVaultAndCleanupFail_ShouldSurfaceCleanupFailure()
+    {
+        var issuer = new RecordingIssuer
+        {
+            IssueResult = ScheduledAgentApiKeyIssueResult.Succeeded(
+                "api-key-alpha",
+                "secret-value",
+                ExpiresAt.ToUnixTimeMilliseconds()),
+            RevokeResult = ScheduledAgentApiKeyRevokeResult.Pending(
+                503,
+                "revoke-failed",
+                UserAgentApiKeyRevocationFailureKind.Transient),
+        };
+        var vault = new RecordingSecretVault { StoreException = new InvalidOperationException("vault-failed") };
+
+        var action = () => new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        var exception = await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("scheduled_credential_cleanup_failed");
+        exception.Which.InnerException.Should().BeOfType<AggregateException>()
+            .Which.InnerExceptions.Should().Contain(error => error.Message == "vault-failed");
+        issuer.Revocations.Should().ContainSingle().Which.Should().Be(("bearer-alpha", "api-key-alpha"));
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenCommittedOwnerDiffersFromPlan_ShouldRejectBeforeEffects()
+    {
+        var issuer = new RecordingIssuer
+        {
+            IssueResult = ScheduledAgentApiKeyIssueResult.Succeeded(
+                "api-key-alpha",
+                "secret-value",
+                ExpiresAt.ToUnixTimeMilliseconds()),
+        };
+        var vault = new RecordingSecretVault();
+        var locator = EffectLocator("schedule-alpha", "operation-alpha") with
+        {
+            CredentialOwner = new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "owner-beta"),
+        };
+
+        var action = () => new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            locator,
+            1,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("scheduled_credential_effect_locator_mismatch");
+        issuer.Events.Should().BeEmpty();
+        vault.Stores.Should().BeEmpty();
+        vault.Revocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_AfterRestart_ShouldRecoverCommittedLocatorEffectsBeforeReissuing()
+    {
+        var issuer = new RecordingIssuer
+        {
+            LookupResult = ScheduledAgentApiKeyLookupResult.Complete(["api-key-orphan"]),
+            IssueResult = ScheduledAgentApiKeyIssueResult.Succeeded(
+                "api-key-replacement",
+                "replacement-secret",
+                ExpiresAt.ToUnixTimeMilliseconds()),
+        };
+        var vault = new RecordingSecretVault();
+        var locator = EffectLocator("schedule-alpha", "operation-alpha");
+
+        var credential = await new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            locator,
+            2,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        credential.ApiKeyId.Should().Be("api-key-replacement");
+        issuer.Events.Should().Equal("lookup", "revoke:api-key-orphan", "issue");
+        vault.Revocations.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new RevokeSecretRequest(
+                locator.RequestedSecretReference,
+                locator.SecretPurpose,
+                locator.SecretOwnerScopeKey,
+                "api-key-orphan",
+                "scheduled-credential-recovery"));
+        vault.Stores.Should().ContainSingle().Which.RequestedRef.Should().Be(locator.RequestedSecretReference);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_OnRecoveryAttemptWithoutExactNameEvidence_ShouldNotRemint()
+    {
+        var issuer = new RecordingIssuer
+        {
+            LookupResult = ScheduledAgentApiKeyLookupResult.Complete([]),
+            IssueResult = ScheduledAgentApiKeyIssueResult.Succeeded(
+                "api-key-unproven",
+                "secret-value",
+                ExpiresAt.ToUnixTimeMilliseconds()),
+        };
+        var vault = new RecordingSecretVault();
+
+        var action = () => new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            2,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        var failure = await action.Should()
+            .ThrowAsync<StudioScheduledCredentialMaterializationException>()
+            .WithMessage("scheduled_credential_recovery_evidence_missing");
+        failure.Which.EffectsCleaned.Should().BeFalse();
+        failure.Which.RecoveryBlocked.Should().BeTrue();
+        issuer.Events.Should().Equal("lookup");
+        issuer.Issues.Should().BeEmpty();
+        vault.Stores.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_WhenVaultPutCommitsButResponseFails_ShouldCleanBothEffects()
+    {
+        var issuer = new RecordingIssuer
+        {
+            IssueResult = ScheduledAgentApiKeyIssueResult.Succeeded(
+                "api-key-alpha",
+                "secret-value",
+                ExpiresAt.ToUnixTimeMilliseconds()),
+        };
+        var vault = new RecordingSecretVault
+        {
+            StoreThenThrowException = new InvalidOperationException("vault-put-ambiguous"),
+        };
+
+        var action = () => new StudioScheduledCredentialMaterializer(issuer, vault).MaterializeAsync(
+            "bearer-alpha",
+            Plan(AuthorizationOwnerKind.Personal, "owner-alpha"),
+            "schedule-alpha",
+            "operation-alpha",
+            EffectLocator("schedule-alpha", "operation-alpha"),
+            1,
+            OwnerScope.ForNyxIdNative("owner-alpha"));
+
+        var failure = await action.Should()
+            .ThrowAsync<StudioScheduledCredentialMaterializationException>()
+            .WithMessage("vault-put-ambiguous");
+        failure.Which.EffectsCleaned.Should().BeTrue();
+        vault.StoreCommitted.Should().BeTrue();
+        vault.StoredReference.Should().BeNull();
+        vault.Revocations.Should().ContainSingle().Which.SubjectId.Should().Be("api-key-alpha");
+        issuer.Revocations.Should().ContainSingle().Which.ApiKeyId.Should().Be("api-key-alpha");
+    }
+
+    [Fact]
+    public void BuildCredentialName_ShouldBeDeterministicBoundedAndOperationScoped()
+    {
+        var scheduleId = new string('\u4e00', 500) + "schedule-alpha";
+        var operationId = new string('\u4e8c', 500) + "operation-alpha";
+
+        var first = StudioScheduledCredentialMaterializer.BuildCredentialName(scheduleId, operationId);
+        var replay = StudioScheduledCredentialMaterializer.BuildCredentialName(scheduleId, operationId);
+        var nextOperation = StudioScheduledCredentialMaterializer.BuildCredentialName(
+            scheduleId,
+            operationId + "-next");
+
+        first.Should().Be(replay);
+        first.Should().NotBe(nextOperation);
+        first.Should().StartWith("studio-schedule-");
+        first.Should().MatchRegex("^[a-z0-9-]+$");
+        Encoding.UTF8.GetByteCount(first).Should().BeLessThanOrEqualTo(200);
     }
 
     [Fact]
@@ -188,8 +433,21 @@ public sealed class StudioScheduledCredentialMaterializerTests
             ExpiresAt,
             owner);
 
+    private static ScheduledCredentialEffectLocator EffectLocator(
+        string scheduleId,
+        string operationId) =>
+        new(
+            StudioScheduledCredentialMaterializer.BuildCredentialName(scheduleId, operationId),
+            StudioScheduledCredentialMaterializer.BuildRequestedSecretReference(scheduleId, operationId),
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            $"schedule:{scheduleId}",
+            new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "owner-alpha"));
+
     private sealed class RecordingIssuer : IScheduledAgentApiKeyIssuer
     {
+        public ScheduledAgentApiKeyLookupResult LookupResult { get; init; } =
+            ScheduledAgentApiKeyLookupResult.Complete([]);
+
         public ScheduledAgentApiKeyIssueResult IssueResult { get; init; } =
             ScheduledAgentApiKeyIssueResult.Failed("not-configured");
 
@@ -198,7 +456,23 @@ public sealed class StudioScheduledCredentialMaterializerTests
 
         public List<IssueRequest> Issues { get; } = [];
 
+        public List<ReconcileRequest> Reconciliations { get; } = [];
+
         public List<(string Token, string ApiKeyId)> Revocations { get; } = [];
+
+        public List<string> Events { get; } = [];
+
+        public Task<ScheduledAgentApiKeyLookupResult> FindActiveKeysByNameAsync(
+            string token,
+            ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
+            string credentialName,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Events.Add("lookup");
+            Reconciliations.Add(new ReconcileRequest(token, validatedPlan, credentialName));
+            return Task.FromResult(LookupResult);
+        }
 
         public Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
             string token,
@@ -207,6 +481,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            Events.Add("issue");
             Issues.Add(new IssueRequest(token, validatedPlan, credentialName));
             return Task.FromResult(IssueResult);
         }
@@ -217,6 +492,7 @@ public sealed class StudioScheduledCredentialMaterializerTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            Events.Add($"revoke:{apiKeyId}");
             Revocations.Add((token, apiKeyId));
             return Task.FromResult(RevokeResult);
         }
@@ -224,15 +500,13 @@ public sealed class StudioScheduledCredentialMaterializerTests
 
     private sealed class RecordingSecretVault : ISecretVault
     {
-        public SecretReference StoredReference { get; } = new()
-        {
-            Ref = "secret-ref-alpha",
-            Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
-            OwnerScopeKey = "schedule:schedule-alpha",
-            ExpiresAtUnixMs = ExpiresAt.ToUnixTimeMilliseconds(),
-        };
+        public SecretReference? StoredReference { get; private set; }
+
+        public bool StoreCommitted { get; private set; }
 
         public Exception? StoreException { get; init; }
+
+        public Exception? StoreThenThrowException { get; init; }
 
         public List<StoreSecretRequest> Stores { get; } = [];
 
@@ -244,6 +518,16 @@ public sealed class StudioScheduledCredentialMaterializerTests
             Stores.Add(request);
             if (StoreException != null)
                 throw StoreException;
+            StoredReference = new SecretReference
+            {
+                Ref = request.RequestedRef,
+                Purpose = request.Purpose,
+                OwnerScopeKey = request.OwnerScopeKey,
+                ExpiresAtUnixMs = request.ExpiresAt?.ToUnixTimeMilliseconds() ?? 0,
+            };
+            StoreCommitted = true;
+            if (StoreThenThrowException != null)
+                throw StoreThenThrowException;
             return Task.FromResult(new StoreSecretResult(StoredReference));
         }
 
@@ -257,11 +541,18 @@ public sealed class StudioScheduledCredentialMaterializerTests
         {
             ct.ThrowIfCancellationRequested();
             Revocations.Add(request);
+            if (string.Equals(StoredReference?.Ref, request.Ref, StringComparison.Ordinal))
+                StoredReference = null;
             return Task.FromResult(new RevokeSecretResult(true));
         }
     }
 
     private sealed record IssueRequest(
+        string Token,
+        ValidatedScheduledInvocationAuthorizationPlan Plan,
+        string CredentialName);
+
+    private sealed record ReconcileRequest(
         string Token,
         ValidatedScheduledInvocationAuthorizationPlan Plan,
         string CredentialName);

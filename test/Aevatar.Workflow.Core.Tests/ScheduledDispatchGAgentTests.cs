@@ -15,6 +15,7 @@ using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.Workflow.Core.Tests;
 
@@ -22,6 +23,7 @@ public sealed class ScheduledDispatchGAgentTests
 {
     private const string ScheduleActorId = "scheduled-dispatch:schedule-1";
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
+    private const string TeamCredentialExpiryCallbackId = "scheduled-dispatch-team-credential-expiry";
     private const string ManualFireIdempotencyKey = "manual-fire";
 
     [Fact]
@@ -2419,28 +2421,317 @@ public sealed class ScheduledDispatchGAgentTests
     public async Task TeamAutomationCredentialOperation_ShouldReplayExactlyAndRejectConflictingDigest()
     {
         var eventStore = new TestEventStore();
-        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort(), timeProvider: timeProvider);
         await agent.ActivateAsync();
         var command = CreateTeamBeginCommand();
+        command.ObservationRequestId = "observation-request-alpha";
 
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(command);
-        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command.Clone());
+        var firstEffectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+        var replay = command.Clone();
+        replay.ObservationRequestId = "observation-request-beta";
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(replay);
 
+        agent.State.ScheduleId.Should().Be("schedule-1");
+        agent.State.TeamAutomationEffectAttemptId.Should().Be(firstEffectAttemptId);
+        agent.State.TeamAutomationEffectAttemptGeneration.Should().Be(1);
         eventStore.GetEvents(ScheduleActorId)
             .Count(x => string.Equals(
                 x.EventType,
                 TeamAutomationCredentialOperationBeganEvent.Descriptor.FullName,
                 StringComparison.Ordinal))
             .Should().Be(1);
+        var beginObservations = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Where(x => x.Stage == TeamAutomationOperationObservationStages.Begin)
+            .ToArray();
+        beginObservations.Should().HaveCount(2);
+        beginObservations[0].OwnsEffectAttempt.Should().BeTrue();
+        beginObservations[1].OwnsEffectAttempt.Should().BeFalse();
+        beginObservations.Select(x => x.ObservationRequestId).Should().Equal(
+            "observation-request-alpha",
+            "observation-request-beta");
         agent.State.TeamAutomationLifecycleStatus.Should()
             .Be(TeamAutomationLifecycleStatusState.ProvisioningPending);
 
         var conflict = command.Clone();
         conflict.PermissionDigest = "digest-beta";
+        conflict.ObservationRequestId = "observation-request-conflict";
         var act = () => agent.HandleBeginTeamAutomationCredentialOperationAsync(conflict);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("team_automation_operation_conflict");
+        await act.Should().NotThrowAsync();
+
+        var mutationConflict = command.Clone();
+        mutationConflict.MutationDigest = "mutation-beta";
+        mutationConflict.ObservationRequestId = "observation-request-mutation-conflict";
+        var mutationAct = () => agent.HandleBeginTeamAutomationCredentialOperationAsync(mutationConflict);
+
+        await mutationAct.Should().NotThrowAsync();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType == TeamAutomationCredentialOperationBeganEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Count(x => x.OwnsEffectAttempt)
+            .Should().Be(1);
+        var rejections = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Where(x => x.ObservationStatus ==
+                TeamAutomationOperationObservationStatusState.RejectedConflict)
+            .ToArray();
+        rejections.Should().HaveCount(2);
+        rejections.Should().OnlyContain(x =>
+            x.ErrorCode == "team_automation_operation_conflict" &&
+            !x.OwnsEffectAttempt &&
+            x.CandidateCredential == null &&
+            x.PendingRevocationCredential == null &&
+            x.CredentialEffectLocator == null);
+        rejections.Select(x => x.ObservationRequestId).Should().Equal(
+            "observation-request-conflict",
+            "observation-request-mutation-conflict");
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialOperation_AfterEffectLeaseExpires_ShouldOwnNewAttempt()
+    {
+        var eventStore = new TestEventStore();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort(), timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        var command = CreateTeamBeginCommand();
+
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command);
+        var firstEffectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+        timeProvider.Advance(TimeSpan.FromMinutes(5));
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command.Clone());
+
+        agent.State.TeamAutomationEffectAttemptId.Should().NotBe(firstEffectAttemptId);
+        agent.State.TeamAutomationEffectAttemptGeneration.Should().Be(2);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Where(x => x.Stage == TeamAutomationOperationObservationStages.Begin)
+            .Should().OnlyContain(x => x.OwnsEffectAttempt);
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialOperation_ShouldRejectStaleEffectAttempt()
+    {
+        var eventStore = new TestEventStore();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort(), timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        var command = CreateTeamBeginCommand();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command);
+        var staleEffectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+        timeProvider.Advance(TimeSpan.FromMinutes(5));
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command.Clone());
+
+        var recordCandidate = () => agent.HandleRecordTeamAutomationCredentialCandidateAsync(
+            new RecordTeamAutomationCredentialCandidateCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                CredentialOwner = CreateCredentialOwner(),
+                EffectAttemptId = staleEffectAttemptId,
+            });
+        var complete = () => agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+                EffectAttemptId = staleEffectAttemptId,
+            });
+        var fail = () => agent.HandleFailTeamAutomationCredentialOperationAsync(
+            new FailTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                ErrorCode = "candidate_activation_failed",
+                EffectAttemptId = staleEffectAttemptId,
+            });
+
+        await recordCandidate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_effect_attempt_stale");
+        await complete.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_effect_attempt_stale");
+        await fail.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_effect_attempt_stale");
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialCandidate_ShouldSurviveReactivationAndComplete()
+    {
+        var eventStore = new TestEventStore();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort(), timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent,
+            owner,
+            "operation-alpha",
+            "idempotency-alpha",
+            credential);
+
+        var reactivated = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            timeProvider: timeProvider);
+        await reactivated.ActivateAsync();
+
+        reactivated.State.CandidateTeamCredential!.ApiKeyId.Should().Be("key-alpha");
+        reactivated.State.CandidateTeamCredentialOwner.Should().BeEquivalentTo(CreateCredentialOwner());
+        reactivated.State.TeamAutomationEffectAttemptId.Should().Be(effectAttemptId);
+        await reactivated.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+                EffectAttemptId = effectAttemptId,
+            });
+
+        reactivated.State.ActiveTeamCredential!.ApiKeyId.Should().Be("key-alpha");
+        reactivated.State.CandidateTeamCredential.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialFailure_WithCommittedCandidate_ShouldOwnRevocationAttempt()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var provisioningAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent,
+            owner,
+            "operation-alpha",
+            "idempotency-alpha",
+            credential);
+
+        await agent.HandleFailTeamAutomationCredentialOperationAsync(
+            new FailTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner,
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                ErrorCode = "candidate_activation_failed",
+                EffectAttemptId = provisioningAttemptId,
+                ObservationRequestId = "observation-fail-alpha",
+            });
+
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.RevocationPending);
+        agent.State.PendingRevocationTeamCredential!.ApiKeyId.Should().Be("key-alpha");
+        agent.State.CandidateTeamCredential.Should().BeNull();
+        agent.State.TeamAutomationEffectAttemptId.Should().NotBe(provisioningAttemptId);
+        var failure = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.Stage == TeamAutomationOperationObservationStages.Fail);
+        failure.ObservationRequestId.Should().Be("observation-fail-alpha");
+        failure.OwnsEffectAttempt.Should().BeTrue();
+        failure.EffectAttemptId.Should().Be(agent.State.TeamAutomationEffectAttemptId);
+        failure.NyxidRevocationPending.Should().BeTrue();
+        failure.VaultRevocationPending.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialRecoveryBlocked_ShouldNotClaimAnotherEffectAttempt()
+    {
+        var eventStore = new TestEventStore();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        var begin = CreateTeamBeginCommand();
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(begin);
+        var effectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+
+        await agent.HandleFailTeamAutomationCredentialOperationAsync(
+            new FailTeamAutomationCredentialOperationCommand
+            {
+                Owner = CreateTeamOwner(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                ErrorCode = "scheduled_credential_recovery_evidence_missing",
+                EffectAttemptId = effectAttemptId,
+            });
+        timeProvider.Advance(TimeSpan.FromMinutes(10));
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(begin.Clone());
+
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.Failed);
+        agent.State.LastAuthorizationErrorCode.Should()
+            .Be("scheduled_credential_recovery_evidence_missing");
+        agent.State.TeamAutomationEffectAttemptClaimed.Should().BeFalse();
+        agent.State.TeamAutomationEffectAttemptGeneration.Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Last(x => x.Stage == TeamAutomationOperationObservationStages.Begin)
+            .OwnsEffectAttempt.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_WithCommittedCandidate_ShouldFailBeforeDroppingDescriptor()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        await RecordTeamCredentialCandidateAsync(
+            agent,
+            owner,
+            "operation-alpha",
+            "idempotency-alpha",
+            credential);
+
+        var delete = () => agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
+        {
+            Reason = "test",
+            TeamAutomationOwner = owner,
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+        });
+
+        await delete.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_operation_in_progress");
+        agent.State.CandidateTeamCredential!.ApiKeyId.Should().Be("key-alpha");
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x => x.EventType == TeamAutomationDeletionRequestedEvent.Descriptor.FullName);
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x => x.EventType == ScheduledDispatchDeletedEvent.Descriptor.FullName);
     }
 
     [Fact]
@@ -2453,6 +2744,8 @@ public sealed class ScheduledDispatchGAgentTests
         var owner = CreateTeamOwner();
         var credential = CreateTeamCredential("key-alpha");
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent, owner, "operation-alpha", "idempotency-alpha", credential);
         var scheduledFireAt = DateTimeOffset.UtcNow.AddMinutes(1);
 
         var beforeActivation = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
@@ -2473,6 +2766,7 @@ public sealed class ScheduledDispatchGAgentTests
                 IdempotencyKey = "idempotency-alpha",
                 Credential = credential.Clone(),
                 Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+                EffectAttemptId = effectAttemptId,
             });
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
@@ -2488,14 +2782,25 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task TeamAutomationDelete_ShouldCommitPendingRevocationBeforeTombstone()
+    public async Task TeamAutomationFire_WhenCredentialCannotResolve_ShouldRequireAuthorizationWithStableCode()
     {
         var eventStore = new TestEventStore();
-        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialUnresolvable,
+                "vault backend detail must not become product state"),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            serviceInvocationDispatch: serviceDispatch);
         await agent.ActivateAsync();
         var owner = CreateTeamOwner();
         var credential = CreateTeamCredential("key-alpha");
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent, owner, "operation-alpha", "idempotency-alpha", credential);
         await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
             new CompleteTeamAutomationCredentialOperationCommand
             {
@@ -2504,6 +2809,415 @@ public sealed class ScheduledDispatchGAgentTests
                 IdempotencyKey = "idempotency-alpha",
                 Credential = credential.Clone(),
                 Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+                EffectAttemptId = effectAttemptId,
+            });
+        var scheduledFireAt = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+            TeamAutomationOwner = owner.Clone(),
+        });
+
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
+        agent.State.LastAuthorizationErrorCode.Should().Be("credential_unresolvable");
+        agent.State.LastError.Should().Be("credential_unresolvable");
+        agent.State.FireCount.Should().Be(1);
+        agent.State.FailureCount.Should().Be(1);
+        agent.State.FireRecords[ManualFireIdempotencyKey].Status.Should()
+            .Be(ScheduledDispatchFireStatusState.Failed);
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().ContainSingle(x => x.EventType == TeamAutomationAuthorizationRequiredEvent.Descriptor.FullName);
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x => x.EventType == ScheduledDispatchFireFailedEvent.Descriptor.FullName);
+        agent.State.ToString().Should().NotContain("vault backend detail");
+    }
+
+    [Fact]
+    public async Task TeamAutomationAutomaticFire_WithStaleLeaseAndExpiredCredential_ShouldNotMutateState()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            serviceDispatch,
+            timeProvider);
+        await agent.ActivateAsync();
+        var credential = CreateTeamCredential("key-alpha");
+        SetCredentialExpiry(credential, timeProvider.GetUtcNow().AddMinutes(1));
+        await ActivateTeamAutomationAsync(agent, credential, enabled: true);
+        var fireRequest = scheduler.TimeoutRequests.Single(x => x.CallbackId == NextFireCallbackId);
+        var eventCount = eventStore.GetEvents(ScheduleActorId).Count;
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            fireRequest,
+            generation: agent.State.NextFireLease!.Generation + 1,
+            fireIndex: 1,
+            firedAt: fireRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>()
+                .ScheduledFireAt.ToDateTimeOffset().AddMilliseconds(1)));
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
+        agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Active);
+        agent.State.LastAuthorizationErrorCode.Should().BeEmpty();
+        agent.State.FireRecords.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        serviceDispatch.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TeamAutomationAutomaticFire_WithCurrentLeaseAndExpiredCredential_ShouldRequireAuthorization()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            serviceDispatch,
+            timeProvider);
+        await agent.ActivateAsync();
+        var credential = CreateTeamCredential("key-alpha");
+        SetCredentialExpiry(credential, timeProvider.GetUtcNow().AddMinutes(1));
+        await ActivateTeamAutomationAsync(agent, credential, enabled: true);
+        var fireRequest = scheduler.TimeoutRequests.Single(x => x.CallbackId == NextFireCallbackId);
+        var scheduledFireAt = fireRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>()
+            .ScheduledFireAt.ToDateTimeOffset();
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            fireRequest,
+            generation: agent.State.NextFireLease!.Generation,
+            fireIndex: 1,
+            firedAt: scheduledFireAt.AddMilliseconds(1)));
+
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
+        agent.State.LastAuthorizationErrorCode.Should().Be("credential_expired");
+        agent.State.FireRecords.Should().BeEmpty();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Select(x => x.CallbackId).Should().Contain(
+            NextFireCallbackId,
+            TeamCredentialExpiryCallbackId);
+        serviceDispatch.Requests.Should().BeEmpty();
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().ContainSingle(x => x.EventType == TeamAutomationAuthorizationRequiredEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task TeamAutomationAutomaticFire_WithInvalidAuthorizationFact_ShouldFailOccurrenceAndRequireAuthorization()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort
+        {
+            DispatchException = new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid,
+                "expired authorization detail must not become product state"),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            serviceDispatch);
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(agent, CreateTeamCredential("key-alpha"), enabled: true);
+        var fireRequest = scheduler.TimeoutRequests.Single(x => x.CallbackId == NextFireCallbackId);
+        var scheduledFireAt = fireRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>()
+            .ScheduledFireAt.ToDateTimeOffset();
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            fireRequest,
+            generation: agent.State.NextFireLease!.Generation,
+            fireIndex: 1,
+            firedAt: scheduledFireAt.AddMilliseconds(1)));
+
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
+        agent.State.LastAuthorizationErrorCode.Should().Be("authorization_fact_invalid");
+        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
+        agent.State.FireRecords[idempotencyKey].Error.Should().Be("authorization_fact_invalid");
+        agent.State.ToString().Should().NotContain("expired authorization detail");
+        serviceDispatch.Requests.Should().ContainSingle();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Select(x => x.CallbackId).Should().Contain(
+            NextFireCallbackId,
+            TeamCredentialExpiryCallbackId);
+    }
+
+    [Fact]
+    public async Task TeamAutomationOneShot_WithExpiredCredential_ShouldStopUntilReauthorized()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            new RecordingScheduledServiceInvocationDispatchPort(),
+            timeProvider);
+        await agent.ActivateAsync();
+        var credential = CreateTeamCredential("key-alpha");
+        SetCredentialExpiry(credential, timeProvider.GetUtcNow().AddMinutes(1));
+        await ActivateTeamAutomationAsync(
+            agent,
+            credential,
+            enabled: true,
+            oneShotFireAt: DateTimeOffset.UtcNow.AddMinutes(1));
+        var fireRequest = scheduler.TimeoutRequests.Single(x => x.CallbackId == NextFireCallbackId);
+        var scheduledFireAt = fireRequest.TriggerEnvelope.Payload.Unpack<ScheduledDispatchFireCommand>()
+            .ScheduledFireAt.ToDateTimeOffset();
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            fireRequest,
+            generation: agent.State.NextFireLease!.Generation,
+            fireIndex: 1,
+            firedAt: scheduledFireAt.AddMilliseconds(1)));
+
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
+        agent.State.Completed.Should().BeFalse();
+        agent.State.NextFireAt.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        scheduler.Canceled.Select(x => x.CallbackId).Should().Contain(
+            NextFireCallbackId,
+            TeamCredentialExpiryCallbackId);
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialExpiry_WhenDisabled_ShouldRequireAuthorization()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        var credential = CreateTeamCredential("key-alpha");
+        var expiresAt = timeProvider.GetUtcNow().AddMinutes(10);
+        SetCredentialExpiry(credential, expiresAt);
+
+        await ActivateTeamAutomationAsync(agent, credential, enabled: false);
+
+        var expiryRequest = scheduler.TimeoutRequests
+            .Single(x => x.CallbackId == TeamCredentialExpiryCallbackId);
+        var expiryGeneration = agent.State.TeamCredentialExpiryLease!.Generation;
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.Active);
+
+        timeProvider.Advance(TimeSpan.FromMinutes(11));
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            expiryRequest,
+            expiryGeneration,
+            fireIndex: 1,
+            firedAt: expiresAt));
+
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
+        agent.State.LastAuthorizationErrorCode.Should().Be("credential_expired");
+        agent.State.TeamCredentialExpiryLease.Should().BeNull();
+        agent.State.NextFireLease.Should().BeNull();
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().ContainSingle(x =>
+                x.EventType == TeamAutomationAuthorizationRequiredEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialExpiry_WhenPaused_ShouldKeepExpiryLeaseAndRequireAuthorization()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        var credential = CreateTeamCredential("key-alpha");
+        var expiresAt = timeProvider.GetUtcNow().AddMinutes(10);
+        SetCredentialExpiry(credential, expiresAt);
+        await ActivateTeamAutomationAsync(agent, credential, enabled: true);
+        var expiryRequest = scheduler.TimeoutRequests
+            .Single(x => x.CallbackId == TeamCredentialExpiryCallbackId);
+        var expiryGeneration = agent.State.TeamCredentialExpiryLease!.Generation;
+
+        await agent.HandleDisableAsync(new ScheduledDispatchDisableCommand
+        {
+            TeamAutomationOwner = CreateTeamOwner(),
+            Reason = "pause",
+        });
+
+        agent.State.TeamCredentialExpiryLease.Should().NotBeNull();
+        scheduler.Canceled.Should().ContainSingle(x => x.CallbackId == NextFireCallbackId);
+        timeProvider.Advance(TimeSpan.FromMinutes(11));
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            expiryRequest,
+            expiryGeneration,
+            fireIndex: 1,
+            firedAt: expiresAt));
+
+        agent.State.Enabled.Should().BeFalse();
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
+        scheduler.Canceled.Should().Contain(x => x.CallbackId == TeamCredentialExpiryCallbackId);
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialExpiry_AfterReplacement_ShouldIgnoreOldGenerationCallback()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        var firstCredential = CreateTeamCredential("key-alpha");
+        SetCredentialExpiry(firstCredential, timeProvider.GetUtcNow().AddMinutes(10));
+        await ActivateTeamAutomationAsync(agent, firstCredential, enabled: false);
+        var staleRequest = scheduler.TimeoutRequests
+            .Single(x => x.CallbackId == TeamCredentialExpiryCallbackId);
+        var staleLeaseGeneration = agent.State.TeamCredentialExpiryLease!.Generation;
+
+        var replacement = CreateTeamBeginCommand();
+        replacement.OperationId = "operation-beta";
+        replacement.IdempotencyKey = "idempotency-beta";
+        replacement.OperationKind = TeamAutomationOperationKindState.Reauthorize;
+        replacement.CredentialEffectLocator = CreateTeamCredentialEffectLocator("operation-beta");
+        replacement.MutationDigest = "mutation-beta";
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(replacement);
+        var secondCredential = CreateTeamCredential("key-beta");
+        SetCredentialExpiry(secondCredential, timeProvider.GetUtcNow().AddHours(1));
+        var replacementAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent,
+            CreateTeamOwner(),
+            "operation-beta",
+            "idempotency-beta",
+            secondCredential);
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = CreateTeamOwner(),
+                OperationId = "operation-beta",
+                IdempotencyKey = "idempotency-beta",
+                EffectAttemptId = replacementAttemptId,
+                Credential = secondCredential,
+                Configuration = ToConfiguredEvent(
+                    CreateTeamConfigureCommand(CreateTeamOwner(), secondCredential)),
+            });
+        var eventCount = eventStore.GetEvents(ScheduleActorId).Count;
+
+        timeProvider.Advance(TimeSpan.FromMinutes(11));
+        await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
+            staleRequest,
+            staleLeaseGeneration,
+            fireIndex: 1));
+
+        eventStore.GetEvents(ScheduleActorId).Should().HaveCount(eventCount);
+        agent.State.ActiveTeamCredential!.ApiKeyId.Should().Be("key-beta");
+        agent.State.TeamCredentialGeneration.Should().Be(2);
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.Active);
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialExpiry_WhenInitialSchedulingFails_ShouldRecoverOnReactivation()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("callback scheduling unavailable"),
+        };
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(2026, 7, 16, 8, 0, 0, TimeSpan.Zero));
+        var credential = CreateTeamCredential("key-alpha");
+        SetCredentialExpiry(credential, timeProvider.GetUtcNow().AddHours(1));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            timeProvider: timeProvider);
+        await agent.ActivateAsync();
+
+        var activation = () => ActivateTeamAutomationAsync(agent, credential, enabled: false);
+
+        await activation.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("callback scheduling unavailable");
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.Active);
+        agent.State.PendingTeamCredentialExpiryAt.Should().NotBeNull();
+        agent.State.TeamCredentialExpiryLease.Should().BeNull();
+
+        scheduler.ScheduleException = null;
+        var reactivated = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler,
+            timeProvider: timeProvider);
+        await reactivated.ActivateAsync();
+
+        reactivated.State.TeamCredentialExpiryLease.Should().NotBeNull();
+        reactivated.State.PendingTeamCredentialExpiryAt.Should().BeNull();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationCredentialExpiryIntentRecordedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationCredentialExpiryScheduledEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_ShouldCommitPendingRevocationBeforeTombstone()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent, owner, "operation-alpha", "idempotency-alpha", credential);
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+                EffectAttemptId = effectAttemptId,
             });
 
         await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
@@ -2533,6 +3247,8 @@ public sealed class ScheduledDispatchGAgentTests
         var owner = CreateTeamOwner();
         var credential = CreateTeamCredential("key-alpha");
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent, owner, "operation-alpha", "idempotency-alpha", credential);
         await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
             new CompleteTeamAutomationCredentialOperationCommand
             {
@@ -2541,6 +3257,7 @@ public sealed class ScheduledDispatchGAgentTests
                 IdempotencyKey = "idempotency-alpha",
                 Credential = credential.Clone(),
                 Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+                EffectAttemptId = effectAttemptId,
             });
         var delete = new ScheduledDispatchDeleteCommand
         {
@@ -2571,6 +3288,56 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task TeamAutomationDelete_AfterRevocationCompletes_ShouldReplayAsTerminalNoOp()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(agent, CreateTeamCredential("key-alpha"), enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "test",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+        };
+
+        await agent.HandleDeleteAsync(delete);
+        var effectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+        await agent.HandleCompleteTeamAutomationRevocationAsync(
+            new CompleteTeamAutomationRevocationCommand
+            {
+                Owner = CreateTeamOwner(),
+                OperationId = "operation-delete",
+                IdempotencyKey = "idempotency-delete",
+                EffectAttemptId = effectAttemptId,
+                NyxidRevoked = true,
+                VaultRevoked = true,
+            });
+
+        var replay = () => agent.HandleDeleteAsync(delete.Clone());
+        await replay.Should().NotThrowAsync();
+
+        agent.State.Deleted.Should().BeTrue();
+        agent.State.PendingRevocationTeamCredential.Should().BeNull();
+        agent.State.ActiveTeamCredential.Should().BeNull();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType == TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType == ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        var replayObservation = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Last(x => x.Stage == TeamAutomationOperationObservationStages.Delete);
+        replayObservation.OwnsEffectAttempt.Should().BeFalse();
+        replayObservation.NyxidRevocationPending.Should().BeFalse();
+        replayObservation.VaultRevocationPending.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task TeamAutomationReauthorize_ShouldKeepUsingActiveCredentialUntilReplacementActivates()
     {
         var eventStore = new TestEventStore();
@@ -2583,6 +3350,8 @@ public sealed class ScheduledDispatchGAgentTests
         var owner = CreateTeamOwner();
         var activeCredential = CreateTeamCredential("key-active");
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent, owner, "operation-alpha", "idempotency-alpha", activeCredential);
         await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
             new CompleteTeamAutomationCredentialOperationCommand
             {
@@ -2591,6 +3360,7 @@ public sealed class ScheduledDispatchGAgentTests
                 IdempotencyKey = "idempotency-alpha",
                 Credential = activeCredential.Clone(),
                 Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, activeCredential)),
+                EffectAttemptId = effectAttemptId,
             });
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(
             new BeginTeamAutomationCredentialOperationCommand
@@ -2602,6 +3372,8 @@ public sealed class ScheduledDispatchGAgentTests
                 PermissionDigest = "digest-beta",
                 PolicyVersion = "policy-v2",
                 OperationKind = TeamAutomationOperationKindState.Reauthorize,
+                CredentialEffectLocator = CreateTeamCredentialEffectLocator("operation-beta"),
+                MutationDigest = "mutation-beta",
             });
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
@@ -2628,6 +3400,8 @@ public sealed class ScheduledDispatchGAgentTests
         var owner = CreateTeamOwner();
         var activeCredential = CreateTeamCredential("key-active");
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent, owner, "operation-alpha", "idempotency-alpha", activeCredential);
         await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
             new CompleteTeamAutomationCredentialOperationCommand
             {
@@ -2636,6 +3410,7 @@ public sealed class ScheduledDispatchGAgentTests
                 IdempotencyKey = "idempotency-alpha",
                 Credential = activeCredential.Clone(),
                 Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, activeCredential)),
+                EffectAttemptId = effectAttemptId,
             });
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(
             new BeginTeamAutomationCredentialOperationCommand
@@ -2647,11 +3422,15 @@ public sealed class ScheduledDispatchGAgentTests
                 PermissionDigest = "digest-beta",
                 PolicyVersion = "policy-v2",
                 OperationKind = TeamAutomationOperationKindState.Reauthorize,
+                CredentialEffectLocator = CreateTeamCredentialEffectLocator("operation-beta"),
+                MutationDigest = "mutation-beta",
             });
         var replacement = CreateTeamCredential("key-replacement");
         var replacementConfiguration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, replacement));
         replacementConfiguration.Target.ServiceInvocation.AuthorizationFact.PermissionDigest = "digest-beta";
         replacementConfiguration.Target.ServiceInvocation.AuthorizationFact.PolicyVersion = "policy-v2";
+        var replacementEffectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent, owner, "operation-beta", "idempotency-beta", replacement);
 
         await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
             new CompleteTeamAutomationCredentialOperationCommand
@@ -2661,6 +3440,7 @@ public sealed class ScheduledDispatchGAgentTests
                 IdempotencyKey = "idempotency-beta",
                 Credential = replacement.Clone(),
                 Configuration = replacementConfiguration,
+                EffectAttemptId = replacementEffectAttemptId,
             });
 
         var completion = eventStore.GetEvents(ScheduleActorId)
@@ -2676,6 +3456,20 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.PendingRevocationTeamCredential!.ApiKeyId.Should().Be("key-active");
         agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Active);
         agent.State.TeamCredentialGeneration.Should().Be(2);
+
+        var delete = () => agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
+        {
+            Reason = "test",
+            TeamAutomationOwner = owner.Clone(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+        });
+        await delete.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_revocation_in_progress");
+        agent.State.PendingRevocationTeamCredential!.ApiKeyId.Should().Be("key-active");
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x => x.EventType == TeamAutomationDeletionRequestedEvent.Descriptor.FullName);
     }
 
     [Fact]
@@ -2778,7 +3572,19 @@ public sealed class ScheduledDispatchGAgentTests
         PermissionDigest = "digest-alpha",
         PolicyVersion = "policy-v1",
         OperationKind = TeamAutomationOperationKindState.Create,
+        CredentialEffectLocator = CreateTeamCredentialEffectLocator("operation-alpha"),
+        MutationDigest = "mutation-alpha",
     };
+
+    private static ScheduledCredentialEffectLocatorState CreateTeamCredentialEffectLocator(string operationId) =>
+        new()
+        {
+            CredentialName = $"studio-schedule-{operationId}",
+            RequestedSecretReference = $"sec-{operationId}",
+            SecretPurpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            SecretOwnerScopeKey = "schedule:schedule-1",
+            CredentialOwner = CreateCredentialOwner(),
+        };
 
     private static TeamMemberAutomationOwnerState CreateTeamOwner() => new()
     {
@@ -2801,6 +3607,70 @@ public sealed class ScheduledDispatchGAgentTests
                 ExpiresAtUnixMs = expiresAt,
             },
         };
+    }
+
+    private static async Task<string> RecordTeamCredentialCandidateAsync(
+        ScheduledDispatchGAgent agent,
+        TeamMemberAutomationOwnerState owner,
+        string operationId,
+        string idempotencyKey,
+        ScheduledInvocationAgentKeyCredentialReferenceState credential)
+    {
+        var effectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+        effectAttemptId.Should().NotBeNullOrWhiteSpace();
+        await agent.HandleRecordTeamAutomationCredentialCandidateAsync(
+            new RecordTeamAutomationCredentialCandidateCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = operationId,
+                IdempotencyKey = idempotencyKey,
+                Credential = credential.Clone(),
+                CredentialOwner = CreateCredentialOwner(),
+                EffectAttemptId = effectAttemptId,
+            });
+        return effectAttemptId;
+    }
+
+    private static async Task ActivateTeamAutomationAsync(
+        ScheduledDispatchGAgent agent,
+        ScheduledInvocationAgentKeyCredentialReferenceState credential,
+        bool enabled,
+        DateTimeOffset? oneShotFireAt = null)
+    {
+        var owner = CreateTeamOwner();
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent,
+            owner,
+            "operation-alpha",
+            "idempotency-alpha",
+            credential);
+        var configuration = CreateTeamConfigureCommand(owner, credential);
+        configuration.Enabled = enabled;
+        if (oneShotFireAt.HasValue)
+        {
+            configuration.ScheduleMode = ScheduledDispatchScheduleModeState.OneShotAtUtc;
+            configuration.CronExpression = string.Empty;
+            configuration.OneShotFireAt = Timestamp.FromDateTimeOffset(oneShotFireAt.Value);
+        }
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner,
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = ToConfiguredEvent(configuration),
+                EffectAttemptId = effectAttemptId,
+            });
+    }
+
+    private static void SetCredentialExpiry(
+        ScheduledInvocationAgentKeyCredentialReferenceState credential,
+        DateTimeOffset expiresAt)
+    {
+        credential.KeyExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds();
+        credential.SecretReference.ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds();
     }
 
     private static ScheduledDispatchCreateCommand CreateTeamConfigureCommand(
@@ -2868,14 +3738,16 @@ public sealed class ScheduledDispatchGAgentTests
         IEventStore eventStore,
         RecordingActorDispatchPort dispatch,
         RecordingRuntimeCallbackScheduler? callbackScheduler = null,
-        RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null)
+        RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null,
+        TimeProvider? timeProvider = null)
     {
         var agent = new ScheduledDispatchGAgent(
             dispatch,
             serviceInvocationDispatch ?? new RecordingScheduledServiceInvocationDispatchPort(),
-            new TestScheduledDispatchCredentialRequirementPolicy())
+            new TestScheduledDispatchCredentialRequirementPolicy(),
+            timeProvider)
         {
-            Services = new TestServiceProvider(callbackScheduler),
+            Services = new TestServiceProvider(callbackScheduler ?? new RecordingRuntimeCallbackScheduler()),
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
         };
         SetAgentId(agent, ScheduleActorId);

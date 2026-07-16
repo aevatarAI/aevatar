@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -43,8 +44,8 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Scripting.Projection.ReadModels;
-using Aevatar.Studio.Application.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -90,8 +91,10 @@ public sealed class MainnetHostCompositionTests
         builder.AddGAgentServiceCapabilityBundle();
         builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
         builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
+        builder.Services.AddSingleton(Substitute.For<INyxIdApiClientFactory>());
         builder.Services.AddScheduledAgents(builder.Configuration);
         builder.AddStudioCapability();
+        builder.Services.AddSingleton(Substitute.For<ISecretVault>());
 
         using var app = builder.Build();
 
@@ -99,7 +102,7 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IStudioScheduledCredentialMaterializer>()
             .Should()
             .BeOfType<StudioScheduledCredentialMaterializer>();
-        app.Services.GetRequiredService<INyxIdCatalogRefreshLifecycle>().Should().NotBeNull();
+        app.Services.GetRequiredService<INyxIdAuthorizationCatalogRefreshPort>().Should().NotBeNull();
         app.Services.GetRequiredService<TimeProvider>().Should().BeSameAs(customTimeProvider);
     }
 

@@ -31,9 +31,7 @@ public sealed class NyxIdAuthorizationCatalogCurrentStateProjector
         if (!CommittedStateEventEnvelope.TryUnpackState<NyxIdAuthorizationCatalogState>(
                 envelope, out _, out var stateEvent, out var state) ||
             stateEvent == null ||
-            state?.Owner == null ||
-            state.ObservedAt == null ||
-            state.FreshUntil == null)
+            state?.Owner == null)
         {
             return;
         }
@@ -46,8 +44,6 @@ public sealed class NyxIdAuthorizationCatalogCurrentStateProjector
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
             Owner = state.Owner.Clone(),
-            ObservedAt = state.ObservedAt.ToDateTimeOffset(),
-            FreshUntil = state.FreshUntil.ToDateTimeOffset(),
             ExternalRevision = state.ExternalRevision,
             ContentDigest = state.ContentDigest,
             Invalidated = state.Invalidated,
@@ -55,7 +51,17 @@ public sealed class NyxIdAuthorizationCatalogCurrentStateProjector
             InvalidatedAt = state.InvalidatedAt?.ToDateTimeOffset(),
             LastRefreshFailedAt = state.LastRefreshFailedAt?.ToDateTimeOffset(),
             LastRefreshFailureCode = state.LastRefreshFailureCode,
+            LifecycleFence = state.LifecycleFence,
+            Activated = state.Activated,
+            ActivatedAt = state.ActivatedAt?.ToDateTimeOffset(),
+            Cleaned = state.Cleaned,
+            CleanedAt = state.CleanedAt?.ToDateTimeOffset(),
+            CleanupReason = state.CleanupReason,
         };
+        if (state.ObservedAt != null)
+            document.ObservedAt = state.ObservedAt.ToDateTimeOffset();
+        if (state.FreshUntil != null)
+            document.FreshUntil = state.FreshUntil.ToDateTimeOffset();
         document.Services.Add(state.Services.Select(static service => service.Clone()));
 
         var result = await _writeDispatcher.UpsertAsync(document, ct);

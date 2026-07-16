@@ -33,6 +33,11 @@ public sealed class ProjectionNyxIdAuthorizationCatalogQueryPort
             document.Invalidated,
             document.InvalidationReason,
             document.LastRefreshFailedAt,
-            document.LastRefreshFailureCode);
+            document.LastRefreshFailureCode,
+            document.LifecycleFence,
+            document.Activated,
+            document.Cleaned,
+            document.CleanedAt,
+            document.CleanupReason);
     }
 }

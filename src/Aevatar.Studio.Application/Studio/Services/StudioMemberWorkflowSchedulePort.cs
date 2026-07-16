@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Buffers.Binary;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -11,6 +12,8 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -28,6 +31,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private readonly IStudioScheduledCredentialMaterializer _credentialMaterializer;
     private readonly StudioMemberWorkflowSchedulePolicy _schedulePolicy;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<StudioMemberWorkflowSchedulePort> _logger;
 
     public StudioMemberWorkflowSchedulePort(
         IStudioMemberService memberService,
@@ -35,7 +39,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         IScheduledInvocationAuthorizationPlanner authorizationPlanner,
         IScheduledInvocationAuthorizationRevalidator authorizationRevalidator,
         IStudioScheduledCredentialMaterializer credentialMaterializer,
-        StudioMemberWorkflowSchedulePolicy schedulePolicy)
+        StudioMemberWorkflowSchedulePolicy schedulePolicy,
+        ILogger<StudioMemberWorkflowSchedulePort>? logger = null)
         : this(
             memberService,
             scheduleService,
@@ -43,7 +48,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             authorizationRevalidator,
             credentialMaterializer,
             schedulePolicy,
-            TimeProvider.System)
+            TimeProvider.System,
+            logger)
     {
     }
 
@@ -53,7 +59,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         IScheduledInvocationAuthorizationPlanner authorizationPlanner,
         IScheduledInvocationAuthorizationRevalidator authorizationRevalidator,
         IStudioScheduledCredentialMaterializer credentialMaterializer,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILogger<StudioMemberWorkflowSchedulePort>? logger = null)
         : this(
             memberService,
             scheduleService,
@@ -61,7 +68,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             authorizationRevalidator,
             credentialMaterializer,
             new StudioMemberWorkflowSchedulePolicy(),
-            timeProvider)
+            timeProvider,
+            logger)
     {
     }
 
@@ -72,7 +80,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         IScheduledInvocationAuthorizationRevalidator authorizationRevalidator,
         IStudioScheduledCredentialMaterializer credentialMaterializer,
         StudioMemberWorkflowSchedulePolicy schedulePolicy,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILogger<StudioMemberWorkflowSchedulePort>? logger = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
@@ -82,6 +91,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         _credentialMaterializer = credentialMaterializer ?? throw new ArgumentNullException(nameof(credentialMaterializer));
         _schedulePolicy = schedulePolicy ?? throw new ArgumentNullException(nameof(schedulePolicy));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _logger = logger ?? NullLogger<StudioMemberWorkflowSchedulePort>.Instance;
     }
 
     public async Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
@@ -169,18 +179,20 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             TeamId = resolved.TeamId,
         };
         var current = await ResolveAuthorizationRequestAsync(authorizationRequest, ct, expiresAt);
-        var planned = await _authorizationPlanner.PlanAsync(current.AuthorizationRequest, ct);
-        if (!planned.Success)
-            throw new InvalidOperationException(planned.Detail);
-        var confirmation = ScheduledInvocationAuthorizationConfirmations.FromPlan(planned.Plan!);
-        confirmation.PermissionDigest = existing.Schedule.PermissionDigest;
-        confirmation.PolicyVersion = existing.Schedule.PolicyVersion;
+        var confirmation = BuildConfirmation(
+            current.AuthorizationRequest,
+            existing.Schedule.PermissionDigest,
+            existing.Schedule.PolicyVersion);
         var validated = await _authorizationRevalidator.RevalidateAsync(
             current.AuthorizationRequest,
             confirmation,
             ct);
         if (!validated.Success)
-            throw new InvalidOperationException(validated.Detail);
+        {
+            throw new StudioMemberAutomationPlanConflictException(
+                "reauthorization_required",
+                validated.Detail);
+        }
 
         var receipt = await _scheduleService.UpdateAsync(
             scheduleId,
@@ -221,6 +233,35 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberAutomationActionCommand command,
         CancellationToken ct = default) =>
         ApplyActionAsync(command, TeamAutomationAction.Delete, ct);
+
+    public async Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
+        StudioMemberAutomationActionCommand command,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var resolved = await ResolveTeamMemberAsync(command.ScopeId, command.TeamId, command.MemberId, ct);
+        var scheduleOwner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId);
+        var authenticatedOwner = command.AuthenticatedOwner ??
+            throw new UnauthorizedAccessException("authenticated_authorization_owner_required");
+        var bearerToken = NormalizeRequired(
+            command.ProvisioningBearerToken,
+            nameof(command.ProvisioningBearerToken));
+        var operationId = NormalizeRequired(command.OperationId, nameof(command.OperationId));
+        var retry = await _scheduleService.RetryTeamAutomationRevocationAsync(
+            NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId)),
+            scheduleOwner,
+            operationId,
+            NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey)),
+            ToAuthorizationOwner(authenticatedOwner),
+            ct);
+        _ = await ExecutePendingRevocationAsync(
+            retry.Outcome,
+            bearerToken,
+            authenticatedOwner,
+            scheduleOwner,
+            CancellationToken.None);
+        return ToMutationReceipt(retry.Admission, operationId, "pending");
+    }
 
     private async Task<StudioMemberAutomationMutationReceipt> ApplyActionAsync(
         StudioMemberAutomationActionCommand command,
@@ -292,16 +333,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     {
         ArgumentNullException.ThrowIfNull(request);
         var resolved = await ResolveAuthorizationRequestAsync(request, ct);
-        var current = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
-        if (!current.Success)
-            throw new InvalidOperationException(current.Detail);
-        var confirmation = ScheduledInvocationAuthorizationConfirmations.FromPlan(current.Plan!);
-        confirmation.PermissionDigest = NormalizeRequired(
-            confirmedPermissionDigest,
-            nameof(confirmedPermissionDigest));
-        confirmation.PolicyVersion = NormalizeRequired(
-            request.ConfirmedPolicyVersion,
-            nameof(request.ConfirmedPolicyVersion));
+        var confirmation = BuildConfirmation(
+            resolved.AuthorizationRequest,
+            NormalizeRequired(confirmedPermissionDigest, nameof(confirmedPermissionDigest)),
+            NormalizeRequired(request.ConfirmedPolicyVersion, nameof(request.ConfirmedPolicyVersion)));
         if (!string.Equals(
                 NormalizeRequired(
                     request.CredentialProvisioningKind,
@@ -338,53 +373,33 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             (operationKind == TeamAutomationOperationKind.Create
                 ? BuildScheduleId(scopeId, memberId, idempotencyKey)
                 : throw new StudioMemberAutomationNotFoundException());
+        var displayName = NormalizeOptional(request.DisplayName) ?? $"studio-member-workflow-{memberId}";
+        var prompt = NormalizeOptional(request.Prompt) ?? string.Empty;
+        var credentialOwner = new ScheduledInvocationAuthorizationOwner(
+            NormalizeRequired(plan.Owner.Authority, nameof(plan.Owner.Authority)),
+            plan.Owner.OwnerKind.ToString(),
+            NormalizeRequired(plan.Owner.OwnerSubject, nameof(plan.Owner.OwnerSubject)));
+        var mutationDigest = BuildTeamAutomationMutationDigest(
+            scheduleId,
+            displayName,
+            scopeId,
+            memberId,
+            publishedServiceId,
+            prompt,
+            scheduleCron,
+            scheduleTimezone,
+            request.Enabled);
         var ownerScope = BuildOwnerScope(request);
         var bearerToken = NormalizeRequired(request.ProvisioningBearerToken, nameof(request.ProvisioningBearerToken));
+        var existingAutomation = await _scheduleService.GetTeamAutomationAsync(scheduleId, teamOwner, ct);
+        if (operationKind == TeamAutomationOperationKind.Reauthorize && existingAutomation == null)
+            throw new ScheduledDispatchNotFoundException(scheduleId);
         if (operationKind == TeamAutomationOperationKind.Reauthorize)
-        {
-            var existing = await _scheduleService.GetTeamAutomationAsync(scheduleId, teamOwner, ct)
-                ?? throw new ScheduledDispatchNotFoundException(scheduleId);
-            if (existing.Schedule.RevocationPending)
-            {
-                if (!string.Equals(existing.Schedule.TeamAutomationOperationId, operationId, StringComparison.Ordinal) ||
-                    !string.Equals(
-                        existing.Schedule.TeamAutomationIdempotencyKey,
-                        idempotencyKey,
-                        StringComparison.Ordinal))
-                {
-                    throw new ScheduledDispatchConflictException(
-                        scheduleId,
-                        "team_automation_revocation_operation_conflict");
-                }
-
-                var retry = await _scheduleService.RetryTeamAutomationRevocationAsync(
-                    scheduleId,
-                    teamOwner,
-                    operationId,
-                    idempotencyKey,
-                    ToAuthorizationOwner(request.AuthenticatedOwner),
-                    ct);
-                var retryCleanupCompleted = await ExecutePendingRevocationAsync(
-                    retry.Outcome,
-                    bearerToken,
-                    request.AuthenticatedOwner,
-                    teamOwner,
-                    CancellationToken.None);
-                return new StudioMemberWorkflowScheduleResult(
-                    Success: retry.Admission.Accepted,
-                    ScopeId: scopeId,
-                    MemberId: memberId,
-                    ScheduleId: scheduleId,
-                    PublishedServiceId: publishedServiceId,
-                    ObservatoryUrl: ObservatoryPath,
-                    Status: retryCleanupCompleted ? "active" : "pending")
-                {
-                    OperationId = operationId,
-                    CommandId = retry.Admission.CommandId,
-                };
-            }
-        }
-
+            EnsureExistingCredentialOwnerMatches(request.AuthenticatedOwner, existingAutomation!.Schedule);
+        var requestedEffectLocator = _credentialMaterializer.CreateEffectLocator(
+            scheduleId,
+            operationId,
+            credentialOwner);
         var began = await _scheduleService.BeginTeamAutomationCredentialOperationAsync(
             new TeamAutomationCredentialOperation(
                 scheduleId,
@@ -393,13 +408,54 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 idempotencyKey,
                 plan.PermissionDigest,
                 plan.CredentialPolicy.PolicyVersion,
-                operationKind),
+                operationKind,
+                requestedEffectLocator,
+                mutationDigest),
             ct);
         if (!began.Admission.Accepted)
             throw new InvalidOperationException("team_automation_begin_rejected");
+        if (existingAutomation?.Schedule.RevocationPending == true)
+        {
+            if (!string.Equals(existingAutomation.Schedule.TeamAutomationOperationId, operationId, StringComparison.Ordinal) ||
+                !string.Equals(
+                    existingAutomation.Schedule.TeamAutomationIdempotencyKey,
+                    idempotencyKey,
+                    StringComparison.Ordinal))
+            {
+                throw new ScheduledDispatchConflictException(
+                    scheduleId,
+                    "team_automation_revocation_operation_conflict");
+            }
+
+            var retry = await _scheduleService.RetryTeamAutomationRevocationAsync(
+                scheduleId,
+                teamOwner,
+                operationId,
+                idempotencyKey,
+                ToAuthorizationOwner(request.AuthenticatedOwner),
+                ct);
+            _ = await ExecutePendingRevocationAsync(
+                retry.Outcome,
+                bearerToken,
+                request.AuthenticatedOwner,
+                teamOwner,
+                CancellationToken.None);
+            return new StudioMemberWorkflowScheduleResult(
+                Success: retry.Admission.Accepted,
+                ScopeId: scopeId,
+                MemberId: memberId,
+                ScheduleId: scheduleId,
+                PublishedServiceId: publishedServiceId,
+                ObservatoryUrl: ObservatoryPath,
+                Status: "pending")
+            {
+                OperationId = operationId,
+                CommandId = retry.Admission.CommandId,
+            };
+        }
+
         if (!began.Outcome.OwnsEffectAttempt)
         {
-            var existing = await _scheduleService.GetTeamAutomationAsync(scheduleId, teamOwner, ct);
             return new StudioMemberWorkflowScheduleResult(
                 Success: true,
                 ScopeId: scopeId,
@@ -407,30 +463,64 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 ScheduleId: scheduleId,
                 PublishedServiceId: publishedServiceId,
                 ObservatoryUrl: ObservatoryPath,
-                Status: existing == null
-                    ? "pending"
-                    : ToStatusName(existing.Schedule.TeamAutomationLifecycleStatus))
+                Status: "pending")
             {
                 OperationId = operationId,
                 CommandId = began.Admission.CommandId,
             };
         }
 
+        var effectAttemptId = NormalizeRequired(
+            began.Outcome.EffectAttemptId,
+            nameof(began.Outcome.EffectAttemptId));
+        var effectLocator = began.Outcome.CredentialEffectLocator
+            ?? throw new InvalidOperationException("team_automation_credential_effect_locator_missing");
+        if (effectLocator != requestedEffectLocator)
+            throw new InvalidOperationException("team_automation_credential_effect_locator_conflict");
         StudioScheduledCredential? credential = null;
+        var candidateCommitted = began.Outcome.CandidateCredential != null;
+        var candidateCommitAttempted = candidateCommitted;
+        var activationAttempted = false;
         TeamAutomationCommittedMutationReceipt activation;
-        var cleanupCompleted = true;
         try
         {
-            credential = await _credentialMaterializer.MaterializeAsync(
-                bearerToken, validation.ValidatedPlan, scheduleId, ownerScope, ct);
+            credential = candidateCommitted
+                ? ToStudioScheduledCredential(
+                    began.Outcome.CandidateCredential!,
+                    began.Outcome.CandidateOwner)
+                : await _credentialMaterializer.MaterializeAsync(
+                    bearerToken,
+                    validation.ValidatedPlan,
+                    scheduleId,
+                    operationId,
+                    effectLocator,
+                    began.Outcome.EffectAttemptGeneration,
+                    ownerScope,
+                    ct);
             EnsureCredentialMatchesPlan(credential, plan, _timeProvider.GetUtcNow());
+            if (!candidateCommitted)
+            {
+                candidateCommitAttempted = true;
+                var candidate = await _scheduleService.RecordTeamAutomationCredentialCandidateAsync(
+                    scheduleId,
+                    teamOwner,
+                    operationId,
+                    idempotencyKey,
+                    effectAttemptId,
+                    BuildScheduleCredential(credential),
+                    credential.Owner,
+                    ct);
+                if (!candidate.Admission.Accepted)
+                    throw new InvalidOperationException("team_automation_candidate_rejected");
+                candidateCommitted = true;
+            }
             var configuration = BuildScheduleConfiguration(
                 scheduleId,
-                request.DisplayName,
+                displayName,
                 scopeId,
                 memberId,
                 publishedServiceId,
-                NormalizeOptional(request.Prompt) ?? string.Empty,
+                prompt,
                 BuildScheduleAuth(credential),
                 ToScheduleAuthorizationFact(plan),
                 scheduleCron,
@@ -438,17 +528,19 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 request.Enabled,
                 teamOwner);
 
+            activationAttempted = true;
             activation = await _scheduleService.CompleteTeamAutomationCredentialOperationAsync(
                 scheduleId,
                 teamOwner,
                 operationId,
                 idempotencyKey,
+                effectAttemptId,
                 BuildScheduleCredential(credential),
                 configuration,
                 ct);
             if (!activation.Admission.Accepted)
                 throw new InvalidOperationException("team_automation_activation_rejected");
-            cleanupCompleted = await ExecutePendingRevocationAsync(
+            _ = await ExecutePendingRevocationAsync(
                 activation.Outcome,
                 bearerToken,
                 request.AuthenticatedOwner,
@@ -457,29 +549,78 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
         catch (Exception ex)
         {
-            await TryRecordFailureAsync(
-                scheduleId,
-                teamOwner,
-                operationId,
-                idempotencyKey,
-                ToStableFailureCode(ex),
-                CancellationToken.None);
-            if (credential != null)
+            if (candidateCommitted && !activationAttempted)
+            {
+                var failure = await TryRecordFailureAsync(
+                    scheduleId,
+                    teamOwner,
+                    operationId,
+                    idempotencyKey,
+                    effectAttemptId,
+                    ToStableFailureCode(ex),
+                    CancellationToken.None);
+                if (failure != null)
+                {
+                    _ = await ExecutePendingRevocationAsync(
+                        failure,
+                        bearerToken,
+                        request.AuthenticatedOwner,
+                        teamOwner,
+                        CancellationToken.None);
+                }
+            }
+            else if (!candidateCommitAttempted && credential != null)
             {
                 try
                 {
-                    _ = await _credentialMaterializer.RevokeAsync(
+                    var revoked = await _credentialMaterializer.RevokeAsync(
                         bearerToken,
                         request.AuthenticatedOwner,
                         credential,
                         revokeNyxId: true,
                         revokeVault: true,
                         CancellationToken.None);
+                    if (revoked.NyxIdRevoked && revoked.VaultRevoked)
+                    {
+                        _ = await TryRecordFailureAsync(
+                            scheduleId,
+                            teamOwner,
+                            operationId,
+                            idempotencyKey,
+                            effectAttemptId,
+                            ToStableFailureCode(ex),
+                            CancellationToken.None);
+                    }
                 }
-                catch
+                catch (Exception cleanupException) when (cleanupException is not OperationCanceledException)
                 {
-                    // The committed failure remains the durable reconciliation signal.
+                    _logger.LogWarning(
+                        cleanupException,
+                        "Failed to clean up an uncommitted scheduled credential for schedule {ScheduleId} and operation {OperationId}.",
+                        scheduleId,
+                        operationId);
+                    // The pending operation and deterministic credential name are
+                    // the recovery descriptor for the next fresh-owner retry.
                 }
+            }
+            else if (!candidateCommitAttempted &&
+                     credential == null &&
+                     ex is StudioScheduledCredentialMaterializationException
+                     {
+                         EffectsCleaned: true,
+                     } or StudioScheduledCredentialMaterializationException
+                     {
+                         RecoveryBlocked: true,
+                     })
+            {
+                _ = await TryRecordFailureAsync(
+                    scheduleId,
+                    teamOwner,
+                    operationId,
+                    idempotencyKey,
+                    effectAttemptId,
+                    ToStableFailureCode(ex),
+                    CancellationToken.None);
             }
             throw;
         }
@@ -491,10 +632,26 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             ScheduleId: NormalizeRequired(activation.Admission.ScheduleId, nameof(activation.Admission.ScheduleId)),
             PublishedServiceId: publishedServiceId,
             ObservatoryUrl: ObservatoryPath,
-            Status: cleanupCompleted ? "active" : "pending")
+            Status: "pending")
         {
             OperationId = operationId,
             CommandId = activation.Admission.CommandId,
+        };
+    }
+
+    private static ScheduledInvocationAuthorizationConfirmation BuildConfirmation(
+        ScheduledInvocationAuthorizationRequest request,
+        string permissionDigest,
+        string policyVersion)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return new ScheduledInvocationAuthorizationConfirmation
+        {
+            InvocationTarget = request.InvocationTarget.Clone(),
+            Owner = request.Owner.Clone(),
+            SchemaVersion = ScheduledInvocationAuthorizationContractVersions.Schema,
+            PolicyVersion = NormalizeRequired(policyVersion, nameof(policyVersion)),
+            PermissionDigest = NormalizeRequired(permissionDigest, nameof(permissionDigest)),
         };
     }
 
@@ -842,6 +999,19 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             credential.ApiKeyId,
             credential.ExpiresAtUtc.ToUnixTimeMilliseconds());
 
+    private static StudioScheduledCredential ToStudioScheduledCredential(
+        ScheduledInvocationAgentKeyCredentialReference credential,
+        ScheduledInvocationAuthorizationOwner? owner)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+        return new StudioScheduledCredential(
+            NormalizeRequired(credential.ApiKeyId, nameof(credential.ApiKeyId)),
+            credential.SecretReference?.Clone()
+                ?? throw new InvalidOperationException("revocation_descriptor_missing"),
+            DateTimeOffset.FromUnixTimeMilliseconds(credential.KeyExpiresAtUnixMs),
+            owner ?? throw new InvalidOperationException("credential_owner_missing"));
+    }
+
     private async Task<bool> ExecutePendingRevocationAsync(
         TeamAutomationOperationCommittedOutcome outcome,
         string bearerToken,
@@ -900,6 +1070,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             outcome.ScheduleId,
             scheduleOwner,
             outcome.OperationId,
+            outcome.IdempotencyKey,
+            NormalizeRequired(outcome.EffectAttemptId, nameof(outcome.EffectAttemptId)),
             result.NyxIdRevoked,
             result.VaultRevoked,
             result.ErrorCode,
@@ -937,6 +1109,16 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         }
     }
 
+    private static void EnsureExistingCredentialOwnerMatches(
+        AuthenticatedAuthorizationOwnerContext authenticatedOwner,
+        ScheduledDispatchSummary schedule) =>
+        EnsureCredentialOwnerMatches(
+            authenticatedOwner,
+            new ScheduledInvocationAuthorizationOwner(
+                NormalizeRequired(schedule.CredentialOwnerAuthority, nameof(schedule.CredentialOwnerAuthority)),
+                NormalizeRequired(schedule.CredentialOwnerKind, nameof(schedule.CredentialOwnerKind)),
+                NormalizeRequired(schedule.CredentialOwnerSubject, nameof(schedule.CredentialOwnerSubject))));
+
     private static ScheduledInvocationAuthorizationOwner ToAuthorizationOwner(
         AuthenticatedAuthorizationOwnerContext authenticatedOwner)
     {
@@ -947,6 +1129,44 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             NormalizeRequired(owner.Authority, nameof(owner.Authority)),
             owner.OwnerKind.ToString(),
             NormalizeRequired(owner.OwnerSubject, nameof(owner.OwnerSubject)));
+    }
+
+    private static string BuildTeamAutomationMutationDigest(
+        string scheduleId,
+        string displayName,
+        string scopeId,
+        string memberId,
+        string publishedServiceId,
+        string prompt,
+        string cronExpression,
+        string timezone,
+        bool enabled)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendDigestValue(hash, "aevatar.team-automation-mutation.v1");
+        AppendDigestValue(hash, scheduleId);
+        AppendDigestValue(hash, displayName);
+        AppendDigestValue(hash, scopeId);
+        AppendDigestValue(hash, memberId);
+        AppendDigestValue(hash, scopeId);
+        AppendDigestValue(hash, ScopeServiceIdentityDefaults.ServiceAppId);
+        AppendDigestValue(hash, ScopeServiceIdentityDefaults.ServiceNamespace);
+        AppendDigestValue(hash, publishedServiceId);
+        AppendDigestValue(hash, WorkflowInvokeEndpointId);
+        AppendDigestValue(hash, prompt);
+        AppendDigestValue(hash, cronExpression);
+        AppendDigestValue(hash, timezone);
+        hash.AppendData(enabled ? [1] : [0]);
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+    }
+
+    private static void AppendDigestValue(IncrementalHash hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
     }
 
     private static void EnsureCredentialMatchesPlan(
@@ -1026,28 +1246,37 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         return $"team-automation:{Convert.ToHexStringLower(SHA256.HashData(identity).AsSpan(0, 16))}";
     }
 
-    private async Task TryRecordFailureAsync(
+    private async Task<TeamAutomationOperationCommittedOutcome?> TryRecordFailureAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         string errorCode,
         CancellationToken ct)
     {
         try
         {
-            await _scheduleService.FailTeamAutomationCredentialOperationAsync(
+            var failure = await _scheduleService.FailTeamAutomationCredentialOperationAsync(
                 scheduleId,
                 owner,
                 operationId,
                 idempotencyKey,
+                effectAttemptId,
                 errorCode,
                 ct);
+            return failure.Outcome;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Failed to record scheduled credential operation failure for schedule {ScheduleId} and operation {OperationId}.",
+                scheduleId,
+                operationId);
             // Preserve the original materialization/apply failure. The actor's
             // pending state remains visible for reconciliation.
+            return null;
         }
     }
 

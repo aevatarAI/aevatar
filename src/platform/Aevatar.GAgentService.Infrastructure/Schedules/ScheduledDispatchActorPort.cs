@@ -128,6 +128,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
     public Task<DispatchAdmission> DispatchBeginTeamAutomationCredentialOperationAsync(
         string actorId,
         TeamAutomationCredentialOperation operation,
+        string observationRequestId,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
@@ -141,6 +142,43 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             PermissionDigest = operation.PermissionDigest,
             PolicyVersion = operation.PolicyVersion,
             OperationKind = ToStateOperationKind(operation.Kind),
+            CredentialEffectLocator = new ScheduledCredentialEffectLocatorState
+            {
+                CredentialName = operation.CredentialEffectLocator.CredentialName,
+                RequestedSecretReference = operation.CredentialEffectLocator.RequestedSecretReference,
+                SecretPurpose = operation.CredentialEffectLocator.SecretPurpose,
+                SecretOwnerScopeKey = operation.CredentialEffectLocator.SecretOwnerScopeKey,
+                CredentialOwner = CreateAuthorizationOwnerState(
+                    operation.CredentialEffectLocator.CredentialOwner),
+            },
+            MutationDigest = operation.MutationDigest,
+            ObservationRequestId = observationRequestId,
+        }, ct);
+    }
+
+    public Task<DispatchAdmission> DispatchRecordTeamAutomationCredentialCandidateAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        ScheduledInvocationAgentKeyCredentialReference credential,
+        ScheduledInvocationAuthorizationOwner credentialOwner,
+        string observationRequestId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentNullException.ThrowIfNull(credential);
+        ArgumentNullException.ThrowIfNull(credentialOwner);
+        return DispatchAsync(actorId, new RecordTeamAutomationCredentialCandidateCommand
+        {
+            Owner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
+            Credential = CreateScheduledInvocationAgentKeyState(credential),
+            CredentialOwner = CreateAuthorizationOwnerState(credentialOwner),
+            ObservationRequestId = observationRequestId,
         }, ct);
     }
 
@@ -149,9 +187,11 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         ScheduledInvocationAgentKeyCredentialReference credential,
         ScheduledDispatchConfiguration configuration,
         PreparedScheduledDispatchTarget dispatch,
+        string observationRequestId,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
@@ -161,8 +201,10 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             Owner = CreateTeamOwnerState(owner),
             OperationId = operationId,
             IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
             Credential = CreateScheduledInvocationAgentKeyState(credential),
             Configuration = CreateConfiguredEvent(configuration, dispatch),
+            ObservationRequestId = observationRequestId,
         }, ct);
     }
 
@@ -171,14 +213,18 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         string errorCode,
+        string observationRequestId,
         CancellationToken ct = default) =>
         DispatchAsync(actorId, new FailTeamAutomationCredentialOperationCommand
         {
             Owner = CreateTeamOwnerState(owner),
             OperationId = operationId,
             IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
             ErrorCode = errorCode,
+            ObservationRequestId = observationRequestId,
         }, ct);
 
     public Task<DispatchAdmission> DispatchEnableTeamAutomationAsync(
@@ -210,6 +256,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         string idempotencyKey,
         string reason,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+        string observationRequestId,
         CancellationToken ct = default) =>
         DispatchAsync(actorId, new ScheduledDispatchDeleteCommand
         {
@@ -218,6 +265,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             OperationId = operationId,
             IdempotencyKey = idempotencyKey,
             AuthenticatedCredentialOwner = CreateAuthorizationOwnerState(authenticatedCredentialOwner),
+            ObservationRequestId = observationRequestId,
         }, ct);
 
     public Task<DispatchAdmission> DispatchRetryTeamAutomationRevocationAsync(
@@ -226,6 +274,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         string operationId,
         string idempotencyKey,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+        string observationRequestId,
         CancellationToken ct = default) =>
         DispatchAsync(actorId, new RetryTeamAutomationRevocationCommand
         {
@@ -233,23 +282,30 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             OperationId = operationId,
             IdempotencyKey = idempotencyKey,
             AuthenticatedCredentialOwner = CreateAuthorizationOwnerState(authenticatedCredentialOwner),
+            ObservationRequestId = observationRequestId,
         }, ct);
 
     public Task<DispatchAdmission> DispatchCompleteTeamAutomationRevocationAsync(
         string actorId,
         TeamMemberAutomationOwner owner,
         string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
         bool nyxIdRevoked,
         bool vaultRevoked,
         string errorCode,
+        string observationRequestId,
         CancellationToken ct = default) =>
         DispatchAsync(actorId, new CompleteTeamAutomationRevocationCommand
         {
             Owner = CreateTeamOwnerState(owner),
             OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
             NyxidRevoked = nyxIdRevoked,
             VaultRevoked = vaultRevoked,
             ErrorCode = errorCode?.Trim() ?? string.Empty,
+            ObservationRequestId = observationRequestId,
         }, ct);
 
     public Task<DispatchAdmission> DispatchRunTeamAutomationNowAsync(

@@ -83,14 +83,166 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
+        result.ApiKeyId.Should().Be("key-1");
+        result.KeyExpiresAtUnixMs.Should().Be(DateTimeOffset.Parse("2026-07-21T00:00:00Z").ToUnixTimeMilliseconds());
         handler.RequestBodies.Should().ContainSingle();
         using var body = System.Text.Json.JsonDocument.Parse(handler.RequestBodies.Single());
+        body.RootElement.GetProperty("name").GetString().Should().Be("scheduled-key");
+        body.RootElement.GetProperty("scopes").GetString().Should().Be("read proxy");
+        body.RootElement.GetProperty("platform").GetString().Should().Be("generic");
         body.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static value => value.GetString())
             .Should().Equal("us-alpha", "us-beta");
         body.RootElement.GetProperty("allowed_node_ids").EnumerateArray().Select(static value => value.GetString())
             .Should().Equal("node-shared", "node-fallback", "node-shared");
         body.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
         body.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+        body.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
+        DateTimeOffset.Parse(body.RootElement.GetProperty("expires_at").GetString()!).Should()
+            .Be(DateTimeOffset.Parse("2026-07-21T00:00:00Z"));
+    }
+
+    [Fact]
+    public async Task IssueAsync_ForOrganizationOwner_ShouldMapExactTargetOrganization()
+    {
+        var handler = new RoutingJsonHandler("""{"id":"key-org","full_key":"secret"}""");
+        var issuer = CreateIssuer(handler);
+        var plan = ValidPlan();
+        plan.Owner.OwnerKind = AuthorizationOwnerKind.Organization;
+        plan.Owner.OwnerSubject = "org-alpha";
+        plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(plan),
+            "scheduled-org-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        using var body = System.Text.Json.JsonDocument.Parse(handler.RequestBodies.Single());
+        body.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
+        body.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+        body.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RevokeActiveKeysByNameAsync_ShouldRevokeEveryMatchingActivePersonalKeyOnly()
+    {
+        var handler = new RoutingJsonHandler(
+            """
+            {
+              "keys": [
+                {"id":"key-stale-1","name":"scheduled-key","is_active":true},
+                {"id":"key-other","name":"other-key","is_active":true},
+                {"id":"key-inactive","name":"scheduled-key","is_active":false},
+                {"id":"key-stale-2","name":"scheduled-key","is_active":true}
+              ]
+            }
+            """,
+            """{"ok":true}""",
+            """{"ok":true}""");
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.RevokeActiveKeysByNameAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Completed.Should().BeTrue();
+        handler.Requests.Should().Equal(
+            "/api/v1/api-keys",
+            "/api/v1/api-keys/key-stale-1",
+            "/api/v1/api-keys/key-stale-2");
+        handler.RequestMethods.Should().Equal(HttpMethod.Get, HttpMethod.Delete, HttpMethod.Delete);
+    }
+
+    [Fact]
+    public async Task RevokeActiveKeysByNameAsync_ForOrganizationOwner_ShouldUseExactOwnerQuery()
+    {
+        var handler = new RoutingJsonHandler("""{"keys":[]}""");
+        var issuer = CreateIssuer(handler);
+        var plan = ValidPlan();
+        plan.Owner.OwnerKind = AuthorizationOwnerKind.Organization;
+        plan.Owner.OwnerSubject = "org alpha/ops";
+        plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
+
+        var result = await issuer.RevokeActiveKeysByNameAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(plan),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Completed.Should().BeTrue();
+        handler.Requests.Should().ContainSingle().Which.Should()
+            .Be("/api/v1/api-keys?org_id=org%20alpha%2Fops");
+        handler.RequestMethods.Should().ContainSingle().Which.Should().Be(HttpMethod.Get);
+    }
+
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    [InlineData("{\"keys\":[{\"id\":\"key-1\",\"name\":\"scheduled-key\"}]}")]
+    [InlineData("{\"keys\":[{\"id\":\" key-1 \",\"name\":\"scheduled-key\",\"is_active\":true}]}")]
+    [InlineData("{\"keys\":[{\"id\":\"key-1\",\"name\":\"scheduled-key\",\"is_active\":true},{\"id\":\"key-2\",\"name\":4,\"is_active\":true}]}")]
+    public async Task RevokeActiveKeysByNameAsync_WithMalformedList_ShouldFailBeforeDelete(string response)
+    {
+        var handler = new RoutingJsonHandler(response);
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.RevokeActiveKeysByNameAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Completed.Should().BeFalse();
+        result.Error.Should().Be("nyxid_api_key_list_malformed");
+        result.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.ProviderError);
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys");
+    }
+
+    [Fact]
+    public async Task RevokeActiveKeysByNameAsync_WhenListFails_ShouldReturnPendingWithoutDelete()
+    {
+        var handler = new RoutingJsonHandler(
+            """{"error":true,"status":503,"body":"list unavailable"}""");
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.RevokeActiveKeysByNameAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Completed.Should().BeFalse();
+        result.HttpStatus.Should().Be(503);
+        result.Error.Should().Be("list unavailable");
+        result.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys");
+    }
+
+    [Fact]
+    public async Task RevokeActiveKeysByNameAsync_WhenAnyDeleteFails_ShouldRemainPending()
+    {
+        var handler = new RoutingJsonHandler(
+            """{"keys":[{"id":"key-stale","name":"scheduled-key","is_active":true}]}""",
+            """{"error":true,"status":503,"body":"delete unavailable"}""");
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.RevokeActiveKeysByNameAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Completed.Should().BeFalse();
+        result.HttpStatus.Should().Be(503);
+        result.Error.Should().Be("delete unavailable");
+        result.FailureKind.Should().Be(UserAgentApiKeyRevocationFailureKind.Transient);
+        handler.Requests.Should().Equal(
+            "/api/v1/api-keys",
+            "/api/v1/api-keys/key-stale");
     }
 
     [Fact]
@@ -291,25 +443,31 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
     private sealed class RoutingJsonHandler : HttpMessageHandler
     {
-        private readonly string _json;
+        private readonly Queue<string> _jsonResponses;
 
-        public RoutingJsonHandler(string json)
+        public RoutingJsonHandler(params string[] jsonResponses)
         {
-            _json = json;
+            if (jsonResponses.Length == 0)
+                throw new ArgumentException("At least one JSON response is required.", nameof(jsonResponses));
+            _jsonResponses = new Queue<string>(jsonResponses);
         }
 
         public List<string> Requests { get; } = [];
+        public List<HttpMethod> RequestMethods { get; } = [];
         public List<string> RequestBodies { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request.RequestUri?.PathAndQuery ?? string.Empty);
+            RequestMethods.Add(request.Method);
             if (request.Content is not null)
                 RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            if (!_jsonResponses.TryDequeue(out var json))
+                throw new InvalidOperationException("No queued JSON response remains.");
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(_json, Encoding.UTF8, "application/json"),
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
             };
         }
     }

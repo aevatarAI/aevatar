@@ -28,6 +28,122 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    public async Task<ScheduledAgentApiKeyRevokeResult> RevokeActiveKeysByNameAsync(
+        string token,
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
+        string credentialName,
+        CancellationToken ct)
+    {
+        var lookup = await FindActiveKeysByNameAsync(token, validatedPlan, credentialName, ct);
+        if (!lookup.Completed)
+        {
+            return ScheduledAgentApiKeyRevokeResult.Pending(
+                lookup.HttpStatus,
+                lookup.Error,
+                lookup.FailureKind);
+        }
+
+        ScheduledAgentApiKeyRevokeResult? firstFailure = null;
+        foreach (var apiKeyId in lookup.ActiveApiKeyIds)
+        {
+            ScheduledAgentApiKeyRevokeResult result;
+            try
+            {
+                result = await RevokeAsync(token, apiKeyId, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "NyxID stale API key revocation failed during reconciliation.");
+                result = ScheduledAgentApiKeyRevokeResult.Pending(
+                    0,
+                    "nyxid_api_key_revoke_failed",
+                    UserAgentApiKeyRevocationFailureKind.Transient);
+            }
+
+            if (!result.Completed)
+                firstFailure ??= result;
+        }
+
+        return firstFailure ?? ScheduledAgentApiKeyRevokeResult.Complete();
+    }
+
+    public async Task<ScheduledAgentApiKeyLookupResult> FindActiveKeysByNameAsync(
+        string token,
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
+        string credentialName,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return ScheduledAgentApiKeyLookupResult.Pending(
+                0,
+                "missing_access_token",
+                UserAgentApiKeyRevocationFailureKind.Unauthorized);
+        }
+        ArgumentNullException.ThrowIfNull(validatedPlan);
+        var exactCredentialName = Normalize(credentialName);
+        if (exactCredentialName == null)
+        {
+            return ScheduledAgentApiKeyLookupResult.Pending(
+                0,
+                "missing_credential_name",
+                UserAgentApiKeyRevocationFailureKind.ProviderError);
+        }
+        if (!validatedPlan.HasValidIntegrity ||
+            !TryResolveOwnerScope(
+                validatedPlan.Plan?.Owner,
+                out var ownerKind,
+                out var ownerSubject))
+        {
+            return ScheduledAgentApiKeyLookupResult.Pending(
+                0,
+                "authorization_plan_owner_invalid",
+                UserAgentApiKeyRevocationFailureKind.Unauthorized);
+        }
+
+        string response;
+        try
+        {
+            var client = _nyxClientFactory.CreateClient();
+            response = ownerKind == AuthorizationOwnerKind.Organization
+                ? await client.ListApiKeysAsync(token, ownerSubject, ct)
+                : await client.ListApiKeysAsync(token, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "NyxID API key reconciliation list failed.");
+            return ScheduledAgentApiKeyLookupResult.Pending(
+                0,
+                "nyxid_api_key_list_failed",
+                UserAgentApiKeyRevocationFailureKind.Transient);
+        }
+
+        if (TryReadErrorEnvelope(response, out var status, out var body, out var message))
+        {
+            return ScheduledAgentApiKeyLookupResult.Pending(
+                status ?? 0,
+                Normalize(body) ?? Normalize(message) ?? "nyxid_api_key_list_failed",
+                ClassifyRevocationFailure(status));
+        }
+        if (!TryReadMatchingActiveApiKeyIds(response, exactCredentialName, out var apiKeyIds))
+        {
+            return ScheduledAgentApiKeyLookupResult.Pending(
+                0,
+                "nyxid_api_key_list_malformed",
+                UserAgentApiKeyRevocationFailureKind.ProviderError);
+        }
+
+        return ScheduledAgentApiKeyLookupResult.Complete(apiKeyIds);
+    }
+
     public async Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
         string token,
         ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
@@ -216,6 +332,78 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             429 or >= 500 => UserAgentApiKeyRevocationFailureKind.Transient,
             _ => UserAgentApiKeyRevocationFailureKind.ProviderError,
         };
+
+    private static bool TryResolveOwnerScope(
+        AuthorizationOwnerIdentity? owner,
+        out AuthorizationOwnerKind ownerKind,
+        out string ownerSubject)
+    {
+        ownerKind = AuthorizationOwnerKind.Unspecified;
+        ownerSubject = string.Empty;
+        if (owner == null ||
+            !string.Equals(owner.Authority?.Trim(), NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) ||
+            Normalize(owner.OwnerSubject) is not { } normalizedOwnerSubject ||
+            owner.OwnerKind is not (AuthorizationOwnerKind.Personal or AuthorizationOwnerKind.Organization))
+        {
+            return false;
+        }
+
+        ownerKind = owner.OwnerKind;
+        ownerSubject = normalizedOwnerSubject;
+        return true;
+    }
+
+    private static bool TryReadMatchingActiveApiKeyIds(
+        string response,
+        string exactCredentialName,
+        out IReadOnlyList<string> apiKeyIds)
+    {
+        apiKeyIds = [];
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("keys", out var keys) ||
+                keys.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            var matching = new List<string>();
+            var seenIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var key in keys.EnumerateArray())
+            {
+                if (key.ValueKind != JsonValueKind.Object ||
+                    !key.TryGetProperty("id", out var idValue) ||
+                    idValue.ValueKind != JsonValueKind.String ||
+                    Normalize(idValue.GetString()) is not { } id ||
+                    !string.Equals(id, idValue.GetString(), StringComparison.Ordinal) ||
+                    !seenIds.Add(id) ||
+                    !key.TryGetProperty("name", out var nameValue) ||
+                    nameValue.ValueKind != JsonValueKind.String ||
+                    nameValue.GetString() is not { Length: > 0 } name ||
+                    !key.TryGetProperty("is_active", out var activeValue) ||
+                    activeValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                {
+                    return false;
+                }
+
+                if (activeValue.GetBoolean() &&
+                    string.Equals(name, exactCredentialName, StringComparison.Ordinal))
+                {
+                    matching.Add(id);
+                }
+            }
+
+            apiKeyIds = matching;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     private static bool IsExactIdSequence(IReadOnlyList<string> ids) =>
         ids.All(static id =>

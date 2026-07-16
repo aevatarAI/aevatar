@@ -28,7 +28,7 @@ public sealed class ScheduledInvocationAuthorizationRevalidator
         if (!current.Success)
         {
             return ScheduledInvocationAuthorizationValidationResult.Failed(
-                current.FailureCode,
+                ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
                 current.Detail);
         }
 

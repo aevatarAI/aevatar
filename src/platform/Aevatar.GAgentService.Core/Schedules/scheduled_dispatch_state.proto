@@ -68,6 +68,16 @@ message ScheduledDispatchState
   ScheduledInvocationAuthorizationOwnerState active_team_credential_owner = 51;
   ScheduledInvocationAuthorizationOwnerState pending_revocation_team_credential_owner = 52;
   bool team_automation_effect_attempt_claimed = 53;
+  ScheduledInvocationAuthorizationOwnerState candidate_team_credential_owner = 54;
+  string team_automation_effect_attempt_id = 55;
+  int64 team_automation_effect_attempt_generation = 56;
+  google.protobuf.Timestamp team_automation_effect_attempt_claimed_at = 57;
+  google.protobuf.Timestamp team_automation_effect_attempt_expires_at = 58;
+  ScheduledCredentialEffectLocatorState team_credential_effect_locator = 59;
+  string team_automation_mutation_digest = 60;
+  ScheduledDispatchRuntimeCallbackLeaseState team_credential_expiry_lease = 61;
+  google.protobuf.Timestamp pending_team_credential_expiry_at = 62;
+  int64 pending_team_credential_expiry_generation = 63;
 }
 
 message TeamMemberAutomationOwnerState
@@ -261,6 +271,15 @@ message ScheduledInvocationAgentKeyCredentialReferenceState
   int64 key_expires_at_unix_ms = 3;
 }
 
+message ScheduledCredentialEffectLocatorState
+{
+  string credential_name = 1;
+  string requested_secret_reference = 2;
+  string secret_purpose = 3;
+  string secret_owner_scope_key = 4;
+  ScheduledInvocationAuthorizationOwnerState credential_owner = 5;
+}
+
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
 {
   string scope = 1;
@@ -400,6 +419,7 @@ message ScheduledDispatchDeleteCommand
   string idempotency_key = 4;
   reserved 5;
   ScheduledInvocationAuthorizationOwnerState authenticated_credential_owner = 6;
+  string observation_request_id = 7;
 }
 
 message ScheduledDispatchDeletedEvent
@@ -445,6 +465,9 @@ message BeginTeamAutomationCredentialOperationCommand
   string permission_digest = 5;
   string policy_version = 6;
   TeamAutomationOperationKindState operation_kind = 7;
+  ScheduledCredentialEffectLocatorState credential_effect_locator = 8;
+  string mutation_digest = 9;
+  string observation_request_id = 10;
 }
 
 message TeamAutomationCredentialOperationBeganEvent
@@ -456,6 +479,31 @@ message TeamAutomationCredentialOperationBeganEvent
   string policy_version = 5;
   TeamAutomationOperationKindState operation_kind = 6;
   google.protobuf.Timestamp occurred_at = 7;
+  string schedule_id = 8;
+  ScheduledCredentialEffectLocatorState credential_effect_locator = 9;
+  string mutation_digest = 10;
+}
+
+message RecordTeamAutomationCredentialCandidateCommand
+{
+  TeamMemberAutomationOwnerState owner = 1;
+  string operation_id = 2;
+  string idempotency_key = 3;
+  ScheduledInvocationAgentKeyCredentialReferenceState credential = 4;
+  ScheduledInvocationAuthorizationOwnerState credential_owner = 5;
+  string effect_attempt_id = 6;
+  string observation_request_id = 7;
+}
+
+message TeamAutomationCredentialCandidateRecordedEvent
+{
+  TeamMemberAutomationOwnerState owner = 1;
+  string operation_id = 2;
+  string idempotency_key = 3;
+  ScheduledInvocationAgentKeyCredentialReferenceState credential = 4;
+  ScheduledInvocationAuthorizationOwnerState credential_owner = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+  string effect_attempt_id = 7;
 }
 
 message CompleteTeamAutomationCredentialOperationCommand
@@ -465,6 +513,8 @@ message CompleteTeamAutomationCredentialOperationCommand
   string idempotency_key = 3;
   ScheduledInvocationAgentKeyCredentialReferenceState credential = 4;
   ScheduledDispatchConfiguredEvent configuration = 5;
+  string effect_attempt_id = 6;
+  string observation_request_id = 7;
 }
 
 message TeamAutomationCredentialActivatedEvent
@@ -487,6 +537,8 @@ message FailTeamAutomationCredentialOperationCommand
   string operation_id = 2;
   string idempotency_key = 3;
   string error_code = 4;
+  string effect_attempt_id = 5;
+  string observation_request_id = 6;
 }
 
 message TeamAutomationCredentialOperationFailedEvent
@@ -516,6 +568,9 @@ message CompleteTeamAutomationRevocationCommand
   bool nyxid_revoked = 3;
   bool vault_revoked = 4;
   string error_code = 5;
+  string effect_attempt_id = 6;
+  string observation_request_id = 7;
+  string idempotency_key = 8;
 }
 
 message RetryTeamAutomationRevocationCommand
@@ -525,6 +580,7 @@ message RetryTeamAutomationRevocationCommand
   string idempotency_key = 3;
   reserved 4;
   ScheduledInvocationAuthorizationOwnerState authenticated_credential_owner = 5;
+  string observation_request_id = 6;
 }
 
 message TeamAutomationRevocationCompletedEvent
@@ -542,6 +598,31 @@ message TeamAutomationAuthorizationRequiredEvent
   TeamMemberAutomationOwnerState owner = 1;
   string error_code = 2;
   google.protobuf.Timestamp occurred_at = 3;
+  google.protobuf.Timestamp scheduled_fire_at = 4;
+  string idempotency_key = 5;
+  bool manual = 6;
+}
+
+message TeamAutomationCredentialExpiryIntentRecordedEvent
+{
+  int64 credential_generation = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  google.protobuf.Timestamp requested_at = 3;
+}
+
+message TeamAutomationCredentialExpiryScheduledEvent
+{
+  int64 credential_generation = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  ScheduledDispatchRuntimeCallbackLeaseState lease = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+}
+
+message TeamAutomationCredentialExpiryCommand
+{
+  string schedule_id = 1;
+  int64 credential_generation = 2;
+  google.protobuf.Timestamp expires_at = 3;
 }
 
 message TeamAutomationOperationObservedEvent
@@ -559,6 +640,25 @@ message TeamAutomationOperationObservedEvent
   ScheduledInvocationAuthorizationOwnerState pending_revocation_owner = 11;
   bool nyxid_revocation_pending = 12;
   bool vault_revocation_pending = 13;
+  string effect_attempt_id = 14;
+  int64 effect_attempt_generation = 15;
+  google.protobuf.Timestamp effect_attempt_expires_at = 16;
+  ScheduledInvocationAgentKeyCredentialReferenceState candidate_credential = 17;
+  ScheduledInvocationAuthorizationOwnerState candidate_owner = 18;
+  ScheduledCredentialEffectLocatorState credential_effect_locator = 19;
+  string mutation_digest = 20;
+  string observation_request_id = 21;
+  TeamAutomationOperationObservationStatusState observation_status = 22;
+}
+
+enum TeamAutomationOperationObservationStatusState
+{
+  TEAM_AUTOMATION_OPERATION_OBSERVATION_STATUS_STATE_UNSPECIFIED = 0;
+  TEAM_AUTOMATION_OPERATION_OBSERVATION_STATUS_STATE_COMMITTED = 1;
+  TEAM_AUTOMATION_OPERATION_OBSERVATION_STATUS_STATE_REJECTED_INVALID_REQUEST = 2;
+  TEAM_AUTOMATION_OPERATION_OBSERVATION_STATUS_STATE_REJECTED_CONFLICT = 3;
+  TEAM_AUTOMATION_OPERATION_OBSERVATION_STATUS_STATE_REJECTED_UNAUTHORIZED = 4;
+  TEAM_AUTOMATION_OPERATION_OBSERVATION_STATUS_STATE_REJECTED_NOT_FOUND = 5;
 }
 
 message ScheduledDispatchFireStartedEvent

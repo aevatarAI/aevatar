@@ -662,13 +662,18 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     [Theory]
-    [InlineData("ref", "Scheduled invocation agent key secret reference is missing.")]
-    [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is missing.")]
-    [InlineData("ownerScopeKey", "Scheduled invocation agent key owner scope is missing.")]
-    [InlineData("apiKeyId", "Scheduled invocation agent key id is missing.")]
+    [InlineData("ref", "Scheduled invocation agent key secret reference is missing.",
+        ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing)]
+    [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is missing.",
+        ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid)]
+    [InlineData("ownerScopeKey", "Scheduled invocation agent key owner scope is missing.",
+        ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid)]
+    [InlineData("apiKeyId", "Scheduled invocation agent key id is missing.",
+        ScheduledServiceInvocationAuthorizationFailureCode.ApiKeyIdMissing)]
     public async Task ScheduledServiceInvocationDispatchPort_WithIncompleteWorkflowScheduledInvocationAgentKey_ShouldFailBeforeDispatch(
         string missingField,
-        string expectedMessage)
+        string expectedMessage,
+        ScheduledServiceInvocationAuthorizationFailureCode expectedCode)
     {
         var invocationPort = new RecordingServiceInvocationPort();
         var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
@@ -693,8 +698,9 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 DateTimeOffset.UtcNow.AddDays(7).ToUnixTimeMilliseconds())),
             ProjectNyxIdAccessTokenToWorkflowCallerCredential: true));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage(expectedMessage);
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.WithMessage(expectedMessage);
+        failure.Which.Code.Should().Be(expectedCode);
         invocationPort.Requests.Should().BeEmpty();
         credentialExchange.Sources.Should().BeEmpty();
         vault.ResolveRequests.Should().BeEmpty();
@@ -762,8 +768,10 @@ public sealed class ScheduledDispatchServiceInvocationTests
             },
             auth));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Scheduled invocation agent key is expired.");
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.WithMessage("Scheduled invocation agent key is expired.");
+        failure.Which.Code.Should()
+            .Be(ScheduledServiceInvocationAuthorizationFailureCode.CredentialExpired);
         credentialExchange.Sources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
     }
@@ -796,8 +804,10 @@ public sealed class ScheduledDispatchServiceInvocationTests
             },
             auth));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Scheduled invocation agent key resolver is not configured.");
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.WithMessage("Scheduled invocation agent key resolver is not configured.");
+        failure.Which.Code.Should()
+            .Be(ScheduledServiceInvocationAuthorizationFailureCode.CredentialVaultUnavailable);
         credentialExchange.Sources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
     }
@@ -831,8 +841,11 @@ public sealed class ScheduledDispatchServiceInvocationTests
             },
             auth));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Scheduled invocation agent key could not be resolved.");
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.WithMessage("Scheduled invocation agent key could not be resolved.");
+        failure.Which.Code.Should()
+            .Be(ScheduledServiceInvocationAuthorizationFailureCode.CredentialUnresolvable);
+        failure.Which.StableCode.Should().Be("credential_unresolvable");
         credentialExchange.Sources.Should().BeEmpty();
         invocationPort.Requests.Should().BeEmpty();
     }

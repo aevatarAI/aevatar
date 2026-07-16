@@ -73,6 +73,11 @@ public sealed class NyxIdCatalogAccessLifecyclePortTests
     {
         public List<(AuthorizationOwnerIdentity Owner, DateTimeOffset InvalidatedAt, string Reason)> Invalidations { get; } = [];
 
+        public Task ActivateAsync(
+            AuthorizationOwnerIdentity owner,
+            DateTimeOffset activatedAtUtc,
+            CancellationToken ct = default) => throw new NotSupportedException();
+
         public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
@@ -91,6 +96,12 @@ public sealed class NyxIdCatalogAccessLifecyclePortTests
             Invalidations.Add((owner, invalidatedAtUtc, reason));
             return Task.CompletedTask;
         }
+
+        public Task CleanupAsync(
+            AuthorizationOwnerIdentity owner,
+            DateTimeOffset cleanedAtUtc,
+            string reason,
+            CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

@@ -49,6 +49,124 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
+    public void ObservationFence_ShouldRejectResultStartedBeforeLifecycleChange()
+    {
+        var act = () => NyxIdAuthorizationCatalogGAgent.EnsureLifecycleFence(
+            currentLifecycleFence: 4,
+            expectedLifecycleFence: 3);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*superseded by a lifecycle change*");
+        var current = () => NyxIdAuthorizationCatalogGAgent.EnsureLifecycleFence(4, 4);
+        current.Should().NotThrow();
+    }
+
+    [Fact]
+    public void CleanupTransition_ShouldClearCatalogFactsAndAdvanceFence()
+    {
+        var agent = new NyxIdAuthorizationCatalogGAgent();
+        var owner = Owner();
+        var observed = Transition(agent, new NyxIdAuthorizationCatalogState(), Observed(owner, "digest-1"));
+
+        var cleaned = Transition(agent, observed, new NyxIdAuthorizationCatalogCleanedEvent
+        {
+            Owner = owner.Clone(),
+            CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)),
+            Reason = "account_removed",
+            LifecycleFence = 1,
+        });
+
+        cleaned.Owner.Should().BeEquivalentTo(owner);
+        cleaned.Services.Should().BeEmpty();
+        cleaned.ObservedAt.Should().BeNull();
+        cleaned.FreshUntil.Should().BeNull();
+        cleaned.ContentDigest.Should().BeEmpty();
+        cleaned.Invalidated.Should().BeTrue();
+        cleaned.Cleaned.Should().BeTrue();
+        cleaned.CleanupReason.Should().Be("account_removed");
+        cleaned.LifecycleFence.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Projector_ShouldPublishNeverObservedInvalidationTombstone()
+    {
+        var owner = Owner();
+        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var store = new RecordingDocumentStore<NyxIdAuthorizationCatalogDocument>(static document => document.Id);
+        var projector = new NyxIdAuthorizationCatalogCurrentStateProjector(
+            store,
+            new FixedProjectionClock(ObservedAt.AddMinutes(3)));
+        var state = Transition(
+            new NyxIdAuthorizationCatalogGAgent(),
+            new NyxIdAuthorizationCatalogState(),
+            new NyxIdAuthorizationCatalogInvalidatedEvent
+            {
+                Owner = owner.Clone(),
+                InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+                Reason = "credential_revoked",
+                LifecycleFence = 1,
+            });
+
+        await projector.ProjectAsync(
+            new NyxIdAuthorizationCatalogProjectionContext
+            {
+                RootActorId = actorId,
+                ProjectionKind = NyxIdAuthorizationCatalogGAgent.ProjectionKind,
+            },
+            CommittedEnvelope(state, 1, "evt-tombstone"));
+        var snapshot = await new ProjectionNyxIdAuthorizationCatalogQueryPort(store).GetAsync(owner);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Invalidated.Should().BeTrue();
+        snapshot.InvalidationReason.Should().Be("credential_revoked");
+        snapshot.LifecycleFence.Should().Be(1);
+        snapshot.Services.Should().BeEmpty();
+        snapshot.ObservedAtUtc.Should().Be(default);
+    }
+
+    [Fact]
+    public void ActorIds_ShouldIsolateAuthorityOwnerKindAndSubject()
+    {
+        var personal = Owner();
+        var organization = personal.Clone();
+        organization.OwnerKind = AuthorizationOwnerKind.Organization;
+        var otherAuthority = personal.Clone();
+        otherAuthority.Authority = "other-authority";
+        var otherSubject = personal.Clone();
+        otherSubject.OwnerSubject = "owner-beta";
+
+        new[]
+            {
+                NyxIdAuthorizationCatalogActorIds.Build(personal),
+                NyxIdAuthorizationCatalogActorIds.Build(organization),
+                NyxIdAuthorizationCatalogActorIds.Build(otherAuthority),
+                NyxIdAuthorizationCatalogActorIds.Build(otherSubject),
+            }
+            .Should().OnlyHaveUniqueItems();
+    }
+
+    [Fact]
+    public void CatalogPersistenceContracts_ShouldNotContainBearerOrTokenFields()
+    {
+        var persistedDescriptors = new[]
+        {
+            NyxIdAuthorizationCatalogState.Descriptor,
+            NyxIdAuthorizationCatalogObservedEvent.Descriptor,
+            NyxIdAuthorizationCatalogRefreshFailedEvent.Descriptor,
+            NyxIdAuthorizationCatalogInvalidatedEvent.Descriptor,
+            NyxIdAuthorizationCatalogCleanedEvent.Descriptor,
+            NyxIdAuthorizationCatalogDocument.Descriptor,
+        };
+
+        persistedDescriptors
+            .SelectMany(static descriptor => descriptor.Fields.InDeclarationOrder())
+            .Select(static field => field.Name)
+            .Should().NotContain(static name =>
+                name.Contains("bearer", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("token", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ProjectorAndQuery_ShouldRoundTripOwnerScopedCommittedState()
     {
         var owner = Owner();

@@ -110,8 +110,25 @@ describe("teamAutomationApi", () => {
         status: "ready",
         permissionDigest: "digest-alpha",
         policyVersion: "scheduled-invocation-auth/v1",
-        serviceGrants: [expect.objectContaining({ targetId: "us-alpha" })],
-        nodeGrants: [expect.objectContaining({ targetId: "node-alpha" })],
+        serviceGrants: [
+          {
+            displayName: "Connector Alpha",
+            grantId: "service:us-alpha",
+            kind: "service",
+            serviceSlug: "connector-alpha",
+            targetId: "us-alpha",
+          },
+        ],
+        nodeGrants: [
+          {
+            displayName: "Node Alpha",
+            grantId: "node:us-alpha:node-alpha",
+            kind: "node",
+            role: "primary",
+            targetId: "node-alpha",
+            userServiceId: "us-alpha",
+          },
+        ],
       }),
     );
     expect(review.credentialPlan).toEqual(
@@ -388,6 +405,44 @@ describe("teamAutomationApi", () => {
         idempotencyKey: "idem-stable",
       }),
     );
+  });
+
+  it("retries credential revocation with only the persisted operation identity", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        accepted: true,
+        status: "pending",
+        scheduleId: "sch-alpha",
+        operationId: "op-stable",
+        commandId: "cmd-retry-revocation",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      teamAutomationApi.retryRevocation(draft, "sch-alpha", {
+        operationId: "op-stable",
+        idempotencyKey: "idem-stable",
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        operationId: "op-stable",
+        scheduleId: "sch-alpha",
+        status: "pending",
+      }),
+    );
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe(
+      "/api/scopes/scope-alpha/teams/team-alpha/members/m-alpha/automations/sch-alpha/retry-revocation",
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      operationId: "op-stable",
+      idempotencyKey: "idem-stable",
+    });
   });
 
   it("follows scoped list cursors without falling back to the generic schedule API", async () => {

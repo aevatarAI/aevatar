@@ -1,5 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
 
@@ -10,13 +12,16 @@ public sealed class TeamAutomationOperationObservationScopeLeasePreparationPort
         _activationService;
     private readonly IProjectionScopeReleaseService<TeamAutomationOperationObservationRuntimeLease>
         _releaseService;
+    private readonly ILogger<TeamAutomationOperationObservationScopeLeasePreparationPort> _logger;
 
     public TeamAutomationOperationObservationScopeLeasePreparationPort(
         IProjectionScopeActivationService<TeamAutomationOperationObservationRuntimeLease> activationService,
-        IProjectionScopeReleaseService<TeamAutomationOperationObservationRuntimeLease> releaseService)
+        IProjectionScopeReleaseService<TeamAutomationOperationObservationRuntimeLease> releaseService,
+        ILogger<TeamAutomationOperationObservationScopeLeasePreparationPort>? logger = null)
     {
         _activationService = activationService ?? throw new ArgumentNullException(nameof(activationService));
         _releaseService = releaseService ?? throw new ArgumentNullException(nameof(releaseService));
+        _logger = logger ?? NullLogger<TeamAutomationOperationObservationScopeLeasePreparationPort>.Instance;
     }
 
     public async Task<TeamAutomationOperationObservationScopeLeasePreparation?> PrepareAsync(
@@ -46,8 +51,13 @@ public sealed class TeamAutomationOperationObservationScopeLeasePreparationPort
                 normalizedActorId,
                 normalizedOperationId);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Failed to prepare a team automation operation observation scope lease for actor {ActorId} and operation {OperationId}.",
+                actorId,
+                operationId);
             if (lease != null)
                 await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
 

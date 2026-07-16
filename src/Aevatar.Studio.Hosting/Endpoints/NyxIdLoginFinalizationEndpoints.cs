@@ -222,7 +222,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 if (sameBindingProbe != IssuedBindingProbeResult.Usable)
                     return BuildIssuedBindingProbeError(sameBindingProbe);
 
-                return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, ct);
+                return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, logger, ct);
             }
 
             var replacementReason = "studio_service_access_review";
@@ -232,7 +232,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 if (probeResult == ExistingBindingProbeResult.Usable)
                 {
                     await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                    return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, ct);
+                    return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, logger, ct);
                 }
 
                 if (probeResult == ExistingBindingProbeResult.Unavailable)
@@ -278,7 +278,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 }, statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, ct);
+            return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, logger, ct);
         }
 
         var newBindingProbe = await ProbeIssuedBindingAsync(
@@ -304,7 +304,7 @@ public static class NyxIdLoginFinalizationEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, ct);
+        return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, logger, ct);
     }
 
     private static async Task<IResult> CompleteLoginAsync(
@@ -312,15 +312,38 @@ public static class NyxIdLoginFinalizationEndpoints
         NyxIdFinalizedUserInfo user,
         bool bindingDispatchAccepted,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshLifecycle,
+        ILogger logger,
         CancellationToken ct)
     {
-        var catalogRefresh = catalogRefreshLifecycle is null
-            ? new NyxIdAuthorizationCatalogRefreshResult(
+        NyxIdAuthorizationCatalogRefreshResult catalogRefresh;
+        if (catalogRefreshLifecycle is null)
+        {
+            catalogRefresh = new NyxIdAuthorizationCatalogRefreshResult(
                 NyxIdAuthorizationCatalogRefreshStatus.Unspecified,
-                "nyxid_catalog_refresh_not_configured")
-            : await catalogRefreshLifecycle
-                .RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct)
-                .ConfigureAwait(false);
+                "nyxid_catalog_refresh_not_configured");
+        }
+        else
+        {
+            try
+            {
+                catalogRefresh = await catalogRefreshLifecycle
+                    .RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                logger.LogWarning(
+                    "NyxID login completed while authorization catalog refresh failed; catalog readiness is degraded.");
+                catalogRefresh = new NyxIdAuthorizationCatalogRefreshResult(
+                    NyxIdAuthorizationCatalogRefreshStatus.Failed,
+                    "nyxid_catalog_refresh_failed");
+            }
+        }
+
         return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted, catalogRefresh));
     }
 
@@ -559,6 +582,7 @@ public static class NyxIdLoginFinalizationEndpoints
         NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut => "observation_timed_out",
         NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => "owner_not_supported",
         NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable => "catalog_unstable",
+        NyxIdAuthorizationCatalogRefreshStatus.PublishedContractMissing => "published_contract_missing",
         _ => "not_configured",
     };
 

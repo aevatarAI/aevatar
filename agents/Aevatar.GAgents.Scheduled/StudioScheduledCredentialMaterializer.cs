@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -8,8 +10,13 @@ namespace Aevatar.GAgents.Scheduled;
 
 public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCredentialMaterializer
 {
+    private const int CredentialIdentityDigestBytes = 12;
+    private const int NyxIdApiKeyNameMaxUtf8Bytes = 200;
+    private const string CredentialNamePrefix = "studio-schedule-";
+
     private readonly IScheduledAgentApiKeyIssuer _apiKeyIssuer;
     private readonly ISecretVault _secretVault;
+    private readonly ScheduledCredentialEffectLifecycle _effects;
 
     public StudioScheduledCredentialMaterializer(
         IScheduledAgentApiKeyIssuer apiKeyIssuer,
@@ -17,60 +24,111 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
     {
         _apiKeyIssuer = apiKeyIssuer ?? throw new ArgumentNullException(nameof(apiKeyIssuer));
         _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
+        _effects = new ScheduledCredentialEffectLifecycle(_secretVault, _apiKeyIssuer);
+    }
+
+    public ScheduledCredentialEffectLocator CreateEffectLocator(
+        string scheduleId,
+        string operationId,
+        ScheduledInvocationAuthorizationOwner credentialOwner)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scheduleId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        ArgumentNullException.ThrowIfNull(credentialOwner);
+        return new ScheduledCredentialEffectLocator(
+            BuildCredentialName(scheduleId, operationId),
+            BuildRequestedSecretReference(scheduleId, operationId),
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            $"schedule:{scheduleId}",
+            NormalizeCredentialOwner(credentialOwner));
     }
 
     public async Task<StudioScheduledCredential> MaterializeAsync(
         string bearerToken,
         ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
         string scheduleId,
+        string operationId,
+        ScheduledCredentialEffectLocator effectLocator,
+        long effectAttemptGeneration,
         OwnerScope ownerScope,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(validatedPlan);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scheduleId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        ArgumentNullException.ThrowIfNull(effectLocator);
+        if (effectAttemptGeneration <= 0)
+            throw new ArgumentOutOfRangeException(nameof(effectAttemptGeneration));
         var plan = validatedPlan.Plan ??
             throw new InvalidOperationException("scheduled_authorization_plan_missing");
         var owner = plan.Owner ??
             throw new InvalidOperationException("scheduled_authorization_owner_missing");
+        var plannedOwner = new ScheduledInvocationAuthorizationOwner(
+            owner.Authority?.Trim() ?? string.Empty,
+            owner.OwnerKind.ToString(),
+            owner.OwnerSubject?.Trim() ?? string.Empty);
+        if (effectLocator != CreateEffectLocator(scheduleId, operationId, plannedOwner))
+            throw new InvalidOperationException("scheduled_credential_effect_locator_mismatch");
+        var recoveredEffectCount = await _effects.ReconcileAsync(
+            bearerToken,
+            validatedPlan,
+            effectLocator,
+            ct);
+        if (effectAttemptGeneration > 1 && recoveredEffectCount == 0)
+        {
+            const string errorCode = "scheduled_credential_recovery_evidence_missing";
+            throw new StudioScheduledCredentialMaterializationException(
+                errorCode,
+                effectsCleaned: false,
+                new InvalidOperationException(errorCode),
+                recoveryBlocked: true);
+        }
+
         var issued = await _apiKeyIssuer.IssueAsync(
             bearerToken,
             validatedPlan,
-            $"studio-schedule-{scheduleId}",
+            effectLocator.CredentialName,
             ct);
         if (!issued.Success || string.IsNullOrWhiteSpace(issued.ApiKeyId))
         {
             if (!string.IsNullOrWhiteSpace(issued.ApiKeyId))
-                _ = await _apiKeyIssuer.RevokeAsync(bearerToken, issued.ApiKeyId, CancellationToken.None);
+            {
+                var issueFailure = new InvalidOperationException(
+                    issued.Error ?? "scheduled_credential_materialization_failed");
+                await CleanupIssuedOrThrowAsync(
+                    bearerToken,
+                    issued.ApiKeyId,
+                    effectLocator,
+                    issueFailure);
+                throw new StudioScheduledCredentialMaterializationException(
+                    issueFailure.Message,
+                    effectsCleaned: true,
+                    issueFailure);
+            }
             throw new InvalidOperationException(issued.Error ?? "scheduled_credential_materialization_failed");
         }
 
         var expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(issued.KeyExpiresAtUnixMs);
-        var requestedRef = "sec_" + Guid.NewGuid().ToString("N");
         try
         {
-            var stored = await issued.StoreSecretAsync(
-                _secretVault,
-                new StoreSecretRequest(
-                    CredentialSecretPurposes.ScheduledInvocationAgentKey,
-                    $"schedule:{scheduleId}",
-                    issued.ApiKeyId!,
-                    string.Empty,
-                    "studio-scheduled-invocation-key",
-                    expiresAt,
-                    requestedRef),
+            var stored = await _effects.StoreIssuedSecretAsync(
+                issued,
+                effectLocator,
+                "studio-scheduled-invocation-key",
                 ct);
             return new StudioScheduledCredential(
                 issued.ApiKeyId!,
                 stored.Reference,
                 expiresAt,
-                new ScheduledInvocationAuthorizationOwner(
-                    owner.Authority,
-                    owner.OwnerKind.ToString(),
-                    owner.OwnerSubject));
+                plannedOwner);
         }
-        catch
+        catch (Exception ex)
         {
-            _ = await _apiKeyIssuer.RevokeAsync(bearerToken, issued.ApiKeyId!, CancellationToken.None);
-            throw;
+            await CleanupIssuedOrThrowAsync(bearerToken, issued.ApiKeyId!, effectLocator, ex);
+            throw new StudioScheduledCredentialMaterializationException(
+                ex.Message,
+                effectsCleaned: true,
+                ex);
         }
     }
 
@@ -138,5 +196,73 @@ public sealed class StudioScheduledCredentialMaterializer : IStudioScheduledCred
         {
             throw new UnauthorizedAccessException("credential_owner_mismatch");
         }
+    }
+
+    private static ScheduledInvocationAuthorizationOwner NormalizeCredentialOwner(
+        ScheduledInvocationAuthorizationOwner owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        return new ScheduledInvocationAuthorizationOwner(
+            NormalizeRequired(owner.Authority, nameof(owner.Authority)),
+            NormalizeRequired(owner.OwnerKind, nameof(owner.OwnerKind)),
+            NormalizeRequired(owner.OwnerSubject, nameof(owner.OwnerSubject)));
+    }
+
+    internal static string BuildCredentialName(string scheduleId, string operationId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scheduleId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        var name = CredentialNamePrefix +
+                   ComputeIdentityDigest(scheduleId) + "-" +
+                   ComputeIdentityDigest(operationId);
+        if (Encoding.UTF8.GetByteCount(name) > NyxIdApiKeyNameMaxUtf8Bytes)
+            throw new InvalidOperationException("scheduled_credential_name_too_long");
+        return name;
+    }
+
+    internal static string BuildRequestedSecretReference(string scheduleId, string operationId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scheduleId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        return "sec_studio_schedule_" + ComputeIdentityDigest(scheduleId + "\0" + operationId);
+    }
+
+    private async Task CleanupIssuedOrThrowAsync(
+        string bearerToken,
+        string apiKeyId,
+        ScheduledCredentialEffectLocator effectLocator,
+        Exception? materializationFailure)
+    {
+        try
+        {
+            await _effects.CleanupIssuedAsync(
+                bearerToken,
+                apiKeyId,
+                effectLocator,
+                CancellationToken.None);
+            return;
+        }
+        catch (Exception cleanupFailure)
+        {
+            throw new InvalidOperationException(
+                "scheduled_credential_cleanup_failed",
+                new AggregateException(
+                    new[] { materializationFailure, cleanupFailure }
+                        .Where(static failure => failure != null)
+                        .Cast<Exception>()));
+        }
+
+    }
+
+    private static string ComputeIdentityDigest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))
+                .AsSpan(0, CredentialIdentityDigestBytes))
+            .ToLowerInvariant();
+
+    private static string NormalizeRequired(string? value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{parameterName} is required.", parameterName);
+        return value.Trim();
     }
 }

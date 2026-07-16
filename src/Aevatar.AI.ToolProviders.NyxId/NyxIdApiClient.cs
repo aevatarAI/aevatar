@@ -357,6 +357,18 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> ListApiKeysAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/api-keys", ct);
 
+    public Task<string> ListApiKeysAsync(
+        string token,
+        string organizationOwnerId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(organizationOwnerId);
+        return GetAsync(
+            token,
+            "/api/v1/api-keys?org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim()),
+            ct);
+    }
+
     public Task<string> CreateApiKeyAsync(string token, string requestBody, CancellationToken ct) =>
         PostAsync(token, "/api/v1/api-keys", requestBody, ct);
 

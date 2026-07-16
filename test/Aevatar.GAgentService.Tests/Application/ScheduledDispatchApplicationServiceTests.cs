@@ -556,6 +556,71 @@ public sealed class ScheduledDispatchApplicationServiceTests
         queryPort.FilteredListRequests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create), false)]
+    [InlineData(nameof(ScheduleMutationKind.Create), true)]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), false)]
+    [InlineData(nameof(ScheduleMutationKind.Ensure), true)]
+    public async Task GenericCreationMutations_ShouldRejectTeamOwnerBeforeAnyDownstreamCall(
+        string mutationName,
+        bool ownerOnConfiguration)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha");
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var queryPort = new RecordingScheduledDispatchQueryPort();
+        var preparation = new RecordingScheduledDispatchTargetPreparationService();
+        var admissionPort = new RecordingScheduledDispatchCredentialAdmissionPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            preparation,
+            admissionPort);
+        var configuration = CreateScopeOwnerConfiguration() with
+        {
+            TeamAutomationOwner = ownerOnConfiguration ? owner : null,
+        };
+        var context = CreateScopeOwnerContext() with { TeamAutomationOwner = owner };
+
+        var act = () => ExecuteMutationAsync(service, mutation, configuration, context);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*dedicated team automation lifecycle*");
+        admissionPort.Requests.Should().BeEmpty();
+        preparation.Requests.Should().BeEmpty();
+        AssertNoActorMutationDispatch(actorPort);
+        AssertNoScheduleQuery(queryPort);
+    }
+
+    [Theory]
+    [InlineData(nameof(ScheduleMutationKind.Create))]
+    [InlineData(nameof(ScheduleMutationKind.Ensure))]
+    public async Task GenericCreationMutations_WithoutTeamOwner_ShouldKeepLegacyBehavior(string mutationName)
+    {
+        var mutation = System.Enum.Parse<ScheduleMutationKind>(mutationName);
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var preparation = new RecordingScheduledDispatchTargetPreparationService();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            preparation,
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var context = new ScheduledDispatchMutationContext(
+            "scope-alpha",
+            new ScheduledServiceInvocationNyxIdSubjectRef(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                "owner-alpha"));
+
+        await ExecuteMutationAsync(service, mutation, CreateEnvelopeConfiguration("schedule-legacy"), context);
+
+        preparation.Requests.Should().ContainSingle();
+        if (mutation == ScheduleMutationKind.Create)
+            actorPort.Created.Should().ContainSingle();
+        else
+            actorPort.Ensured.Should().ContainSingle();
+    }
+
     [Fact]
     public async Task UpdateAsync_WhenScheduleMissing_ShouldThrowNotFoundWithoutEnsuringActor()
     {
@@ -1516,6 +1581,41 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ListTeamAutomationsAsync_ShouldApplyVisibilityBeforePagingAndPreserveQueryMetadata()
+    {
+        var expected = new ScheduledDispatchListResult(
+            [CreateSummaryDetail(
+                "schedule-visible",
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey).Schedule],
+            "cursor-visible",
+            7);
+        var queryPort = new RecordingScheduledDispatchQueryPort { ListResult = expected };
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var result = await service.ListTeamAutomationsAsync(
+            new TeamMemberAutomationOwner(" scope-alpha ", " member-alpha "),
+            25,
+            "cursor-input",
+            includeTotalCount: true);
+
+        result.Should().BeSameAs(expected);
+        queryPort.FilteredListRequests.Should().ContainSingle().Which.Should().Be(
+            new ScheduledDispatchListQuery(
+                Take: 25,
+                Cursor: "cursor-input",
+                IncludeTotalCount: true,
+                TeamAutomationOwner: new TeamMemberAutomationOwner("scope-alpha", "member-alpha"),
+                ExcludeCompletedTeamAutomationDeletions: true));
+    }
+
+    [Fact]
     public async Task ScheduledDispatchQueryPort_ShouldApplyTypedFiltersBeforePaging()
     {
         var reader = new RecordingScheduledDispatchDocumentReader
@@ -1593,6 +1693,32 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldFailClosedForUnknownLifecycleStatus()
+    {
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items =
+                [
+                    new ScheduledDispatchDocument
+                    {
+                        ScheduleId = "team-automation-unknown",
+                        TeamOwned = true,
+                        TeamAutomationLifecycleStatus = (TeamAutomationLifecycleStatusDocument)999,
+                    },
+                ],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var act = () => port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Unknown Team automation lifecycle status value '999'*");
+    }
+
+    [Fact]
     public async Task ScheduledDispatchQueryPort_ShouldApplyTeamOwnerFilterBeforePagingAndCount()
     {
         var reader = new RecordingScheduledDispatchDocumentReader();
@@ -1603,7 +1729,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
             Take: 25,
             Cursor: "cursor",
             IncludeTotalCount: true,
-            TeamAutomationOwner: owner));
+            TeamAutomationOwner: owner,
+            ExcludeCompletedTeamAutomationDeletions: true));
 
         reader.LastQuery.Should().NotBeNull();
         reader.LastQuery!.Take.Should().Be(25);
@@ -1629,6 +1756,23 @@ public sealed class ScheduledDispatchApplicationServiceTests
         }, options => options.ComparingByMembers<ProjectionDocumentValue>());
         reader.LastQuery.Filters.Should().NotContain(filter =>
             filter.FieldPath.EndsWith("CurrentTeamId", StringComparison.Ordinal));
+        reader.LastQuery.AnyOfFilters.Should().BeEquivalentTo(
+            new[]
+            {
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ScheduledDispatchDocument.Deleted),
+                    Operator = ProjectionDocumentFilterOperator.EqOrMissing,
+                    Value = ProjectionDocumentValue.FromBool(false),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(ScheduledDispatchDocument.RevocationPending),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromBool(true),
+                },
+            },
+            options => options.ComparingByMembers<ProjectionDocumentValue>());
     }
 
     [Fact]
@@ -2129,6 +2273,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public List<(int Take, string? Cursor, bool IncludeTotalCount)> ListRequests { get; } = [];
         public List<ScheduledDispatchListQuery> FilteredListRequests { get; } = [];
         public ScheduledDispatchDetail? Detail { get; set; }
+        public ScheduledDispatchListResult ListResult { get; init; } =
+            new([], null, null);
 
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -2154,7 +2300,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
         {
             ct.ThrowIfCancellationRequested();
             FilteredListRequests.Add(query);
-            return Task.FromResult(new ScheduledDispatchListResult([], null, query.IncludeTotalCount ? 0 : null));
+            if (query.IncludeTotalCount && ListResult.TotalCount.HasValue)
+                return Task.FromResult(ListResult);
+            return Task.FromResult(ListResult with
+            {
+                TotalCount = query.IncludeTotalCount ? ListResult.TotalCount ?? 0 : null,
+            });
         }
     }
 
@@ -2172,6 +2323,23 @@ public sealed class ScheduledDispatchApplicationServiceTests
             ct.ThrowIfCancellationRequested();
             Requests.Add(request);
             return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingScheduledDispatchTargetPreparationService : IScheduledDispatchTargetPreparationService
+    {
+        private readonly ScheduledDispatchTargetPreparationService _inner = new();
+
+        public List<ScheduledDispatchConfiguration> Requests { get; } = [];
+
+        public Task<PreparedScheduledDispatchTarget> PrepareAsync(
+            ScheduledDispatchConfiguration configuration,
+            string commandId,
+            string correlationId,
+            CancellationToken ct = default)
+        {
+            Requests.Add(configuration);
+            return _inner.PrepareAsync(configuration, commandId, correlationId, ct);
         }
     }
 }

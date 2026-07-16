@@ -96,10 +96,18 @@ public sealed class ScheduledDispatchCurrentStateProjector
                     ScopeId = state.TeamAutomationOwner.ScopeId ?? string.Empty,
                     MemberId = state.TeamAutomationOwner.MemberId ?? string.Empty,
                 },
-            TeamAutomationLifecycleStatus = ToApplicationLifecycleStatus(
-                state.TeamAutomationLifecycleStatus).ToString(),
+            TeamAutomationLifecycleStatus = ToProjectionLifecycleStatus(
+                state.TeamAutomationLifecycleStatus),
             TeamAutomationOperationId = state.TeamAutomationOperationId ?? string.Empty,
             TeamAutomationIdempotencyKey = state.TeamAutomationIdempotencyKey ?? string.Empty,
+            ActiveCredentialOwner = state.ActiveTeamCredentialOwner == null
+                ? null
+                : new ScheduledInvocationAuthorizationOwnerDocument
+                {
+                    Authority = state.ActiveTeamCredentialOwner.Authority ?? string.Empty,
+                    OwnerKind = state.ActiveTeamCredentialOwner.OwnerKind ?? string.Empty,
+                    OwnerSubject = state.ActiveTeamCredentialOwner.OwnerSubject ?? string.Empty,
+                },
             CredentialGeneration = state.TeamCredentialGeneration,
             NyxidRevocationStatus = state.NyxidRevocationStatus.ToString(),
             VaultRevocationStatus = state.VaultRevocationStatus.ToString(),
@@ -293,22 +301,22 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ? ScheduledDispatchScheduleMode.OneShotAtUtc
             : ScheduledDispatchScheduleMode.RecurringCron;
 
-    private static TeamAutomationLifecycleStatus ToApplicationLifecycleStatus(
+    private static TeamAutomationLifecycleStatusDocument ToProjectionLifecycleStatus(
         TeamAutomationLifecycleStatusState status) =>
         status switch
         {
             TeamAutomationLifecycleStatusState.ProvisioningPending =>
-                TeamAutomationLifecycleStatus.ProvisioningPending,
-            TeamAutomationLifecycleStatusState.Active => TeamAutomationLifecycleStatus.Active,
+                TeamAutomationLifecycleStatusDocument.ProvisioningPending,
+            TeamAutomationLifecycleStatusState.Active => TeamAutomationLifecycleStatusDocument.Active,
             TeamAutomationLifecycleStatusState.NeedsAuthorization =>
-                TeamAutomationLifecycleStatus.NeedsAuthorization,
+                TeamAutomationLifecycleStatusDocument.NeedsAuthorization,
             TeamAutomationLifecycleStatusState.ReplacementPending =>
-                TeamAutomationLifecycleStatus.ReplacementPending,
-            TeamAutomationLifecycleStatusState.Deleting => TeamAutomationLifecycleStatus.Deleting,
+                TeamAutomationLifecycleStatusDocument.ReplacementPending,
+            TeamAutomationLifecycleStatusState.Deleting => TeamAutomationLifecycleStatusDocument.Deleting,
             TeamAutomationLifecycleStatusState.RevocationPending =>
-                TeamAutomationLifecycleStatus.RevocationPending,
-            TeamAutomationLifecycleStatusState.Failed => TeamAutomationLifecycleStatus.Failed,
-            _ => TeamAutomationLifecycleStatus.Unspecified,
+                TeamAutomationLifecycleStatusDocument.RevocationPending,
+            TeamAutomationLifecycleStatusState.Failed => TeamAutomationLifecycleStatusDocument.Failed,
+            _ => TeamAutomationLifecycleStatusDocument.Unspecified,
         };
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>

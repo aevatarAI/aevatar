@@ -8,6 +8,7 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  ReloadOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -39,6 +40,7 @@ import {
   TeamAutomationApiError,
   type TeamAutomationCreateDraft,
   type TeamAutomationDisclosure,
+  type TeamAutomationGrant,
   type TeamAutomationMutationReceipt,
   type TeamAutomationOperationIdentity,
   type TeamAutomationPermissionReview,
@@ -108,6 +110,18 @@ type AcceptedLifecycleOperation = {
   readonly scheduleId: string;
 };
 
+type PersistedOperationIdentity = {
+  readonly idempotencyKey: string;
+  readonly intentKey: string;
+  readonly lifecycleKind: LifecycleOperationKind | null;
+  readonly memberId: string;
+  readonly operationId: string;
+  readonly scheduleId: string | null;
+  readonly schemaVersion: 1;
+  readonly scopeId: string;
+  readonly teamId: string;
+};
+
 const scheduleListTake = 200;
 const scheduleListRetryLimit = 4;
 const scheduleListRetryBaseMs = 600;
@@ -115,6 +129,28 @@ const scheduleListRetryMaxMs = 2_500;
 const customPreset = "custom";
 const defaultPreset = "weekdays-0900";
 const defaultCronExpression = "0 9 * * 1-5";
+const operationIdentityStorageNamespace =
+  "aevatar.teamAutomationOperationIdentity.v1";
+const operationIntentKinds = new Set([
+  "create",
+  "delete",
+  "pause",
+  "reauthorize",
+  "resume",
+  "run-now",
+  "update",
+]);
+const persistedOperationIdentityKeys = [
+  "idempotencyKey",
+  "intentKey",
+  "lifecycleKind",
+  "memberId",
+  "operationId",
+  "scheduleId",
+  "schemaVersion",
+  "scopeId",
+  "teamId",
+] as const;
 
 function buildDefaultAutomationFormState(memberId = ""): AutomationFormState {
   return {
@@ -741,6 +777,233 @@ function buildOperationIntentKey(
   ].join("\n");
 }
 
+function buildOperationIdentityStoragePrefix(route: TeamAutomationRoute): string {
+  return [
+    operationIdentityStorageNamespace,
+    encodeURIComponent(route.scopeId),
+    encodeURIComponent(route.teamId),
+    encodeURIComponent(route.memberId),
+    "",
+  ].join(":");
+}
+
+function buildOperationIdentityStorageKey(
+  route: TeamAutomationRoute,
+  intentKey: string,
+): string {
+  return buildOperationIdentityStoragePrefix(route) + encodeURIComponent(intentKey);
+}
+
+function getTeamAutomationSessionStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+): boolean {
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpectedKeys = [...expectedKeys].sort();
+  return (
+    actualKeys.length === sortedExpectedKeys.length &&
+    actualKeys.every((key, index) => key === sortedExpectedKeys[index])
+  );
+}
+
+function isBoundedOperationValue(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    value === value.trim() &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function isValidOperationIntentKey(
+  intentKey: unknown,
+  route: TeamAutomationRoute,
+): intentKey is string {
+  if (typeof intentKey !== "string" || intentKey.length === 0 || intentKey.length > 4096) {
+    return false;
+  }
+  const parts = intentKey.split("\n");
+  return (
+    parts.length === 6 &&
+    operationIntentKinds.has(parts[0]) &&
+    parts[1] === route.scopeId &&
+    parts[2] === route.teamId &&
+    parts[3] === route.memberId &&
+    parts.slice(4).every((part) => part.length <= 1024)
+  );
+}
+
+function parsePersistedOperationIdentity(
+  raw: string,
+  route: TeamAutomationRoute,
+  expectedIntentKey?: string,
+): PersistedOperationIdentity | null {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Array.isArray(value) ||
+      !hasExactKeys(value as Record<string, unknown>, persistedOperationIdentityKeys)
+    ) {
+      return null;
+    }
+    const record = value as Record<string, unknown>;
+    if (
+      record.schemaVersion !== 1 ||
+      record.scopeId !== route.scopeId ||
+      record.teamId !== route.teamId ||
+      record.memberId !== route.memberId ||
+      !isValidOperationIntentKey(record.intentKey, route) ||
+      (expectedIntentKey !== undefined && record.intentKey !== expectedIntentKey) ||
+      !isBoundedOperationValue(record.operationId) ||
+      !isBoundedOperationValue(record.idempotencyKey)
+    ) {
+      return null;
+    }
+
+    const lifecycleKind = record.lifecycleKind;
+    const scheduleId = record.scheduleId;
+    const intentParts = record.intentKey.split("\n");
+    if (
+      lifecycleKind !== null &&
+      (!["create", "delete", "reauthorize"].includes(String(lifecycleKind)) ||
+        lifecycleKind !== intentParts[0])
+    ) {
+      return null;
+    }
+    if (
+      (lifecycleKind === null && scheduleId !== null) ||
+      (lifecycleKind !== null && !isBoundedOperationValue(scheduleId)) ||
+      (lifecycleKind !== null &&
+        lifecycleKind !== "create" &&
+        scheduleId !== intentParts[4])
+    ) {
+      return null;
+    }
+
+    return {
+      idempotencyKey: record.idempotencyKey,
+      intentKey: record.intentKey,
+      lifecycleKind: lifecycleKind as LifecycleOperationKind | null,
+      memberId: route.memberId,
+      operationId: record.operationId,
+      scheduleId: scheduleId as string | null,
+      schemaVersion: 1,
+      scopeId: route.scopeId,
+      teamId: route.teamId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedOperationIdentity(
+  route: TeamAutomationRoute,
+  intentKey: string,
+): PersistedOperationIdentity | null {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return null;
+  }
+  try {
+    const raw = storage.getItem(buildOperationIdentityStorageKey(route, intentKey));
+    return raw
+      ? parsePersistedOperationIdentity(raw, route, intentKey)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedOperationIdentities(
+  route: TeamAutomationRoute,
+): readonly PersistedOperationIdentity[] {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return [];
+  }
+  try {
+    const prefix = buildOperationIdentityStoragePrefix(route);
+    const records: PersistedOperationIdentity[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (!key?.startsWith(prefix)) {
+        continue;
+      }
+      const raw = storage.getItem(key);
+      const record = raw ? parsePersistedOperationIdentity(raw, route) : null;
+      if (
+        record &&
+        buildOperationIdentityStorageKey(route, record.intentKey) === key
+      ) {
+        records.push(record);
+      }
+    }
+    return records;
+  } catch {
+    return [];
+  }
+}
+
+function persistOperationIdentity(
+  route: TeamAutomationRoute,
+  intentKey: string,
+  identity: TeamAutomationOperationIdentity,
+  lifecycle?: Pick<AcceptedLifecycleOperation, "kind" | "scheduleId">,
+): void {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return;
+  }
+  const record: PersistedOperationIdentity = {
+    idempotencyKey: identity.idempotencyKey,
+    intentKey,
+    lifecycleKind: lifecycle?.kind ?? null,
+    memberId: route.memberId,
+    operationId: identity.operationId,
+    scheduleId: lifecycle?.scheduleId ?? null,
+    schemaVersion: 1,
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+  };
+  try {
+    storage.setItem(
+      buildOperationIdentityStorageKey(route, intentKey),
+      JSON.stringify(record),
+    );
+  } catch {
+    // The in-memory identity still protects retries within this component lifetime.
+  }
+}
+
+function removePersistedOperationIdentity(
+  route: TeamAutomationRoute,
+  intentKey: string,
+): void {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.removeItem(buildOperationIdentityStorageKey(route, intentKey));
+  } catch {
+    // Storage denial must not break a confirmed lifecycle transition.
+  }
+}
+
 function formatDisclosure(
   disclosure: TeamAutomationDisclosure,
   intl: IntlShape,
@@ -883,18 +1146,54 @@ function TeamAutomationGrantList({
   grants,
   title,
 }: {
-  readonly grants: TeamAutomationPermissionReview["serviceGrants"];
+  readonly grants: readonly TeamAutomationGrant[];
   readonly title: string;
 }) {
+  const intl = useIntl();
+
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <Typography.Text strong>{title}</Typography.Text>
       {grants.map((grant, index) => (
         <Typography.Text key={`${grant.grantId}:${index}`} style={{ fontSize: 12 }}>
-          {grant.displayName} · {grant.permission}
+          {grant.displayName} · {formatTeamAutomationGrant(grant, intl)}
         </Typography.Text>
       ))}
     </div>
+  );
+}
+
+function formatTeamAutomationGrant(
+  grant: TeamAutomationGrant,
+  intl: IntlShape,
+): string {
+  if (grant.kind === "service") {
+    return grant.serviceSlug
+      ? intl.formatMessage(
+          {
+            id: "teams.automations.form.serviceGrant",
+            defaultMessage: "NyxID service {serviceSlug}",
+          },
+          { serviceSlug: grant.serviceSlug },
+        )
+      : intl.formatMessage({
+          id: "teams.automations.form.serviceGrantAccess",
+          defaultMessage: "NyxID service access",
+        });
+  }
+
+  return intl.formatMessage(
+    {
+      id:
+        grant.role === "primary"
+          ? "teams.automations.form.nodeGrantPrimary"
+          : "teams.automations.form.nodeGrantFallback",
+      defaultMessage:
+        grant.role === "primary"
+          ? "NyxID primary node for {userServiceId}"
+          : "NyxID fallback node for {userServiceId}",
+    },
+    { userServiceId: grant.userServiceId },
   );
 }
 
@@ -1031,9 +1330,27 @@ function TeamAutomationPermissionReviewPanel({
                   { mode: review.credentialPlan.mode },
                 )}
               />
-              <FactLine text={`NyxID scopes · ${review.credentialPlan.scopes.join(" ")}`} />
-              <FactLine text="Exact service allowlist · allow all disabled" />
-              <FactLine text="Exact node allowlist · allow all disabled" />
+              <FactLine
+                text={intl.formatMessage(
+                  {
+                    id: "teams.automations.form.agentKeyScopes",
+                    defaultMessage: "NyxID scopes · {scopes}",
+                  },
+                  { scopes: review.credentialPlan.scopes.join(" ") },
+                )}
+              />
+              <FactLine
+                text={intl.formatMessage({
+                  id: "teams.automations.form.agentKeyServiceAllowlist",
+                  defaultMessage: "Exact service allowlist · allow all disabled",
+                })}
+              />
+              <FactLine
+                text={intl.formatMessage({
+                  id: "teams.automations.form.agentKeyNodeAllowlist",
+                  defaultMessage: "Exact node allowlist · allow all disabled",
+                })}
+              />
               {review.disclosures.map((disclosure, index) => (
                 <FactLine
                   key={`${disclosure}:${index}`}
@@ -1170,7 +1487,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       selectedMember
         ? { scopeId, teamId, memberId: selectedMember.memberId }
         : null,
-    [scopeId, selectedMember, teamId],
+    [scopeId, selectedMember?.memberId, teamId],
   );
   const operationIdentitiesRef = React.useRef(
     new Map<string, TeamAutomationOperationIdentity>(),
@@ -1178,19 +1495,70 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const acceptedLifecycleOperationsRef = React.useRef(
     new Map<string, AcceptedLifecycleOperation>(),
   );
-  const resolveOperationIdentity = React.useCallback((intentKey: string) => {
-    const existing = operationIdentitiesRef.current.get(intentKey);
-    if (existing) {
-      return existing;
+  const [, forceOperationIdentityRender] = React.useReducer(
+    (revision: number) => revision + 1,
+    0,
+  );
+  React.useEffect(() => {
+    operationIdentitiesRef.current.clear();
+    acceptedLifecycleOperationsRef.current.clear();
+    if (!automationRoute) {
+      return;
     }
-    const created = createTeamAutomationOperationIdentity();
-    operationIdentitiesRef.current.set(intentKey, created);
-    return created;
-  }, []);
-  const releaseOperationIdentity = React.useCallback((intentKey: string) => {
-    operationIdentitiesRef.current.delete(intentKey);
-    acceptedLifecycleOperationsRef.current.delete(intentKey);
-  }, []);
+    for (const record of readPersistedOperationIdentities(automationRoute)) {
+      const identity = {
+        idempotencyKey: record.idempotencyKey,
+        operationId: record.operationId,
+      };
+      operationIdentitiesRef.current.set(record.intentKey, identity);
+      if (record.lifecycleKind && record.scheduleId) {
+        acceptedLifecycleOperationsRef.current.set(record.intentKey, {
+          identity,
+          intentKey: record.intentKey,
+          kind: record.lifecycleKind,
+          scheduleId: record.scheduleId,
+        });
+      }
+    }
+    forceOperationIdentityRender();
+  }, [automationRoute]);
+  const resolveOperationIdentity = React.useCallback(
+    (intentKey: string) => {
+      const existing = operationIdentitiesRef.current.get(intentKey);
+      if (existing) {
+        return existing;
+      }
+      const persisted = automationRoute
+        ? readPersistedOperationIdentity(automationRoute, intentKey)
+        : null;
+      if (persisted) {
+        const identity = {
+          idempotencyKey: persisted.idempotencyKey,
+          operationId: persisted.operationId,
+        };
+        operationIdentitiesRef.current.set(intentKey, identity);
+        return identity;
+      }
+      const created = createTeamAutomationOperationIdentity();
+      operationIdentitiesRef.current.set(intentKey, created);
+      if (automationRoute) {
+        persistOperationIdentity(automationRoute, intentKey, created);
+      }
+      return created;
+    },
+    [automationRoute],
+  );
+  const releaseOperationIdentity = React.useCallback(
+    (intentKey: string) => {
+      operationIdentitiesRef.current.delete(intentKey);
+      acceptedLifecycleOperationsRef.current.delete(intentKey);
+      if (automationRoute) {
+        removePersistedOperationIdentity(automationRoute, intentKey);
+      }
+      forceOperationIdentityRender();
+    },
+    [automationRoute],
+  );
   const rememberAcceptedLifecycleOperation = React.useCallback(
     (
       kind: LifecycleOperationKind,
@@ -1201,14 +1569,19 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       if (!identity) {
         return;
       }
-      acceptedLifecycleOperationsRef.current.set(intentKey, {
+      const operation = {
         identity,
         intentKey,
         kind,
         scheduleId: receipt.scheduleId,
-      });
+      };
+      acceptedLifecycleOperationsRef.current.set(intentKey, operation);
+      if (automationRoute) {
+        persistOperationIdentity(automationRoute, intentKey, identity, operation);
+      }
+      forceOperationIdentityRender();
     },
-    [],
+    [automationRoute],
   );
   const scheduleQueryKey = React.useMemo(
     () => ["team-automations", scopeId, teamId, selectedMember?.memberId ?? ""] as const,
@@ -1254,7 +1627,13 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       const schedule = teamSchedules.find(
         (item) => item.scheduleId === operation.scheduleId,
       );
-      if (!schedule || schedule.operationId !== operation.identity.operationId) {
+      if (!schedule) {
+        if (operation.kind === "delete" && schedulesQuery.isSuccess) {
+          releaseOperationIdentity(operation.intentKey);
+        }
+        continue;
+      }
+      if (schedule.operationId !== operation.identity.operationId) {
         continue;
       }
       const stillPending =
@@ -1269,7 +1648,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         releaseOperationIdentity(operation.intentKey);
       }
     }
-  }, [releaseOperationIdentity, teamSchedules]);
+  }, [releaseOperationIdentity, schedulesQuery.isSuccess, teamSchedules]);
   const activeFormMember =
     selectedMember?.memberId === formState.memberId ? selectedMember : null;
   const editingScheduleId = trimText(editingSchedule?.scheduleId);
@@ -1490,6 +1869,20 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         scheduleId,
         permissionDigest,
       );
+      const acceptedRetry = [
+        ...acceptedLifecycleOperationsRef.current.values(),
+      ].find(
+        (operation) =>
+          operation.kind === "reauthorize" &&
+          operation.scheduleId === scheduleId,
+      );
+      if (acceptedRetry && acceptedRetry.intentKey !== intentKey) {
+        throw new TeamAutomationApiError(
+          "authorization_plan_changed",
+          409,
+          "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+        );
+      }
       return teamAutomationApi.reauthorize(
         route,
         scheduleId,
@@ -1683,6 +2076,42 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           scheduleId,
         ),
         receipt,
+      );
+      await invalidateSchedules();
+    },
+  });
+  const retryRevocationMutation = useMutation({
+    mutationFn: async (operation: AcceptedLifecycleOperation) => {
+      const receipt = await teamAutomationApi.retryRevocation(
+        requireAutomationRoute(),
+        operation.scheduleId,
+        operation.identity,
+      );
+      if (
+        receipt.scheduleId !== operation.scheduleId ||
+        receipt.operationId !== operation.identity.operationId
+      ) {
+        throw new Error("Team automation revocation retry receipt did not match the operation.");
+      }
+      return receipt;
+    },
+    onError: (error) => {
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.retryRevocationFailed",
+            defaultMessage: "Credential cleanup retry failed: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: async () => {
+      void message.success(
+        intl.formatMessage({
+          id: "teams.automations.messages.retryRevocationAccepted",
+          defaultMessage: "Credential cleanup retry accepted.",
+        }),
       );
       await invalidateSchedules();
     },
@@ -2377,6 +2806,19 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           const status = resolveScheduleStatus(schedule);
           const canViewRuns = Boolean(member?.workflowSupported && scheduleId);
           const mutationLocked = status === "pending" || status === "revocationPending";
+          const revocationRetryOperation = [
+            ...acceptedLifecycleOperationsRef.current.values(),
+          ].find(
+            (operation) =>
+              operation.scheduleId === scheduleId &&
+              operation.identity.operationId === schedule.operationId,
+          );
+          const canRetryRevocation =
+            Boolean(revocationRetryOperation) &&
+            (schedule.revocationPending ||
+              ["replacement_pending", "deleting", "revocation_pending"].includes(
+                schedule.authorizationStatus,
+              ));
           const rowBorderColor =
             status === "error" || status === "needsAuthorization"
                 ? token.colorErrorBorder
@@ -2524,12 +2966,28 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 })}
                 {status === "needsAuthorization" || status === "error"
                   ? renderAutomationActionButton({
+                      disabled: reauthorizeMutation.isPending,
                       icon: <CheckCircleOutlined />,
                       label: intl.formatMessage({
                         id: "teams.automations.actions.reauthorize",
                         defaultMessage: "Re-authorize",
                       }),
                       onClick: () => openReauthorize(schedule),
+                    })
+                  : null}
+                {canRetryRevocation && revocationRetryOperation
+                  ? renderAutomationActionButton({
+                      disabled: retryRevocationMutation.isPending,
+                      icon: <ReloadOutlined />,
+                      label: intl.formatMessage({
+                        id: "teams.automations.actions.retryRevocation",
+                        defaultMessage: "Retry cleanup",
+                      }),
+                      loading:
+                        retryRevocationMutation.isPending &&
+                        retryRevocationMutation.variables?.scheduleId === scheduleId,
+                      onClick: () =>
+                        retryRevocationMutation.mutate(revocationRetryOperation),
                     })
                   : null}
                 {renderAutomationActionButton({

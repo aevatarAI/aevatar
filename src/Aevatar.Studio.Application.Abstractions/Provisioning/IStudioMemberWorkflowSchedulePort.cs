@@ -51,4 +51,9 @@ public interface IStudioMemberWorkflowSchedulePort
     Task<StudioMemberAutomationMutationReceipt> DeleteAsync(
         StudioMemberAutomationActionCommand command,
         CancellationToken ct = default);
+
+    Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
+        StudioMemberAutomationActionCommand command,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
 }

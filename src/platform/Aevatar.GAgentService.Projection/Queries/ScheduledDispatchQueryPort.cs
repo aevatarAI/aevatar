@@ -40,6 +40,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             Cursor = query.Cursor,
             IncludeTotalCount = query.IncludeTotalCount,
             Filters = BuildFilters(query),
+            AnyOfFilters = BuildAnyOfFilters(query),
         }, ct);
 
         return new ScheduledDispatchListResult(
@@ -51,7 +52,7 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
     private static ProjectionDocumentFilter[] BuildFilters(ScheduledDispatchListQuery query)
     {
         var filters = new List<ProjectionDocumentFilter>();
-        if (!query.IncludeDeleted)
+        if (!query.IncludeDeleted && !query.ExcludeCompletedTeamAutomationDeletions)
         {
             filters.Add(new ProjectionDocumentFilter
             {
@@ -123,6 +124,28 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
         return filters.ToArray();
     }
 
+    private static ProjectionDocumentFilter[] BuildAnyOfFilters(ScheduledDispatchListQuery query)
+    {
+        if (!query.ExcludeCompletedTeamAutomationDeletions)
+            return [];
+
+        return
+        [
+            new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.Deleted),
+                Operator = ProjectionDocumentFilterOperator.EqOrMissing,
+                Value = ProjectionDocumentValue.FromBool(false),
+            },
+            new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.RevocationPending),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromBool(true),
+            },
+        ];
+    }
+
     private static ScheduledDispatchDetail MapDetail(ScheduledDispatchDocument document) =>
         new(
             MapSummary(document),
@@ -188,7 +211,10 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.StateVersion,
             document.PermissionDigest ?? string.Empty,
             document.PolicyVersion ?? string.Empty,
-            document.TeamAutomationIdempotencyKey ?? string.Empty);
+            document.TeamAutomationIdempotencyKey ?? string.Empty,
+            document.ActiveCredentialOwner?.Authority ?? string.Empty,
+            document.ActiveCredentialOwner?.OwnerKind ?? string.Empty,
+            document.ActiveCredentialOwner?.OwnerSubject ?? string.Empty);
     }
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
@@ -241,8 +267,22 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             ? parsed
             : ScheduledDispatchScheduleMode.RecurringCron;
 
-    private static TeamAutomationLifecycleStatus ParseTeamAutomationLifecycleStatus(string? value) =>
-        Enum.TryParse<TeamAutomationLifecycleStatus>(value, ignoreCase: true, out var parsed)
-            ? parsed
-            : TeamAutomationLifecycleStatus.Unspecified;
+    private static TeamAutomationLifecycleStatus ParseTeamAutomationLifecycleStatus(
+        TeamAutomationLifecycleStatusDocument value) => value switch
+    {
+        TeamAutomationLifecycleStatusDocument.Unspecified => TeamAutomationLifecycleStatus.Unspecified,
+        TeamAutomationLifecycleStatusDocument.ProvisioningPending =>
+            TeamAutomationLifecycleStatus.ProvisioningPending,
+        TeamAutomationLifecycleStatusDocument.Active => TeamAutomationLifecycleStatus.Active,
+        TeamAutomationLifecycleStatusDocument.NeedsAuthorization =>
+            TeamAutomationLifecycleStatus.NeedsAuthorization,
+        TeamAutomationLifecycleStatusDocument.ReplacementPending =>
+            TeamAutomationLifecycleStatus.ReplacementPending,
+        TeamAutomationLifecycleStatusDocument.Deleting => TeamAutomationLifecycleStatus.Deleting,
+        TeamAutomationLifecycleStatusDocument.RevocationPending =>
+            TeamAutomationLifecycleStatus.RevocationPending,
+        TeamAutomationLifecycleStatusDocument.Failed => TeamAutomationLifecycleStatus.Failed,
+        _ => throw new InvalidOperationException(
+            $"Unknown Team automation lifecycle status value '{(int)value}'."),
+    };
 }

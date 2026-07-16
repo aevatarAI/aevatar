@@ -30,6 +30,8 @@ internal static class StudioMemberAutomationEndpoints
         app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
             .WithTags("StudioTeamAutomations");
+        app.MapPost($"{BasePath}/{{scheduleId}}/retry-revocation", HandleRetryRevocationAsync)
+            .WithTags("StudioTeamAutomations");
         app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/pause", HandlePauseAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/resume", HandleResumeAsync).WithTags("StudioTeamAutomations");
@@ -287,6 +289,43 @@ internal static class StudioMemberAutomationEndpoints
         {
             var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
             var receipt = await schedules.DeleteAsync(
+                new StudioMemberAutomationActionCommand(
+                    scopeId,
+                    teamId,
+                    memberId,
+                    scheduleId,
+                    body.OperationId,
+                    body.IdempotencyKey)
+                {
+                    AuthenticatedOwner = owner.Context,
+                    ProvisioningBearerToken = ResolveBearerToken(http),
+                },
+                ct);
+            return Results.Accepted(value: receipt);
+        }
+        catch (Exception ex) when (TryMapError(ex, scopeId, teamId, memberId, out var error))
+        {
+            return error;
+        }
+    }
+
+    internal static async Task<IResult> HandleRetryRevocationAsync(
+        HttpContext http,
+        string scopeId,
+        string teamId,
+        string memberId,
+        string scheduleId,
+        StudioMemberAutomationActionRequest body,
+        [FromServices] IStudioMemberWorkflowSchedulePort schedules,
+        [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        try
+        {
+            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var receipt = await schedules.RetryRevocationAsync(
                 new StudioMemberAutomationActionCommand(
                     scopeId,
                     teamId,

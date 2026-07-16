@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -8,6 +9,8 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
 internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolCapabilityDescriptor
 {
+    private const string CredentialProvisioningKind = "dedicated_scheduled_invocation_agent_key";
+
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -127,6 +130,19 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
         if (scheduleTimezone is null)
             return ErrorJson("invalid_arguments", "schedule_timezone is required.");
 
+        var prompt = Normalize(args.Prompt);
+        var displayName = Normalize(args.DisplayName);
+        var operationIdentity = TryBuildOperationIdentity(
+            scopeId,
+            memberId,
+            nyxUserId);
+        if (operationIdentity is null)
+        {
+            return ErrorJson(
+                "operation_identity_unavailable",
+                "A trusted idempotency key or request and tool-call identity is required to create a schedule.");
+        }
+
         var request = new StudioMemberWorkflowScheduleRequest(
             ScopeId: scopeId,
             MemberId: memberId,
@@ -144,8 +160,11 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
                 subjectExternalUserId,
                 bindingId))
         {
-            Prompt = Normalize(args.Prompt),
-            DisplayName = Normalize(args.DisplayName),
+            OperationId = operationIdentity.OperationId,
+            IdempotencyKey = operationIdentity.IdempotencyKey,
+            CredentialProvisioningKind = CredentialProvisioningKind,
+            Prompt = prompt,
+            DisplayName = displayName,
             ProvisioningBearerToken = provisioningBearerToken,
         };
 
@@ -154,7 +173,18 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
             var preflight = await _schedulePort.PreflightAsync(request, ct);
             if (!preflight.Success)
                 return ErrorJson(preflight.FailureCode.ToString(), preflight.Detail);
-            var result = await _schedulePort.CreateAsync(request, preflight.Plan!.PermissionDigest, ct);
+
+            var permissionDigest = Normalize(preflight.Plan?.PermissionDigest);
+            var policyVersion = Normalize(preflight.Plan?.CredentialPolicy?.PolicyVersion);
+            if (permissionDigest is null || policyVersion is null)
+            {
+                return ErrorJson(
+                    "authorization_plan_invalid",
+                    "The authorization preflight plan must include permission_digest and credential_policy.policy_version.");
+            }
+
+            var confirmedRequest = request with { ConfirmedPolicyVersion = policyVersion };
+            var result = await _schedulePort.CreateAsync(confirmedRequest, permissionDigest, ct);
             return JsonSerializer.Serialize(
                 new ScheduleStudioMemberWorkflowResultJson(
                     Success: result.Success,
@@ -188,6 +218,33 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static ScheduleOperationIdentity? TryBuildOperationIdentity(
+        string scopeId,
+        string memberId,
+        string ownerSubject)
+    {
+        var callerIdempotencyKey = Normalize(AgentToolRequestContext.IdempotencyKey);
+        var requestId = Normalize(AgentToolRequestContext.RequestId);
+        var callId = Normalize(AgentToolRequestContext.CallId);
+        if (callerIdempotencyKey is null && (requestId is null || callId is null))
+            return null;
+
+        var invocation = callerIdempotencyKey is null
+            ? new ScheduleToolInvocationIdentity("request_call", string.Empty, requestId!, callId!)
+            : new ScheduleToolInvocationIdentity("idempotency_key", callerIdempotencyKey, string.Empty, string.Empty);
+        var canonical = new ScheduleOperationFingerprint(
+            "studio-member-workflow-schedule/v1",
+            scopeId,
+            memberId,
+            ownerSubject,
+            invocation);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, s_jsonOptions);
+        var fingerprint = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        return new ScheduleOperationIdentity(
+            $"studio-member-workflow-create:{fingerprint}",
+            $"studio-member-workflow-schedule:{fingerprint}");
+    }
+
     private static string? FindUnknownArgument(string argumentsJson)
     {
         using var document = JsonDocument.Parse(argumentsJson);
@@ -210,6 +267,21 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
         [property: JsonPropertyName("schedule_timezone")] string? ScheduleTimezone,
         [property: JsonPropertyName("prompt")] string? Prompt,
         [property: JsonPropertyName("display_name")] string? DisplayName);
+
+    private sealed record ScheduleOperationIdentity(string OperationId, string IdempotencyKey);
+
+    private sealed record ScheduleOperationFingerprint(
+        string SchemaVersion,
+        string ScopeId,
+        string MemberId,
+        string OwnerSubject,
+        ScheduleToolInvocationIdentity Invocation);
+
+    private sealed record ScheduleToolInvocationIdentity(
+        string Kind,
+        string IdempotencyKey,
+        string RequestId,
+        string CallId);
 
     private sealed record ScheduleStudioMemberWorkflowResultJson(
         bool Success,

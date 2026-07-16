@@ -114,14 +114,17 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             !fact.Disclosure.SecretManagedByAevatar ||
             fact.Disclosure.BrowserReceivesRawKey)
         {
-            throw new InvalidOperationException("Scheduled invocation authorization fact is missing, stale, or malformed.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid,
+                "Scheduled invocation authorization fact is missing, stale, or malformed.");
         }
 
         if (dispatch.Auth?.Source is not ScheduledInvocationAgentKeyCredentialReference agentKey ||
             agentKey.KeyExpiresAtUnixMs <= 0 ||
             DateTimeOffset.FromUnixTimeMilliseconds(agentKey.KeyExpiresAtUnixMs) > fact.ExpiresAt)
         {
-            throw new InvalidOperationException(
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid,
                 "Scheduled invocation authorization fact requires a constrained scheduled agent key.");
         }
     }
@@ -179,6 +182,14 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
         if (!exchange.Result.Succeeded)
         {
+            if (exchange.Result.AuthorizationFailureCode is { } authorizationFailureCode)
+            {
+                throw new ScheduledServiceInvocationAuthorizationException(
+                    authorizationFailureCode,
+                    string.IsNullOrWhiteSpace(exchange.Result.Error)
+                        ? $"Scheduled service invocation {ToErrorSubject(exchange.Role)} credential resolution failed."
+                        : exchange.Result.Error.Trim());
+            }
             throw new InvalidOperationException(string.IsNullOrWhiteSpace(exchange.Result.Error)
                 ? $"Scheduled service invocation {ToErrorSubject(exchange.Role)} NyxID credential exchange failed."
                 : exchange.Result.Error.Trim());
@@ -231,13 +242,21 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         var reference = source.SecretReference;
         if (string.IsNullOrWhiteSpace(reference.Ref))
-            throw new InvalidOperationException("Scheduled invocation agent key secret reference is missing.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing,
+                "Scheduled invocation agent key secret reference is missing.");
         if (string.IsNullOrWhiteSpace(reference.Purpose))
-            throw new InvalidOperationException("Scheduled invocation agent key secret reference purpose is missing.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
+                "Scheduled invocation agent key secret reference purpose is missing.");
         if (string.IsNullOrWhiteSpace(reference.OwnerScopeKey))
-            throw new InvalidOperationException("Scheduled invocation agent key owner scope is missing.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
+                "Scheduled invocation agent key owner scope is missing.");
         if (string.IsNullOrWhiteSpace(source.ApiKeyId))
-            throw new InvalidOperationException("Scheduled invocation agent key id is missing.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.ApiKeyIdMissing,
+                "Scheduled invocation agent key id is missing.");
 
         return new DurableCallerCredentialRef
         {
@@ -257,7 +276,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         CancellationToken ct)
     {
         if (_secretVault == null)
-            throw new InvalidOperationException("Scheduled workflow caller credential vault is not configured.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialVaultUnavailable,
+                "Scheduled workflow caller credential vault is not configured.");
 
         var ownerScopeKey = ResolveOwnerScopeKey(dispatch);
         var subjectId = ResolveSubjectId(dispatch.Auth, role);
@@ -437,7 +458,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         if (_secretVault == null)
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "Scheduled service invocation durable credential vault is not configured.");
+                "Scheduled service invocation durable credential vault is not configured.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialVaultUnavailable);
 
         var secretReference = credential.SecretReference;
         if (secretReference == null ||
@@ -446,27 +468,45 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             string.IsNullOrWhiteSpace(secretReference.OwnerScopeKey))
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "Scheduled service invocation durable credential reference is incomplete.");
+                "Scheduled service invocation durable credential reference is incomplete.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing);
         }
 
         if (!string.Equals(secretReference.Purpose, CredentialSecretPurposes.ScheduledNyxApiKey, StringComparison.Ordinal))
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "Scheduled service invocation durable credential reference purpose is invalid.");
+                "Scheduled service invocation durable credential reference purpose is invalid.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid);
         }
 
-        var resolved = await _secretVault.ResolveAsync(
-            new ResolveSecretRequest(
-                secretReference.Ref.Trim(),
-                CredentialSecretPurposes.ScheduledNyxApiKey,
-                secretReference.OwnerScopeKey.Trim(),
-                credential.CredentialId.Trim(),
-                "scheduled-dispatch-fire"),
-            ct);
+        ResolveSecretResult resolved;
+        try
+        {
+            resolved = await _secretVault.ResolveAsync(
+                new ResolveSecretRequest(
+                    secretReference.Ref.Trim(),
+                    CredentialSecretPurposes.ScheduledNyxApiKey,
+                    secretReference.OwnerScopeKey.Trim(),
+                    credential.CredentialId.Trim(),
+                    "scheduled-dispatch-fire"),
+                ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Scheduled durable credential vault resolve failed.");
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "Scheduled service invocation durable credential vault is unavailable.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialVaultUnavailable);
+        }
         if (!resolved.Resolved)
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "Scheduled service invocation durable credential reference could not be resolved.");
+                "Scheduled service invocation durable credential reference could not be resolved.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialUnresolvable);
         }
 
         return ScheduledServiceInvocationCredentialExchangeResult.Success(
@@ -486,7 +526,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (_secretVault == null)
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "Scheduled invocation agent key resolver is not configured.");
+                "Scheduled invocation agent key resolver is not configured.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialVaultUnavailable);
         }
 
         var reference = source.SecretReference;
@@ -496,7 +537,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (expiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "Scheduled invocation agent key is expired.");
+                "Scheduled invocation agent key is expired.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialExpired);
         }
 
         try
@@ -505,7 +547,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             if (string.IsNullOrWhiteSpace(accessToken))
             {
                 return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                    "Scheduled invocation agent key could not be resolved.");
+                    "Scheduled invocation agent key could not be resolved.",
+                    ScheduledServiceInvocationAuthorizationFailureCode.CredentialUnresolvable);
             }
 
             return ScheduledServiceInvocationCredentialExchangeResult.Success(
@@ -516,15 +559,23 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         {
             throw;
         }
+        catch (ScheduledServiceInvocationAuthorizationException ex)
+        {
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(ex.Message, ex.Code);
+        }
         catch (InvalidOperationException ex)
         {
-            return ScheduledServiceInvocationCredentialExchangeResult.Failure(ex.Message);
+            _logger.LogWarning(ex, "Scheduled invocation agent key vault resolve failed.");
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "Scheduled invocation agent key vault is unavailable.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialVaultUnavailable);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Scheduled invocation agent key resolve failed.");
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "Scheduled invocation agent key resolve failed.");
+                "Scheduled invocation agent key vault is unavailable.",
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialVaultUnavailable);
         }
     }
 
@@ -534,24 +585,31 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     {
         var reference = source.SecretReference;
         if (string.IsNullOrWhiteSpace(reference.Ref))
-            throw new InvalidOperationException("Scheduled invocation agent key secret reference is missing.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing,
+                "Scheduled invocation agent key secret reference is missing.");
 
         if (!string.Equals(
                 reference.Purpose,
                 CredentialSecretPurposes.ScheduledInvocationAgentKey,
                 StringComparison.Ordinal))
         {
-            throw new InvalidOperationException(
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
                 "Scheduled invocation agent key secret reference purpose is invalid.");
         }
 
         var apiKeyId = source.ApiKeyId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(apiKeyId))
-            throw new InvalidOperationException("Scheduled invocation agent key id is missing.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.ApiKeyIdMissing,
+                "Scheduled invocation agent key id is missing.");
 
         var ownerScopeKey = reference.OwnerScopeKey?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(ownerScopeKey))
-            throw new InvalidOperationException("Scheduled invocation agent key owner scope is missing.");
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
+                "Scheduled invocation agent key owner scope is missing.");
 
         var resolved = await _secretVault!.ResolveAsync(new ResolveSecretRequest(
                 reference.Ref,

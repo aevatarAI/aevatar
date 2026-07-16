@@ -8,7 +8,10 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
-import { teamAutomationApi } from "@/shared/api/teamAutomationApi";
+import {
+  createTeamAutomationOperationIdentity,
+  teamAutomationApi,
+} from "@/shared/api/teamAutomationApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import { studioApi } from "@/shared/studio/api";
 import {
@@ -16,6 +19,60 @@ import {
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
+import TeamAutomationsTab from "./tabs/TeamAutomationsTab";
+
+type TeamAutomationOperationIdentity = {
+  readonly idempotencyKey: string;
+  readonly operationId: string;
+};
+
+type TeamAutomationRoute = {
+  readonly memberId: string;
+  readonly scopeId: string;
+  readonly teamId: string;
+};
+
+const teamAutomationOperationStoragePrefix =
+  "aevatar.teamAutomationOperationIdentity.v1:";
+
+function readStoredTeamAutomationOperations(): readonly Record<string, unknown>[] {
+  return Object.keys(window.sessionStorage)
+    .filter((key) => key.startsWith(teamAutomationOperationStoragePrefix))
+    .map((key) => JSON.parse(window.sessionStorage.getItem(key) ?? "null"))
+    .filter(
+      (value): value is Record<string, unknown> =>
+        typeof value === "object" && value !== null && !Array.isArray(value),
+    );
+}
+
+function createAutomationMemberRow(
+  route: TeamAutomationRoute,
+) {
+  return {
+    automationsHref: `/scopes/${route.scopeId}/teams/${route.teamId}/members/${route.memberId}/automations`,
+    canAutomateMember: true,
+    disabledReason: "",
+    implementationKind: "workflow",
+    isSelectedMember: true,
+    key: route.memberId,
+    lifecycleLabel: "Ready",
+    lifecycleStyle: {},
+    memberId: route.memberId,
+    name: `${route.memberId} operator`,
+    serviceId: `svc-${route.memberId}`,
+    workflowSupported: true,
+  };
+}
+
+function renderTeamAutomationsTab(route: TeamAutomationRoute) {
+  return renderWithQueryClient(
+    React.createElement(TeamAutomationsTab, {
+      members: [createAutomationMemberRow(route)],
+      scopeId: route.scopeId,
+      teamId: route.teamId,
+    }),
+  );
+}
 
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
@@ -352,18 +409,20 @@ function mockCreateTeamAutomationPermissionReview(
     serviceGrants: [
       {
         grantId: "service-chat-invoke",
+        kind: "service",
         targetId: "svc-alpha",
         displayName: "Published service svc-alpha",
-        permission: "Invoke workflow chat endpoint",
+        serviceSlug: "svc-alpha",
       },
     ],
     nodeGrants: [
       {
         grantId: "workflow-runtime-start",
+        kind: "node",
         targetId: "workflow-runtime",
         displayName: "Workflow runtime",
-        permission: "Start scheduled workflow runs",
         role: "primary",
+        userServiceId: "us-alpha",
       },
     ],
     disclosures: [
@@ -784,6 +843,19 @@ jest.mock("@/shared/api/teamAutomationApi", () => ({
       operationId: "op-reauthorize",
       commandId: "cmd-reauthorize",
     })),
+    retryRevocation: jest.fn(
+      async (
+        _route: unknown,
+        scheduleId: string,
+        identity: TeamAutomationOperationIdentity,
+      ) => ({
+        accepted: true,
+        status: "pending",
+        scheduleId,
+        operationId: identity.operationId,
+        commandId: "cmd-retry-revocation",
+      }),
+    ),
     delete: jest.fn(async () => ({
       accepted: true,
       status: "pending",
@@ -1076,6 +1148,17 @@ describe("TeamDetailPage", () => {
     setLocale("zh-CN", false);
     window.history.replaceState({}, "", "/scopes/scope-1/teams/t-alpha");
     window.sessionStorage.clear();
+    let operationIdentitySequence = 0;
+    (createTeamAutomationOperationIdentity as jest.Mock).mockReset();
+    (createTeamAutomationOperationIdentity as jest.Mock).mockImplementation(
+      (): TeamAutomationOperationIdentity => {
+        operationIdentitySequence += 1;
+        return {
+          operationId: `team-automation:test-operation-${operationIdentitySequence}`,
+          idempotencyKey: `team-automation:test-idempotency-${operationIdentitySequence}`,
+        };
+      },
+    );
     (scopesApi.listWorkflows as jest.Mock).mockClear();
     (scopesApi.listScripts as jest.Mock).mockClear();
     (runtimeGAgentApi.listActors as jest.Mock).mockClear();
@@ -1149,6 +1232,7 @@ describe("TeamDetailPage", () => {
     (teamAutomationApi.create as jest.Mock).mockClear();
     (teamAutomationApi.update as jest.Mock).mockClear();
     (teamAutomationApi.reauthorize as jest.Mock).mockClear();
+    (teamAutomationApi.retryRevocation as jest.Mock).mockClear();
     (teamAutomationApi.delete as jest.Mock).mockClear();
     (teamAutomationApi.pause as jest.Mock).mockClear();
     (teamAutomationApi.resume as jest.Mock).mockClear();
@@ -2645,7 +2729,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("需要关注")).toBeTruthy();
     expect(screen.getByText("工作日 · 09:00")).toBeTruthy();
     expect(screen.getAllByText("Team Alpha Operator").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Published service · alpha-service").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("已发布服务 · alpha-service").length).toBeGreaterThan(0);
     expect(screen.getAllByText("通过已发布服务运行").length).toBeGreaterThan(0);
     fireEvent.click(await screen.findByRole("button", { name: "查看运行" }));
     expect(window.location.pathname).toBe(
@@ -2955,12 +3039,19 @@ describe("TeamDetailPage", () => {
     expect(reviewPayload).not.toHaveProperty("serviceRevisionId");
     expect(teamAutomationApi.create).not.toHaveBeenCalled();
     expect(screen.getByText("凭据模式：dedicated-per-schedule")).toBeTruthy();
+    expect(screen.getByText("NyxID 权限范围：read proxy")).toBeTruthy();
     expect(screen.getByText("由 Aevatar 托管")).toBeTruthy();
     expect(
       screen.getByText("浏览器不会接收 Agent Key 原文"),
     ).toBeTruthy();
     expect(screen.getByText("服务权限")).toBeTruthy();
     expect(screen.getByText("节点权限")).toBeTruthy();
+    expect(
+      screen.getByText("Published service svc-alpha · NyxID 服务 svc-alpha"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Workflow runtime · NyxID us-alpha 的主节点"),
+    ).toBeTruthy();
     expect(screen.getByText("权限摘要：perm-digest-alpha-v1")).toBeTruthy();
     const createButton = screen.getByRole("button", {
       name: "授权并创建自动化",
@@ -3037,6 +3128,294 @@ describe("TeamDetailPage", () => {
 
     expect((teamAutomationApi.create as jest.Mock).mock.calls[1][3]).toEqual(
       firstIdentity,
+    );
+  });
+
+  it("reuses the persisted delete identity after an uncertain response and reload", async () => {
+    const route = {
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      memberId: "member-team-alpha",
+    };
+    (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
+      items: [mockCreateScheduledDispatchSummary()],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    (teamAutomationApi.delete as jest.Mock)
+      .mockRejectedValueOnce(new Error("connection closed before delete receipt"))
+      .mockRejectedValueOnce(new Error("connection closed before retry receipt"));
+
+    const firstView = renderTeamAutomationsTab(route);
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    await waitFor(() => expect(teamAutomationApi.delete).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: "删除" })).toBeEnabled());
+    const firstIdentity = (teamAutomationApi.delete as jest.Mock).mock.calls[0][2];
+    expect(readStoredTeamAutomationOperations()).toEqual([
+      expect.objectContaining(firstIdentity),
+    ]);
+
+    firstView.unmount();
+    renderTeamAutomationsTab(route);
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    await waitFor(() => expect(teamAutomationApi.delete).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(message.error).toHaveBeenCalledTimes(2));
+
+    expect((teamAutomationApi.delete as jest.Mock).mock.calls[1][2]).toEqual(
+      firstIdentity,
+    );
+    expect(createTeamAutomationOperationIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses replacement identity after reload and clears it only after terminal projection", async () => {
+    const route = {
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      memberId: "member-team-alpha",
+    };
+    let phase: "needs-authorization" | "pending" | "terminal" =
+      "needs-authorization";
+    let acceptedIdentity: TeamAutomationOperationIdentity | null = null;
+    (teamAutomationApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items: [
+        mockCreateScheduledDispatchSummary({
+          authorizationStatus:
+            phase === "needs-authorization"
+              ? "needs_authorization"
+              : phase === "pending"
+                ? "replacement_pending"
+                : "active",
+          lastAuthorizationErrorCode:
+            phase === "needs-authorization" ? "credential_expired" : "",
+          operationId: acceptedIdentity?.operationId ?? "op-before-replacement",
+        }),
+      ],
+      nextCursor: null,
+      totalCount: 1,
+    }));
+    (teamAutomationApi.reauthorize as jest.Mock)
+      .mockRejectedValueOnce(new Error("connection closed before replacement receipt"))
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        acceptedIdentity = args[5] as TeamAutomationOperationIdentity;
+        phase = "pending";
+        return {
+          accepted: true,
+          status: "pending",
+          scheduleId: "sch-alpha",
+          operationId: acceptedIdentity.operationId,
+          commandId: "cmd-reauthorize",
+        };
+      });
+
+    const submitReplacement = async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "重新授权" }));
+      const dialog = await screen.findByRole("dialog", { name: "重新授权自动化" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "审查权限" }));
+      fireEvent.click(
+        await within(dialog).findByLabelText(
+          /我同意 Aevatar 为此定时任务创建专用的 Agent Key/,
+        ),
+      );
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "授权替换凭据" }),
+      );
+    };
+
+    const firstView = renderTeamAutomationsTab(route);
+    await submitReplacement();
+    await waitFor(() => expect(teamAutomationApi.reauthorize).toHaveBeenCalledTimes(1));
+    const firstIdentity = (teamAutomationApi.reauthorize as jest.Mock).mock.calls[0][5];
+    await waitFor(() => expect(message.error).toHaveBeenCalled());
+    firstView.unmount();
+
+    const secondView = renderTeamAutomationsTab(route);
+    await submitReplacement();
+    await waitFor(() => expect(teamAutomationApi.reauthorize).toHaveBeenCalledTimes(2));
+    expect((teamAutomationApi.reauthorize as jest.Mock).mock.calls[1][5]).toEqual(
+      firstIdentity,
+    );
+    expect(await screen.findByText("授权处理中")).toBeTruthy();
+    expect(readStoredTeamAutomationOperations()).toEqual([
+      expect.objectContaining({
+        ...firstIdentity,
+        lifecycleKind: "reauthorize",
+        scheduleId: "sch-alpha",
+      }),
+    ]);
+
+    secondView.unmount();
+    const retryView = renderTeamAutomationsTab(route);
+    fireEvent.click(await screen.findByRole("button", { name: "重试清理" }));
+    await waitFor(() =>
+      expect(teamAutomationApi.retryRevocation).toHaveBeenCalledTimes(1),
+    );
+    expect((teamAutomationApi.retryRevocation as jest.Mock).mock.calls[0]).toEqual([
+      route,
+      "sch-alpha",
+      firstIdentity,
+    ]);
+    expect(teamAutomationApi.reauthorize).toHaveBeenCalledTimes(2);
+    expect(createTeamAutomationOperationIdentity).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("授权处理中")).toBeTruthy();
+    const [storedReplacementOperation] = readStoredTeamAutomationOperations();
+    expect(storedReplacementOperation).not.toHaveProperty("draft");
+    expect(storedReplacementOperation).not.toHaveProperty("prompt");
+    expect(storedReplacementOperation).not.toHaveProperty("permissionReview");
+
+    phase = "terminal";
+    await act(async () => {
+      await retryView.queryClient.invalidateQueries({
+        queryKey: ["team-automations", "scope-1", "t-alpha", "member-team-alpha"],
+      });
+    });
+    await waitFor(() => expect(readStoredTeamAutomationOperations()).toEqual([]));
+  });
+
+  it("keeps delete identity through revocation pending reload and clears it when deletion is visible", async () => {
+    const route = {
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      memberId: "member-team-alpha",
+    };
+    let phase: "active" | "pending" | "deleted" = "active";
+    let acceptedIdentity: TeamAutomationOperationIdentity | null = null;
+    (teamAutomationApi.listAll as jest.Mock).mockImplementation(async () => ({
+      items:
+        phase === "deleted"
+          ? []
+          : [
+              mockCreateScheduledDispatchSummary({
+                authorizationStatus:
+                  phase === "pending" ? "revocation_pending" : "active",
+                operationId: acceptedIdentity?.operationId ?? "op-before-delete",
+                revocationPending: phase === "pending",
+              }),
+            ],
+      nextCursor: null,
+      totalCount: phase === "deleted" ? 0 : 1,
+    }));
+    const acceptDelete = async (
+      _route: unknown,
+      _scheduleId: unknown,
+      identity: TeamAutomationOperationIdentity,
+    ) => {
+      acceptedIdentity = identity;
+      phase = "pending";
+      return {
+        accepted: true,
+        status: "pending",
+        scheduleId: "sch-alpha",
+        operationId: identity.operationId,
+        commandId: "cmd-delete",
+      };
+    };
+    (teamAutomationApi.delete as jest.Mock).mockImplementationOnce(acceptDelete);
+
+    const firstView = renderTeamAutomationsTab(route);
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    expect(await screen.findByText("凭据撤销中")).toBeTruthy();
+    const deleteIdentity = (teamAutomationApi.delete as jest.Mock).mock.calls[0][2];
+    expect(readStoredTeamAutomationOperations()).toEqual([
+      expect.objectContaining({
+        ...deleteIdentity,
+        lifecycleKind: "delete",
+        scheduleId: "sch-alpha",
+      }),
+    ]);
+
+    firstView.unmount();
+    const secondView = renderTeamAutomationsTab(route);
+    expect(await screen.findByText("凭据撤销中")).toBeTruthy();
+    expect(readStoredTeamAutomationOperations()).toHaveLength(1);
+    fireEvent.click(await screen.findByRole("button", { name: "重试清理" }));
+    await waitFor(() =>
+      expect(teamAutomationApi.retryRevocation).toHaveBeenCalledTimes(1),
+    );
+    expect((teamAutomationApi.retryRevocation as jest.Mock).mock.calls[0]).toEqual([
+      route,
+      "sch-alpha",
+      deleteIdentity,
+    ]);
+    expect(teamAutomationApi.delete).toHaveBeenCalledTimes(1);
+    expect(createTeamAutomationOperationIdentity).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("凭据撤销中")).toBeTruthy();
+
+    phase = "deleted";
+    await act(async () => {
+      await secondView.queryClient.invalidateQueries({
+        queryKey: ["team-automations", "scope-1", "t-alpha", "member-team-alpha"],
+      });
+    });
+    await waitFor(() => expect(readStoredTeamAutomationOperations()).toEqual([]));
+  });
+
+  it("isolates persisted identities by owner and action intent", async () => {
+    const firstRoute = {
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      memberId: "member-team-alpha",
+    };
+    const secondRoute = {
+      scopeId: "scope-2",
+      teamId: "t-beta",
+      memberId: "member-team-beta",
+    };
+    (teamAutomationApi.listAll as jest.Mock).mockImplementation(
+      async (route: TeamAutomationRoute) => ({
+        items: [
+          mockCreateScheduledDispatchSummary({
+            memberId: route.memberId,
+            publishedServiceId: `svc-${route.memberId}`,
+            scheduleId: "sch-shared",
+            scopeId: route.scopeId,
+            teamId: route.teamId,
+          }),
+        ],
+        nextCursor: null,
+        totalCount: 1,
+      }),
+    );
+    (teamAutomationApi.delete as jest.Mock)
+      .mockRejectedValueOnce(new Error("first owner uncertain delete"))
+      .mockRejectedValueOnce(new Error("second owner uncertain delete"));
+    (teamAutomationApi.pause as jest.Mock).mockRejectedValueOnce(
+      new Error("second owner uncertain pause"),
+    );
+
+    const firstView = renderTeamAutomationsTab(firstRoute);
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    await waitFor(() => expect(teamAutomationApi.delete).toHaveBeenCalledTimes(1));
+    const firstOwnerDelete = (teamAutomationApi.delete as jest.Mock).mock.calls[0][2];
+    firstView.unmount();
+
+    renderTeamAutomationsTab(secondRoute);
+    fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+    await waitFor(() => expect(teamAutomationApi.delete).toHaveBeenCalledTimes(2));
+    const secondOwnerDelete = (teamAutomationApi.delete as jest.Mock).mock.calls[1][2];
+    await waitFor(() => expect(screen.getByRole("button", { name: "暂停" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "暂停" }));
+    await waitFor(() => expect(teamAutomationApi.pause).toHaveBeenCalledTimes(1));
+    const secondOwnerPause = (teamAutomationApi.pause as jest.Mock).mock.calls[0][2];
+
+    expect(secondOwnerDelete).not.toEqual(firstOwnerDelete);
+    expect(secondOwnerPause).not.toEqual(secondOwnerDelete);
+    await waitFor(() =>
+      expect(readStoredTeamAutomationOperations()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            ...firstOwnerDelete,
+            memberId: "member-team-alpha",
+          }),
+          expect.objectContaining({
+            ...secondOwnerDelete,
+            memberId: "member-team-beta",
+          }),
+          expect.objectContaining({
+            ...secondOwnerPause,
+            memberId: "member-team-beta",
+          }),
+        ]),
+      ),
     );
   });
 

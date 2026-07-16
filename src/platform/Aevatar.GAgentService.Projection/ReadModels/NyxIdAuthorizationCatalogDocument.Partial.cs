@@ -34,4 +34,16 @@ public sealed partial class NyxIdAuthorizationCatalogDocument
         get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(LastRefreshFailedAtUtcValue);
         set => LastRefreshFailedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
+
+    public DateTimeOffset? ActivatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(ActivatedAtUtcValue);
+        set => ActivatedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? CleanedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CleanedAtUtcValue);
+        set => CleanedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
 }

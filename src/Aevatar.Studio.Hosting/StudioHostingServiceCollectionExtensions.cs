@@ -64,9 +64,6 @@ internal static class StudioHostingServiceCollectionExtensions
                     ? LlmDefaults.NyxIdRoute
                     : configuredRoute.Trim();
             });
-        services.AddOptions<NyxIdAuthorizationCatalogRefreshOptions>()
-            .Configure(options => options.EndpointBaseUrl =
-                NyxIdAuthorityResolver.ResolveNyxIdAuthorityBase(configuration) ?? string.Empty);
         services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
         services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
         services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(

@@ -725,6 +725,8 @@ const zhCNMessages = {
   'teams.automations.actions.pause': '暂停',
   'teams.automations.actions.resume': '恢复',
   'teams.automations.actions.runNow': '立即运行',
+  'teams.automations.actions.retryRevocation': '重试清理',
+  'teams.automations.actions.viewRuns': '查看运行',
   'teams.automations.columns.actions': '操作',
   'teams.automations.columns.automation': '自动化',
   'teams.automations.columns.member': '成员',
@@ -759,6 +761,7 @@ const zhCNMessages = {
   'teams.automations.form.agentKeyExpiry': '到期时间：{time}',
   'teams.automations.form.agentKeyManaged': '由 Aevatar 托管',
   'teams.automations.form.agentKeyMode': '凭据模式：{mode}',
+  'teams.automations.form.agentKeyNodeAllowlist': '精确节点白名单，禁止授权全部节点',
   'teams.automations.form.agentKeyNoRawKey':
     '浏览器不会接收 Agent Key 原文',
   'teams.automations.form.agentKeyNodePermissionSet':
@@ -767,6 +770,8 @@ const zhCNMessages = {
     '暂停和恢复不会撤销 Agent Key',
   'teams.automations.form.agentKeyPlan':
     '自动化专用 Agent Key',
+  'teams.automations.form.agentKeyServiceAllowlist': '精确服务白名单，禁止授权全部服务',
+  'teams.automations.form.agentKeyScopes': 'NyxID 权限范围：{scopes}',
   'teams.automations.form.backendRequired': '暂不可创建',
   'teams.automations.form.cadence': '节奏',
   'teams.automations.form.cadenceAria': '自动化节奏',
@@ -790,6 +795,10 @@ const zhCNMessages = {
   'teams.automations.form.member': '成员',
   'teams.automations.form.memberAria': '自动化成员',
   'teams.automations.form.nodeGrants': '节点权限',
+  'teams.automations.form.nodeGrantFallback':
+    'NyxID {userServiceId} 的备用节点',
+  'teams.automations.form.nodeGrantPrimary':
+    'NyxID {userServiceId} 的主节点',
   'teams.automations.form.permissionDigest':
     '权限摘要：{permissionDigest}',
   'teams.automations.form.planChanged':
@@ -839,6 +848,8 @@ const zhCNMessages = {
   'teams.automations.form.section.workHint':
     '给自动化命名，可选填写每次触发时发送给成员的 Prompt。',
   'teams.automations.form.serviceGrants': '服务权限',
+  'teams.automations.form.serviceGrant': 'NyxID 服务 {serviceSlug}',
+  'teams.automations.form.serviceGrantAccess': 'NyxID 服务访问权限',
   'teams.automations.form.timezone': '时区',
   'teams.automations.form.timezoneAria': '时区',
   'teams.automations.form.title': '新建成员自动化',
@@ -860,6 +871,9 @@ const zhCNMessages = {
   'teams.automations.messages.deleteFailed': '删除未受理：{message}',
   'teams.automations.messages.pauseFailed': '自动化未暂停：{message}',
   'teams.automations.messages.resumeFailed': '自动化未恢复：{message}',
+  'teams.automations.messages.retryRevocationAccepted': '凭据清理重试已受理。',
+  'teams.automations.messages.retryRevocationFailed':
+    '凭据清理重试失败：{message}',
   'teams.automations.messages.reauthorizeAccepted':
     '重新授权已受理，正在等待已提交状态。',
   'teams.automations.messages.reauthorizeFailed':
@@ -901,6 +915,8 @@ const zhCNMessages = {
   'teams.automations.row.awaitingReadModel': '正在等待计划同步',
   'teams.automations.row.manualRunRequested': '已在 {time} 请求运行',
   'teams.automations.row.noNextRun': '暂无下次运行',
+  'teams.automations.row.publishedService': '已发布服务 · {serviceId}',
+  'teams.automations.row.revocationPending': '凭据撤销仍在收敛中',
   'teams.automations.row.target': 'Workflow chat · {endpoint}',
   'teams.automations.status.active': '运行中',
   'teams.automations.status.error': '错误',

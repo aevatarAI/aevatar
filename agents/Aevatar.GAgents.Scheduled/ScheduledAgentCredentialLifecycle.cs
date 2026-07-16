@@ -42,6 +42,7 @@ public sealed class ScheduledAgentCredentialLifecycle
     private readonly ISecretVault _secretVault;
     private readonly IUserAgentCatalogCommandPort _catalogCommandPort;
     private readonly IScheduledAgentApiKeyIssuer _apiKeyIssuer;
+    private readonly ScheduledCredentialEffectLifecycle _effects;
 
     public ScheduledAgentCredentialLifecycle(
         ISecretVault secretVault,
@@ -51,6 +52,7 @@ public sealed class ScheduledAgentCredentialLifecycle
         _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _apiKeyIssuer = apiKeyIssuer ?? throw new ArgumentNullException(nameof(apiKeyIssuer));
+        _effects = new ScheduledCredentialEffectLifecycle(_secretVault, _apiKeyIssuer);
     }
 
     public async Task<ScheduledAgentCredentialProvisionResult> ProvisionAsync(
@@ -67,12 +69,14 @@ public sealed class ScheduledAgentCredentialLifecycle
         ArgumentNullException.ThrowIfNull(validatedPlan);
         var issuedKey = await _apiKeyIssuer.IssueAsync(token, validatedPlan, credentialName, ct);
         return await CompleteProvisionAsync(
-            token, issuedKey, agentId, ownerScope, purpose, ownerScopeKey, auditReason, ct);
+            token, validatedPlan, issuedKey, credentialName, agentId, ownerScope, purpose, ownerScopeKey, auditReason, ct);
     }
 
     private async Task<ScheduledAgentCredentialProvisionResult> CompleteProvisionAsync(
         string token,
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
         ScheduledAgentApiKeyIssueResult issuedKey,
+        string credentialName,
         string agentId,
         OwnerScope ownerScope,
         string purpose,
@@ -103,11 +107,13 @@ public sealed class ScheduledAgentCredentialLifecycle
         var reference = await StoreIssuedSecretAsync(
             token,
             issuedKey,
+            credentialName,
             agentId,
             ownerScope,
             purpose,
             ownerScopeKey,
             auditReason,
+            ResolveCredentialOwner(validatedPlan),
             ct);
         return new ScheduledAgentCredentialProvisionResult(issuedKey, reference);
     }
@@ -115,11 +121,13 @@ public sealed class ScheduledAgentCredentialLifecycle
     private async Task<SecretReference> StoreIssuedSecretAsync(
         string token,
         ScheduledAgentApiKeyIssueResult issuedKey,
+        string credentialName,
         string agentId,
         OwnerScope ownerScope,
         string purpose,
         string ownerScopeKey,
         string auditReason,
+        ScheduledInvocationAuthorizationOwner credentialOwner,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(issuedKey);
@@ -129,18 +137,15 @@ public sealed class ScheduledAgentCredentialLifecycle
         var requestedRef = "sec_" + Guid.NewGuid().ToString("N");
         try
         {
-            var stored = await issuedKey.StoreSecretAsync(
-                _secretVault,
-                new StoreSecretRequest(
+            var stored = await _effects.StoreIssuedSecretAsync(
+                issuedKey,
+                new ScheduledCredentialEffectLocator(
+                    credentialName,
+                    requestedRef,
                     purpose,
                     ownerScopeKey,
-                    issuedKey.ApiKeyId!,
-                    string.Empty,
-                    auditReason,
-                    issuedKey.KeyExpiresAtUnixMs > 0
-                        ? DateTimeOffset.FromUnixTimeMilliseconds(issuedKey.KeyExpiresAtUnixMs)
-                        : null,
-                    requestedRef),
+                    credentialOwner),
+                auditReason,
                 ct);
             return stored.Reference;
         }
@@ -333,6 +338,17 @@ public sealed class ScheduledAgentCredentialLifecycle
             UserAgentApiKeyRevocationFailureKind.Transient => "nyxid_revocation_transient",
             _ => "nyxid_revocation_provider_error",
         };
+
+    private static ScheduledInvocationAuthorizationOwner ResolveCredentialOwner(
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan)
+    {
+        var owner = validatedPlan.Plan?.Owner ??
+            throw new InvalidOperationException("scheduled_authorization_owner_missing");
+        return new ScheduledInvocationAuthorizationOwner(
+            owner.Authority?.Trim() ?? string.Empty,
+            owner.OwnerKind.ToString(),
+            owner.OwnerSubject?.Trim() ?? string.Empty);
+    }
 
 }
 

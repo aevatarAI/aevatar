@@ -763,6 +763,8 @@ const enUSMessages = {
   'teams.automations.actions.pause': 'Pause',
   'teams.automations.actions.resume': 'Resume',
   'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.actions.retryRevocation': 'Retry cleanup',
+  'teams.automations.actions.viewRuns': 'View runs',
   'teams.automations.columns.actions': 'Actions',
   'teams.automations.columns.automation': 'Automation',
   'teams.automations.columns.member': 'Member',
@@ -800,6 +802,8 @@ const enUSMessages = {
   'teams.automations.form.agentKeyExpiry': 'Expires {time}',
   'teams.automations.form.agentKeyManaged': 'Aevatar managed',
   'teams.automations.form.agentKeyMode': 'Credential mode · {mode}',
+  'teams.automations.form.agentKeyNodeAllowlist':
+    'Exact node allowlist · allow all disabled',
   'teams.automations.form.agentKeyNoRawKey':
     'Browser never receives the raw Agent Key',
   'teams.automations.form.agentKeyNodePermissionSet':
@@ -808,6 +812,9 @@ const enUSMessages = {
     'Pause and resume preserve the Agent Key',
   'teams.automations.form.agentKeyPlan':
     'Automation dedicated Agent Key',
+  'teams.automations.form.agentKeyServiceAllowlist':
+    'Exact service allowlist · allow all disabled',
+  'teams.automations.form.agentKeyScopes': 'NyxID scopes · {scopes}',
   'teams.automations.form.backendRequired': 'Creation unavailable',
   'teams.automations.form.close': 'Close',
   'teams.automations.form.create': 'Create automation',
@@ -830,6 +837,10 @@ const enUSMessages = {
   'teams.automations.form.member': 'Member',
   'teams.automations.form.memberAria': 'Automation member',
   'teams.automations.form.nodeGrants': 'Node grants',
+  'teams.automations.form.nodeGrantFallback':
+    'NyxID fallback node for {userServiceId}',
+  'teams.automations.form.nodeGrantPrimary':
+    'NyxID primary node for {userServiceId}',
   'teams.automations.form.permissionDigest':
     'Permission digest · {permissionDigest}',
   'teams.automations.form.planChanged':
@@ -882,6 +893,8 @@ const enUSMessages = {
   'teams.automations.form.section.workHint':
     'Name the automation and optionally add a prompt for each run.',
   'teams.automations.form.serviceGrants': 'Service grants',
+  'teams.automations.form.serviceGrant': 'NyxID service {serviceSlug}',
+  'teams.automations.form.serviceGrantAccess': 'NyxID service access',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
@@ -907,6 +920,10 @@ const enUSMessages = {
   'teams.automations.messages.deleteFailed': 'Deletion was not accepted: {message}',
   'teams.automations.messages.pauseFailed': 'Automation was not paused: {message}',
   'teams.automations.messages.resumeFailed': 'Automation was not resumed: {message}',
+  'teams.automations.messages.retryRevocationAccepted':
+    'Credential cleanup retry accepted.',
+  'teams.automations.messages.retryRevocationFailed':
+    'Credential cleanup retry failed: {message}',
   'teams.automations.messages.reauthorizeAccepted':
     'Re-authorization was accepted. Waiting for committed state.',
   'teams.automations.messages.reauthorizeFailed':
@@ -956,6 +973,9 @@ const enUSMessages = {
   'teams.automations.row.awaitingReadModel': 'Waiting for schedule sync',
   'teams.automations.row.manualRunRequested': 'Run requested {time}',
   'teams.automations.row.noNextRun': 'No next run',
+  'teams.automations.row.publishedService': 'Published service · {serviceId}',
+  'teams.automations.row.revocationPending':
+    'Credential revocation is still converging',
   'teams.automations.row.target': 'Workflow chat · {endpoint}',
   'teams.automations.status.active': 'Active',
   'teams.automations.status.error': 'Error',

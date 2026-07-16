@@ -6,6 +6,8 @@ using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
@@ -26,6 +28,7 @@ internal sealed class WorkflowRunActorPort :
     private readonly IWorkflowActorBindingReader _bindingReader;
     private readonly ISet<string> _knownStepTypes;
     private readonly IAgentKindRegistry? _agentKindRegistry;
+    private readonly ILogger<WorkflowRunActorPort> _logger;
     private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowRunActorPort(
@@ -33,12 +36,14 @@ internal sealed class WorkflowRunActorPort :
         IActorDispatchPort dispatchPort,
         IWorkflowActorBindingReader bindingReader,
         IEnumerable<IWorkflowModulePack> modulePacks,
-        IAgentKindRegistry? agentKindRegistry = null)
+        IAgentKindRegistry? agentKindRegistry = null,
+        ILogger<WorkflowRunActorPort>? logger = null)
     {
         _runtime = runtime;
         _dispatchPort = dispatchPort;
         _bindingReader = bindingReader;
         _agentKindRegistry = agentKindRegistry;
+        _logger = logger ?? NullLogger<WorkflowRunActorPort>.Instance;
         var packs = modulePacks?.ToList()
             ?? throw new ArgumentNullException(nameof(modulePacks));
         if (packs.Count == 0)
@@ -345,8 +350,9 @@ internal sealed class WorkflowRunActorPort :
             {
                 await _runtime.DestroyAsync(actorId, CancellationToken.None);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogWarning(ex, "Failed to roll back workflow actor {ActorId}.", actorId);
                 // Best effort rollback path.
             }
         }

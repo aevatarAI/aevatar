@@ -17,6 +17,16 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
+    public Task ActivateAsync(
+        AuthorizationOwnerIdentity owner,
+        DateTimeOffset activatedAtUtc,
+        CancellationToken ct = default) =>
+        DispatchAsync(owner, new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(activatedAtUtc),
+        }, ct);
+
     public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(observation);
@@ -27,6 +37,7 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             FreshUntil = Timestamp.FromDateTimeOffset(observation.FreshUntilUtc),
             ExternalRevision = observation.ExternalRevision,
             ContentDigest = observation.ContentDigest,
+            ExpectedLifecycleFence = observation.ExpectedLifecycleFence,
         };
         command.Services.Add(observation.Services.Select(static service => service.Clone()));
         return DispatchAsync(observation.Owner, command, ct);
@@ -53,6 +64,18 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         {
             Owner = owner.Clone(),
             InvalidatedAt = Timestamp.FromDateTimeOffset(invalidatedAtUtc),
+            Reason = reason ?? string.Empty,
+        }, ct);
+
+    public Task CleanupAsync(
+        AuthorizationOwnerIdentity owner,
+        DateTimeOffset cleanedAtUtc,
+        string reason,
+        CancellationToken ct = default) =>
+        DispatchAsync(owner, new CleanupNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            CleanedAt = Timestamp.FromDateTimeOffset(cleanedAtUtc),
             Reason = reason ?? string.Empty,
         }, ct);
 

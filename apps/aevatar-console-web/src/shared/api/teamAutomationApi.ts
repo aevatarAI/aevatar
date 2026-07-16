@@ -25,15 +25,28 @@ export type TeamAutomationCreateDraft = TeamAutomationRoute & {
   readonly enabled: boolean;
 };
 
-export type TeamAutomationGrant = {
+type TeamAutomationGrantBase = {
   readonly grantId: string;
   readonly targetId: string;
   readonly displayName: string;
-  readonly permission: string;
-  readonly role?: TeamAutomationNodeRole;
 };
 
 export type TeamAutomationNodeRole = "primary" | "fallback";
+
+export type TeamAutomationServiceGrant = TeamAutomationGrantBase & {
+  readonly kind: "service";
+  readonly serviceSlug: string | null;
+};
+
+export type TeamAutomationNodeGrant = TeamAutomationGrantBase & {
+  readonly kind: "node";
+  readonly role: TeamAutomationNodeRole;
+  readonly userServiceId: string;
+};
+
+export type TeamAutomationGrant =
+  | TeamAutomationServiceGrant
+  | TeamAutomationNodeGrant;
 
 export type TeamAutomationDisclosure =
   | "dedicated_credential"
@@ -63,8 +76,8 @@ export type TeamAutomationPermissionReview = {
   readonly permissionDigest: string;
   readonly policyVersion: string;
   readonly credentialPlan: TeamAutomationCredentialPlan;
-  readonly serviceGrants: readonly TeamAutomationGrant[];
-  readonly nodeGrants: readonly TeamAutomationGrant[];
+  readonly serviceGrants: readonly TeamAutomationServiceGrant[];
+  readonly nodeGrants: readonly TeamAutomationNodeGrant[];
   readonly disclosures: readonly TeamAutomationDisclosure[];
   readonly warning?: string;
 };
@@ -404,10 +417,11 @@ function decodePermissionReview(
       const serviceSlug = optionalString(grant, ["serviceSlug", "ServiceSlug"]);
       return {
         grantId: `service:${targetId}`,
+        kind: "service" as const,
         targetId,
         displayName:
           optionalString(grant, ["displayName", "DisplayName"]) || serviceSlug || targetId,
-        permission: serviceSlug ? `NyxID service ${serviceSlug}` : "NyxID service access",
+        serviceSlug: serviceSlug || null,
       };
     },
   );
@@ -430,10 +444,11 @@ function decodePermissionReview(
       const role = normalizeNodeRole(field(grant, "role", "Role"));
       return {
         grantId: `node:${userServiceId}:${targetId}`,
+        kind: "node" as const,
         targetId,
         displayName: optionalString(grant, ["displayName", "DisplayName"]) || targetId,
-        permission: `NyxID ${role} node for ${userServiceId}`,
         role,
+        userServiceId,
       };
     },
   );
@@ -868,6 +883,21 @@ export const teamAutomationApi = {
       method: "DELETE",
       ...jsonBody(normalizeOperationIdentity(operationIdentity)),
     });
+  },
+
+  retryRevocation(
+    route: TeamAutomationRoute,
+    scheduleId: string,
+    operationIdentity: TeamAutomationOperationIdentity,
+  ): Promise<TeamAutomationMutationReceipt> {
+    return requestTeamAutomation(
+      `${schedulePath(route, scheduleId)}/retry-revocation`,
+      decodeReceipt,
+      {
+        method: "POST",
+        ...jsonBody(normalizeOperationIdentity(operationIdentity)),
+      },
+    );
   },
 
   pause(

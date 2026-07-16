@@ -2,6 +2,7 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 
@@ -81,6 +82,81 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_WithSameEvidence_ShouldProduceByteIdenticalPlan()
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.Required,
+                Node("node-primary", NyxIdNodeRole.Primary),
+                Node("node-fallback", NyxIdNodeRole.Fallback))));
+        var planner = NewPlanner(catalog);
+        var request = Request(["svc-a", "svc-a"]);
+
+        var first = await planner.PlanAsync(request);
+        var second = await planner.PlanAsync(request);
+
+        first.Success.Should().BeTrue();
+        second.Success.Should().BeTrue();
+        first.Plan!.ToByteArray().Should().Equal(second.Plan!.ToByteArray());
+        first.Plan!.PermissionDigest.Should().Be(second.Plan!.PermissionDigest);
+        first.Plan.PermissionDigest.Should().Be(
+            "c827239c72a763cec54d3f68f4332649a6f2a98a42e0dfcb8ca3b364cdc01d87");
+    }
+
+    [Fact]
+    public async Task ComputeDigest_ShouldCoverTargetOwnerAuthorityPolicySourceAndDisclosure()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
+        var original = (await planner.PlanAsync(Request(["svc-a"]))).Plan!;
+        var originalDigest = ScheduledInvocationAuthorizationPlanner.ComputeDigest(original);
+        Action<ScheduledInvocationAuthorizationPlan>[] mutations =
+        [
+            static plan => plan.InvocationTarget.ScheduledAgent.ExecutionScopeId = "scope-other",
+            static plan => plan.Owner.OwnerSubject = "owner-other",
+            static plan => plan.SourceStamps[0].StateVersion = 17,
+            static plan => plan.CatalogAuthority.ActorStateVersion++,
+            static plan => plan.CatalogAuthority.ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
+            static plan => plan.CatalogAuthority.FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(30)),
+            static plan => plan.CatalogAuthority.ContentDigest = "digest-other",
+            static plan => plan.CredentialPolicy.ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddDays(31)),
+            static plan => plan.CredentialPolicy.PolicyVersion = "policy-other",
+            static plan => plan.CredentialPolicy.AllowAllServices = true,
+            static plan => plan.Disclosures[0] = ScheduledInvocationDisclosure.BrowserNeverReceivesSecret,
+        ];
+
+        foreach (var mutate in mutations)
+        {
+            var changed = original.Clone();
+            mutate(changed);
+            ScheduledInvocationAuthorizationPlanner.ComputeDigest(changed).Should().NotBe(
+                originalDigest,
+                $"mutation {Array.IndexOf(mutations, mutate)} must be integrity-covered");
+        }
+    }
+
+    [Fact]
+    public async Task PlanAsync_ShouldFailClosedForUnknownEvidenceEnums()
+    {
+        var invalidAccess = Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired);
+        invalidAccess.Access = (NyxIdAuthorizationAccess)999;
+        var invalidNode = Service(
+            "svc-a",
+            "provider-a",
+            AuthorizationGrantRequirement.Required,
+            Node("node-primary", NyxIdNodeRole.Primary));
+        invalidNode.Nodes[0].Role = (NyxIdNodeRole)999;
+
+        foreach (var service in new[] { invalidAccess, invalidNode })
+        {
+            var result = await NewPlanner(new MutableCatalogQueryPort(Snapshot(service)))
+                .PlanAsync(Request(["svc-a"]));
+
+            result.Success.Should().BeFalse();
+            result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.UnknownEnum);
+        }
+    }
+
+    [Fact]
     public async Task PlanAsync_ShouldRejectViewOnlyService()
     {
         var service = Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired);
@@ -112,6 +188,49 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
         result.Success.Should().BeFalse();
         result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged);
+    }
+
+    [Fact]
+    public async Task RevalidateAsync_ShouldNormalizeMissingCurrentEvidenceToPlanChanged()
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)));
+        var planner = NewPlanner(catalog);
+        var request = Request(["svc-a"]);
+        var original = await planner.PlanAsync(request);
+        catalog.Snapshot = null;
+        var revalidator = new ScheduledInvocationAuthorizationRevalidator(
+            planner,
+            new FakeTimeProvider(Now));
+
+        var result = await revalidator.RevalidateAsync(
+            request,
+            ScheduledInvocationAuthorizationConfirmations.FromPlan(original.Plan!));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged);
+        result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+    }
+
+    [Fact]
+    public async Task RevalidateAsync_ShouldReadCurrentCatalogExactlyOnce()
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)));
+        var planner = NewPlanner(catalog);
+        var request = Request(["svc-a"]);
+        var original = await planner.PlanAsync(request);
+        catalog.QueryCount = 0;
+        var revalidator = new ScheduledInvocationAuthorizationRevalidator(
+            planner,
+            new FakeTimeProvider(Now));
+
+        var result = await revalidator.RevalidateAsync(
+            request,
+            ScheduledInvocationAuthorizationConfirmations.FromPlan(original.Plan!));
+
+        result.Success.Should().BeTrue();
+        catalog.QueryCount.Should().Be(1);
     }
 
     [Fact]
@@ -328,10 +447,15 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         : INyxIdAuthorizationCatalogQueryPort
     {
         public NyxIdAuthorizationCatalogSnapshot? Snapshot { get; set; } = snapshot;
+        public int QueryCount { get; set; }
 
         public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
             AuthorizationOwnerIdentity owner,
-            CancellationToken ct = default) => Task.FromResult(Snapshot);
+            CancellationToken ct = default)
+        {
+            QueryCount++;
+            return Task.FromResult(Snapshot);
+        }
     }
 
     private sealed class StudioEvidencePorts :

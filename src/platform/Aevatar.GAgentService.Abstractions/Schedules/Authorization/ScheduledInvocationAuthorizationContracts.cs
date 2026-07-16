@@ -4,6 +4,12 @@ using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
+public static class ScheduledInvocationAuthorizationContractVersions
+{
+    public const string Schema = "scheduled-invocation-authorization/v1";
+    public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v1";
+}
+
 public sealed record AuthenticatedAuthorizationOwnerContext(
     AuthorizationOwnerIdentity Owner,
     string SubjectPlatform,
@@ -120,7 +126,12 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     bool Invalidated = false,
     string InvalidationReason = "",
     DateTimeOffset? LastRefreshFailedAtUtc = null,
-    string LastRefreshFailureCode = "");
+    string LastRefreshFailureCode = "",
+    long LifecycleFence = 0,
+    bool Activated = false,
+    bool Cleaned = false,
+    DateTimeOffset? CleanedAtUtc = null,
+    string CleanupReason = "");
 
 public sealed record NyxIdAuthorizationCatalogObservation(
     AuthorizationOwnerIdentity Owner,
@@ -128,7 +139,8 @@ public sealed record NyxIdAuthorizationCatalogObservation(
     DateTimeOffset FreshUntilUtc,
     string ExternalRevision,
     string ContentDigest,
-    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services);
+    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
+    long ExpectedLifecycleFence = 0);
 
 public enum NyxIdAuthorizationCatalogRefreshStatus
 {
@@ -139,6 +151,7 @@ public enum NyxIdAuthorizationCatalogRefreshStatus
     ObservationTimedOut = 4,
     OwnerNotSupported = 5,
     CatalogUnstable = 6,
+    PublishedContractMissing = 7,
 }
 
 public sealed record NyxIdAuthorizationCatalogRefreshResult(
@@ -189,6 +202,11 @@ public interface INyxIdAuthorizationCatalogQueryPort
 
 public interface INyxIdAuthorizationCatalogCommandPort
 {
+    Task ActivateAsync(
+        AuthorizationOwnerIdentity owner,
+        DateTimeOffset activatedAtUtc,
+        CancellationToken ct = default);
+
     Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default);
 
     Task RecordRefreshFailureAsync(
@@ -200,6 +218,12 @@ public interface INyxIdAuthorizationCatalogCommandPort
     Task InvalidateAsync(
         AuthorizationOwnerIdentity owner,
         DateTimeOffset invalidatedAtUtc,
+        string reason,
+        CancellationToken ct = default);
+
+    Task CleanupAsync(
+        AuthorizationOwnerIdentity owner,
+        DateTimeOffset cleanedAtUtc,
         string reason,
         CancellationToken ct = default);
 }

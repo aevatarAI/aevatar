@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -28,6 +29,48 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class ScheduledDispatchEndpointsTests
 {
+    [Theory]
+    [InlineData("unexpectedField")]
+    [InlineData("owner")]
+    [InlineData("teamAutomationOwner")]
+    [InlineData("permissionDigest")]
+    [InlineData("credentialProvisioningKind")]
+    [InlineData("provisioningStatus")]
+    [InlineData("teamAutomationLifecycleStatus")]
+    public void ConfigurationRequest_ShouldRejectUnmappedOrTrustedLifecycleFields(string propertyName)
+    {
+        var json = $$"""
+            {
+              "cronExpression": "0 9 * * *",
+              "{{propertyName}}": "forged"
+            }
+            """;
+
+        var act = () => JsonSerializer.Deserialize<ScheduledDispatchConfigurationHttpRequest>(
+            json,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void ServiceInvocationRequest_ShouldRejectForgedAuthorizationFact()
+    {
+        const string json = """
+            {
+              "authorizationFact": {
+                "permissionDigest": "forged"
+              }
+            }
+            """;
+
+        var act = () => JsonSerializer.Deserialize<ScheduledDispatchServiceInvocationTargetHttpRequest>(
+            json,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        act.Should().Throw<JsonException>();
+    }
+
     [Fact]
     public async Task Create_ShouldAcceptEnvelopeTargetAndForwardConfiguration()
     {

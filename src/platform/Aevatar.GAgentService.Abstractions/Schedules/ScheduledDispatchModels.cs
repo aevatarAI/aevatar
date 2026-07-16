@@ -52,7 +52,16 @@ public sealed record TeamAutomationCredentialOperation(
     string IdempotencyKey,
     string PermissionDigest,
     string PolicyVersion,
-    TeamAutomationOperationKind Kind);
+    TeamAutomationOperationKind Kind,
+    ScheduledCredentialEffectLocator CredentialEffectLocator,
+    string MutationDigest);
+
+public sealed record ScheduledCredentialEffectLocator(
+    string CredentialName,
+    string RequestedSecretReference,
+    string SecretPurpose,
+    string SecretOwnerScopeKey,
+    ScheduledInvocationAuthorizationOwner CredentialOwner);
 
 public sealed record ScheduledDispatchTargetDescriptor(
     ScheduledDispatchTargetKind Kind,
@@ -270,15 +279,18 @@ public sealed record ScheduledServiceInvocationCredentialExchangeResult(
     bool Succeeded,
     string? AccessToken = null,
     string? Error = null,
-    DateTimeOffset? ExpiresAt = null)
+    DateTimeOffset? ExpiresAt = null,
+    ScheduledServiceInvocationAuthorizationFailureCode? AuthorizationFailureCode = null)
 {
     public static ScheduledServiceInvocationCredentialExchangeResult Success(
         string accessToken,
         DateTimeOffset? expiresAt = null) =>
         new(true, accessToken, null, expiresAt);
 
-    public static ScheduledServiceInvocationCredentialExchangeResult Failure(string error) =>
-        new(false, null, error, null);
+    public static ScheduledServiceInvocationCredentialExchangeResult Failure(
+        string error,
+        ScheduledServiceInvocationAuthorizationFailureCode? authorizationFailureCode = null) =>
+        new(false, null, error, null, authorizationFailureCode);
 }
 
 public sealed record ScheduledDispatchConfiguration(
@@ -353,7 +365,10 @@ public sealed record ScheduledDispatchSummary(
     long StateVersion = 0,
     string PermissionDigest = "",
     string PolicyVersion = "",
-    string TeamAutomationIdempotencyKey = "");
+    string TeamAutomationIdempotencyKey = "",
+    string CredentialOwnerAuthority = "",
+    string CredentialOwnerKind = "",
+    string CredentialOwnerSubject = "");
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,
@@ -412,7 +427,8 @@ public sealed record ScheduledDispatchListQuery(
     ScheduledDispatchScheduleKind? ScheduleKind = null,
     TeamMemberAutomationOwner? TeamAutomationOwner = null,
     bool ExcludeTeamOwned = false,
-    bool IncludeDeleted = false);
+    bool IncludeDeleted = false,
+    bool ExcludeCompletedTeamAutomationDeletions = false);
 
 public interface IScheduledDispatchActorPort
 {
@@ -461,6 +477,19 @@ public interface IScheduledDispatchActorPort
     Task<DispatchAdmission> DispatchBeginTeamAutomationCredentialOperationAsync(
         string actorId,
         TeamAutomationCredentialOperation operation,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<DispatchAdmission> DispatchRecordTeamAutomationCredentialCandidateAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        ScheduledInvocationAgentKeyCredentialReference credential,
+        ScheduledInvocationAuthorizationOwner credentialOwner,
+        string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
@@ -469,9 +498,11 @@ public interface IScheduledDispatchActorPort
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         ScheduledInvocationAgentKeyCredentialReference credential,
         ScheduledDispatchConfiguration configuration,
         PreparedScheduledDispatchTarget dispatch,
+        string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
@@ -480,7 +511,9 @@ public interface IScheduledDispatchActorPort
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         string errorCode,
+        string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
@@ -505,6 +538,7 @@ public interface IScheduledDispatchActorPort
         string idempotencyKey,
         string reason,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+        string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
@@ -514,6 +548,7 @@ public interface IScheduledDispatchActorPort
         string operationId,
         string idempotencyKey,
         ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+        string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
@@ -521,9 +556,12 @@ public interface IScheduledDispatchActorPort
         string actorId,
         TeamMemberAutomationOwner owner,
         string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
         bool nyxIdRevoked,
         bool vaultRevoked,
         string errorCode,
+        string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
@@ -652,11 +690,23 @@ public interface IScheduledDispatchApplicationService
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
+    Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        ScheduledInvocationAgentKeyCredentialReference credential,
+        ScheduledInvocationAuthorizationOwner credentialOwner,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     Task<TeamAutomationCommittedMutationReceipt> CompleteTeamAutomationCredentialOperationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         ScheduledInvocationAgentKeyCredentialReference credential,
         ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default) =>
@@ -667,6 +717,7 @@ public interface IScheduledDispatchApplicationService
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         string errorCode,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
@@ -708,6 +759,8 @@ public interface IScheduledDispatchApplicationService
         string scheduleId,
         TeamMemberAutomationOwner owner,
         string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
         bool nyxIdRevoked,
         bool vaultRevoked,
         string errorCode,

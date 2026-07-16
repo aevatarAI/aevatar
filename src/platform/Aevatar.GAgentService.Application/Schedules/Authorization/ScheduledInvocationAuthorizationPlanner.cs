@@ -5,8 +5,8 @@ namespace Aevatar.GAgentService.Application.Schedules.Authorization;
 
 public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocationAuthorizationPlanner
 {
-    public const string SchemaVersion = "scheduled-invocation-authorization/v1";
-    public const string PolicyVersion = "nyxid-api-key/scheduled-invocation/v1";
+    public const string SchemaVersion = ScheduledInvocationAuthorizationContractVersions.Schema;
+    public const string PolicyVersion = ScheduledInvocationAuthorizationContractVersions.CredentialPolicy;
 
     private readonly INyxIdAuthorizationCatalogQueryPort _catalogQueryPort;
     private readonly IScheduledInvocationMemberEvidenceQueryPort _memberQueryPort;

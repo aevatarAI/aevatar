@@ -65,6 +65,31 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     [Fact]
+    public async Task AuthorizationCatalogRefresh_WhenPublishedContractIsMissing_ShouldExposeStableBlocker()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(new NyxIdAuthorizationCatalogRefreshResult(
+            NyxIdAuthorizationCatalogRefreshStatus.PublishedContractMissing,
+            "nyxid_catalog_published_contract_missing"));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("sub", "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle);
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
+            false,
+            "published_contract_missing",
+            "nyxid_catalog_published_contract_missing"));
+        JsonSerializer.Serialize(payload).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
     public async Task Finalize_ShouldRefreshCatalogForVerifiedNyxIdOwner()
     {
         var lifecycle = new RecordingCatalogRefreshLifecycle();
@@ -125,6 +150,69 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload!.AuthorizationCatalogReady.Should().BeFalse();
         payload.AuthorizationCatalogStatus.Should().Be("observation_timed_out");
         payload.AuthorizationCatalogFailureCode.Should().Be("nyxid_catalog_observation_timeout");
+    }
+
+    [Fact]
+    public async Task Finalize_WhenCatalogRefreshThrows_ShouldKeepSuccessfulTokenAndBindingResponse()
+    {
+        var lifecycle = new ThrowingCatalogRefreshLifecycle(
+            new InvalidOperationException("refresh-private-detail"));
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+            },
+            new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+                "binding-alpha",
+                CreateIdToken(new { uid = "nyx-owner-alpha" }),
+                "bearer-alpha")),
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingReplaceDispatch(),
+            NullLoggerFactory.Instance,
+            catalogRefreshLifecycle: lifecycle);
+
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.Tokens.AccessToken.Should().Be("bearer-alpha");
+        payload.BindingDispatchAccepted.Should().BeTrue();
+        payload.AuthorizationCatalogReady.Should().BeFalse();
+        payload.AuthorizationCatalogStatus.Should().Be("failed");
+        payload.AuthorizationCatalogFailureCode.Should().Be("nyxid_catalog_refresh_failed");
+        JsonSerializer.Serialize(payload).Should().NotContain("refresh-private-detail");
+    }
+
+    [Fact]
+    public async Task Finalize_WhenCallerCancelsCatalogRefresh_ShouldPropagateCancellation()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var lifecycle = new ThrowingCatalogRefreshLifecycle(new OperationCanceledException(cts.Token));
+
+        var action = () => NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+            },
+            new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+                "binding-alpha",
+                CreateIdToken(new { uid = "nyx-owner-alpha" }),
+                "bearer-alpha")),
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingReplaceDispatch(),
+            NullLoggerFactory.Instance,
+            lifecycle,
+            cts.Token);
+
+        await action.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
@@ -642,6 +730,20 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             Requests.Add((verifiedOwnerSubject, bearerToken));
             return Task.FromResult(result ?? NyxIdAuthorizationCatalogRefreshResult.Observed);
         }
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class ThrowingCatalogRefreshLifecycle(Exception exception) : INyxIdAuthorizationCatalogRefreshPort
+    {
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
+            string verifiedOwnerSubject,
+            string bearerToken,
+            CancellationToken ct = default) =>
+            Task.FromException<NyxIdAuthorizationCatalogRefreshResult>(exception);
 
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
             AuthorizationOwnerIdentity owner,

@@ -41,6 +41,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
+        RejectTeamAutomationOwnerForGenericMutation(configuration, context);
         var normalized = await NormalizeAndAdmitMutationAsync(configuration, context, requireScheduleId: false, ct);
         await EnsureCreatableAsync(normalized.ScheduleId, ct);
         normalized = AdmitCredentialRequirement(
@@ -62,6 +63,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
+        RejectTeamAutomationOwnerForGenericMutation(configuration, context);
         var normalized = await NormalizeAndAdmitMutationAsync(configuration, context, requireScheduleId: true, ct);
         // A deleted schedule is a permanent tombstone: the actor rejects any
         // reconfigure, and the admission-only dispatch would swallow that
@@ -246,7 +248,43 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             normalized.OperationId,
             normalized.IdempotencyKey,
             TeamAutomationOperationObservationStages.Begin,
-            token => _actorPort.DispatchBeginTeamAutomationCredentialOperationAsync(actorId, normalized, token),
+            (requestId, token) => _actorPort.DispatchBeginTeamAutomationCredentialOperationAsync(
+                actorId, normalized, requestId, token),
+            ct);
+    }
+
+    public async Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        ScheduledInvocationAgentKeyCredentialReference credential,
+        ScheduledInvocationAuthorizationOwner credentialOwner,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedOwner = NormalizeTeamOwner(owner);
+        var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
+        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var normalizedEffectAttemptId = NormalizeRequired(effectAttemptId, nameof(effectAttemptId));
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        return await DispatchObservedTeamOperationAsync(
+            normalizedScheduleId,
+            actorId,
+            normalizedOperationId,
+            normalizedIdempotencyKey,
+            TeamAutomationOperationObservationStages.Candidate,
+            (requestId, token) => _actorPort.DispatchRecordTeamAutomationCredentialCandidateAsync(
+                actorId,
+                normalizedOwner,
+                normalizedOperationId,
+                normalizedIdempotencyKey,
+                normalizedEffectAttemptId,
+                NormalizeScheduledInvocationAgentKey(credential),
+                NormalizeAuthorizationOwner(credentialOwner),
+                requestId,
+                token),
             ct);
     }
 
@@ -255,6 +293,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         ScheduledInvocationAgentKeyCredentialReference credential,
         ScheduledDispatchConfiguration configuration,
         CancellationToken ct = default)
@@ -263,6 +302,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedOwner = NormalizeTeamOwner(owner);
         var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
         var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var normalizedEffectAttemptId = NormalizeRequired(effectAttemptId, nameof(effectAttemptId));
         var normalizedConfiguration = await NormalizeAndAdmitMutationAsync(
             configuration with
             {
@@ -291,14 +331,16 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             normalizedOperationId,
             normalizedIdempotencyKey,
             TeamAutomationOperationObservationStages.Complete,
-            token => _actorPort.DispatchCompleteTeamAutomationCredentialOperationAsync(
+            (requestId, token) => _actorPort.DispatchCompleteTeamAutomationCredentialOperationAsync(
                 actorId,
                 normalizedOwner,
                 normalizedOperationId,
                 normalizedIdempotencyKey,
+                normalizedEffectAttemptId,
                 NormalizeScheduledInvocationAgentKey(credential),
                 normalizedConfiguration,
                 dispatch,
+                requestId,
                 token),
             ct);
     }
@@ -308,6 +350,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        string effectAttemptId,
         string errorCode,
         CancellationToken ct = default)
     {
@@ -315,6 +358,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
         var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
         var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var normalizedEffectAttemptId = NormalizeRequired(effectAttemptId, nameof(effectAttemptId));
         var normalizedOwner = NormalizeTeamOwner(owner);
         var normalizedErrorCode = NormalizeStableErrorCode(errorCode);
         return await DispatchObservedTeamOperationAsync(
@@ -323,12 +367,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             normalizedOperationId,
             normalizedIdempotencyKey,
             TeamAutomationOperationObservationStages.Fail,
-            token => _actorPort.DispatchFailTeamAutomationCredentialOperationAsync(
+            (requestId, token) => _actorPort.DispatchFailTeamAutomationCredentialOperationAsync(
                 actorId,
                 normalizedOwner,
                 normalizedOperationId,
                 normalizedIdempotencyKey,
+                normalizedEffectAttemptId,
                 normalizedErrorCode,
+                requestId,
                 token),
             ct);
     }
@@ -380,13 +426,14 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             normalizedOperationId,
             normalizedIdempotencyKey,
             TeamAutomationOperationObservationStages.Delete,
-            token => _actorPort.DispatchDeleteTeamAutomationAsync(
+            (requestId, token) => _actorPort.DispatchDeleteTeamAutomationAsync(
                 actorId,
                 normalizedOwner,
                 normalizedOperationId,
                 normalizedIdempotencyKey,
                 NormalizeOptional(reason),
                 NormalizeAuthorizationOwner(authenticatedCredentialOwner),
+                requestId,
                 token),
             ct);
     }
@@ -425,12 +472,13 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             normalizedOperationId,
             normalizedIdempotencyKey,
             TeamAutomationOperationObservationStages.Delete,
-            token => _actorPort.DispatchRetryTeamAutomationRevocationAsync(
+            (requestId, token) => _actorPort.DispatchRetryTeamAutomationRevocationAsync(
                 actorId,
                 normalizedOwner,
                 normalizedOperationId,
                 normalizedIdempotencyKey,
                 NormalizeAuthorizationOwner(authenticatedCredentialOwner),
+                requestId,
                 token),
             ct);
     }
@@ -439,6 +487,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         string scheduleId,
         TeamMemberAutomationOwner owner,
         string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
         bool nyxIdRevoked,
         bool vaultRevoked,
         string errorCode,
@@ -447,13 +497,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var normalizedOwner = NormalizeTeamOwner(owner);
         var normalizedOperationId = NormalizeRequired(operationId, nameof(operationId));
-        var existing = await GetTeamOwnedScheduleIncludingDeletedAsync(
-            normalizedScheduleId,
-            normalizedOwner,
-            ct);
-        var normalizedIdempotencyKey = NormalizeRequired(
-            existing.Schedule.TeamAutomationIdempotencyKey,
-            nameof(existing.Schedule.TeamAutomationIdempotencyKey));
+        var normalizedIdempotencyKey = NormalizeRequired(idempotencyKey, nameof(idempotencyKey));
+        var normalizedEffectAttemptId = NormalizeRequired(effectAttemptId, nameof(effectAttemptId));
         var normalizedErrorCode = string.IsNullOrWhiteSpace(errorCode)
             ? string.Empty
             : NormalizeStableErrorCode(errorCode);
@@ -464,13 +509,16 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             normalizedOperationId,
             normalizedIdempotencyKey,
             TeamAutomationOperationObservationStages.Revocation,
-            token => _actorPort.DispatchCompleteTeamAutomationRevocationAsync(
+            (requestId, token) => _actorPort.DispatchCompleteTeamAutomationRevocationAsync(
                 actorId,
                 normalizedOwner,
                 normalizedOperationId,
+                normalizedIdempotencyKey,
+                normalizedEffectAttemptId,
                 nyxIdRevoked,
                 vaultRevoked,
                 normalizedErrorCode,
+                requestId,
                 token),
             ct);
     }
@@ -539,14 +587,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             Cursor: cursor,
             IncludeTotalCount: includeTotalCount,
             TeamAutomationOwner: NormalizeTeamOwner(owner),
-            IncludeDeleted: true), ct);
-        var visible = result.Items
-            .Where(static item => !item.Deleted || item.RevocationPending)
-            .ToArray();
-        return new ScheduledDispatchListResult(
-            visible,
-            result.NextCursor,
-            result.TotalCount.HasValue ? visible.LongLength : null);
+            ExcludeCompletedTeamAutomationDeletions: true), ct);
+        return result;
     }
 
     private async Task<ScheduledDispatchMutationReceipt> SetTeamAutomationEnabledAsync(
@@ -566,6 +608,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             : await _actorPort.DispatchDisableTeamAutomationAsync(
                 actorId, normalizedOwner, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
+    }
+
+    private static void RejectTeamAutomationOwnerForGenericMutation(
+        ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchMutationContext? context)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration.TeamAutomationOwner == null && context?.TeamAutomationOwner == null)
+            return;
+
+        throw new ArgumentException(
+            "Team automation ownership is reserved for the dedicated team automation lifecycle.",
+            nameof(configuration));
     }
 
     private async Task<ScheduledDispatchDetail> GetTeamMutableScheduleAsync(
@@ -737,7 +792,21 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(operation.IdempotencyKey, nameof(operation.IdempotencyKey)),
             NormalizeRequired(operation.PermissionDigest, nameof(operation.PermissionDigest)),
             NormalizeRequired(operation.PolicyVersion, nameof(operation.PolicyVersion)),
-            kind);
+            kind,
+            NormalizeCredentialEffectLocator(operation.CredentialEffectLocator),
+            NormalizeRequired(operation.MutationDigest, nameof(operation.MutationDigest)));
+    }
+
+    private static ScheduledCredentialEffectLocator NormalizeCredentialEffectLocator(
+        ScheduledCredentialEffectLocator locator)
+    {
+        ArgumentNullException.ThrowIfNull(locator);
+        return new ScheduledCredentialEffectLocator(
+            NormalizeRequired(locator.CredentialName, nameof(locator.CredentialName)),
+            NormalizeRequired(locator.RequestedSecretReference, nameof(locator.RequestedSecretReference)),
+            NormalizeRequired(locator.SecretPurpose, nameof(locator.SecretPurpose)),
+            NormalizeRequired(locator.SecretOwnerScopeKey, nameof(locator.SecretOwnerScopeKey)),
+            NormalizeAuthorizationOwner(locator.CredentialOwner));
     }
 
     private static bool TeamOwnerEquals(TeamMemberAutomationOwner left, TeamMemberAutomationOwner? right) =>
@@ -755,7 +824,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         string operationId,
         string idempotencyKey,
         string expectedStage,
-        Func<CancellationToken, Task<DispatchAdmission>> dispatchAsync,
+        Func<string, CancellationToken, Task<DispatchAdmission>> dispatchAsync,
         CancellationToken ct)
     {
         if (_teamOperationObservationPreparation == null || _teamOperationObservationProjection == null)
@@ -780,7 +849,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             if (attachment == null)
                 throw new InvalidOperationException("team_automation_commit_observation_unavailable");
 
-            var admission = await dispatchAsync(ct).ConfigureAwait(false);
+            var observationRequestId = Guid.NewGuid().ToString("N");
+            var admission = await dispatchAsync(observationRequestId, ct).ConfigureAwait(false);
             if (!admission.Accepted)
                 throw new InvalidOperationException("team_automation_dispatch_rejected");
 
@@ -789,12 +859,17 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 if (!string.Equals(outcome.ScheduleId, scheduleId, StringComparison.Ordinal) ||
                     !string.Equals(outcome.OperationId, operationId, StringComparison.Ordinal) ||
                     !string.Equals(outcome.IdempotencyKey, idempotencyKey, StringComparison.Ordinal) ||
-                    !string.Equals(outcome.Stage, expectedStage, StringComparison.Ordinal))
+                    !string.Equals(outcome.Stage, expectedStage, StringComparison.Ordinal) ||
+                    !string.Equals(
+                        outcome.ObservationRequestId,
+                        observationRequestId,
+                        StringComparison.Ordinal))
                 {
                     continue;
                 }
 
                 sink.Complete();
+                ThrowIfTeamAutomationOperationRejected(scheduleId, outcome);
                 return new TeamAutomationCommittedMutationReceipt(
                     CreateMutationReceipt(scheduleId, actorId, admission),
                     outcome);
@@ -823,6 +898,30 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                         CancellationToken.None)
                     .ConfigureAwait(false);
             }
+        }
+    }
+
+    private static void ThrowIfTeamAutomationOperationRejected(
+        string scheduleId,
+        TeamAutomationOperationCommittedOutcome outcome)
+    {
+        var errorCode = string.IsNullOrWhiteSpace(outcome.ErrorCode)
+            ? "team_automation_operation_rejected"
+            : outcome.ErrorCode;
+        switch (outcome.Status)
+        {
+            case TeamAutomationOperationObservationStatus.Committed:
+                return;
+            case TeamAutomationOperationObservationStatus.RejectedConflict:
+                throw new ScheduledDispatchConflictException(scheduleId, errorCode);
+            case TeamAutomationOperationObservationStatus.RejectedUnauthorized:
+                throw new UnauthorizedAccessException(errorCode);
+            case TeamAutomationOperationObservationStatus.RejectedNotFound:
+                throw new ScheduledDispatchNotFoundException(scheduleId);
+            case TeamAutomationOperationObservationStatus.RejectedInvalidRequest:
+                throw new InvalidOperationException(errorCode);
+            default:
+                throw new InvalidOperationException("team_automation_observation_status_invalid");
         }
     }
 

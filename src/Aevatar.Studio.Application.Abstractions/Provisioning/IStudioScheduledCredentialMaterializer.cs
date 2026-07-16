@@ -7,10 +7,18 @@ namespace Aevatar.Studio.Application.Provisioning;
 
 public interface IStudioScheduledCredentialMaterializer
 {
+    ScheduledCredentialEffectLocator CreateEffectLocator(
+        string scheduleId,
+        string operationId,
+        ScheduledInvocationAuthorizationOwner credentialOwner);
+
     Task<StudioScheduledCredential> MaterializeAsync(
         string bearerToken,
         ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
         string scheduleId,
+        string operationId,
+        ScheduledCredentialEffectLocator effectLocator,
+        long effectAttemptGeneration,
         OwnerScope ownerScope,
         CancellationToken ct = default);
 
@@ -33,3 +41,21 @@ public sealed record StudioScheduledCredentialRevocationResult(
     bool NyxIdRevoked,
     bool VaultRevoked,
     string ErrorCode);
+
+public sealed class StudioScheduledCredentialMaterializationException : InvalidOperationException
+{
+    public StudioScheduledCredentialMaterializationException(
+        string message,
+        bool effectsCleaned,
+        Exception innerException,
+        bool recoveryBlocked = false)
+        : base(message, innerException)
+    {
+        EffectsCleaned = effectsCleaned;
+        RecoveryBlocked = recoveryBlocked;
+    }
+
+    public bool EffectsCleaned { get; }
+
+    public bool RecoveryBlocked { get; }
+}

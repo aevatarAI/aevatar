@@ -5,10 +5,20 @@ namespace Aevatar.GAgentService.Abstractions.Schedules;
 public static class TeamAutomationOperationObservationStages
 {
     public const string Begin = "begin";
+    public const string Candidate = "candidate";
     public const string Complete = "complete";
     public const string Delete = "delete";
     public const string Fail = "fail";
     public const string Revocation = "revocation";
+}
+
+public enum TeamAutomationOperationObservationStatus
+{
+    Committed = 1,
+    RejectedInvalidRequest = 2,
+    RejectedConflict = 3,
+    RejectedUnauthorized = 4,
+    RejectedNotFound = 5,
 }
 
 public sealed record TeamAutomationOperationCommittedOutcome(
@@ -24,7 +34,16 @@ public sealed record TeamAutomationOperationCommittedOutcome(
     ScheduledInvocationAgentKeyCredentialReference? PendingRevocationCredential,
     ScheduledInvocationAuthorizationOwner? PendingRevocationOwner,
     bool NyxIdRevocationPending,
-    bool VaultRevocationPending);
+    bool VaultRevocationPending,
+    string EffectAttemptId = "",
+    long EffectAttemptGeneration = 0,
+    DateTimeOffset? EffectAttemptExpiresAtUtc = null,
+    ScheduledInvocationAgentKeyCredentialReference? CandidateCredential = null,
+    ScheduledInvocationAuthorizationOwner? CandidateOwner = null,
+    ScheduledCredentialEffectLocator? CredentialEffectLocator = null,
+    string MutationDigest = "",
+    string ObservationRequestId = "",
+    TeamAutomationOperationObservationStatus Status = TeamAutomationOperationObservationStatus.Committed);
 
 public sealed record TeamAutomationOperationObservationScopeLeasePreparation(
     string ActorId,

@@ -475,6 +475,12 @@ public sealed class ScheduledCredentialVaultContractTests
     private static ValidatedScheduledInvocationAuthorizationPlan AuthorizationPlan() =>
         new(new ScheduledInvocationAuthorizationPlan
         {
+            Owner = new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "user-a",
+            },
             PermissionDigest = "permission-digest-a",
         });
 }

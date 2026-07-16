@@ -7,7 +7,9 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
@@ -21,6 +23,37 @@ public sealed class StudioMemberAutomationEndpointsTests
     private const string TeamId = "team-alpha";
     private const string MemberId = "m-alpha";
     private const string ScheduleId = "sch-alpha";
+
+    [Fact]
+    public void Map_ShouldExposeOnlyCanonicalScopeTeamMemberAutomationRoutes()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddSingleton<IStudioMemberWorkflowSchedulePort, StubSchedules>();
+        builder.Services.AddSingleton<IExternalIdentityBindingQueryPort, StubBindingQuery>();
+        builder.Services.AddRouting();
+        var app = builder.Build();
+
+        StudioMemberAutomationEndpoints.Map(app);
+
+        var routes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(static endpoint => endpoint.RoutePattern.RawText)
+            .ToArray();
+
+        const string canonicalBase =
+            "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
+        routes.Should().HaveCount(11);
+        routes.Should().OnlyContain(route => route != null && route.StartsWith(canonicalBase, StringComparison.Ordinal));
+        routes.Should().Contain(canonicalBase);
+        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}");
+        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/reauthorize");
+        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/retry-revocation");
+        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/pause");
+        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/resume");
+        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/run-now");
+        routes.Should().NotContain(route => route != null && route.StartsWith("/api/teams/", StringComparison.Ordinal));
+    }
 
     [Fact]
     public async Task List_ShouldKeepScopeMismatchAsForbidden()
@@ -66,6 +99,112 @@ public sealed class StudioMemberAutomationEndpointsTests
         JsonSerializer.Serialize(value).Should().NotContain("team-other");
     }
 
+    [Fact]
+    public async Task Create_ShouldKeepCanonicalOwnerIdentityAndReturnPendingReceipt()
+    {
+        var schedules = new StubSchedules();
+
+        var result = await StudioMemberAutomationEndpoints.HandleCreateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationMutationRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true,
+                "permission-digest-alpha",
+                "scheduled-invocation-auth/v1",
+                "dedicated_scheduled_invocation_agent_key",
+                "op-create",
+                "idem-create"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        var receipt = Value(result).Should().BeOfType<StudioMemberAutomationMutationReceipt>().Subject;
+        receipt.Accepted.Should().BeTrue();
+        receipt.Status.Should().Be("pending");
+        receipt.Status.Should().NotBe("active");
+        receipt.ScheduleId.Should().Be(ScheduleId);
+        receipt.OperationId.Should().Be("op-create");
+        receipt.CommandId.Should().Be("cmd-alpha");
+        AssertNoCredentialMaterial(receipt);
+
+        schedules.ScheduleMutationCalls.Should().Be(1);
+        schedules.LastCreate.Should().NotBeNull();
+        schedules.LastCreate!.ScopeId.Should().Be(ScopeId);
+        schedules.LastCreate.TeamId.Should().Be(TeamId);
+        schedules.LastCreate.MemberId.Should().Be(MemberId);
+        schedules.LastCreate.OperationId.Should().Be("op-create");
+        schedules.LastCreate.IdempotencyKey.Should().Be("idem-create");
+        schedules.LastCreate.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
+        schedules.LastCreate.AuthenticatedOwner.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+        schedules.LastConfirmedPermissionDigest.Should().Be("permission-digest-alpha");
+    }
+
+    [Fact]
+    public async Task ReadResponses_ShouldExposeCanonicalIdentityWithoutCredentialMaterial()
+    {
+        var view = new StudioMemberAutomationView(
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            "svc-alpha",
+            "Daily digest",
+            "run daily digest",
+            "0 9 * * *",
+            "UTC",
+            true,
+            "active",
+            DateTimeOffset.Parse("2026-10-01T00:00:00Z"),
+            string.Empty,
+            "op-alpha",
+            3,
+            false,
+            DateTimeOffset.Parse("2026-07-17T09:00:00Z"),
+            DateTimeOffset.Parse("2026-07-16T09:00:00Z"),
+            17);
+        var schedules = new StubSchedules { View = view };
+
+        var getResult = await StudioMemberAutomationEndpoints.HandleGetAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            schedules,
+            CancellationToken.None);
+        var listResult = await StudioMemberAutomationEndpoints.HandleListAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            schedules,
+            take: 20,
+            cursor: "cursor-alpha",
+            CancellationToken.None);
+
+        StatusCode(getResult).Should().Be(StatusCodes.Status200OK);
+        var getResponse = Value(getResult).Should().BeOfType<StudioMemberAutomationView>().Subject;
+        getResponse.ScopeId.Should().Be(ScopeId);
+        getResponse.TeamId.Should().Be(TeamId);
+        getResponse.MemberId.Should().Be(MemberId);
+        getResponse.ScheduleId.Should().Be(ScheduleId);
+        AssertNoCredentialMaterial(getResponse);
+
+        StatusCode(listResult).Should().Be(StatusCodes.Status200OK);
+        var listResponse = Value(listResult).Should().BeOfType<StudioMemberAutomationListResponse>().Subject;
+        listResponse.Items.Should().ContainSingle().Which.Should().BeSameAs(view);
+        AssertNoCredentialMaterial(listResponse);
+        schedules.LastGet.Should().Be((ScopeId, TeamId, MemberId, ScheduleId));
+        schedules.LastList.Should().Be((ScopeId, TeamId, MemberId, 20, "cursor-alpha"));
+    }
+
     [Theory]
     [InlineData("authorization_plan_changed", "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED")]
     [InlineData("reauthorization_required", "TEAM_AUTOMATION_REAUTHORIZATION_REQUIRED")]
@@ -104,6 +243,85 @@ public sealed class StudioMemberAutomationEndpointsTests
         StringProperty(value, "preflightLocator").Should().Be(
             $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations/preflight");
         JsonSerializer.Serialize(value).Should().NotContain("sensitive backend detail");
+        AssertNoCredentialMaterial(value);
+        schedules.LastUpdate.Should().NotBeNull();
+        schedules.LastUpdate!.ScopeId.Should().Be(ScopeId);
+        schedules.LastUpdate.TeamId.Should().Be(TeamId);
+        schedules.LastUpdate.MemberId.Should().Be(MemberId);
+        schedules.LastUpdate.ScheduleId.Should().Be(ScheduleId);
+        schedules.ScheduleMutationCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("pause")]
+    [InlineData("resume")]
+    [InlineData("run-now")]
+    public async Task Action_ShouldReturnHonestAcceptedReceiptWithCanonicalIdentity(string action)
+    {
+        var schedules = new StubSchedules();
+        var request = new StudioMemberAutomationActionRequest($"op-{action}", $"idem-{action}");
+
+        var result = action switch
+        {
+            "pause" => await StudioMemberAutomationEndpoints.HandlePauseAsync(
+                CreateContext(ScopeId), ScopeId, TeamId, MemberId, ScheduleId,
+                request, schedules, CancellationToken.None),
+            "resume" => await StudioMemberAutomationEndpoints.HandleResumeAsync(
+                CreateContext(ScopeId), ScopeId, TeamId, MemberId, ScheduleId,
+                request, schedules, CancellationToken.None),
+            "run-now" => await StudioMemberAutomationEndpoints.HandleRunNowAsync(
+                CreateContext(ScopeId), ScopeId, TeamId, MemberId, ScheduleId,
+                request, schedules, CancellationToken.None),
+            _ => throw new InvalidOperationException($"Unsupported action '{action}'."),
+        };
+
+        StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        var receipt = Value(result).Should().BeOfType<StudioMemberAutomationMutationReceipt>().Subject;
+        receipt.Accepted.Should().BeTrue();
+        receipt.Status.Should().Be("accepted");
+        receipt.Status.Should().NotBe("active");
+        receipt.ScheduleId.Should().Be(ScheduleId);
+        receipt.OperationId.Should().Be($"op-{action}");
+        receipt.CommandId.Should().Be("cmd-alpha");
+        AssertNoCredentialMaterial(receipt);
+
+        schedules.ScheduleMutationCalls.Should().Be(1);
+        schedules.LastActionName.Should().Be(action);
+        schedules.LastAction.Should().NotBeNull();
+        schedules.LastAction!.ScopeId.Should().Be(ScopeId);
+        schedules.LastAction.TeamId.Should().Be(TeamId);
+        schedules.LastAction.MemberId.Should().Be(MemberId);
+        schedules.LastAction.ScheduleId.Should().Be(ScheduleId);
+        schedules.LastAction.OperationId.Should().Be($"op-{action}");
+        schedules.LastAction.IdempotencyKey.Should().Be($"idem-{action}");
+    }
+
+    [Theory]
+    [InlineData("team-other", MemberId)]
+    [InlineData(TeamId, "m-other")]
+    public async Task Resume_ShouldFailClosedForCrossTeamOrMemberWithoutScheduleMutation(
+        string routeTeamId,
+        string routeMemberId)
+    {
+        var schedules = new StubSchedules();
+
+        var result = await StudioMemberAutomationEndpoints.HandleResumeAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            routeTeamId,
+            routeMemberId,
+            ScheduleId,
+            new StudioMemberAutomationActionRequest("op-resume", "idem-resume"),
+            schedules,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status404NotFound);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be("TEAM_AUTOMATION_NOT_FOUND");
+        StringProperty(value, "message").Should().Be("Team automation resource was not found.");
+        var serialized = JsonSerializer.Serialize(value);
+        serialized.Should().NotContain(routeTeamId == TeamId ? routeMemberId : routeTeamId);
+        schedules.ScheduleMutationCalls.Should().Be(0);
     }
 
     [Fact]
@@ -125,13 +343,47 @@ public sealed class StudioMemberAutomationEndpointsTests
         StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
         var response = Value(result);
         StringProperty(response, "Status").Should().Be("pending");
-        JsonSerializer.Serialize(response).Should().NotContain("fresh-owner-bearer");
-        JsonSerializer.Serialize(response).Should().NotContain("binding-alpha");
+        StringProperty(response, "Status").Should().NotBe("active");
+        AssertNoCredentialMaterial(response);
         schedules.LastDelete.Should().NotBeNull();
         schedules.LastDelete!.AuthenticatedOwner!.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         schedules.LastDelete.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
+        schedules.LastDelete.ScopeId.Should().Be(ScopeId);
+        schedules.LastDelete.TeamId.Should().Be(TeamId);
         schedules.LastDelete.MemberId.Should().Be(MemberId);
         schedules.LastDelete.ScheduleId.Should().Be(ScheduleId);
+    }
+
+    [Fact]
+    public async Task RetryRevocation_ShouldPassStableIdentityAndFreshOwnerCredentialOnlyToApplicationBoundary()
+    {
+        var schedules = new StubSchedules();
+
+        var result = await StudioMemberAutomationEndpoints.HandleRetryRevocationAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationActionRequest("op-cleanup", "idem-cleanup"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        var response = Value(result).Should().BeOfType<StudioMemberAutomationMutationReceipt>().Subject;
+        response.Status.Should().Be("pending");
+        response.OperationId.Should().Be("op-cleanup");
+        AssertNoCredentialMaterial(response);
+        schedules.LastRetryRevocation.Should().NotBeNull();
+        schedules.LastRetryRevocation!.OperationId.Should().Be("op-cleanup");
+        schedules.LastRetryRevocation.IdempotencyKey.Should().Be("idem-cleanup");
+        schedules.LastRetryRevocation.AuthenticatedOwner!.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+        schedules.LastRetryRevocation.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
+        schedules.LastRetryRevocation.ScopeId.Should().Be(ScopeId);
+        schedules.LastRetryRevocation.TeamId.Should().Be(TeamId);
+        schedules.LastRetryRevocation.MemberId.Should().Be(MemberId);
+        schedules.LastRetryRevocation.ScheduleId.Should().Be(ScheduleId);
     }
 
     [Theory]
@@ -227,6 +479,21 @@ public sealed class StudioMemberAutomationEndpointsTests
     private static string? StringProperty(object value, string propertyName) =>
         value.GetType().GetProperty(propertyName)?.GetValue(value) as string;
 
+    private static void AssertNoCredentialMaterial(object response)
+    {
+        var serialized = JsonSerializer.Serialize(
+            response,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var normalized = serialized.ToLowerInvariant();
+        normalized.Should().NotContain("bearer");
+        normalized.Should().NotContain("raw-key");
+        normalized.Should().NotContain("secretreference");
+        normalized.Should().NotContain("apikeyid");
+        normalized.Should().NotContain("credentialid");
+        normalized.Should().NotContain("binding-alpha");
+        normalized.Should().NotContain("nyx-owner-alpha");
+    }
+
     private sealed class StubBindingQuery : IExternalIdentityBindingQueryPort
     {
         public Task<BindingId?> ResolveAsync(
@@ -239,7 +506,17 @@ public sealed class StudioMemberAutomationEndpointsTests
     {
         public Exception? Exception { get; init; }
         public int ListCalls { get; private set; }
+        public int ScheduleMutationCalls { get; private set; }
+        public StudioMemberAutomationView? View { get; init; }
+        public StudioMemberWorkflowScheduleRequest? LastCreate { get; private set; }
+        public string? LastConfirmedPermissionDigest { get; private set; }
+        public StudioMemberAutomationUpdateCommand? LastUpdate { get; private set; }
+        public StudioMemberAutomationActionCommand? LastAction { get; private set; }
+        public string? LastActionName { get; private set; }
         public StudioMemberAutomationActionCommand? LastDelete { get; private set; }
+        public StudioMemberAutomationActionCommand? LastRetryRevocation { get; private set; }
+        public (string ScopeId, string TeamId, string MemberId, int Take, string? Cursor)? LastList { get; private set; }
+        public (string ScopeId, string TeamId, string MemberId, string ScheduleId)? LastGet { get; private set; }
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
             StudioMemberWorkflowScheduleRequest request,
@@ -253,19 +530,27 @@ public sealed class StudioMemberAutomationEndpointsTests
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest,
-            CancellationToken ct = default) =>
-            Result(new StudioMemberWorkflowScheduleResult(
-                true,
+            CancellationToken ct = default)
+        {
+            LastCreate = request;
+            LastConfirmedPermissionDigest = confirmedPermissionDigest;
+            return MutationResult(
                 request.ScopeId,
+                request.TeamId,
                 request.MemberId,
-                ScheduleId,
-                "svc-alpha",
-                "/workflow/observatory",
-                "pending")
-            {
-                OperationId = request.OperationId ?? "op-alpha",
-                CommandId = "cmd-alpha",
-            });
+                new StudioMemberWorkflowScheduleResult(
+                    true,
+                    request.ScopeId,
+                    request.MemberId,
+                    ScheduleId,
+                    "svc-alpha",
+                    "/workflow/observatory",
+                    "pending")
+                {
+                    OperationId = request.OperationId ?? "op-alpha",
+                    CommandId = "cmd-alpha",
+                });
+        }
 
         public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
             StudioMemberWorkflowScheduleRequest request,
@@ -283,7 +568,11 @@ public sealed class StudioMemberAutomationEndpointsTests
             CancellationToken ct = default)
         {
             ListCalls++;
-            return Result(new StudioMemberAutomationListResponse([], null, 0));
+            LastList = (scopeId, teamId, memberId, take, cursor);
+            return Result(new StudioMemberAutomationListResponse(
+                View == null ? [] : [View],
+                null,
+                View == null ? 0 : 1));
         }
 
         public Task<StudioMemberAutomationView?> GetAsync(
@@ -291,35 +580,94 @@ public sealed class StudioMemberAutomationEndpointsTests
             string teamId,
             string memberId,
             string scheduleId,
-            CancellationToken ct = default) =>
-            Result<StudioMemberAutomationView?>(null);
+            CancellationToken ct = default)
+        {
+            LastGet = (scopeId, teamId, memberId, scheduleId);
+            return Result(View);
+        }
 
         public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
             StudioMemberAutomationUpdateCommand command,
-            CancellationToken ct = default) =>
-            Result(Receipt(command.OperationId));
+            CancellationToken ct = default)
+        {
+            LastUpdate = command;
+            return MutationResult(
+                command.ScopeId,
+                command.TeamId,
+                command.MemberId,
+                Receipt(command.OperationId));
+        }
 
         public Task<StudioMemberAutomationMutationReceipt> PauseAsync(
             StudioMemberAutomationActionCommand command,
             CancellationToken ct = default) =>
-            Result(Receipt(command.OperationId));
+            ActionResult("pause", command);
 
         public Task<StudioMemberAutomationMutationReceipt> ResumeAsync(
             StudioMemberAutomationActionCommand command,
             CancellationToken ct = default) =>
-            Result(Receipt(command.OperationId));
+            ActionResult("resume", command);
 
         public Task<StudioMemberAutomationMutationReceipt> RunNowAsync(
             StudioMemberAutomationActionCommand command,
             CancellationToken ct = default) =>
-            Result(Receipt(command.OperationId));
+            ActionResult("run-now", command);
 
         public Task<StudioMemberAutomationMutationReceipt> DeleteAsync(
             StudioMemberAutomationActionCommand command,
             CancellationToken ct = default)
         {
             LastDelete = command;
-            return Result(Receipt(command.OperationId, "pending"));
+            return MutationResult(
+                command.ScopeId,
+                command.TeamId,
+                command.MemberId,
+                Receipt(command.OperationId, "pending"));
+        }
+
+        public Task<StudioMemberAutomationMutationReceipt> RetryRevocationAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default)
+        {
+            LastRetryRevocation = command;
+            return MutationResult(
+                command.ScopeId,
+                command.TeamId,
+                command.MemberId,
+                Receipt(command.OperationId, "pending"));
+        }
+
+        private Task<StudioMemberAutomationMutationReceipt> ActionResult(
+            string action,
+            StudioMemberAutomationActionCommand command)
+        {
+            LastActionName = action;
+            LastAction = command;
+            return MutationResult(
+                command.ScopeId,
+                command.TeamId,
+                command.MemberId,
+                Receipt(command.OperationId));
+        }
+
+        private Task<T> MutationResult<T>(
+            string scopeId,
+            string? teamId,
+            string memberId,
+            T value)
+        {
+            if (!string.Equals(scopeId, ScopeId, StringComparison.Ordinal) ||
+                !string.Equals(teamId, TeamId, StringComparison.Ordinal) ||
+                !string.Equals(memberId, MemberId, StringComparison.Ordinal))
+            {
+                return Task.FromException<T>(new StudioMemberAutomationNotFoundException());
+            }
+
+            if (Exception != null)
+                return Task.FromException<T>(Exception);
+
+            ScheduleMutationCalls++;
+            return Task.FromResult(value);
         }
 
         private Task<T> Result<T>(T value) => Exception == null

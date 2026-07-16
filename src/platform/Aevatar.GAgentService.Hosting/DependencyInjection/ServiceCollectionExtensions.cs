@@ -274,13 +274,6 @@ public static class ServiceCollectionExtensions
         services.AddScheduledInvocationAuthorization();
         services.AddHttpClient();
         services.TryAddSingleton(TimeProvider.System);
-        services.AddOptions<NyxIdAuthorizationCatalogRefreshOptions>()
-            .Configure(options =>
-            {
-                options.EndpointBaseUrl = configuration["Cli:App:NyxId:Authority"]
-                                          ?? configuration["Aevatar:NyxId:Authority"]
-                                          ?? string.Empty;
-            });
         services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
         services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
         services.TryAddTransient<NyxIdAuthorizationCatalogGAgent>();
