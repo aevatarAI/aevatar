@@ -159,9 +159,6 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
     'process.env.NYXID_REDIRECT_URI': JSON.stringify(
       process.env.NYXID_REDIRECT_URI,
     ),
-    'process.env.NYXID_DEFAULT_SERVICE_SLUGS': JSON.stringify(
-      process.env.NYXID_DEFAULT_SERVICE_SLUGS,
-    ),
     'process.env.ORNN_BASE_URL': JSON.stringify(process.env.ORNN_BASE_URL),
     'process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED': JSON.stringify(
       process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED,

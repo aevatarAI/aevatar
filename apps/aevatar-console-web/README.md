@@ -60,11 +60,8 @@ starts from the backend-provided `baseUrl`, `clientId`, and `scope`, so the
 client id matches backend token finalization.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
-`NYXID_DEFAULT_SERVICE_SLUGS` is the comma-separated set of NyxID services requested
-during login. When it is unset or empty, the console does not request default services.
-Only include organization-scoped services such as `api-lark-bot` when every intended
-sign-in account can access that organization; NyxID rejects the full authorization
-request when any requested service is unknown or unavailable to the current user.
+Default service preselection is owned by the NyxID OAuth Client
+`default_service_catalog_slugs`; the browser does not send OAuth `resource` parameters.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 
