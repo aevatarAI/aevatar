@@ -193,8 +193,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
         deliveryPort.Reservations[0].WorkflowCommandId.Should().Be(inner.Requests[0].CommandIdSeed);
         var notificationTarget = inner.Requests[0].CompletionNotificationTarget;
         notificationTarget.Should().NotBeNull();
-        notificationTarget!.ActorId.Should().Be(deliveryPort.Reservations[0].DeliveryId);
+        notificationTarget!.ActorId.Should().Be(deliveryPort.ReservedDeliveryActorId);
         notificationTarget.DeliveryId.Should().Be(deliveryPort.Reservations[0].DeliveryId);
+        notificationTarget.ActorId.Should().NotBe(notificationTarget.DeliveryId);
         notificationTarget.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         deliveryPort.Bindings.Should().ContainSingle();
         deliveryPort.Abandons.Should().BeEmpty();
@@ -806,6 +807,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
 
     private sealed class RecordingChatHistoryTerminalDeliveryPort : IWorkflowChatHistoryTerminalDeliveryPort
     {
+        public string ReservedDeliveryActorId { get; } = "chat-history-delivery-actor-alpha";
         public List<WorkflowChatHistoryTerminalDeliveryReservationRequest> Reservations { get; } = [];
         public List<WorkflowChatHistoryTerminalDeliveryReservation> Bindings { get; } = [];
         public List<WorkflowChatHistoryTerminalDeliveryReservation> Abandons { get; } = [];
@@ -817,6 +819,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
             ct.ThrowIfCancellationRequested();
             Reservations.Add(request);
             return Task.FromResult<WorkflowChatHistoryTerminalDeliveryReservation?>(new WorkflowChatHistoryTerminalDeliveryReservation(
+                ReservedDeliveryActorId,
                 request.DeliveryId,
                 request.WorkflowActorId,
                 request.WorkflowCommandId));

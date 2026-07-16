@@ -11,6 +11,7 @@ public sealed record WorkflowChatHistoryTerminalDeliveryReservationRequest(
     string WorkflowCorrelationId);
 
 public sealed record WorkflowChatHistoryTerminalDeliveryReservation(
+    string DeliveryActorId,
     string DeliveryId,
     string WorkflowActorId,
     string WorkflowCommandId);

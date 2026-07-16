@@ -198,7 +198,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     private static Application.Abstractions.Runs.WorkflowCompletionNotificationTarget CreateCompletionNotificationTarget(
         WorkflowChatHistoryTerminalDeliveryReservation reservation) =>
         new(
-            reservation.DeliveryId,
+            reservation.DeliveryActorId,
             reservation.DeliveryId,
             DateTimeOffset.UtcNow.Add(ChatHistoryTerminalDeliveryLifetime).ToUnixTimeMilliseconds());
 

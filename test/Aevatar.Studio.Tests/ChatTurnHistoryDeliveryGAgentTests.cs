@@ -14,8 +14,8 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class ChatTurnHistoryDeliveryGAgentTests
 {
-    private const string DeliveryActorId = "chat-history-delivery-workflow-actor-workflow-command";
-    private const string DeliveryId = "chat-history-delivery-workflow-actor-workflow-command";
+    private const string DeliveryActorId = "chat-history-delivery:actor-address-alpha";
+    private const string DeliveryId = "chat-history-delivery-business-alpha";
     private const string WorkflowActorId = "workflow-actor";
     private const string WorkflowCommandId = "workflow-command";
 

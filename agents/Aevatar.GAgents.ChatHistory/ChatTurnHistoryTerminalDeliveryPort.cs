@@ -35,13 +35,14 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
         if (string.IsNullOrWhiteSpace(request.DeliveryId))
             return null;
 
-        var deliveryActorId = request.DeliveryId.Trim();
+        var deliveryId = request.DeliveryId.Trim();
+        var deliveryActorId = ChatTurnHistoryDeliveryActorIds.FromDeliveryId(deliveryId);
         if (!await _actorRuntime.ExistsAsync(deliveryActorId).ConfigureAwait(false))
             await _actorRuntime.CreateAsync<ChatTurnHistoryDeliveryGAgent>(deliveryActorId, ct).ConfigureAwait(false);
 
         var command = new ChatTurnHistoryDeliveryReserveRequested
         {
-            DeliveryId = deliveryActorId,
+            DeliveryId = deliveryId,
             ScopeId = request.ScopeId,
             ConversationId = request.ConversationId,
             TurnId = request.TurnId,
@@ -61,6 +62,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
 
         return new WorkflowChatHistoryTerminalDeliveryReservation(
             deliveryActorId,
+            deliveryId,
             request.WorkflowActorId,
             request.WorkflowCommandId);
     }
@@ -80,7 +82,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             WorkflowCommandId = receipt.CommandId,
             WorkflowCorrelationId = receipt.CorrelationId,
         };
-        await DispatchAsync(reservation.DeliveryId, command, receipt.CorrelationId, $"chat-history-delivery-bind:{reservation.DeliveryId}", ct)
+        await DispatchAsync(reservation.DeliveryActorId, command, receipt.CorrelationId, $"chat-history-delivery-bind:{reservation.DeliveryActorId}", ct)
             .ConfigureAwait(false);
     }
 
@@ -97,7 +99,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
                 ? "workflow_dispatch_not_accepted"
                 : reason.Trim(),
         };
-        await DispatchAsync(reservation.DeliveryId, command, reservation.WorkflowCommandId, $"chat-history-delivery-abandon:{reservation.DeliveryId}", ct)
+        await DispatchAsync(reservation.DeliveryActorId, command, reservation.WorkflowCommandId, $"chat-history-delivery-abandon:{reservation.DeliveryActorId}", ct)
             .ConfigureAwait(false);
     }
 
