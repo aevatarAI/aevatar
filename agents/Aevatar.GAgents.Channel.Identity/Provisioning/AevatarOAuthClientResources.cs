@@ -21,6 +21,18 @@ public static class AevatarOAuthClientResources
         string nyxIdApiBaseUrl,
         string? requiredLlmServiceSlug,
         IEnumerable<string>? additionalRequiredServiceSlugs = null)
+        => RequiredServiceSlugs(requiredLlmServiceSlug, additionalRequiredServiceSlugs)
+            .Select(serviceSlug => ServiceResourceUri(nyxIdApiBaseUrl, serviceSlug))
+            .ToArray();
+
+    /// <summary>
+    /// Returns the canonical service slugs required by Aevatar's NyxID flows.
+    /// Consent defaults and RFC 8707 runtime resources both derive from this
+    /// list so provider configuration cannot drift across the two contracts.
+    /// </summary>
+    public static string[] RequiredServiceSlugs(
+        string? requiredLlmServiceSlug,
+        IEnumerable<string>? additionalRequiredServiceSlugs = null)
     {
         var serviceSlugs = new List<string> { RequiredServiceSlug };
         if (!string.IsNullOrWhiteSpace(requiredLlmServiceSlug))
@@ -31,10 +43,7 @@ public static class AevatarOAuthClientResources
                 static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug)));
         }
 
-        return serviceSlugs
-            .Select(serviceSlug => ServiceResourceUri(nyxIdApiBaseUrl, serviceSlug))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        return NormalizeServiceSlugs(serviceSlugs);
     }
 
     public static string[] MissingRequiredResources(
@@ -69,6 +78,16 @@ public static class AevatarOAuthClientResources
         }
 
         return normalized;
+    }
+
+    internal static string[] NormalizeServiceSlugs(IEnumerable<string> serviceSlugs)
+    {
+        ArgumentNullException.ThrowIfNull(serviceSlugs);
+        return serviceSlugs
+            .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
+            .Select(NormalizeServiceSlug)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
     }
 
     internal static bool IsValidServiceSlug(string? serviceSlug)

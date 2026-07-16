@@ -46,18 +46,29 @@ public class NyxIdDynamicClientRegistrationClient
         CancellationToken ct = default) =>
         RegisterPublicClientAsync(authority, clientName, [redirectUri], ct);
 
+    public virtual Task<RegistrationResult> RegisterPublicClientAsync(
+        string authority,
+        string clientName,
+        IReadOnlyCollection<string> redirectUris,
+        CancellationToken ct = default) =>
+        RegisterPublicClientAsync(authority, clientName, redirectUris, [], ct);
+
     public virtual async Task<RegistrationResult> RegisterPublicClientAsync(
         string authority,
         string clientName,
         IReadOnlyCollection<string> redirectUris,
+        IReadOnlyCollection<string> defaultServiceCatalogSlugs,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
         ArgumentException.ThrowIfNullOrWhiteSpace(clientName);
         ArgumentNullException.ThrowIfNull(redirectUris);
+        ArgumentNullException.ThrowIfNull(defaultServiceCatalogSlugs);
         var normalizedRedirectUris = NyxIdRedirectUriResolver.NormalizeRedirectUris(redirectUris);
         if (normalizedRedirectUris.Count == 0)
             throw new ArgumentException("At least one redirect URI is required.", nameof(redirectUris));
+        var normalizedDefaultServiceCatalogSlugs =
+            AevatarOAuthClientResources.NormalizeServiceSlugs(defaultServiceCatalogSlugs);
 
         var url = $"{authority.TrimEnd('/')}{RegisterEndpoint}";
         var request = new RegistrationRequest
@@ -68,6 +79,7 @@ public class NyxIdDynamicClientRegistrationClient
             ResponseTypes = ["code"],
             TokenEndpointAuthMethod = "none",
             Scope = AevatarOAuthClientScopes.AuthorizationScope,
+            DefaultServiceCatalogSlugs = normalizedDefaultServiceCatalogSlugs,
         };
 
         using var response = await _http.PostAsJsonAsync(url, request, JsonOptions, ct).ConfigureAwait(false);
@@ -88,6 +100,16 @@ public class NyxIdDynamicClientRegistrationClient
 
         if (string.IsNullOrWhiteSpace(registration.ClientId))
             throw new InvalidOperationException("NyxID DCR response did not include a client_id.");
+
+        var confirmedDefaultServiceCatalogSlugs = AevatarOAuthClientResources.NormalizeServiceSlugs(
+            registration.DefaultServiceCatalogSlugs ?? []);
+        if (!normalizedDefaultServiceCatalogSlugs.SequenceEqual(
+                confirmedDefaultServiceCatalogSlugs,
+                StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "NyxID DCR response did not confirm the requested default_service_catalog_slugs.");
+        }
 
         var issuedAt = registration.ClientIdIssuedAt > 0
             ? DateTimeOffset.FromUnixTimeSeconds(registration.ClientIdIssuedAt)
@@ -114,6 +136,7 @@ public class NyxIdDynamicClientRegistrationClient
         public string[] ResponseTypes { get; init; } = Array.Empty<string>();
         public string TokenEndpointAuthMethod { get; init; } = "none";
         public string? Scope { get; init; }
+        public string[] DefaultServiceCatalogSlugs { get; init; } = [];
     }
 
     private sealed record RegistrationResponse
@@ -125,6 +148,7 @@ public class NyxIdDynamicClientRegistrationClient
         public string[]? ResponseTypes { get; init; }
         public string? TokenEndpointAuthMethod { get; init; }
         public string? Scope { get; init; }
+        public string[]? DefaultServiceCatalogSlugs { get; init; }
         public long ClientIdIssuedAt { get; init; }
     }
 }

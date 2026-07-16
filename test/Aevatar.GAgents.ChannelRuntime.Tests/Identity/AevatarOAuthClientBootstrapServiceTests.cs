@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -39,6 +40,11 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
+        command.DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
     }
@@ -72,6 +78,11 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
+        command.DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
     }
@@ -225,6 +236,11 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         new(
             dispatch,
             Options.Create(new AevatarOAuthClientBootstrapOptions { Enabled = enabled }),
+            Options.Create(new NyxIdBrokerOptions
+            {
+                RequiredLlmServiceSlug = "chrono-llm-public",
+                AdditionalRequiredServiceSlugs = ["ornn-api", "chrono-sandbox"],
+            }),
             NullLogger<AevatarOAuthClientBootstrapService>.Instance);
 
     private static ChannelIdentityOAuthAcceptedReceipt OAuthClientReceipt() =>

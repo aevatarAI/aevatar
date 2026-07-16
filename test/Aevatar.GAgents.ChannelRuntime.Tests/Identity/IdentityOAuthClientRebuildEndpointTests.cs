@@ -3,11 +3,13 @@ using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -115,6 +117,11 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         cmd.RedirectUri.Should().Be(NyxIdRedirectUriResolver.Resolve());
         cmd.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         cmd.NyxidAuthority.Should().NotBeNullOrWhiteSpace();
+        cmd.DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
 
         var ctx = NewHttpContext();
         await result.ExecuteAsync(ctx);
@@ -182,10 +189,18 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             http: http,
             body: body,
             adminAuthorizer: authorizer,
+            brokerOptions: BrokerOptions(),
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,
             ct: ct);
     }
+
+    private static IOptions<NyxIdBrokerOptions> BrokerOptions() =>
+        Options.Create(new NyxIdBrokerOptions
+        {
+            RequiredLlmServiceSlug = "chrono-llm-public",
+            AdditionalRequiredServiceSlugs = ["ornn-api", "chrono-sandbox"],
+        });
 
     private sealed class FakePlatformAdminAuthorizer(
         bool elevated,

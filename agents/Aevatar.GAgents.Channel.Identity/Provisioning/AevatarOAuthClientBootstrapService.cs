@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -23,15 +24,18 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
 
     private readonly ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _provisioningDispatch;
     private readonly AevatarOAuthClientBootstrapOptions _options;
+    private readonly NyxIdBrokerOptions _brokerOptions;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
 
     public AevatarOAuthClientBootstrapService(
         ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> provisioningDispatch,
         IOptions<AevatarOAuthClientBootstrapOptions> options,
+        IOptions<NyxIdBrokerOptions> brokerOptions,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         _provisioningDispatch = provisioningDispatch ?? throw new ArgumentNullException(nameof(provisioningDispatch));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _brokerOptions = brokerOptions?.Value ?? throw new ArgumentNullException(nameof(brokerOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -70,6 +74,9 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         // authorize / token time — both call sites use NyxIdRedirectUriResolver.
         var redirectUri = NyxIdRedirectUriResolver.Resolve(_logger);
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(_logger);
+        var defaultServiceCatalogSlugs = AevatarOAuthClientResources.RequiredServiceSlugs(
+            _brokerOptions.RequiredLlmServiceSlug,
+            _brokerOptions.AdditionalRequiredServiceSlugs);
         ValidateStartupProvisioningBoundary(authority, redirectUri);
         var forceReprovision = string.Equals(
             Environment.GetEnvironmentVariable(ForceDcrOnStartupEnvVar),
@@ -91,6 +98,7 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
             ForceReprovision = forceReprovision,
         };
         command.RedirectUris.AddRange(redirectUris);
+        command.DefaultServiceCatalogSlugs.AddRange(defaultServiceCatalogSlugs);
 
         var accepted = await _provisioningDispatch
             .DispatchAsync(command, ct)

@@ -67,6 +67,64 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
     }
 
     [Fact]
+    public async Task RegisterPublicClient_SendsAndVerifiesDefaultServiceCatalogSlugs()
+    {
+        var handler = StubHandler.Json(HttpStatusCode.OK, new
+        {
+            client_id = "client-issued",
+            default_service_catalog_slugs = new[]
+            {
+                "aevatar",
+                "chrono-llm-public",
+                "ornn-api",
+                "chrono-sandbox",
+            },
+        });
+        var registrar = new NyxIdDynamicClientRegistrationClient(
+            new HttpClient(handler), NullLogger<NyxIdDynamicClientRegistrationClient>.Instance);
+
+        await registrar.RegisterPublicClientAsync(
+            "https://nyxid.test",
+            "aevatar",
+            ["https://aevatar.test/api/oauth/nyxid-callback"],
+            [
+                " aevatar ",
+                "chrono-llm-public",
+                "ornn-api",
+                "chrono-sandbox",
+                "aevatar",
+            ]);
+
+        var request = await handler.Last!.Content!.ReadFromJsonAsync<JsonElement>();
+        request.GetProperty("default_service_catalog_slugs")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should()
+            .Equal(
+                "aevatar",
+                "chrono-llm-public",
+                "ornn-api",
+                "chrono-sandbox");
+    }
+
+    [Fact]
+    public async Task RegisterPublicClient_Throws_WhenNyxIdDoesNotConfirmConsentDefaults()
+    {
+        var handler = StubHandler.Json(HttpStatusCode.OK, new { client_id = "client-issued" });
+        var registrar = new NyxIdDynamicClientRegistrationClient(
+            new HttpClient(handler), NullLogger<NyxIdDynamicClientRegistrationClient>.Instance);
+
+        var act = () => registrar.RegisterPublicClientAsync(
+            "https://nyxid.test",
+            "aevatar",
+            ["https://aevatar.test/api/oauth/nyxid-callback"],
+            ["aevatar"]);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*did not confirm*default_service_catalog_slugs*");
+    }
+
+    [Fact]
     public async Task RegisterPublicClient_FallsBackIssuedAt_WhenServerOmitsTimestamp()
     {
         var handler = StubHandler.Json(HttpStatusCode.OK, new { client_id = "client-no-ts" });

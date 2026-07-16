@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 
@@ -378,6 +379,7 @@ public static class IdentityOAuthEndpoints
     internal static Task<IResult> HandleAevatarOAuthClientRebuildAsync(
         HttpContext http,
         [FromBody] RebuildAevatarOAuthClientRequest? body,
+        [FromServices] IOptions<NyxIdBrokerOptions> brokerOptions,
         [FromServices] ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct) =>
@@ -385,6 +387,7 @@ public static class IdentityOAuthEndpoints
             http,
             body,
             http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
+            brokerOptions,
             rebuildDispatch,
             loggerFactory,
             ct);
@@ -397,6 +400,7 @@ public static class IdentityOAuthEndpoints
         HttpContext http,
         RebuildAevatarOAuthClientRequest? body,
         IPlatformAdminAuthorizer? adminAuthorizer,
+        IOptions<NyxIdBrokerOptions> brokerOptions,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -424,6 +428,9 @@ public static class IdentityOAuthEndpoints
         var redirectUri = NyxIdRedirectUriResolver.Resolve(logger);
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(logger);
         var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
+        var defaultServiceCatalogSlugs = AevatarOAuthClientResources.RequiredServiceSlugs(
+            brokerOptions.Value.RequiredLlmServiceSlug,
+            brokerOptions.Value.AdditionalRequiredServiceSlugs);
 
         // Validate Unix-seconds before dispatching: AevatarOAuthClient
         // ProjectionProvider later calls DateTimeOffset.FromUnixTimeSeconds
@@ -465,6 +472,7 @@ public static class IdentityOAuthEndpoints
                 RedirectUri = redirectUri,
             };
             command.RedirectUris.AddRange(redirectUris);
+            command.DefaultServiceCatalogSlugs.AddRange(defaultServiceCatalogSlugs);
             accepted = await rebuildDispatch
                 .DispatchAsync(command, ct)
                 .ConfigureAwait(false);

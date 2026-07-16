@@ -6,6 +6,19 @@ owner: eanzhao
 
 # ADR-0018: Per-User NyxID Binding via OAuth Broker
 
+## Update 2026-07-16 - DCR 持久化 Consent 默认服务
+
+Studio 浏览器不发送 RFC 8707 `resource`,因此登录页的默认勾选必须来自 OAuth Client 自身的 provisioning contract.此前 aevatar 曾发送非契约字段 `default_services`,NyxID `/oauth/register` 会静默忽略它;aevatar 随后又删除了无法验证的 actor 字段,最终生产 client 的 `default_service_catalog_slugs` 一直是空数组.
+
+当前 contract 为:
+
+- NyxID `POST /oauth/register` 接受并回显 `default_service_catalog_slugs`,与 Developer App/Admin 写路径共用 active catalog 校验.默认项只是用户可修改的 Consent hint,不是授权 grant.
+- Aevatar bootstrap 从 `NyxIdBrokerOptions.RequiredLlmServiceSlug` 与 `AdditionalRequiredServiceSlugs` 复用同一组 provider 配置,加上核心 `aevatar` slug,生成默认 catalog 列表;Mainnet 当前结果是 `aevatar`、`chrono-llm-public`、`ornn-api`、`chrono-sandbox`.
+- `EnsureAevatarOAuthClientProvisionedCommand`、provisioned event、actor state 与 durable retry payload 都携带 typed `default_service_catalog_slugs`.已有 actor state 为空时视为 drift并重新 DCR;旧 caller 未提供该新增字段时不得清空已有事实.
+- DCR client 必须校验 NyxID 响应回显同一默认列表.旧 NyxID 静默忽略字段时,本次 provisioning 失败并进入 actor-owned retry,不能持久化一个虚假的“已配置”事实.部署顺序必须先 NyxID、后 Aevatar,避免旧 NyxID 已创建但无法确认的 orphan client.
+- `/api/auth/nyxid/config` 只返回浏览器真正使用的 `baseUrl/clientId/scope`,不再暴露已从 Studio authorize/refresh 移除的 `resources` 假 contract.
+- channel `/init` authorize 与 broker 短期 token-exchange 继续请求并校验四个运行必需 resource;authorization-code exchange 继续继承用户最终 Consent,不发送 `resource`.
+
 ## Update 2026-07-16 - authorization code 保留最终 Consent service 边界
 
 授权页完成后,authorization code 已经承载用户最终确认的 service 集合.如果 aevatar 在 authorization-code exchange 再发送固定 `resource` 集合,NyxID 会按 RFC 8707 将 access token、refresh grant 与 broker binding 收窄到该集合,丢失用户在 Consent 页面额外选择的 service.这也解释了 refresh token 请求不带 `resource` 时权限恢复为完整 Consent 集合的现象.
@@ -61,7 +74,7 @@ NyxID 2026-07-06 至 2026-07-08 的 OAuth 更新把第三方应用 service acces
 - broker 每次拿到短期 access token 后校验 `resources` claim. 旧 binding、allow-all grandfather grant 或缺少任一必需 service 的 grant会被归类为 service-access mismatch;调用侧保留 binding 并引导 `/init` 原地更新 grant.
 - `/api/auth/nyxid/config` 不返回 resource 列表;前端不得自行猜 service ID,也不得把 Developer App 默认项当作授权事实.
 
-NyxID 当前 `/oauth/register` 的 `RegisterClientRequest` 不接受 Developer App 的默认 service 字段. 因此 aevatar 不在 DCR 中发送 `default_services`,也不在 actor state/readmodel 中记录无法从 NyxID 验证的“已注册默认项”. Developer App 可以额外配置同名默认项改善 consent 展示,但它不是运行正确性的事实源.
+NyxID `/oauth/register` 现在接受并回显 `default_service_catalog_slugs`;aevatar 只在响应确认后把该列表提交为 actor-owned provisioning 事实.默认项改善 Consent 展示,但仍不是运行权限的事实源.
 
 ## Update 2026-04-30 — NyxID#576 / PR #578 contract alignment
 

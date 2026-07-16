@@ -84,14 +84,31 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
             ClientName = "aevatar",
+            DefaultServiceCatalogSlugs =
+            {
+                "aevatar",
+                "chrono-llm-public",
+                "ornn-api",
+                "chrono-sandbox",
+            },
         });
 
         _registrar.Calls.Should().HaveCount(1);
         _registrar.Calls[0].Authority.Should().Be("https://nyxid.test");
         _registrar.Calls[0].RedirectUris.Should().Equal("https://aevatar.test/api/oauth/nyxid-callback");
+        _registrar.Calls[0].DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
         _agent.State.ClientId.Should().Be(_registrar.NextClientId);
         _agent.State.NyxidAuthority.Should().Be("https://nyxid.test");
         _agent.State.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
+        _agent.State.DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
         // New writes store the key in the vault and leave [hmac_key] empty; the
         // state carries only a ref that resolves to 32 raw bytes.
         _agent.State.HmacKey.Length.Should().Be(0, "new writes leave the legacy plaintext field empty");
@@ -357,6 +374,78 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleEnsureProvisioned_ReDcrs_WhenConsentDefaultsDrift()
+    {
+        var initial = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            DefaultServiceCatalogSlugs = { "aevatar", "chrono-llm-public" },
+        };
+        await _agent.HandleEnsureProvisioned(initial);
+
+        var expanded = initial.Clone();
+        expanded.DefaultServiceCatalogSlugs.Add("ornn-api");
+        expanded.DefaultServiceCatalogSlugs.Add("chrono-sandbox");
+        _registrar.NextClientId = "client-after-default-service-drift";
+
+        await _agent.HandleEnsureProvisioned(expanded);
+
+        _registrar.Calls.Should().HaveCount(2);
+        _registrar.Calls[1].DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
+        _agent.State.ClientId.Should().Be("client-after-default-service-drift");
+        _agent.State.DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
+        (await ReadEventsAsync<AevatarOAuthClientDriftReconciledEvent>())
+            .Should()
+            .ContainSingle(e => e.DriftKind == "default_service_catalog_slugs");
+    }
+
+    [Fact]
+    public async Task HandleEnsureProvisioned_LegacyCommandPreservesConsentDefaultsDuringOtherDrift()
+    {
+        var initial = new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://old.test/api/oauth/nyxid-callback",
+            DefaultServiceCatalogSlugs =
+            {
+                "aevatar",
+                "chrono-llm-public",
+                "ornn-api",
+                "chrono-sandbox",
+            },
+        };
+        await _agent.HandleEnsureProvisioned(initial);
+
+        _registrar.NextClientId = "client-after-legacy-command-redirect-drift";
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://new.test/api/oauth/nyxid-callback",
+        });
+
+        _registrar.Calls.Should().HaveCount(2);
+        _registrar.Calls[1].DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
+        _agent.State.DefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public",
+            "ornn-api",
+            "chrono-sandbox");
+    }
+
+    [Fact]
     public async Task HandleEnsureProvisioned_ReDcrs_WhenLegacyScopeIsMissingProxy()
     {
         var redirectUri = "https://aevatar-console-backend-api.aevatar.ai/api/oauth/nyxid-callback";
@@ -391,6 +480,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             NyxidAuthority = "https://nyxid.test",
             RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
             ClientName = "aevatar",
+            DefaultServiceCatalogSlugs = { "aevatar", "chrono-llm-public" },
         });
 
         _agent.State.ClientId.Should().BeEmpty();
@@ -398,12 +488,18 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         _agent.State.ProvisioningRetryAuthority.Should().Be("https://nyxid.test");
         _agent.State.ProvisioningRetryRedirectUri.Should().Be("https://aevatar.test/api/oauth/nyxid-callback");
         _agent.State.ProvisioningRetryRedirectUris.Should().Equal("https://aevatar.test/api/oauth/nyxid-callback");
+        _agent.State.ProvisioningRetryDefaultServiceCatalogSlugs.Should().Equal(
+            "aevatar",
+            "chrono-llm-public");
         _agent.State.ProvisioningRetryClientName.Should().Be("aevatar");
         _agent.State.ProvisioningRetryDueUnixMs.Should().BeGreaterThan(0);
         _agent.State.ProvisioningRetryCallbackGeneration.Should().Be(1);
         _agent.State.ProvisioningRetryLastError.Should().Contain("nyxid unavailable");
         _callbackScheduler.TimeoutRequests.Should().ContainSingle();
         _callbackScheduler.TimeoutRequests[0].DueTime.Should().Be(AevatarOAuthClientGAgent.InitialRetryDelay);
+        _callbackScheduler.TimeoutRequests[0].TriggerEnvelope.Payload
+            .Unpack<AevatarOAuthClientProvisioningRetryFiredEvent>()
+            .DefaultServiceCatalogSlugs.Should().Equal("aevatar", "chrono-llm-public");
         (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryScheduledEvent>())
             .Should()
             .ContainSingle();
@@ -954,7 +1050,11 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     private sealed class RecordingDcrClient
     {
         public string NextClientId { get; set; } = "client-first";
-        public List<(string Authority, string ClientName, string[] RedirectUris)> Calls { get; } = new();
+        public List<(
+            string Authority,
+            string ClientName,
+            string[] RedirectUris,
+            string[] DefaultServiceCatalogSlugs)> Calls { get; } = new();
         public Exception? ThrowOnRegister { get; set; }
 
         /// <summary>
@@ -978,9 +1078,17 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
             }
 
             public override async Task<RegistrationResult> RegisterPublicClientAsync(
-                string authority, string clientName, IReadOnlyCollection<string> redirectUris, CancellationToken ct = default)
+                string authority,
+                string clientName,
+                IReadOnlyCollection<string> redirectUris,
+                IReadOnlyCollection<string> defaultServiceCatalogSlugs,
+                CancellationToken ct = default)
             {
-                _owner.Calls.Add((authority, clientName, redirectUris.ToArray()));
+                _owner.Calls.Add((
+                    authority,
+                    clientName,
+                    redirectUris.ToArray(),
+                    defaultServiceCatalogSlugs.ToArray()));
                 if (_owner.OnRegistered is not null)
                     await _owner.OnRegistered().ConfigureAwait(false);
                 if (_owner.ThrowOnRegister is not null)
