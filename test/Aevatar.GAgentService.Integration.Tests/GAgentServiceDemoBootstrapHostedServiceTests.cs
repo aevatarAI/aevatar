@@ -135,6 +135,57 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_WhenDeploymentAndServingTargetsAlreadyActive_ShouldOnlyWaitForTrafficView()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var queryPort = new RecordingServiceQueryPort
+        {
+            ActiveTrafficQueryThreshold = 3,
+        };
+        queryPort.SeedPublishedDefaultDemoServices();
+        queryPort.SeedActiveDeploymentAndServingSet();
+        var hostedService = CreateHostedService(
+            commandPort,
+            queryPort,
+            new GAgentServiceDemoOptions
+            {
+                Enabled = true,
+                ReadinessObservationTimeout = TimeSpan.FromMilliseconds(100),
+                ReadinessObservationPollInterval = TimeSpan.FromMilliseconds(1),
+            },
+            Environments.Development);
+
+        await hostedService.StartAsync(CancellationToken.None);
+
+        commandPort.ActivateServiceRevisionCommands.Should().BeEmpty();
+        commandPort.ReplaceServingTargetsCommands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenReadinessObservationDurationsAreNegative_ShouldClampAndFailClearly()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var queryPort = new RecordingServiceQueryPort();
+        queryPort.SeedPublishedDefaultDemoServices();
+        var hostedService = CreateHostedService(
+            commandPort,
+            queryPort,
+            new GAgentServiceDemoOptions
+            {
+                Enabled = true,
+                ReadinessObservationTimeout = TimeSpan.FromMilliseconds(-1),
+                ReadinessObservationPollInterval = TimeSpan.FromMilliseconds(-1),
+            },
+            Environments.Development);
+
+        var act = () => hostedService.StartAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("Demo service 'demo:gagent-service:samples:demo-uppercase' has no active serving traffic view.");
+    }
+
+    [Fact]
     public async Task StartAsync_WhenExplicitlyDisabled_ShouldSkipBootstrapEvenInDevelopment()
     {
         var commandPort = new RecordingServiceCommandPort();
@@ -330,6 +381,8 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
 
         public bool ReturnActiveTrafficAfterFirstTrafficQuery { get; init; }
 
+        public int? ActiveTrafficQueryThreshold { get; init; }
+
         public void SeedPublishedDefaultDemoServices()
         {
             foreach (var serviceId in DemoServiceIds)
@@ -368,6 +421,38 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             }
         }
 
+        public void SeedActiveDeploymentAndServingSet()
+        {
+            foreach (var serviceId in DemoServiceIds)
+            {
+                var identity = CreateDemoIdentity(serviceId);
+                var serviceKey = ServiceKeys.Build(identity);
+                var target = CreateActiveServingTarget(identity);
+                _deployments[serviceKey] = new ServiceDeploymentCatalogSnapshot(
+                    serviceKey,
+                    [new ServiceDeploymentSnapshot(
+                        target.DeploymentId,
+                        target.RevisionId,
+                        target.PrimaryActorId,
+                        ServiceDeploymentStatus.Active.ToString(),
+                        DateTimeOffset.UnixEpoch,
+                        DateTimeOffset.UnixEpoch)],
+                    DateTimeOffset.UnixEpoch);
+                _servingSets[serviceKey] = new ServiceServingSetSnapshot(
+                    serviceKey,
+                    1,
+                    string.Empty,
+                    [new ServiceServingTargetSnapshot(
+                        target.DeploymentId,
+                        target.RevisionId,
+                        target.PrimaryActorId,
+                        target.AllocationWeight,
+                        target.ServingState,
+                        ["chat"])],
+                    DateTimeOffset.UnixEpoch);
+            }
+        }
+
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(_services.GetValueOrDefault(ServiceKeys.Build(identity)));
 
@@ -402,7 +487,8 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             var serviceKey = ServiceKeys.Build(identity);
             _trafficViewQueryCounts[serviceKey] = _trafficViewQueryCounts.GetValueOrDefault(serviceKey) + 1;
             if (ReturnActiveTrafficImmediately ||
-                ReturnActiveTrafficAfterFirstTrafficQuery && _trafficViewQueryCounts[serviceKey] > 1)
+                ReturnActiveTrafficAfterFirstTrafficQuery && _trafficViewQueryCounts[serviceKey] > 1 ||
+                ActiveTrafficQueryThreshold.HasValue && _trafficViewQueryCounts[serviceKey] >= ActiveTrafficQueryThreshold.Value)
             {
                 return Task.FromResult<ServiceTrafficViewSnapshot?>(CreateActiveTrafficView(identity));
             }
@@ -421,7 +507,7 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
 
         private static ServiceTrafficViewSnapshot CreateActiveTrafficView(ServiceIdentity identity)
         {
-            var deploymentId = $"{ServiceActorIds.Deployment(identity)}:builtin-v1";
+            var target = CreateActiveServingTarget(identity);
             return new ServiceTrafficViewSnapshot(
                 ServiceKeys.Build(identity),
                 1,
@@ -429,12 +515,23 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
                 [new ServiceTrafficEndpointSnapshot(
                     "chat",
                     [new ServiceTrafficTargetSnapshot(
-                        deploymentId,
-                        "builtin-v1",
-                        $"gagent-service:workflow-definition:{deploymentId}",
-                        100,
-                        ServiceServingState.Active.ToString())])],
+                        target.DeploymentId,
+                        target.RevisionId,
+                        target.PrimaryActorId,
+                        target.AllocationWeight,
+                        target.ServingState)])],
                 DateTimeOffset.UnixEpoch);
+        }
+
+        private static ServiceTrafficTargetSnapshot CreateActiveServingTarget(ServiceIdentity identity)
+        {
+            var deploymentId = $"{ServiceActorIds.Deployment(identity)}:builtin-v1";
+            return new ServiceTrafficTargetSnapshot(
+                deploymentId,
+                "builtin-v1",
+                $"gagent-service:workflow-definition:{deploymentId}",
+                100,
+                ServiceServingState.Active.ToString());
         }
     }
 
