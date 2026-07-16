@@ -200,10 +200,11 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
-    public async Task BindingFlow_PreservesConsentAndScopesBrokerTokenExchange()
+    public async Task BindingFlow_PreservesCompleteConsentAcrossBrokerTokenExchange()
     {
         const string bindingId = "bnd-e2e-user";
-        var accessToken = CreateAccessToken(RequiredResources);
+        const string optionalResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/user-selected-service";
+        var accessToken = CreateAccessToken([.. RequiredResources, optionalResource]);
         var handler = new SequenceHandler(
             JsonSerializer.Serialize(new
             {
@@ -252,7 +253,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         bindingExchangeForm["grant_type"].Should().ContainSingle().Which.Should()
             .Be("urn:ietf:params:oauth:grant-type:token-exchange");
         bindingExchangeForm["subject_token"].Should().ContainSingle().Which.Should().Be(bindingId);
-        bindingExchangeForm["resource"].Should().Equal(RequiredResources);
+        bindingExchangeForm.ContainsKey("resource").Should().BeFalse();
     }
 
     [Fact]
@@ -312,8 +313,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
         result.AccessToken.Should().Be(accessToken);
-        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")["resource"]
-            .Should().Equal(RequiredResources);
+        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")
+            .ContainsKey("resource").Should().BeFalse();
     }
 
     [Fact]
