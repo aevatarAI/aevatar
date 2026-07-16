@@ -22,16 +22,22 @@ internal static class Program
     private const string FakeRunnerToken = "credential-vault-placeholder";
     private const string VaultCredentialName = "nyxid-llm-delegation";
     private const string VaultBindingName = "nyxid-llm-gateway";
+    private const string PermissionProfileName = "aevatar-landlock";
     private const string FixedCodexCommand =
         "codex --ask-for-approval never exec --ephemeral --json " +
-        "--sandbox workspace-write - < /workspace/.aevatar/prompt.txt";
+        "- < /workspace/.aevatar/prompt.txt";
     private const string SandboxPreflightCommand =
         "test \"${NYXID_LLM_TOKEN:-}\" = 'credential-vault-placeholder' && " +
-        "rm -f /opt/aevatar-sandbox-probe/escape /workspace/.aevatar/inner-sandbox-ready && " +
-        "codex sandbox -C /workspace -- /bin/sh -c '" +
+        "rm -f /opt/aevatar-sandbox-probe/escape " +
+        "/workspace/.aevatar/inner-sandbox-ready /workspace/.git/aevatar-landlock-probe && " +
+        "codex sandbox --permission-profile aevatar-landlock " +
+        "-c use_legacy_landlock=true -C /workspace -- /bin/sh -c '" +
         "printf ready > /workspace/.aevatar/inner-sandbox-ready; " +
+        "printf metadata-write > /workspace/.git/aevatar-landlock-probe; " +
         "if printf escaped > /opt/aevatar-sandbox-probe/escape 2>/dev/null; then exit 91; fi' && " +
         "test \"$(cat /workspace/.aevatar/inner-sandbox-ready)\" = ready && " +
+        "test \"$(cat /workspace/.git/aevatar-landlock-probe)\" = metadata-write && " +
+        "rm -f /workspace/.aevatar/inner-sandbox-ready /workspace/.git/aevatar-landlock-probe && " +
         "test ! -e /opt/aevatar-sandbox-probe/escape";
     private const string GitInitializationCommand =
         "git init --quiet && " +
@@ -254,6 +260,8 @@ internal static class Program
                 Output: result.FinalAgentMessage,
                 RunnerImage: settings.RunnerImage,
                 RunnerArchitecture: settings.RunnerArchitecture,
+                IsolationBackend: "legacy_landlock",
+                PermissionProfile: PermissionProfileName,
                 ElapsedMilliseconds: startedAt.ElapsedMilliseconds,
                 Cleanup: "pending");
         }
@@ -442,7 +450,17 @@ internal static class Program
             model = {{TomlString(settings.Model)}}
             model_provider = "nyxid"
             approval_policy = "never"
-            sandbox_mode = "workspace-write"
+            default_permissions = "aevatar-landlock"
+
+            [features]
+            use_legacy_landlock = true
+
+            [permissions.aevatar-landlock.filesystem]
+            ":root" = "read"
+            ":workspace_roots" = { "." = "write", ".git" = "write", ".agents" = "write", ".codex" = "write" }
+
+            [permissions.aevatar-landlock.network]
+            enabled = true
 
             [model_providers.nyxid]
             name = "NyxID LLM Gateway"
@@ -481,7 +499,7 @@ internal static class Program
             "opensandbox.example.internal",
             "opensandbox-control-secret",
             ConnectionProtocol.Https,
-            false,
+            true,
             "ghcr.io/aevatarai/codex-runner@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "amd64",
             new Uri("https://nyx.example.com/api/v1/llm/gateway/v1"),
@@ -494,7 +512,18 @@ internal static class Program
         if (config.Contains(settings.NyxIdDelegationToken, StringComparison.Ordinal) ||
             !config.Contains("env_key = \"NYXID_LLM_TOKEN\"", StringComparison.Ordinal) ||
             !config.Contains("wire_api = \"responses\"", StringComparison.Ordinal) ||
-            !SandboxPreflightCommand.Contains(FakeRunnerToken, StringComparison.Ordinal))
+            !config.Contains("default_permissions = \"aevatar-landlock\"", StringComparison.Ordinal) ||
+            !config.Contains("use_legacy_landlock = true", StringComparison.Ordinal) ||
+            !config.Contains("\":root\" = \"read\"", StringComparison.Ordinal) ||
+            !config.Contains("\".git\" = \"write\"", StringComparison.Ordinal) ||
+            config.Contains("sandbox_mode", StringComparison.Ordinal) ||
+            FixedCodexCommand.Contains("--sandbox", StringComparison.Ordinal) ||
+            FixedCodexCommand.Contains("danger-full-access", StringComparison.Ordinal) ||
+            !SandboxPreflightCommand.Contains(FakeRunnerToken, StringComparison.Ordinal) ||
+            !SandboxPreflightCommand.Contains(
+                "--permission-profile aevatar-landlock",
+                StringComparison.Ordinal) ||
+            !SandboxPreflightCommand.Contains("use_legacy_landlock=true", StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Codex provider configuration self-test failed.");
         }
@@ -532,6 +561,8 @@ internal sealed record SmokeEvidence(
     string Output,
     string RunnerImage,
     string RunnerArchitecture,
+    string IsolationBackend,
+    string PermissionProfile,
     long ElapsedMilliseconds,
     string Cleanup);
 
@@ -676,7 +707,7 @@ internal sealed record SmokeSettings(
             domain,
             RequireEnvironment("OPEN_SANDBOX_API_KEY"),
             protocol,
-            ParseBoolean("OPEN_SANDBOX_USE_SERVER_PROXY", defaultValue: false),
+            ParseBoolean("OPEN_SANDBOX_USE_SERVER_PROXY", defaultValue: true),
             image,
             architecture,
             gateway,

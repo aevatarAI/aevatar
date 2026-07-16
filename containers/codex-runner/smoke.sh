@@ -43,6 +43,10 @@ if rg -i '(^|_)(OPENAI|NYXID|OPENSANDBOX|OPEN_SANDBOX)(_.*)?=' <<< "${configured
     echo "Runner image must not contain provider or control-plane credentials." >&2
     exit 1
 fi
+if ! rg -x 'SSL_CERT_FILE=/opt/opensandbox/mitmproxy-ca-cert.pem' <<< "${configured_environment}" >/dev/null; then
+    echo "Runner image must trust the OpenSandbox Credential Proxy CA path." >&2
+    exit 1
+fi
 
 image_history="$(docker history --no-trunc --format '{{.CreatedBy}}' "${IMAGE}")"
 if rg -i '(OPENAI_API_KEY|NYXID_LLM_TOKEN|NYXID_LLM_DELEGATION_TOKEN|OPEN_SANDBOX_API_KEY|OPENSANDBOX_API_KEY)=' <<< "${image_history}"; then
@@ -70,6 +74,7 @@ docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
     test "$(id -g)" = "10001"
     test "${HOME}" = "/home/codex"
     test "${CODEX_HOME}" = "/home/codex/.codex"
+    test "${SSL_CERT_FILE}" = "/opt/opensandbox/mitmproxy-ca-cert.pem"
     test "$(stat --format "%u:%g" /home/codex)" = "10001:10001"
     test ! -e "${HOME}/.npm"
     test ! -e "${CODEX_HOME}/auth.json"
@@ -89,6 +94,34 @@ docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
     test "$(git rev-list --count HEAD)" = "1"
     codex exec --help >/dev/null
 '
+
+if [[ "${SKIP_CODEX_RUNNER_LANDLOCK_PROBE:-0}" == "1" ]]; then
+    echo "Skipping Landlock probe by explicit request; this image is not isolation-verified." >&2
+else
+    docker exec "${CONTAINER_ID}" rm -f \
+        /opt/aevatar-sandbox-probe/escape \
+        /workspace/.aevatar/inner-sandbox-ready \
+        /workspace/.git/aevatar-landlock-probe
+    docker exec "${CONTAINER_ID}" codex sandbox \
+        --permission-profile aevatar-landlock \
+        -c 'permissions.aevatar-landlock.filesystem={":root"="read",":workspace_roots"={"."="write",".git"="write",".agents"="write",".codex"="write"}}' \
+        -c 'permissions.aevatar-landlock.network.enabled=true' \
+        -c 'use_legacy_landlock=true' \
+        -C /workspace \
+        -- /bin/sh -c '
+            printf ready > /workspace/.aevatar/inner-sandbox-ready
+            printf metadata-write > /workspace/.git/aevatar-landlock-probe
+            if printf escaped > /opt/aevatar-sandbox-probe/escape 2>/dev/null; then
+                exit 91
+            fi
+        '
+    docker exec "${CONTAINER_ID}" bash -euo pipefail -c '
+        test "$(cat /workspace/.aevatar/inner-sandbox-ready)" = ready
+        test "$(cat /workspace/.git/aevatar-landlock-probe)" = metadata-write
+        test ! -e /opt/aevatar-sandbox-probe/escape
+        rm -f /workspace/.aevatar/inner-sandbox-ready /workspace/.git/aevatar-landlock-probe
+    '
+fi
 
 docker stop --time 5 "${CONTAINER_ID}" >/dev/null
 docker wait "${CONTAINER_ID}" >/dev/null

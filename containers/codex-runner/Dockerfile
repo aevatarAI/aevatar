@@ -4,7 +4,7 @@ ARG NODE_IMAGE=docker.io/library/node:22-bookworm-slim@sha256:6c74791e557ce11fc9
 FROM ${NODE_IMAGE}
 
 ARG CODEX_VERSION=0.144.5
-ARG RUNNER_VERSION=0.144.5-r1
+ARG RUNNER_VERSION=0.144.5-r2
 ARG REVISION=unknown
 
 LABEL org.opencontainers.image.title="Aevatar Codex runner" \
@@ -37,7 +37,8 @@ RUN apt-get update \
         /workspace/.aevatar
 
 ENV HOME=/home/codex \
-    CODEX_HOME=/home/codex/.codex
+    CODEX_HOME=/home/codex/.codex \
+    SSL_CERT_FILE=/opt/opensandbox/mitmproxy-ca-cert.pem
 
 WORKDIR /workspace
 USER codex:codex

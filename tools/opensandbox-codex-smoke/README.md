@@ -27,9 +27,9 @@ export CODEX_MODEL="gpt-5.4"
 dotnet run --project tools/opensandbox-codex-smoke/Aevatar.OpenSandbox.CodexRunner.Smoke.csproj --configuration Release
 ```
 
-`CODEX_RUNNER_IMAGE` must be a registry digest, not a mutable tag. `OPEN_SANDBOX_USE_SERVER_PROXY` depends on whether the Aevatar host can reach sandbox endpoints directly; operations must provide the correct value.
+`CODEX_RUNNER_IMAGE` must be a registry digest, not a mutable tag. `OPEN_SANDBOX_USE_SERVER_PROXY` defaults to `true`, which is required by the current private PSC topology. Set it to `false` only for an environment where the Aevatar host can reach sandbox endpoints directly.
 
-Before the model call, the tool runs a nested sandbox preflight as UID/GID `10001`. It must write inside `/workspace` and must fail to write to the otherwise writable `/opt/aevatar-sandbox-probe`. Missing Bubblewrap/user-namespace/mount support therefore fails the proof instead of falling back to `danger-full-access`.
+Before the model call, the tool forces Codex 0.144.5's deprecated legacy Landlock backend and runs a nested sandbox preflight as UID/GID `10001`. It must write inside `/workspace`, including the intentionally writable `.git` directory, and must fail to write to the otherwise writable `/opt/aevatar-sandbox-probe`. Missing or ineffective Landlock support therefore fails the proof instead of falling back to Bubblewrap or `danger-full-access`.
 
 Success emits sanitized JSON containing the OpenSandbox sandbox/execution diagnostic IDs, exact output, image digest, architecture, elapsed time, and `cleanup=sandbox_absent`. It never prints either API key or the delegated NyxID token.
 
@@ -37,4 +37,4 @@ Success emits sanitized JSON containing the OpenSandbox sandbox/execution diagno
 
 Aevatar owns and verifies the runner Dockerfile, fixed command, runtime-written Codex config, bounded JSONL parser, direct SDK lifecycle, fake-token contract, default-deny egress request, resource request/limits, and cleanup confirmation in this repository.
 
-Operations must provide an OpenSandbox deployment with server `>= 0.2.0`, egress `>= 1.1.1`, Credential Proxy in `dns+nft` mode, no injected service-mesh sidecar on runner pods, non-root Bubblewrap-compatible namespace/mount policy, registry access to the pinned image digest, PID and concurrency limits, and private control-plane connectivity. The proof is not complete until this command succeeds against that deployed environment and the platform confirms the deleted sandbox pod/process tree is gone.
+Operations must provide an OpenSandbox deployment with server `>= 0.2.0`, egress `>= 1.1.1`, Credential Proxy in `dns+nft` mode, no injected service-mesh sidecar on runner pods, non-root Landlock and `PR_SET_NO_NEW_PRIVS` support, the Credential Proxy CA at `/opt/opensandbox/mitmproxy-ca-cert.pem`, registry access to the pinned image digest, PID and concurrency limits, and private control-plane connectivity. The proof is not complete until this command succeeds against that deployed environment and the platform confirms the deleted sandbox pod/process tree is gone.
