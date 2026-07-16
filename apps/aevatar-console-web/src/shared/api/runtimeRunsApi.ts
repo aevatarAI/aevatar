@@ -49,6 +49,23 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
+function normalizeChatHistoryWriteIntent(
+  value?: ChatHistoryWriteIntent
+): Required<ChatHistoryWriteIntent> | undefined {
+  const conversationId = trimOptional(value?.conversationId);
+  const turnId = trimOptional(value?.turnId);
+  const userText = trimOptional(value?.userText);
+  if (!conversationId || !turnId || !userText) {
+    return undefined;
+  }
+
+  return {
+    conversationId,
+    turnId,
+    userText,
+  };
+}
+
 function encodeSegment(value: string): string {
   return encodeURIComponent(value.trim());
 }
@@ -77,6 +94,17 @@ type RuntimeRouteTarget = {
   memberId?: string;
   serviceId?: string;
   teamId?: string;
+};
+
+type ChatHistoryWriteIntent = {
+  conversationId?: string;
+  turnId?: string;
+  userText?: string;
+};
+
+type ChatRunRequestWithHistory = ChatRunRequest & {
+  chatHistory?: ChatHistoryWriteIntent;
+  sessionId?: string;
 };
 
 function buildInvocationBasePath(
@@ -338,13 +366,12 @@ function buildDraftRunRequestInit(
 export const runtimeRunsApi = {
   async streamChat(
     scopeId: string,
-    request: ChatRunRequest,
+    request: ChatRunRequestWithHistory,
     signal: AbortSignal,
     options?: RuntimeRouteTarget
   ): Promise<Response> {
-    const sessionId = trimOptional(
-      (request as ChatRunRequest & { sessionId?: string }).sessionId
-    );
+    const sessionId = trimOptional(request.sessionId);
+    const chatHistory = normalizeChatHistoryWriteIntent(request.chatHistory);
     const response = await authFetch(
       buildInvokeChatStreamPath(scopeId, options),
       {
@@ -355,6 +382,7 @@ export const runtimeRunsApi = {
         },
         body: JSON.stringify(
           compactObject({
+            chatHistory,
             prompt: request.prompt.trim(),
             sessionId,
             headers: request.metadata,

@@ -103,10 +103,6 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
-            ChatHistoryIndexCurrentStateProjector>();
-
-        services.AddCurrentStateProjectionMaterializer<
-            StudioMaterializationContext,
             ChatConversationCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
@@ -166,10 +162,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<UserMemoryCurrentStateDocument>,
             UserMemoryCurrentStateDocumentMetadataProvider>();
-
-        services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<ChatHistoryIndexCurrentStateDocument>,
-            ChatHistoryIndexCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ChatConversationCurrentStateDocument>,

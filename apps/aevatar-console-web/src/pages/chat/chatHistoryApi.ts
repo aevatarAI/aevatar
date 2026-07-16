@@ -94,28 +94,6 @@ export const chatHistoryApi = {
     }
 
     saveLocalConversation(normalizedScopeId, meta, messages);
-
-    try {
-      await readJson<void>(
-        `/api/scopes/${encodeSegment(
-          normalizedScopeId
-        )}/chat-history/conversations/${encodeSegment(normalizedConversationId)}`,
-        {
-          method: "PUT",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            meta,
-            messages,
-          }),
-        }
-      );
-    } catch {
-      // Keep the local fallback so chat history remains usable even if the
-      // remote history store is temporarily unavailable.
-    }
   },
 
   async deleteConversation(

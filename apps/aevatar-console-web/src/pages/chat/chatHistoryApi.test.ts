@@ -23,7 +23,7 @@ describe("chatHistoryApi", () => {
     jest.clearAllMocks();
   });
 
-  it("mirrors typed session metadata to the remote chat-history store while keeping the local fallback updated", async () => {
+  it("keeps local fallback updated without remote full-transcript writes", async () => {
     (authFetch as jest.Mock).mockResolvedValue({
       headers: new Headers({
         "content-type": "application/json",
@@ -67,16 +67,7 @@ describe("chatHistoryApi", () => {
     await chatHistoryApi.saveConversation("scope-a", meta as any, messages as any);
 
     expect(saveLocalConversation).toHaveBeenCalledWith("scope-a", meta, messages);
-    expect(authFetch).toHaveBeenCalledWith(
-      "/api/scopes/scope-a/chat-history/conversations/conversation-1",
-      expect.objectContaining({
-        body: JSON.stringify({
-          meta,
-          messages,
-        }),
-        method: "PUT",
-      })
-    );
+    expect(authFetch).not.toHaveBeenCalled();
   });
 
   it("falls back to the local history index when the remote chat-history index is unavailable", async () => {

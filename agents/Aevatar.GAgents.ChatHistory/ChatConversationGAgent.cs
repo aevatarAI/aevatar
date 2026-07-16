@@ -4,57 +4,66 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChatHistory;
 
 /// <summary>
-/// Per-conversation actor that holds all messages for a single conversation.
+/// Per-conversation actor that owns terminal chat history turns for one conversation.
 /// Actor ID: <c>chat-{scopeId}-{conversationId}</c>.
-///
-/// When messages are replaced or the conversation is deleted, forwards
-/// the change to the <see cref="ChatHistoryIndexGAgent"/> via <c>SendToAsync</c>,
-/// ensuring transactional consistency between conversation and index actors.
 /// </summary>
 [GAgent("chat.history.conversation")]
 public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, IProjectedActor
 {
-    private readonly IChatHistoryIndexTopologyPort _indexTopologyPort;
-
-    public ChatConversationGAgent(IChatHistoryIndexTopologyPort indexTopologyPort)
-    {
-        _indexTopologyPort = indexTopologyPort ?? throw new ArgumentNullException(nameof(indexTopologyPort));
-    }
-
     public static string ProjectionKind => "chat-conversation";
 
-    /// <summary>Maximum messages retained per conversation.</summary>
-    internal const int MaxMessages = 500;
+    public const int MaxTurns = 250;
 
-    [EventHandler(EndpointName = "replaceMessages")]
-    public async Task HandleMessagesReplaced(MessagesReplacedEvent evt)
+    [EventHandler(EndpointName = "appendChatTurn")]
+    public async Task HandleAppendChatTurn(AppendChatTurnCommand command)
     {
-        if (evt.Meta is null)
-            return;
-
-        // Trim to MaxMessages (keep newest)
-        var trimmed = TrimMessages(evt);
-
-        await PersistDomainEventAsync(trimmed);
-
-        // Forward index upsert to the index actor
-        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
+        if (!TryValidateAppend(command, out var rejectionReason))
         {
-            // Refactor (iter49/cluster-049-chat-history-index-side-lifecycle):
-            //   Old pattern: ChatConversationGAgent resolved IActorRuntime via Services locator and created index actor inline during event handling.
-            //   New principle: Index actor addressing/provisioning is a constructor-injected narrow domain port; ChatHistoryIndexGAgent created via topology setup, not inline event handling.
-            var indexActorId = _indexTopologyPort.GetIndexActorId(evt.ScopeId);
-            var indexMeta = State.Meta?.Clone();
-            if (indexMeta is not null)
-            {
-                indexMeta.MessageCount = State.Messages.Count;
-                await SendToAsync(indexActorId, new ConversationUpsertedEvent { Meta = indexMeta });
-            }
+            await PersistRejectionAsync(command, rejectionReason);
+            return;
         }
+
+        var turn = command.Turn.Clone();
+        var existing = State.Turns.FirstOrDefault(x =>
+            string.Equals(x.TurnId, turn.TurnId, StringComparison.Ordinal));
+        if (existing is not null)
+        {
+            if (!HasSamePayload(existing, turn))
+            {
+                await PersistRejectionAsync(command, ChatTurnAppendRejectionReason.Conflict);
+                await DispatchAppendResultAsync(command, false, ChatTurnAppendRejectionReason.Conflict);
+            }
+            else
+            {
+                await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
+            }
+            return;
+        }
+
+        if (State.Turns.Count >= MaxTurns)
+        {
+            await PersistRejectionAsync(command, ChatTurnAppendRejectionReason.MaxTurnsExceeded);
+            await DispatchAppendResultAsync(command, false, ChatTurnAppendRejectionReason.MaxTurnsExceeded);
+            return;
+        }
+
+        turn.Sequence = State.Turns.Count + 1;
+        await PersistDomainEventAsync(new ChatTurnAppendedEvent
+        {
+            ScopeId = command.ScopeId,
+            ConversationId = command.ConversationId,
+            Title = command.Title,
+            ServiceId = command.ServiceId,
+            ServiceKind = command.ServiceKind,
+            Turn = turn,
+        });
+        await DispatchAppendResultAsync(command, true, ChatTurnAppendRejectionReason.Unspecified);
     }
 
     [EventHandler(EndpointName = "deleteConversation")]
@@ -63,18 +72,10 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
         if (string.IsNullOrWhiteSpace(evt.ConversationId))
             return;
 
-        // Only delete if there is state to delete
-        if (State.Meta is null && State.Messages.Count == 0)
+        if (State.Deleted || (string.IsNullOrWhiteSpace(State.ConversationId) && State.Turns.Count == 0))
             return;
 
         await PersistDomainEventAsync(evt);
-
-        // Forward index removal to the index actor
-        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
-        {
-            var indexActorId = _indexTopologyPort.GetIndexActorId(evt.ScopeId);
-            await SendToAsync(indexActorId, new ConversationRemovedEvent { ConversationId = evt.ConversationId });
-        }
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -83,42 +84,143 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
     }
 
     protected override ChatConversationState TransitionState(
-        ChatConversationState current, IMessage evt)
+        ChatConversationState current,
+        IMessage evt)
     {
         return StateTransitionMatcher
             .Match(current, evt)
-            .On<MessagesReplacedEvent>(ApplyMessagesReplaced)
+            .On<ChatTurnAppendedEvent>(ApplyChatTurnAppended)
+            .On<ChatTurnAppendRejectedEvent>(ApplyChatTurnAppendRejected)
             .On<ConversationDeletedEvent>(ApplyConversationDeleted)
             .OrCurrent();
     }
 
-    private static MessagesReplacedEvent TrimMessages(MessagesReplacedEvent evt)
+    private static bool TryValidateAppend(
+        AppendChatTurnCommand command,
+        out ChatTurnAppendRejectionReason rejectionReason)
     {
-        if (evt.Messages.Count <= MaxMessages)
-            return evt;
+        if (command.Turn is null ||
+            string.IsNullOrWhiteSpace(command.ScopeId) ||
+            string.IsNullOrWhiteSpace(command.ConversationId) ||
+            string.IsNullOrWhiteSpace(command.Turn.TurnId) ||
+            command.Turn.TerminalStatus is ChatTurnTerminalStatus.Unspecified)
+        {
+            rejectionReason = ChatTurnAppendRejectionReason.Invalid;
+            return false;
+        }
 
-        var trimmed = evt.Clone();
-        var excess = trimmed.Messages.Count - MaxMessages;
-        for (var i = 0; i < excess; i++)
-            trimmed.Messages.RemoveAt(0);
-
-        if (trimmed.Meta is not null)
-            trimmed.Meta.MessageCount = trimmed.Messages.Count;
-
-        return trimmed;
+        rejectionReason = ChatTurnAppendRejectionReason.Unspecified;
+        return true;
     }
 
-    private static ChatConversationState ApplyMessagesReplaced(
-        ChatConversationState state, MessagesReplacedEvent evt)
+    private async Task PersistRejectionAsync(
+        AppendChatTurnCommand command,
+        ChatTurnAppendRejectionReason reason)
     {
-        var next = new ChatConversationState { Meta = evt.Meta?.Clone() };
-        next.Messages.AddRange(evt.Messages);
+        await PersistDomainEventAsync(new ChatTurnAppendRejectedEvent
+        {
+            ScopeId = command.ScopeId,
+            ConversationId = command.ConversationId,
+            TurnId = command.Turn?.TurnId ?? string.Empty,
+            Reason = reason,
+            RejectedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+    }
+
+    private async Task DispatchAppendResultAsync(
+        AppendChatTurnCommand command,
+        bool accepted,
+        ChatTurnAppendRejectionReason rejectionReason)
+    {
+        if (string.IsNullOrWhiteSpace(command.DeliveryActorId))
+            return;
+
+        var dispatchPort = Services?.GetService<IActorDispatchPort>();
+        if (dispatchPort is null)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var result = new ChatTurnHistoryDeliveryAppendResultObserved
+        {
+            DeliveryActorId = command.DeliveryActorId.Trim(),
+            ConversationId = command.ConversationId,
+            TurnId = command.Turn?.TurnId ?? string.Empty,
+            Accepted = accepted,
+            RejectionReason = rejectionReason,
+            ObservedAtUnixMs = now.ToUnixTimeMilliseconds(),
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(now),
+            Payload = Any.Pack(result),
+            Route = EnvelopeRouteSemantics.CreateDirect("chat-history-conversation", result.DeliveryActorId),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = result.TurnId,
+            },
+        };
+        await dispatchPort.DispatchAsync(result.DeliveryActorId, envelope, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private static bool HasSamePayload(ChatTurn existing, ChatTurn candidate) =>
+        string.Equals(existing.UserText, candidate.UserText, StringComparison.Ordinal) &&
+        string.Equals(existing.AssistantText, candidate.AssistantText, StringComparison.Ordinal) &&
+        existing.TerminalStatus == candidate.TerminalStatus &&
+        string.Equals(existing.SanitizedError, candidate.SanitizedError, StringComparison.Ordinal) &&
+        string.Equals(existing.LlmRoute, candidate.LlmRoute, StringComparison.Ordinal) &&
+        string.Equals(existing.LlmModel, candidate.LlmModel, StringComparison.Ordinal) &&
+        Equals(existing.TerminalTime, candidate.TerminalTime);
+
+    private static ChatConversationState ApplyChatTurnAppended(
+        ChatConversationState state,
+        ChatTurnAppendedEvent evt)
+    {
+        var next = state.Clone();
+        next.ScopeId = evt.ScopeId;
+        next.ConversationId = evt.ConversationId;
+        if (!string.IsNullOrWhiteSpace(evt.Title))
+            next.Title = evt.Title;
+        if (!string.IsNullOrWhiteSpace(evt.ServiceId))
+            next.ServiceId = evt.ServiceId;
+        if (!string.IsNullOrWhiteSpace(evt.ServiceKind))
+            next.ServiceKind = evt.ServiceKind;
+
+        var terminalAt = evt.Turn?.TerminalTime?.ToDateTimeOffset().ToUnixTimeMilliseconds() ?? 0;
+        if (next.CreatedAtMs == 0)
+            next.CreatedAtMs = terminalAt;
+        next.UpdatedAtMs = terminalAt;
+        next.Deleted = false;
+        next.LastRejectedAppend = null;
+        if (evt.Turn is not null)
+            next.Turns.Add(evt.Turn.Clone());
+        return next;
+    }
+
+    private static ChatConversationState ApplyChatTurnAppendRejected(
+        ChatConversationState state,
+        ChatTurnAppendRejectedEvent evt)
+    {
+        var next = state.Clone();
+        next.LastRejectedAppend = new ChatTurnAppendRejection
+        {
+            TurnId = evt.TurnId,
+            Reason = evt.Reason,
+            RejectedAt = evt.RejectedAt?.Clone(),
+        };
         return next;
     }
 
     private static ChatConversationState ApplyConversationDeleted(
-        ChatConversationState state, ConversationDeletedEvent evt)
+        ChatConversationState state,
+        ConversationDeletedEvent evt)
     {
-        return new ChatConversationState();
+        var next = state.Clone();
+        next.Deleted = true;
+        next.ScopeId = string.IsNullOrWhiteSpace(next.ScopeId) ? evt.ScopeId : next.ScopeId;
+        next.ConversationId = string.IsNullOrWhiteSpace(next.ConversationId) ? evt.ConversationId : next.ConversationId;
+        next.UpdatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return next;
     }
 }

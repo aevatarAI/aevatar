@@ -1268,6 +1268,11 @@ const ChatPage: React.FC = () => {
       const response = await runtimeRunsApi.streamChat(
         scopeId,
         {
+          chatHistory: {
+            conversationId,
+            turnId: assistantMessageId,
+            userText: trimmedPrompt,
+          },
           metadata: conversationHeaders,
           prompt: trimmedPrompt,
           sessionId: conversationId,

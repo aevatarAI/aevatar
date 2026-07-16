@@ -13,7 +13,6 @@ public static class ChatHistoryEndpoints
         var group = app.MapGroup("/api/scopes/{scopeId}/chat-history");
         group.MapGet("", HandleGetIndex);
         group.MapGet("/conversations/{conversationId}", HandleGetConversation);
-        group.MapPut("/conversations/{conversationId}", HandleSaveConversation);
         group.MapDelete("/conversations/{conversationId}", HandleDeleteConversation);
         return app;
     }
@@ -37,17 +36,6 @@ public static class ChatHistoryEndpoints
         return Results.Ok(messages);
     }
 
-    private static async Task<IResult> HandleSaveConversation(
-        string scopeId,
-        string conversationId,
-        SaveConversationRequest request,
-        [FromServices] IChatHistoryCommandPort commandPort,
-        CancellationToken ct)
-    {
-        await commandPort.SaveMessagesAsync(scopeId, conversationId, request.Meta, request.Messages, ct);
-        return Results.Ok();
-    }
-
     private static async Task<IResult> HandleDeleteConversation(
         string scopeId,
         string conversationId,
@@ -57,8 +45,4 @@ public static class ChatHistoryEndpoints
         await commandPort.DeleteConversationAsync(scopeId, conversationId, ct);
         return Results.Ok();
     }
-
-    public sealed record SaveConversationRequest(
-        ConversationMeta Meta,
-        IReadOnlyList<StoredChatMessage> Messages);
 }

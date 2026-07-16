@@ -153,7 +153,20 @@ internal static class ChatRunRequestNormalizer
                 ScopeId: normalizedContext.ScopeId,
                 LlmControl: NormalizeLlmControl(input.LlmControl),
                 CallerCredential: callerCredentialResult.Credential,
-                Headers: normalizedContext.Headers));
+                Headers: normalizedContext.Headers,
+                ChatHistory: NormalizeChatHistory(input.ChatHistory)));
+    }
+
+    private static WorkflowChatHistoryWriteIntent? NormalizeChatHistory(ChatHistoryWriteIntentInput? source)
+    {
+        var conversationId = NormalizeOptional(source?.ConversationId);
+        var turnId = NormalizeOptional(source?.TurnId);
+        var userText = NormalizeOptional(source?.UserText);
+        return string.IsNullOrWhiteSpace(conversationId) ||
+               string.IsNullOrWhiteSpace(turnId) ||
+               string.IsNullOrWhiteSpace(userText)
+            ? null
+            : new WorkflowChatHistoryWriteIntent(conversationId, turnId, userText);
     }
 
     private static SourceNormalizationResult NormalizeSource(ChatInput input)

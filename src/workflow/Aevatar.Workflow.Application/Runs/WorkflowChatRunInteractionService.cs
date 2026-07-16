@@ -12,19 +12,22 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
     private readonly ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> _inner;
     private readonly WorkflowDirectFallbackPolicy _fallbackPolicy;
+    private readonly IWorkflowChatHistoryTerminalDeliveryPort? _chatHistoryTerminalDeliveryPort;
 
     public WorkflowChatRunInteractionService(
         IWorkflowRunActorResolver actorResolver,
         IWorkflowExecutionProjectionPort projectionPort,
         IWorkflowRunProvisioningPort runProvisioningPort,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> inner,
-        WorkflowDirectFallbackPolicy fallbackPolicy)
+        WorkflowDirectFallbackPolicy fallbackPolicy,
+        IWorkflowChatHistoryTerminalDeliveryPort? chatHistoryTerminalDeliveryPort = null)
     {
         _actorResolver = actorResolver ?? throw new ArgumentNullException(nameof(actorResolver));
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
         _runProvisioningPort = runProvisioningPort ?? throw new ArgumentNullException(nameof(runProvisioningPort));
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _fallbackPolicy = fallbackPolicy ?? throw new ArgumentNullException(nameof(fallbackPolicy));
+        _chatHistoryTerminalDeliveryPort = chatHistoryTerminalDeliveryPort;
     }
 
     public async Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
@@ -36,8 +39,12 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(emitAsync);
 
-        var commandId = CreateInteractionId();
-        var correlationId = CreateInteractionId();
+        var commandId = string.IsNullOrWhiteSpace(request.CommandIdSeed)
+            ? CreateInteractionId()
+            : request.CommandIdSeed.Trim();
+        var correlationId = string.IsNullOrWhiteSpace(request.CorrelationIdSeed)
+            ? CreateInteractionId()
+            : request.CorrelationIdSeed.Trim();
         var currentRequest = request with
         {
             CommandIdSeed = commandId,
@@ -114,28 +121,84 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
         CancellationToken ct)
     {
+        var chatHistoryDelivery = await ReserveChatHistoryDeliveryAsync(attempt.Request, ct).ConfigureAwait(false);
+
         async ValueTask OnAcceptedAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
         {
             attempt.MarkAccepted();
+            if (chatHistoryDelivery is not null)
+                await _chatHistoryTerminalDeliveryPort!
+                    .BindAcceptedAsync(chatHistoryDelivery, receipt, token)
+                    .ConfigureAwait(false);
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, token).ConfigureAwait(false);
         }
 
-        var result = await _inner.ExecuteAsync(
-            attempt.Request,
-            emitAsync,
-            OnAcceptedAsync,
-            ct).ConfigureAwait(false);
+        CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> result;
+        try
+        {
+            result = await _inner.ExecuteAsync(
+                attempt.Request,
+                emitAsync,
+                OnAcceptedAsync,
+                ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (!attempt.Accepted)
+                await CleanupAttemptAsync(attempt, CancellationToken.None, chatHistoryDelivery).ConfigureAwait(false);
+            throw;
+        }
+
         if (!result.Succeeded && !attempt.Accepted)
-            await CleanupAttemptAsync(attempt, CancellationToken.None).ConfigureAwait(false);
+            await CleanupAttemptAsync(attempt, CancellationToken.None, chatHistoryDelivery).ConfigureAwait(false);
 
         return result;
     }
 
-    private async Task CleanupAttemptAsync(
-        WorkflowChatRunInteractionAttempt attempt,
+    private async Task<WorkflowChatHistoryTerminalDeliveryReservation?> ReserveChatHistoryDeliveryAsync(
+        WorkflowChatRunRequest request,
         CancellationToken ct)
     {
+        if (_chatHistoryTerminalDeliveryPort is null ||
+            request.ChatHistory is null ||
+            request.TargetSeed is null ||
+            string.IsNullOrWhiteSpace(request.ScopeId) ||
+            string.IsNullOrWhiteSpace(request.ChatHistory.ConversationId) ||
+            string.IsNullOrWhiteSpace(request.ChatHistory.TurnId) ||
+            string.IsNullOrWhiteSpace(request.ChatHistory.UserText) ||
+            string.IsNullOrWhiteSpace(request.CommandIdSeed))
+        {
+            return null;
+        }
+
+        var deliveryId = $"chat-history-delivery-{request.TargetSeed.ActorId.Trim()}-{request.CommandIdSeed.Trim()}";
+        return await _chatHistoryTerminalDeliveryPort.ReserveAsync(
+                new WorkflowChatHistoryTerminalDeliveryReservationRequest(
+                    deliveryId,
+                    request.ScopeId.Trim(),
+                    request.ChatHistory.ConversationId.Trim(),
+                    request.ChatHistory.TurnId.Trim(),
+                    request.ChatHistory.UserText.Trim(),
+                    request.TargetSeed.ActorId.Trim(),
+                    request.CommandIdSeed.Trim(),
+                    request.CorrelationIdSeed?.Trim() ?? string.Empty),
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task CleanupAttemptAsync(
+        WorkflowChatRunInteractionAttempt attempt,
+        CancellationToken ct,
+        WorkflowChatHistoryTerminalDeliveryReservation? chatHistoryDelivery = null)
+    {
+        if (!attempt.TryMarkCleanedUp())
+            return;
+
+        if (chatHistoryDelivery is not null && _chatHistoryTerminalDeliveryPort is not null)
+            await _chatHistoryTerminalDeliveryPort
+                .AbandonAsync(chatHistoryDelivery, "workflow_dispatch_not_accepted", ct)
+                .ConfigureAwait(false);
         await RollbackCreatedActorsAsync(attempt.CreatedActorIds, CancellationToken.None).ConfigureAwait(false);
     }
 
@@ -162,8 +225,17 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         IReadOnlyList<string> CreatedActorIds)
     {
         public bool Accepted { get; private set; }
+        public bool CleanedUp { get; private set; }
 
         public void MarkAccepted() => Accepted = true;
+
+        public bool TryMarkCleanedUp()
+        {
+            if (CleanedUp)
+                return false;
+            CleanedUp = true;
+            return true;
+        }
     }
 
     private sealed record AttemptStartResult(
