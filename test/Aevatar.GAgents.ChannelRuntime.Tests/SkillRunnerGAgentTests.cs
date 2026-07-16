@@ -16,6 +16,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -52,6 +53,18 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     {
         _serviceProvider.Dispose();
         return Task.CompletedTask;
+    }
+
+    [Fact]
+    public void SkillRunnerGAgent_ShouldNotExposeExternalTriggerAdmissionHandler()
+    {
+        typeof(SkillRunnerGAgent)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(static method => method.GetCustomAttribute<EventHandlerAttribute>() is not null)
+            .Should()
+            .NotContain(static method =>
+                method.GetParameters()
+                    .Any(static parameter => parameter.ParameterType == typeof(AdmitSkillRunnerExternalTriggerCommand)));
     }
 
     [Fact]
@@ -463,6 +476,39 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         _agent.State.Enabled.Should().BeFalse();
         _agent.State.LastError.Should().Be(SkillRunnerDefaults.RejectionReasonRunnerDisabled);
         _agent.State.ErrorCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HandleTriggerAsync_WithExternalIdentity_ShouldNotWriteRunnerExternalTriggerLedgerFacts()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+        await _agent.HandleDisableAsync(new DisableSkillRunnerCommand { Reason = "test" });
+
+        await _agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand
+        {
+            Reason = SkillRunnerDefaults.ExternalTriggerReason,
+            ExternalTriggerIdentity = new SkillRunnerExternalTriggerIdentity
+            {
+                SourceId = "webhook-main",
+                DeliveryId = "delivery-1",
+                AdmissionId = "admission-1",
+            },
+        });
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        persisted.Select(static x => x.EventData).Should().NotContain(static eventData =>
+            eventData.Is(SkillRunnerExternalTriggerAdmittedEvent.Descriptor) ||
+            eventData.Is(SkillRunnerExternalTriggerDispatchRequestedEvent.Descriptor) ||
+            eventData.Is(SkillRunnerExternalTriggerDuplicateIgnoredEvent.Descriptor));
+        var rejected = persisted
+            .Select(static x => x.EventData)
+            .Where(static x => x.Is(SkillRunnerExecutionRejectedEvent.Descriptor))
+            .Select(static x => x.Unpack<SkillRunnerExecutionRejectedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        rejected.ExternalTriggerIdentity.Should().BeNull();
+        _agent.State.RecentExternalTriggerDeliveries.Should().BeEmpty();
     }
 
     [Fact]
