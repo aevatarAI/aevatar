@@ -1082,7 +1082,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         {
             AgentId = "format-agent",
             ConversationId = "oc_chat_1",
-            OutputFormat = SkillRunnerOutputFormat.FeishuDoc,
+            OutputFormat = ScheduledAgentOutputFormat.FeishuDoc,
         });
 
         await _agent.HandleUpsertAsync(new UserAgentCatalogUpsertCommand
@@ -1092,7 +1092,7 @@ public sealed class UserAgentCatalogGAgentTests : IAsyncLifetime
         });
 
         _agent.State.Entries.Should().ContainSingle();
-        _agent.State.Entries[0].OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+        _agent.State.Entries[0].OutputFormat.Should().Be(ScheduledAgentOutputFormat.FeishuDoc);
     }
 
     [Fact]

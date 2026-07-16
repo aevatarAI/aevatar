@@ -53,9 +53,11 @@ message ScheduledDispatchState
 
 enum ScheduledDispatchScheduleKindState
 {
+  reserved 2;
+  reserved "SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_SKILL_RUNNER";
+
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_GENERIC = 0;
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_WORKFLOW = 1;
-  SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_SKILL_RUNNER = 2;
 }
 
 enum ScheduledDispatchScheduleModeState

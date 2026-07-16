@@ -261,8 +261,8 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesUserSkillsToolProvider>());
         // Bridge Studio's IUserConfigQueryPort onto the AI-layer IOwnerLlmConfigSource port so
-        // SkillRunner / WorkflowAgent / NyxidChat honor the bot owner's pre-configured LLM model
-        // + route (issue #509). The bridge lives here, not in any agent or AI package, so
+        // scheduled workflow dispatch, workflow agents, and NyxidChat honor the bot owner's
+        // pre-configured LLM model + route (issue #509). The bridge lives here, not in any agent or AI package, so
         // neither side has to depend on Studio.Application — the host is the natural composition
         // layer between Studio and the AI/agent packages that consume the port.
         builder.Services.TryAddSingleton<IOwnerLlmConfigSource, StudioUserConfigOwnerLlmConfigSource>();

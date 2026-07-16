@@ -14,7 +14,6 @@ public enum ScheduledDispatchScheduleKind
 {
     Generic = 0,
     Workflow = 1,
-    SkillRunner = 2,
 }
 
 public enum ScheduledDispatchScheduleMode
