@@ -452,15 +452,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
       window.location.pathname,
     );
   }, [locationSnapshot, tabRegistry]);
-  const requestedRouteTabId = React.useMemo(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-
-    return (
-      new URLSearchParams(window.location.search).get("tab")?.trim().toLowerCase() ?? ""
-    );
-  }, [locationSnapshot]);
   const scopeId = routeState.scopeId.trim();
   const selectedTeamId = trimText(routeState.teamId);
   const hasTeamIdentity = scopeId.length > 0 && selectedTeamId.length > 0;
@@ -487,7 +478,7 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     routeState.serviceId,
   );
   const [preferredRunId, setPreferredRunId] = React.useState(routeState.runId);
-  const [activeTab, setActiveTab] = React.useState<TeamDetailTabId>(routeState.tab);
+  const activeTab = routeState.tab;
   const [teamEditorOpen, setTeamEditorOpen] = React.useState(false);
   const [teamArchiveOpen, setTeamArchiveOpen] = React.useState(false);
   const [teamEditorName, setTeamEditorName] = React.useState("");
@@ -520,9 +511,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     );
     setPreferredRunId((currentRunId) =>
       trimText(currentRunId) === nextRunId ? currentRunId : nextRunId,
-    );
-    setActiveTab((currentTab) =>
-      currentTab === routeState.tab ? currentTab : routeState.tab,
     );
     if (routeState.testTeam) {
       setTeamTestModalOpen(true);
@@ -1413,18 +1401,15 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     }));
 
   React.useEffect(() => {
-    const requestedTabIsUnknown =
-      requestedRouteTabId.length > 0 && !tabRegistry.has(requestedRouteTabId);
     const activeTabIsUnavailable = activeTabDefinition.id !== activeTab;
     if (
       !hasTeamIdentity ||
       activeTabAvailabilityPending ||
-      (!requestedTabIsUnknown && !activeTabIsUnavailable)
+      (!routeState.tabWasUnknown && !activeTabIsUnavailable)
     ) {
       return;
     }
 
-    setActiveTab(activeTabDefinition.id);
     history.replace(
       buildTeamDetailHref({
         memberId: routeState.memberId || undefined,
@@ -1445,10 +1430,10 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     activeTabAvailabilityPending,
     activeTabDefinition.id,
     hasTeamIdentity,
-    requestedRouteTabId,
     routeState.memberId,
     routeState.runId,
     routeState.serviceId,
+    routeState.tabWasUnknown,
     routeState.testTeam,
     routeState.workflowId,
     scopeId,
@@ -1464,7 +1449,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
   const pushTeamTab = React.useCallback(
     (tab: TeamDetailTabId) => {
       const includeRuntimeContext = tab === teamDetailTabIds.overview;
-      setActiveTab(tab);
       history.push(
         buildTeamDetailHref({
           memberId: currentMemberId || undefined,

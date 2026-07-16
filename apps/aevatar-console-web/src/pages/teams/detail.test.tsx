@@ -10,6 +10,7 @@ import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
 import { teamAutomationApi } from "@/shared/api/teamAutomationApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
+import { history } from "@/shared/navigation/history";
 import { createTeamDetailTabRegistry } from "@/shared/teams/teamDetailTabs";
 import { studioApi } from "@/shared/studio/api";
 import {
@@ -1565,6 +1566,50 @@ describe("TeamDetailPage", () => {
     );
     expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
     expect(new URLSearchParams(window.location.search).get("tab")).toBe("activity");
+  });
+
+  it("falls back deterministically when an active registered tab changes to an unknown tab", async () => {
+    setLocale("en-US", false);
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=activity",
+    );
+    const tabRegistry = createTeamDetailTabRegistry({
+      defaultTabId: "overview",
+      definitions: [
+        ...builtInTeamDetailTabDefinitions,
+        defineTeamDetailFeatureTab({
+          id: "activity",
+          label: {
+            defaultMessage: "Activity",
+            id: "teams.detail.tabs.activity",
+          },
+          load: async () => ({ default: TestActivityTab }),
+        }),
+      ],
+    });
+
+    renderWithQueryClient(
+      React.createElement(TeamDetailPage, { tabRegistry }),
+    );
+
+    expect(await screen.findByRole("tab", { name: "Activity" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    act(() => {
+      history.push("/scopes/scope-1/teams/t-alpha?tab=not-registered");
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(new URLSearchParams(window.location.search).get("tab")).toBeNull();
+    });
   });
 
   it("hides an unavailable registered tab and canonicalizes its deep link", async () => {

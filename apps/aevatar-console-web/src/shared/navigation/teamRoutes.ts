@@ -13,9 +13,15 @@ type TeamDetailRouteState = {
   readonly scopeId: string;
   readonly serviceId: string;
   readonly tab: TeamDetailTabId;
+  readonly tabWasUnknown: boolean;
   readonly teamId: string;
   readonly testTeam: boolean;
   readonly workflowId: string;
+};
+
+type TeamDetailTabResolution = {
+  readonly tab: TeamDetailTabId;
+  readonly wasUnknown: boolean;
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -33,9 +39,15 @@ function decodePathSegment(value: string): string {
 function parseTeamTab(
   value: string | null | undefined,
   tabs: TeamDetailTabLookup,
-): TeamDetailTabId {
+): TeamDetailTabResolution {
   const requestedTabId = trimOptional(value).toLowerCase();
-  return tabs.has(requestedTabId) ? requestedTabId : tabs.defaultTabId;
+  if (!requestedTabId) {
+    return { tab: tabs.defaultTabId, wasUnknown: false };
+  }
+
+  return tabs.has(requestedTabId)
+    ? { tab: requestedTabId, wasUnknown: false }
+    : { tab: tabs.defaultTabId, wasUnknown: true };
 }
 
 function buildHref(
@@ -314,13 +326,15 @@ export function readTeamDetailRouteState(
       : '';
   const pathTab =
     memberSurfaceFromPath === 'automations' ? 'automations' : undefined;
+  const tabResolution = parseTeamTab(pathTab ?? params.get('tab'), tabs);
 
   return {
     memberId,
     runId: trimOptional(params.get('runId')),
     scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),
-    tab: parseTeamTab(pathTab ?? params.get('tab'), tabs),
+    tab: tabResolution.tab,
+    tabWasUnknown: tabResolution.wasUnknown,
     teamId: teamIdFromPath || trimOptional(params.get('teamId')),
     testTeam: ['1', 'true', 'yes'].includes(
       trimOptional(params.get('testTeam')).toLowerCase(),
