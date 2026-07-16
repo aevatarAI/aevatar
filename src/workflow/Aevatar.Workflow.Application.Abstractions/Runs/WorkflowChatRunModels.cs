@@ -78,6 +78,11 @@ public sealed record WorkflowExternalIngressContext(
     string? AuthScheme = null,
     string? PrincipalSubject = null);
 
+public sealed record WorkflowChatHistoryWriteIntent(
+    string ConversationId,
+    string TurnId,
+    string UserText);
+
 public sealed record WorkflowCompletionNotificationTarget(
     string ActorId,
     string DeliveryId,
@@ -201,6 +206,7 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
+    WorkflowChatHistoryWriteIntent? ChatHistory = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
     [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
@@ -232,6 +238,7 @@ public enum WorkflowChatRunStartError
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
     InvalidFileInput = 12,
+    InvalidChatHistory = 13,
 }
 
 public enum WorkflowProjectionCompletionStatus

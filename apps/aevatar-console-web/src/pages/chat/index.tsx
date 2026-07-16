@@ -649,6 +649,11 @@ const ChatPage: React.FC = () => {
       try {
         const response = await startChatStream(
           {
+            chatHistory: {
+              conversationId: conversation.id,
+              turnId: userMessage.id,
+              userText: trimmedInput,
+            },
             prompt: promptWithHistory,
             scopeId,
             sessionId: conversation.id,
