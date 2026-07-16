@@ -320,8 +320,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         if (requireProvisionedRedirectUri)
             EnsureClientCurrent(snapshot, redirectUri);
-        var requiredResources = RequiredResourceUris();
 
+        // The authorization code already carries the user's finalized Consent selection.
+        // Repeating resource here would narrow that grant to Aevatar's minimum runtime set.
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", "authorization_code"),
@@ -330,8 +331,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             new("redirect_uri", redirectUri),
             new("client_id", snapshot.ClientId),
         };
-        foreach (var resource in requiredResources)
-            form.Add(new KeyValuePair<string, string>("resource", resource));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -345,11 +344,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            if ((int)response.StatusCode == 400 && IsInvalidTarget(body))
-            {
-                throw new NyxIdRequiredServiceAccessException(
-                    requiredResources);
-            }
             _logger.LogError(
                 "NyxID authorization-code exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,

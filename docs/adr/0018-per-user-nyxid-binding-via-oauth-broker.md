@@ -6,6 +6,19 @@ owner: eanzhao
 
 # ADR-0018: Per-User NyxID Binding via OAuth Broker
 
+## Update 2026-07-16 - authorization code 保留最终 Consent service 边界
+
+授权页完成后,authorization code 已经承载用户最终确认的 service 集合.如果 aevatar 在 authorization-code exchange 再发送固定 `resource` 集合,NyxID 会按 RFC 8707 将 access token、refresh grant 与 broker binding 收窄到该集合,丢失用户在 Consent 页面额外选择的 service.这也解释了 refresh token 请求不带 `resource` 时权限恢复为完整 Consent 集合的现象.
+
+当前 contract 调整为:
+
+- Studio 浏览器不再从环境变量维护默认 service,也不在 `/oauth/authorize` 拼装 `resource`.默认预选由 NyxID OAuth Client 的 `default_service_catalog_slugs` 负责,最终授权集合由用户在 Consent 页面确认.
+- channel `/init` 的 `/oauth/authorize` 仍显式请求 `aevatar`、默认 LLM、Ornn 与 Sandbox 四个运行必需 resource,确保 binding 具备最低运行能力;用户在 Consent 页面增加的其他 service 仍属于同一个最终 grant.
+- authorization-code exchange 必须省略 `resource`,直接继承 authorization code 中已经完成的 Consent service 边界,不得由 callback/finalization 再次缩窄.
+- broker 的短期 token-exchange 仍携带四个运行必需 resource,并校验返回 token 的 `resources` claim.这一步只为当前 runtime 调用签发最小权限 token,不改写 binding 的完整 service grant.
+
+本节取代 2026-07-15 中“authorization-code exchange 重复发送必需 resource”以及 2026-07-10 中由 Studio 浏览器维护 resource 列表的决定.
+
 ## Update 2026-07-15 - 完整 service grant 与 binding 原地授权审阅
 
 生产 Lark bot 暴露出一条 resource contract 断裂:sender 在 `/init` 前可以回复;`/init` 后 runtime 改用 sender binding token,调用默认 `chrono-llm-public`、Ornn `ornn-api` 与 Sandbox `chrono-sandbox` route 时被 NyxID 以 `api_key_scope_forbidden` 拒绝.线上 token 的 `allowed_service_ids` 只有 `aevatar`,没有实际被调用的 LLM、Ornn 与 Sandbox service.
