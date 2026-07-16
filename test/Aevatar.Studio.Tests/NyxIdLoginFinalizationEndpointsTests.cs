@@ -12,7 +12,6 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -31,8 +30,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 NyxIdAuthority: "https://id.example.test/",
                 BrokerCapabilityObserved: true,
                 BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch,
-                OauthScope: "openid broker proxy")),
-            BrokerOptions());
+                OauthScope: "openid broker proxy")));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
@@ -40,13 +38,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload.Should().BeEquivalentTo(new NyxIdLoginConfigurationResponse(
             "https://id.example.test",
             "broker-client-1",
-            "openid broker proxy",
-            [
-                "https://api.example.test/api/v1/proxy/s/aevatar",
-                "https://api.example.test/api/v1/proxy/s/chrono-llm-public",
-                "https://api.example.test/api/v1/proxy/s/ornn-api",
-                "https://api.example.test/api/v1/proxy/s/chrono-sandbox",
-            ]));
+            "openid broker proxy"));
     }
 
     [Fact]
@@ -61,8 +53,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 HmacKeyRotatedAt: DateTimeOffset.UnixEpoch,
                 NyxIdAuthority: "https://nyx.example/",
                 BrokerCapabilityObserved: true,
-                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch)),
-            BrokerOptions());
+                BrokerCapabilityObservedAt: DateTimeOffset.UnixEpoch)));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginConfigurationResponse>(result);
 
@@ -74,8 +65,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     public async Task Config_ShouldReturnUnavailable_WhenBrokerOAuthClientIsNotProvisioned()
     {
         var result = await NyxIdLoginFinalizationEndpoints.HandleConfigAsync(
-            new NotProvisionedAevatarOAuthClientProvider(),
-            BrokerOptions());
+            new NotProvisionedAevatarOAuthClientProvider());
 
         var context = NewHttpContext();
         await result.ExecuteAsync(context);
@@ -574,14 +564,6 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 externalSubject,
                 ["https://api.example.test/api/v1/proxy/s/aevatar"]);
     }
-
-    private static IOptions<NyxIdBrokerOptions> BrokerOptions() =>
-        Options.Create(new NyxIdBrokerOptions
-        {
-            ResourceServerBaseUrl = " https://api.example.test/// ",
-            RequiredLlmServiceSlug = "chrono-llm-public",
-            AdditionalRequiredServiceSlugs = ["ornn-api", "chrono-sandbox"],
-        });
 
     private sealed class FailingCapabilityBroker : StubCapabilityBroker
     {

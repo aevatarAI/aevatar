@@ -75,6 +75,10 @@ describe("NyxIDAuthClient", () => {
         clientId: "broker-client-1",
         scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
         redirectUri: "https://backend.example/auth/callback",
+        resources: [
+          "https://nyx.example/api/v1/proxy/s/aevatar",
+          "https://nyx.example/api/v1/proxy/s/legacy-extra",
+        ],
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;

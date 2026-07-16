@@ -83,7 +83,7 @@ wwwroot/assets/console/*                  -> shared assets
 `UseDefaultFiles()` serves `index.html` per directory; `UseStaticFiles()` serves assets. **Risk to verify (impl):** confirm nothing else in `wwwroot` (e.g. the Umi SPA dist or a fallback) shadows these paths; if the Umi app and this suite are deployed to the same host, define a non-colliding `wwwroot` layout (these explicit dir paths take precedence over a default-document fallback, but confirm on the deployed host).
 
 ### 4.3 Shared auth (`auth.js`)
-- Config comes from the Studio backend `/api/auth/nyxid/config`: OAuth authority, client id, scope, and RFC 8707 resources remain backend-owned. Only `NYXID_REDIRECT_URI` is an optional frontend callback override.
+- Config comes from the Studio backend `/api/auth/nyxid/config`: OAuth authority, client id, and scope remain backend-owned. NyxID Consent owns the user's service grant, so this endpoint does not expose RFC 8707 resources and the browser does not send them. Only `NYXID_REDIRECT_URI` is an optional frontend callback override.
 - On load: read session from `localStorage['aevatar-console:nyxid:session']`; if absent/expired and not restorable → `loginWithRedirect()` to NyxID, return via `/auth/callback` (the suite must serve or share a callback handler — reuse the SPA's `/auth/callback` if same host, else add a minimal callback page).
 - `api.js#apiFetch` attaches `Authorization: Bearer <accessToken>`; on 401 → re-auth.
 - Logout clears the shared key (affects SPA too — intended: single session).

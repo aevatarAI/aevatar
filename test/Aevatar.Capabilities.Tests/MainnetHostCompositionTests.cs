@@ -193,6 +193,31 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_WithAdditionalNyxIdServices_ShouldComposeConfiguredMinimumSet()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:AdditionalRequiredServiceSlugs:0"] = "github-api",
+            ["Aevatar:NyxId:AdditionalRequiredServiceSlugs:1"] = "lark-api",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
+
+        brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
+            "github-api",
+            "lark-api",
+            OrnnOptions.DefaultNyxIdSlug,
+            NyxIdToolOptions.DefaultSandboxServiceSlug);
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_WithInvalidAdditionalNyxIdServiceSlug_ShouldFailStartupValidation()
     {
         using var home = new TemporaryAevatarHomeScope();
