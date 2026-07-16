@@ -3778,10 +3778,15 @@ describe("TeamDetailPage", () => {
   });
 
   it("does not turn a cancelled re-authorization form into a create draft", async () => {
+    const route = {
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+      memberId: "member-team-alpha",
+    } as const;
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
+      `/scopes/${route.scopeId}/teams/${route.teamId}/members/${route.memberId}/automations`,
     );
     (teamAutomationApi.listAll as jest.Mock).mockResolvedValue({
       items: [
@@ -3795,7 +3800,7 @@ describe("TeamDetailPage", () => {
       totalCount: 1,
     });
 
-    renderWithQueryClient(React.createElement(TeamDetailPage));
+    renderTeamAutomationsTab(route);
 
     fireEvent.click(await screen.findByRole("button", { name: "重新授权" }));
     const reauthorizeDialog = await screen.findByRole("dialog", {
