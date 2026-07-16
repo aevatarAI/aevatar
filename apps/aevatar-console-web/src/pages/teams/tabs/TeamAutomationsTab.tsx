@@ -75,7 +75,7 @@ export type TeamAutomationMemberRow = {
   readonly workflowSupported: boolean;
 };
 
-type TeamAutomationsTabProps = {
+export type TeamAutomationsTabProps = {
   readonly members?: readonly TeamAutomationMemberRow[];
   readonly scopeId: string;
   readonly serviceIdentitiesLoading?: boolean;

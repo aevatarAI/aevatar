@@ -10,12 +10,48 @@ import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scheduledDispatchApi } from "@/shared/api/scheduledDispatchApi";
 import { teamAutomationApi } from "@/shared/api/teamAutomationApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
+import { createTeamDetailTabRegistry } from "@/shared/teams/teamDetailTabs";
 import { studioApi } from "@/shared/studio/api";
 import {
   createTestQueryClient,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
+import {
+  builtInTeamDetailTabDefinitions,
+  defineTeamDetailFeatureTab,
+} from "./teamDetailTabRegistry";
+
+type TestActivityTabProps = {
+  readonly context: {
+    readonly navigation: {
+      readonly buildTabHref: (tabId: string) => string;
+    };
+    readonly scopeId: string;
+    readonly teamId: string;
+    readonly teamSummary: { readonly displayName: string } | null;
+  };
+};
+
+const TestActivityTab = ({ context }: TestActivityTabProps) => {
+  const testReact = require("react");
+  return testReact.createElement(
+    "div",
+    null,
+    testReact.createElement(
+      "div",
+      { "data-testid": "registered-team-context" },
+      [context.scopeId, context.teamId, context.teamSummary?.displayName]
+        .filter(Boolean)
+        .join("|"),
+    ),
+    testReact.createElement(
+      "a",
+      { href: context.navigation.buildTabHref("members") },
+      "Open members",
+    ),
+  );
+};
 
 async function openTeamTestDialog() {
   fireEvent.click(await screen.findByRole("button", { name: "测试团队" }));
@@ -30,6 +66,69 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
     return React.createElement("div", null, "Graph canvas");
   },
 }));
+
+jest.mock("./teamDetailTabRegistry", () => {
+  const {
+    createTeamDetailTabRegistry: createRegistry,
+    defineTeamDetailTab: defineTab,
+  } = require("@/shared/teams/teamDetailTabs");
+  const teamDetailTabIds = Object.freeze({
+    automations: "automations",
+    members: "members",
+    overview: "overview",
+  });
+  const builtInTeamDetailTabDefinitions = Object.freeze([
+    defineTab({
+      id: teamDetailTabIds.overview,
+      label: {
+        defaultMessage: "Overview",
+        id: "teams.detail.tabs.overview",
+      },
+      load: () => ({
+        // biome-ignore lint/suspicious/noThenProperty: React.lazy needs a synchronous Jest thenable.
+        then: (resolve: (module: { default: unknown }) => void) =>
+          resolve({ default: require("./tabs/TeamOverviewTab").default }),
+      }),
+      selectHostProps: (hostModel: Record<string, unknown>) => hostModel.overview,
+    }),
+    defineTab({
+      id: teamDetailTabIds.automations,
+      label: {
+        defaultMessage: "Automations",
+        id: "teams.detail.tabs.automations",
+      },
+      load: () => ({
+        // biome-ignore lint/suspicious/noThenProperty: React.lazy needs a synchronous Jest thenable.
+        then: (resolve: (module: { default: unknown }) => void) =>
+          resolve({ default: require("./tabs/TeamAutomationsTab").default }),
+      }),
+      selectHostProps: (hostModel: Record<string, unknown>) => hostModel.automations,
+    }),
+    defineTab({
+      id: teamDetailTabIds.members,
+      label: {
+        defaultMessage: "Team members",
+        id: "teams.detail.tabs.members",
+      },
+      load: () => ({
+        // biome-ignore lint/suspicious/noThenProperty: React.lazy needs a synchronous Jest thenable.
+        then: (resolve: (module: { default: unknown }) => void) =>
+          resolve({ default: require("./tabs/TeamMembersTab").default }),
+      }),
+      selectHostProps: (hostModel: Record<string, unknown>) => hostModel.members,
+    }),
+  ]);
+
+  return {
+    builtInTeamDetailTabDefinitions,
+    defineTeamDetailFeatureTab: defineTab,
+    teamDetailTabIds,
+    teamDetailTabRegistry: createRegistry({
+      defaultTabId: teamDetailTabIds.overview,
+      definitions: builtInTeamDetailTabDefinitions,
+    }),
+  };
+});
 
 jest.mock("antd", () => {
   const actual = jest.requireActual("antd");
@@ -1410,17 +1509,101 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "自动化" }));
+    fireEvent.click(screen.getByRole("tab", { name: "自动化" }));
 
     expect(await screen.findByRole("heading", { name: "自动化" })).toBeTruthy();
     expect(screen.getByText("给成员添加周期任务")).toBeTruthy();
     expect(window.location.search).toContain("tab=automations");
 
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
 
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(window.location.search).toContain("tab=members");
     expect(window.location.search).not.toContain("step=bind");
+  });
+
+  it("renders a build-time registered tab from the canonical Team detail route", async () => {
+    setLocale("en-US", false);
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=activity",
+    );
+    const activityDefinition = defineTeamDetailFeatureTab({
+      id: "activity",
+      isAvailable: (context) => context.teamSummary?.lifecycleStage === "active",
+      label: {
+        defaultMessage: "Activity",
+        id: "teams.detail.tabs.activity",
+      },
+      load: async () => ({ default: TestActivityTab }),
+    });
+    const tabRegistry = createTeamDetailTabRegistry({
+      defaultTabId: "overview",
+      definitions: [
+        ...builtInTeamDetailTabDefinitions,
+        activityDefinition,
+      ],
+    });
+
+    renderWithQueryClient(
+      React.createElement(TeamDetailPage, { tabRegistry }),
+    );
+
+    expect(await screen.findByRole("tab", { name: "Activity" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("registered-team-context")).toHaveTextContent(
+        "scope-1|t-alpha|Alpha Support Team",
+      );
+    });
+    expect(screen.getByRole("link", { name: "Open members" })).toHaveAttribute(
+      "href",
+      "/scopes/scope-1/teams/t-alpha?tab=members",
+    );
+    expect(window.location.pathname).toBe("/scopes/scope-1/teams/t-alpha");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe("activity");
+  });
+
+  it("hides an unavailable registered tab and canonicalizes its deep link", async () => {
+    setLocale("en-US", false);
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha?tab=restricted",
+    );
+    const restrictedDefinition = defineTeamDetailFeatureTab({
+      id: "restricted",
+      isAvailable: () => false,
+      label: {
+        defaultMessage: "Restricted",
+        id: "teams.detail.tabs.restricted",
+      },
+      load: async () => ({ default: TestActivityTab }),
+    });
+    const tabRegistry = createTeamDetailTabRegistry({
+      defaultTabId: "overview",
+      definitions: [
+        ...builtInTeamDetailTabDefinitions,
+        restrictedDefinition,
+      ],
+    });
+
+    renderWithQueryClient(
+      React.createElement(TeamDetailPage, { tabRegistry }),
+    );
+
+    expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByRole("tab", { name: "Restricted" })).toBeNull();
+    expect(screen.queryByTestId("registered-team-context")).toBeNull();
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("tab")).toBeNull();
+    });
   });
 
   it("falls legacy event deep links back to the overview tab", async () => {
@@ -1604,7 +1787,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
 
     expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
     expect(
@@ -1837,7 +2020,7 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("调用这支团队时会先路由到这个成员。")).toBeNull();
     expect(screen.getByRole("button", { name: "清除入口成员" })).toBeEnabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
 
     expect(await screen.findByText("入口成员")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "设为入口成员" })).toBeNull();
@@ -1869,7 +2052,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     expect(await screen.findByText("Team Beta Operator")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "设为入口成员" }));
 
@@ -2049,7 +2232,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     expect(await screen.findByText("Unpublished Ready Member")).toBeTruthy();
 
     const setEntryButtons = await screen.findAllByRole("button", {
@@ -2287,7 +2470,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "Workflow Studio" }));
 
     expect(window.location.pathname).toBe(
@@ -2399,7 +2582,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "调用" }));
 
     expect(window.location.pathname).toBe(
@@ -2411,7 +2594,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "发布运行记录" }));
 
     expect(window.location.pathname).toBe(
@@ -2424,7 +2607,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "自动化" }));
 
     expect(window.location.pathname).toBe(
@@ -2443,7 +2626,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     await screen.findByLabelText("调用");
 
     const memberTable = screen.getByTestId("team-members-table");
@@ -3254,7 +3437,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
 
     expect(await screen.findByText("Draft Workflow")).toBeTruthy();
     expect(screen.getByText("尚未绑定")).toBeTruthy();
@@ -3295,7 +3478,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
 
     expect(await screen.findByText("Agent Alpha")).toBeTruthy();
     expect(screen.getByText("已绑定服务")).toBeTruthy();
@@ -3366,7 +3549,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "创建工作流成员" }));
 
     expect(window.location.pathname).toBe(
@@ -3384,7 +3567,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByRole("button", { name: "编辑团队" });
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("tab", { name: "团队成员" }));
     fireEvent.click(await screen.findByRole("link", { name: "创建第一个工作流成员" }));
 
     expect(window.location.pathname).toBe(

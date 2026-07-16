@@ -10,6 +10,11 @@ import {
   readTeamDetailRouteState,
 } from "./teamRoutes";
 
+const teamDetailTabs = {
+  defaultTabId: "overview",
+  has: (tabId: string) => ["activity", "automations", "members", "overview"].includes(tabId),
+} as const;
+
 describe("teamRoutes", () => {
   it("builds a canonical team detail href and trims empty values", () => {
     expect(
@@ -26,6 +31,20 @@ describe("teamRoutes", () => {
     ).toBe(
       "/scopes/scope-alpha/teams/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1&testTeam=1",
     );
+  });
+
+  it("builds and reads a registered Team detail tab", () => {
+    expect(
+      buildTeamDetailHref({
+        scopeId: "scope-alpha",
+        tab: "activity",
+        teamId: "t-alpha",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha?tab=activity");
+    expect(
+      readTeamDetailRouteState(teamDetailTabs, "?tab=activity", "/scopes/scope-alpha/teams/t-alpha")
+        .tab,
+    ).toBe("activity");
   });
 
   it("falls back to the scope resolver when the scope is empty", () => {
@@ -153,9 +172,7 @@ describe("teamRoutes", () => {
         scopeId: "scope-alpha",
         teamId: "t-alpha",
       }),
-    ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?scheduleId=schedule-alpha",
-    );
+    ).toBe("/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?scheduleId=schedule-alpha");
 
     expect(
       buildTeamMemberPublishedRunsHref({
@@ -227,6 +244,7 @@ describe("teamRoutes", () => {
   it("reads the canonical team detail route state from path and query", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?memberId=member-alpha&teamId=stale-team&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
         "/scopes/scope-alpha/teams/t-alpha",
       ),
@@ -245,6 +263,7 @@ describe("teamRoutes", () => {
   it("reads scope, team, member, and draft workflow identities from scoped member workflow routes", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?workflowId=wf-alpha",
         "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow",
       ),
@@ -259,6 +278,7 @@ describe("teamRoutes", () => {
   it("reads member-owned automation routes from the canonical member path", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?tab=members",
         "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/automations",
       ),
@@ -273,6 +293,7 @@ describe("teamRoutes", () => {
   it("does not read removed legacy Team member workflow routes", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?workflowId=wf-alpha",
         "/teams/scope-alpha/t-alpha/members/member-alpha/workflow",
       ),
@@ -287,6 +308,7 @@ describe("teamRoutes", () => {
   it("reads Team Test auto-open intent from the team detail query", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?memberId=member-alpha&testTeam=1",
         "/scopes/scope-alpha/teams/t-alpha",
       ),
@@ -300,10 +322,7 @@ describe("teamRoutes", () => {
 
   it("does not read removed legacy query team links", () => {
     expect(
-      readTeamDetailRouteState(
-        "?teamId=t-alpha&tab=members",
-        "/teams/scope-alpha",
-      ),
+      readTeamDetailRouteState(teamDetailTabs, "?teamId=t-alpha&tab=members", "/teams/scope-alpha"),
     ).toMatchObject({
       scopeId: "",
       tab: "members",
@@ -314,6 +333,7 @@ describe("teamRoutes", () => {
   it("defaults canonical team routes to the overview tab", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?workflowId=wf-2&tab=not-real",
         "/scopes/scope-query/teams",
       ),
@@ -332,6 +352,7 @@ describe("teamRoutes", () => {
   it("falls back to the query scope and overview tab when the path is malformed", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?scopeId=scope-query&workflowId=wf-2&tab=not-real",
         "/runtime/runs",
       ),

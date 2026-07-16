@@ -1,9 +1,8 @@
 import { buildStudioRoute } from '@/shared/studio/navigation';
-
-type TeamDetailTab =
-  | 'overview'
-  | 'automations'
-  | 'members';
+import type {
+  TeamDetailTabId,
+  TeamDetailTabLookup,
+} from '@/shared/teams/teamDetailTabs';
 
 type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
 
@@ -13,7 +12,7 @@ type TeamDetailRouteState = {
   readonly runId: string;
   readonly scopeId: string;
   readonly serviceId: string;
-  readonly tab: TeamDetailTab;
+  readonly tab: TeamDetailTabId;
   readonly teamId: string;
   readonly testTeam: boolean;
   readonly workflowId: string;
@@ -33,16 +32,10 @@ function decodePathSegment(value: string): string {
 
 function parseTeamTab(
   value: string | null | undefined,
-  fallback: TeamDetailTab = 'overview',
-): TeamDetailTab {
-  switch (trimOptional(value).toLowerCase()) {
-    case 'overview':
-    case 'automations':
-    case 'members':
-      return trimOptional(value).toLowerCase() as TeamDetailTab;
-    default:
-      return fallback;
-  }
+  tabs: TeamDetailTabLookup,
+): TeamDetailTabId {
+  const requestedTabId = trimOptional(value).toLowerCase();
+  return tabs.has(requestedTabId) ? requestedTabId : tabs.defaultTabId;
 }
 
 function buildHref(
@@ -87,7 +80,7 @@ export function buildTeamDetailHref(options: {
   memberId?: string;
   scopeId: string;
   teamId?: string;
-  tab?: TeamDetailTab;
+  tab?: TeamDetailTabId;
   serviceId?: string;
   runId?: string;
   testTeam?: boolean;
@@ -283,6 +276,7 @@ export function buildTeamMemberAutomationsHref(options: {
 }
 
 export function readTeamDetailRouteState(
+  tabs: TeamDetailTabLookup,
   search = typeof window === 'undefined' ? '' : window.location.search,
   pathname = typeof window === 'undefined' ? '' : window.location.pathname,
 ): TeamDetailRouteState {
@@ -310,7 +304,6 @@ export function readTeamDetailRouteState(
     membersIndex >= 0 && pathnameSegments[membersIndex + 1]
       ? decodePathSegment(pathnameSegments[membersIndex + 1])
       : '';
-  const defaultTab: TeamDetailTab = 'overview';
   const memberId =
     memberIdFromPath === 'new'
       ? ''
@@ -327,11 +320,14 @@ export function readTeamDetailRouteState(
     runId: trimOptional(params.get('runId')),
     scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),
-    tab: parseTeamTab(pathTab ?? params.get('tab'), defaultTab),
+    tab: parseTeamTab(pathTab ?? params.get('tab'), tabs),
     teamId: teamIdFromPath || trimOptional(params.get('teamId')),
-    testTeam: ['1', 'true', 'yes'].includes(trimOptional(params.get('testTeam')).toLowerCase()),
+    testTeam: ['1', 'true', 'yes'].includes(
+      trimOptional(params.get('testTeam')).toLowerCase(),
+    ),
     workflowId: trimOptional(params.get('workflowId')),
   };
 }
 
-export type { TeamDetailRouteState, TeamDetailTab };
+export type { TeamDetailRouteState };
+export type { TeamDetailTabId } from '@/shared/teams/teamDetailTabs';
