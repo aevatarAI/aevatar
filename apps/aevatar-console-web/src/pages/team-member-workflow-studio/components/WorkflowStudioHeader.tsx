@@ -4,9 +4,7 @@ import {
   CloudUploadOutlined,
   CodeOutlined,
   DeleteOutlined,
-  DownOutlined,
   EditOutlined,
-  FileTextOutlined,
   HistoryOutlined,
   MoreOutlined,
   PlayCircleOutlined,
@@ -46,7 +44,7 @@ type WorkflowStudioHeaderProps = {
   readonly showRefreshPublishStatus: boolean;
   readonly canOpenDraftRunPanel: boolean;
   readonly canSave: boolean;
-  readonly canViewYaml: boolean;
+  readonly canEditYaml: boolean;
   readonly dirty: boolean;
   readonly currentDraftRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
@@ -58,14 +56,12 @@ type WorkflowStudioHeaderProps = {
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onOpenDraftRunPanel: () => void;
-  readonly onOpenPasteYaml: () => void;
-  readonly onViewYaml: () => void;
+  readonly onEditYaml: () => void;
   readonly onNavigateBack: () => void;
   readonly onNavigateToTeam: () => void;
   readonly onNavigateToTeams: () => void;
   readonly onSave: () => void;
   readonly onTitleChange: (title: string) => void;
-  readonly pasteYamlPending: boolean;
   readonly savePending: boolean;
   readonly savePlaceholderReason?: string;
   readonly selectedEdgeId: string;
@@ -589,7 +585,7 @@ type HeaderActionsProps = {
   readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
   readonly canSave: boolean;
-  readonly canViewYaml: boolean;
+  readonly canEditYaml: boolean;
   readonly invokeHref: string;
   readonly invokePlaceholderReason?: string;
   readonly onAddNode: () => void;
@@ -599,12 +595,10 @@ type HeaderActionsProps = {
   readonly onOpenDraftRunPanel: () => void;
   readonly onOpenInvoke: () => void;
   readonly onOpenPublishedRuns: () => void;
-  readonly onPasteYamlClick: () => void;
+  readonly onEditYaml: () => void;
   readonly onPublishMember: () => void;
   readonly onRefreshPublishStatus: () => void;
   readonly onSave: () => void;
-  readonly onViewYaml: () => void;
-  readonly pasteYamlPending: boolean;
   readonly publishDisabled: boolean;
   readonly publishPending: boolean;
   readonly publishPlaceholderReason?: string;
@@ -628,7 +622,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   canOpenInvoke,
   canOpenPublishedRuns,
   canSave,
-  canViewYaml,
+  canEditYaml,
   invokeHref,
   invokePlaceholderReason,
   onAddNode,
@@ -636,14 +630,12 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   onDeleteNode,
   onOpenAutomations,
   onOpenDraftRunPanel,
+  onEditYaml,
   onOpenInvoke,
   onOpenPublishedRuns,
-  onPasteYamlClick,
   onPublishMember,
   onRefreshPublishStatus,
   onSave,
-  onViewYaml,
-  pasteYamlPending,
   publishDisabled,
   publishPending,
   publishPlaceholderReason,
@@ -669,26 +661,6 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         'teamMemberWorkflowStudio.header.deleteSelectedNode',
         'Delete selected node',
       );
-  const yamlMenuItems: WorkflowHeaderMenuItem[] = [
-    {
-      disabled: !canViewYaml,
-      icon: <CodeOutlined />,
-      key: 'view-yaml',
-      label: t('teamMemberWorkflowStudio.header.viewYaml', 'View YAML'),
-      title: canViewYaml
-        ? undefined
-        : t(
-            'teamMemberWorkflowStudio.header.viewYamlUnavailable',
-            'Load the workflow draft before viewing YAML.',
-          ),
-    },
-    {
-      disabled: pasteYamlPending,
-      icon: <FileTextOutlined />,
-      key: 'paste-yaml',
-      label: t('teamMemberWorkflowStudio.header.pasteYaml', 'Paste YAML'),
-    },
-  ];
   const moreMenuItems: WorkflowHeaderMenuItem[] = [
     hasSelectedConnection || hasSelectedNode
       ? {
@@ -874,40 +846,29 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
           </Button>
         )
       ) : null}
-      <Dropdown
-        menu={{
-          items: yamlMenuItems,
-          onClick: ({ key }) => {
-            if (key === 'view-yaml' && canViewYaml) {
-              onViewYaml();
-              return;
-            }
-
-            if (key === 'paste-yaml' && !pasteYamlPending) {
-              onPasteYamlClick();
-            }
-          },
-        }}
-        placement="bottomRight"
-        trigger={['click']}
+      <Button
+        aria-label={t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
+        className="workflow-studio-header__compact-button"
+        disabled={!canEditYaml}
+        icon={<CodeOutlined />}
+        onClick={onEditYaml}
+        size="small"
+        title={
+          canEditYaml
+            ? t(
+                'teamMemberWorkflowStudio.header.editYamlTitle',
+                'Edit workflow YAML',
+              )
+            : t(
+                'teamMemberWorkflowStudio.header.editYamlUnavailable',
+                'Load the workflow draft before editing YAML.',
+              )
+        }
       >
-        <Button
-          aria-label={t('teamMemberWorkflowStudio.header.yamlActions', 'YAML')}
-          className="workflow-studio-header__compact-button"
-          icon={<FileTextOutlined />}
-          loading={pasteYamlPending}
-          size="small"
-          title={t(
-            'teamMemberWorkflowStudio.header.yamlActionsTitle',
-            'View or import workflow YAML',
-          )}
-        >
-          <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-            {t('teamMemberWorkflowStudio.header.yaml', 'YAML')}
-          </span>
-          <DownOutlined style={{ fontSize: 10 }} />
-        </Button>
-      </Dropdown>
+        <span className="workflow-studio-header__action-label">
+          {t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
+        </span>
+      </Button>
       {moreMenuHasActions ? (
         <Dropdown
           menu={{
@@ -982,7 +943,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   showRefreshPublishStatus,
   canOpenDraftRunPanel,
   canSave,
-  canViewYaml,
+  canEditYaml,
   dirty,
   currentDraftRunPlaceholderReason,
   onPublishMember,
@@ -994,14 +955,12 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   onDeleteConnection,
   onDeleteNode,
   onOpenDraftRunPanel,
-  onOpenPasteYaml,
-  onViewYaml,
+  onEditYaml,
   onNavigateBack,
   onNavigateToTeam,
   onNavigateToTeams,
   onSave,
   onTitleChange,
-  pasteYamlPending,
   savePending,
   savePlaceholderReason,
   selectedEdgeId,
@@ -1062,7 +1021,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           canOpenInvoke={canOpenInvoke}
           canOpenPublishedRuns={canOpenPublishedRuns}
           canSave={canSave}
-          canViewYaml={canViewYaml}
+          canEditYaml={canEditYaml}
           invokeHref={invokeHref}
           invokePlaceholderReason={invokePlaceholderReason}
           onAddNode={onAddNode}
@@ -1070,14 +1029,12 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           onDeleteNode={onDeleteNode}
           onOpenAutomations={onOpenAutomations}
           onOpenDraftRunPanel={onOpenDraftRunPanel}
+          onEditYaml={onEditYaml}
           onOpenInvoke={onOpenInvoke}
           onOpenPublishedRuns={onOpenPublishedRuns}
-          onPasteYamlClick={onOpenPasteYaml}
           onPublishMember={onPublishMember}
           onRefreshPublishStatus={onRefreshPublishStatus}
           onSave={onSave}
-          onViewYaml={onViewYaml}
-          pasteYamlPending={pasteYamlPending}
           publishDisabled={publishDisabled}
           publishPending={publishPending}
           publishPlaceholderReason={publishPlaceholderReason}
