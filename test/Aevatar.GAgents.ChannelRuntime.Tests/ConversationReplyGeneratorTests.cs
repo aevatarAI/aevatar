@@ -20,6 +20,7 @@ using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;

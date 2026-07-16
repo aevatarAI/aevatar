@@ -58,6 +58,16 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         return ToWorkflowMutationReceipt(receipt);
     }
 
+    public async Task<WorkflowScheduleMutationReceipt> DeleteAsync(
+        string scheduleId,
+        string reason,
+        CancellationToken ct = default)
+    {
+        await EnsureWorkflowScheduleAsync(scheduleId, ct);
+        var receipt = await _scheduledDispatches.DeleteAsync(scheduleId, reason, ct);
+        return ToWorkflowMutationReceipt(receipt);
+    }
+
     public async Task<WorkflowScheduleDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default)
