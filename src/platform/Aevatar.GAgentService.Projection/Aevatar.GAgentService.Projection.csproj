@@ -28,5 +28,8 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="service_projection_read_models.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos;..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions;..\..\Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="Authorization/nyxid_authorization_catalog_read_model.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
   </ItemGroup>
 </Project>

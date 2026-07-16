@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -403,6 +404,33 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-member-1");
         root.GetProperty("published_service_id").GetString().Should().Be("published-member-1");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenPreflightFails_ShouldReturnFailureAndNotCreateSchedule()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+                "nyxid_catalog_snapshot_stale"),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.SnapshotStale));
+        ErrorMessage(output).Should().Be("nyxid_catalog_snapshot_stale");
+        schedulePort.CreateCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -811,12 +839,86 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
     private sealed class RecordingMemberWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
     {
+        private const string PermissionDigest = "permission-digest-alpha";
         public StudioMemberWorkflowScheduleRequest? LastRequest { get; private set; }
+        public int CreateCallCount { get; private set; }
+        public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
+            new(
+                true,
+                new ScheduledInvocationAuthorizationPlan { PermissionDigest = PermissionDigest },
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty);
 
-        public Task<StudioMemberWorkflowScheduleResult> EnsureAsync(
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
             StudioMemberWorkflowScheduleRequest request,
             CancellationToken ct = default)
         {
+            LastRequest = request;
+            return Task.FromResult(PreflightResult);
+        }
+
+        public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
+        public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
+        public Task<StudioMemberAutomationListResponse> ListAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationView?> GetAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            string scheduleId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
+            StudioMemberAutomationUpdateCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> PauseAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> ResumeAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> RunNowAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> DeleteAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        private Task<StudioMemberWorkflowScheduleResult> CompleteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest)
+        {
+            CreateCallCount++;
+            if (!string.Equals(confirmedPermissionDigest, PermissionDigest, StringComparison.Ordinal))
+                throw new InvalidOperationException("authorization_plan_changed");
             LastRequest = request;
             return Task.FromResult(new StudioMemberWorkflowScheduleResult(
                 Success: true,

@@ -754,11 +754,17 @@ const zhCNMessages = {
   'teams.automations.error.title': '自动化加载失败',
   'teams.automations.form.agentKeyConsent':
     '我同意 Aevatar 为此定时任务创建专用的 Agent Key。',
+  'teams.automations.form.agentKeyDedicated': '仅供此定时任务使用',
+  'teams.automations.form.agentKeyDeleteRevokes': '删除任务时撤销 Agent Key',
   'teams.automations.form.agentKeyExpiry': '到期时间：{time}',
   'teams.automations.form.agentKeyManaged': '由 Aevatar 托管',
   'teams.automations.form.agentKeyMode': '凭据模式：{mode}',
   'teams.automations.form.agentKeyNoRawKey':
     '浏览器不会接收 Agent Key 原文',
+  'teams.automations.form.agentKeyNodePermissionSet':
+    '节点 ID 构成精确权限集合',
+  'teams.automations.form.agentKeyPausePreserves':
+    '暂停和恢复不会撤销 Agent Key',
   'teams.automations.form.agentKeyPlan':
     '自动化专用 Agent Key',
   'teams.automations.form.backendRequired': '暂不可创建',
@@ -813,13 +819,16 @@ const zhCNMessages = {
   'teams.automations.form.reviewPlaceholder':
     '目标和运行节奏准备好后即可审查权限。',
   'teams.automations.form.previewOnlyNotice':
-    '当前仅供预览。在接入专用后端契约前，不会创建自动化或 Agent Key。',
+    '只有确认本次权限审查后，才会创建自动化和 Agent Key。',
+  'teams.automations.form.authorizeAndCreate': '授权并创建自动化',
+  'teams.automations.form.reauthorize': '授权替换凭据',
+  'teams.automations.form.reauthorizeTitle': '重新授权自动化',
   'teams.automations.form.save': '保存修改',
   'teams.automations.form.scheduleReadsAs': '计划解读为',
   'teams.automations.form.section.permissionReview':
     '4. 审查 Agent Key 授权',
   'teams.automations.form.section.permissionReviewHint':
-    '浏览器登录授权仅用于确认本次同意；自动化将使用由 Aevatar 托管的专用 Agent Key。',
+    '确认凭据配置前，请先审查后端返回的授权事实。',
   'teams.automations.form.section.schedule': '3. 运行节奏',
   'teams.automations.form.section.scheduleHint':
     '选择常用节奏，或切换到自定义 Cron 配置高级计划。',
@@ -838,24 +847,37 @@ const zhCNMessages = {
   'teams.automations.member.unknown': '未知成员',
   'teams.automations.member.workflowOnly':
     '只有 Workflow 成员可以添加周期任务。',
+  'teams.automations.member.chooseTitle': '选择成员',
+  'teams.automations.member.chooseDescription':
+    '打开某个成员的自动化页面，查看或修改该成员的周期任务。',
+  'teams.automations.actions.reauthorize': '重新授权',
+  'teams.automations.messages.createAccepted':
+    '自动化创建已受理，正在等待已提交状态。',
   'teams.automations.messages.createFailed': '自动化未创建：{message}',
   'teams.automations.messages.createSuccess': '自动化已创建。',
   'teams.automations.messages.cronRequired': '请先填写 Cron 表达式。',
-  'teams.automations.messages.deleteSuccess': '自动化已删除。',
-  'teams.automations.messages.disableSuccess': '自动化已暂停。',
-  'teams.automations.messages.enableSuccess': '自动化已恢复。',
+  'teams.automations.messages.deleteSuccess': '删除已受理，正在等待凭据撤销。',
+  'teams.automations.messages.deleteFailed': '删除未受理：{message}',
+  'teams.automations.messages.pauseFailed': '自动化未暂停：{message}',
+  'teams.automations.messages.resumeFailed': '自动化未恢复：{message}',
+  'teams.automations.messages.reauthorizeAccepted':
+    '重新授权已受理，正在等待已提交状态。',
+  'teams.automations.messages.reauthorizeFailed':
+    '凭据未被替换：{message}',
+  'teams.automations.messages.disableSuccess': '暂停已受理，正在等待已提交状态。',
+  'teams.automations.messages.enableSuccess': '恢复已受理，正在等待已提交状态。',
   'teams.automations.messages.previewFailed': '预览失败：{message}',
   'teams.automations.messages.promptTooLong':
     '周期 Prompt 最多 {maxLength} 个字符。',
   'teams.automations.messages.reviewFailed':
     '无法准备权限审查：{message}',
   'teams.automations.messages.runNowFailed': '立即运行请求失败：{message}',
-  'teams.automations.messages.runNowSuccess': '已请求立即运行。',
+  'teams.automations.messages.runNowSuccess': '立即运行请求已受理。',
   'teams.automations.messages.serviceIdentityLoading': '服务身份仍在加载中。',
   'teams.automations.messages.serviceIdentityMissing':
     '所选成员还没有服务身份。',
   'teams.automations.messages.updateFailed': '自动化未更新：{message}',
-  'teams.automations.messages.updateSuccess': '自动化已更新。',
+  'teams.automations.messages.updateSuccess': '更新已受理，正在等待已提交状态。',
   'teams.automations.noPublishedMember.description':
     '自动化需要成员拥有已发布的服务身份后才能运行。',
   'teams.automations.noPublishedMember.title': '先发布一个成员',
@@ -882,7 +904,10 @@ const zhCNMessages = {
   'teams.automations.row.target': 'Workflow chat · {endpoint}',
   'teams.automations.status.active': '运行中',
   'teams.automations.status.error': '错误',
+  'teams.automations.status.needsAuthorization': '需要授权',
+  'teams.automations.status.pending': '授权处理中',
   'teams.automations.status.paused': '已暂停',
+  'teams.automations.status.revocationPending': '凭据撤销中',
   'teams.automations.status.runRequested': '已触发',
   'teams.automations.summary.active': '运行中',
   'teams.automations.summary.needsAttention': '需要关注',

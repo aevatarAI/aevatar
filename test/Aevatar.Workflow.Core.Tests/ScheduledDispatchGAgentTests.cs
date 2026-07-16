@@ -22,6 +22,7 @@ public sealed class ScheduledDispatchGAgentTests
 {
     private const string ScheduleActorId = "scheduled-dispatch:schedule-1";
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
+    private const string ManualFireIdempotencyKey = "manual-fire";
 
     [Fact]
     public async Task HandleFireAsync_ShouldSuppressDuplicateDispatchAfterTerminalRecordIsDurable()
@@ -37,15 +38,17 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         dispatch.Dispatches.Should().ContainSingle();
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         agent.State.FireRecords.Should().ContainKey(idempotencyKey);
         agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
     }
@@ -67,6 +70,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         await canceled.Should().ThrowAsync<OperationCanceledException>();
@@ -75,9 +79,10 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         dispatch.Dispatches.Should().HaveCount(2);
         agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
         agent.State.FireCount.Should().Be(1);
@@ -273,6 +278,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         await agent.HandleEnsureAsync(CreateEnsureCommand(displayName: "Updated schedule", enabled: false));
@@ -280,10 +286,11 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         dispatch.Dispatches.Should().ContainSingle();
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         agent.State.FireRecords.Should().ContainKey(idempotencyKey);
         agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Dispatched);
     }
@@ -596,6 +603,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 5, 29, 9, 0, 0, TimeSpan.Zero)),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         await enable.Should().ThrowAsync<InvalidOperationException>()
@@ -802,9 +810,10 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(firstFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", firstFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         dispatch.Dispatches.Should().BeEmpty();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
         var serviceRequest = serviceInvocationDispatch.Requests.Single();
@@ -902,9 +911,10 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         var chatRequest = dispatch.Dispatches.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Metadata["workflow.schedule_id"].Should().Be("schedule-1");
         chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
@@ -935,13 +945,14 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         dispatch.Dispatches.Should().ContainSingle();
         var dispatched = dispatch.Dispatches[0];
         dispatched.ActorId.Should().Be("generic-agent-1");
         dispatched.Envelope.Route.GetTargetActorId().Should().Be("generic-agent-1");
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         dispatched.Envelope.Id.Should().Be(idempotencyKey);
         var chatRequest = dispatched.Envelope.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Metadata.Should().NotContainKey(ScheduledDispatchMetadataKeys.ScheduleId);
@@ -970,13 +981,14 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         dispatch.Dispatches.Should().ContainSingle();
         var dispatched = dispatch.Dispatches.Single();
         dispatched.ActorId.Should().Be("target-actor-1");
         dispatched.Envelope.Payload.Unpack<Empty>().Should().NotBeNull();
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         dispatched.Envelope.Propagation!.Baggage[ScheduledDispatchMetadataKeys.ScheduleId].Should().Be("schedule-1");
         dispatched.Envelope.Propagation.Baggage[ScheduledDispatchMetadataKeys.FireAtUtc]
             .Should().Be(scheduledFireAt.ToUniversalTime().ToString("O"));
@@ -1064,13 +1076,14 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         dispatch.Dispatches.Should().BeEmpty();
         var request = serviceInvocationDispatch.Requests.Should().ContainSingle().Which;
         request.Identity.ServiceId.Should().Be("configured-service");
         request.EndpointId.Should().Be("chat");
-        request.CommandId.Should().Be(ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt));
+        request.CommandId.Should().Be(ManualFireIdempotencyKey);
         request.CorrelationId.Should().Be(request.CommandId);
         var chatRequest = request.Payload.Unpack<ChatRequestEvent>();
         chatRequest.Prompt.Should().Be("configured");
@@ -1132,6 +1145,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
@@ -1185,6 +1199,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         var headers = serviceInvocationDispatch.Headers.Should().ContainSingle().Which;
@@ -1240,6 +1255,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
@@ -1306,6 +1322,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
@@ -1439,6 +1456,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         agent.State.Target!.ServiceInvocation!.Auth.Should().NotBeNull();
@@ -1497,6 +1515,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         serviceInvocationDispatch.Auths.Should().ContainSingle()
@@ -1561,6 +1580,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         var auth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
@@ -1583,6 +1603,104 @@ public sealed class ScheduledDispatchGAgentTests
         serviceInvocationDispatch.Requests.Should().ContainSingle();
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleFireAsync_WithAuthorizationFact_ShouldPreserveEveryPermissionField()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var serviceInvocationDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch, serviceInvocationDispatch: serviceInvocationDispatch);
+        await agent.ActivateAsync();
+        var observedAt = new DateTimeOffset(2026, 7, 15, 7, 0, 0, TimeSpan.Zero);
+        var freshUntil = observedAt.AddHours(2);
+        var expiresAt = observedAt.AddHours(1);
+        var authorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            PermissionDigest = "digest-alpha",
+            PolicyVersion = "policy-v1",
+            Owner = new ScheduledInvocationAuthorizationOwnerState
+            {
+                Authority = "nyxid",
+                OwnerKind = "personal",
+                OwnerSubject = "owner-alpha",
+            },
+            Scopes = "proxy chat",
+            ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
+            ServiceGrantsNotRequired = false,
+            Disclosure = new ScheduledInvocationAuthorizationDisclosureState
+            {
+                DedicatedToSchedule = true,
+                SecretManagedByAevatar = true,
+                BrowserReceivesRawKey = false,
+                DeleteRevokesCredential = true,
+                PauseResumeRevokesCredential = true,
+            },
+            Authority = new ScheduledInvocationAuthorizationAuthorityState
+            {
+                MemberStateVersion = 11,
+                WorkflowStateVersion = 12,
+                ConnectorStateVersion = 13,
+                OwnerLlmStateVersion = 14,
+                CatalogStateVersion = 15,
+                CatalogObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+                CatalogFreshUntil = Timestamp.FromDateTimeOffset(freshUntil),
+                CatalogExternalRevision = "catalog-rev-alpha",
+                CatalogContentDigest = "catalog-digest-alpha",
+            },
+        };
+        authorizationFact.ServiceGrants.Add(new ScheduledInvocationAuthorizationServiceGrantState
+        {
+            ServiceId = "svc-alpha",
+            NodeIds = { "node-alpha", "node-beta" },
+            NodeGrantsNotRequired = false,
+        });
+        var target = new ScheduledDispatchTargetState
+        {
+            Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+            ServiceInvocation = new ScheduledServiceInvocationTargetState
+            {
+                Identity = new ServiceIdentity { ServiceId = "svc-alpha" },
+                EndpointId = "chat",
+                Payload = Any.Pack(new ChatRequestEvent { Prompt = "configured" }),
+                AuthorizationFact = authorizationFact,
+            },
+        };
+
+        await agent.HandleConfigureAsync(CreateConfigureCommand(enabled: false, target: target));
+
+        agent.State.Target!.ServiceInvocation!.AuthorizationFact.Should().BeEquivalentTo(authorizationFact);
+
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(5)),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+        });
+
+        var dispatchedFact = serviceInvocationDispatch.AuthorizationFacts.Should().ContainSingle().Which;
+        dispatchedFact.Should().NotBeNull();
+        dispatchedFact!.PermissionDigest.Should().Be("digest-alpha");
+        dispatchedFact.PolicyVersion.Should().Be("policy-v1");
+        dispatchedFact.Owner.Should().Be(new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "owner-alpha"));
+        dispatchedFact.ServiceGrants.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha", "node-beta"], false));
+        dispatchedFact.Scopes.Should().Be("proxy chat");
+        dispatchedFact.ExpiresAt.Should().Be(expiresAt);
+        dispatchedFact.ServiceGrantsNotRequired.Should().BeFalse();
+        dispatchedFact.Disclosure.Should().Be(
+            new ScheduledInvocationAuthorizationDisclosure(true, true, false, true, true));
+        dispatchedFact.Authority.Should().Be(new ScheduledInvocationAuthorizationAuthority(
+            11,
+            12,
+            13,
+            14,
+            15,
+            observedAt,
+            freshUntil,
+            "catalog-rev-alpha",
+            "catalog-digest-alpha"));
     }
 
     [Fact]
@@ -1626,6 +1744,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         serviceInvocationDispatch.Auths.Should().BeEmpty();
@@ -1681,6 +1800,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         var runtimeAuth = serviceInvocationDispatch.Auths.Should().ContainSingle().Which;
@@ -1739,11 +1859,12 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         serviceInvocationDispatch.Auths.Should().ContainSingle();
         serviceInvocationDispatch.Requests.Should().ContainSingle();
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(1);
         agent.State.LastError.Should().Be("exchange failed");
@@ -1792,11 +1913,13 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         serviceInvocationDispatch.Auths.Should().ContainSingle();
@@ -1825,9 +1948,10 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         dispatch.Dispatches.Should().ContainSingle();
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(1);
@@ -1853,9 +1977,10 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         dispatch.Dispatches.Should().ContainSingle();
         agent.State.FireCount.Should().Be(1);
         agent.State.FailureCount.Should().Be(1);
@@ -1882,10 +2007,11 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
             Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
         });
 
         await act.Should().ThrowAsync<OperationCanceledException>();
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
+        var idempotencyKey = ManualFireIdempotencyKey;
         agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Started);
         agent.State.FireCount.Should().Be(0);
         agent.State.FailureCount.Should().Be(0);
@@ -2245,6 +2371,7 @@ public sealed class ScheduledDispatchGAgentTests
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(occurrence),
             Manual = true,
+            IdempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", occurrence),
         });
         var firstRequest = scheduler.TimeoutRequests[0];
         await agent.HandleEventAsync(CreateFiredCallbackEnvelope(
@@ -2286,6 +2413,269 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.PendingNextFireAt.Should().BeNull();
         agent.State.OverdueFireDetectedCount.Should().Be(0);
         return armedFireAt;
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialOperation_ShouldReplayExactlyAndRejectConflictingDigest()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateTeamBeginCommand();
+
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command);
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command.Clone());
+
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => string.Equals(
+                x.EventType,
+                TeamAutomationCredentialOperationBeganEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Should().Be(1);
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.ProvisioningPending);
+
+        var conflict = command.Clone();
+        conflict.PermissionDigest = "digest-beta";
+        var act = () => agent.HandleBeginTeamAutomationCredentialOperationAsync(conflict);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_operation_conflict");
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialOperation_ShouldCommitConfigurationOnlyWithActivation()
+    {
+        var eventStore = new TestEventStore();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateAgent(eventStore, dispatch);
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        var scheduledFireAt = DateTimeOffset.UtcNow.AddMinutes(1);
+
+        var beforeActivation = () => agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+            TeamAutomationOwner = owner.Clone(),
+        });
+        await beforeActivation.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not configured*");
+
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+            });
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+            TeamAutomationOwner = owner.Clone(),
+        });
+
+        agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Active);
+        agent.State.TeamCredentialGeneration.Should().Be(1);
+        dispatch.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_ShouldCommitPendingRevocationBeforeTombstone()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+            });
+
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
+        {
+            Reason = "test",
+            TeamAutomationOwner = owner.Clone(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+        });
+
+        agent.State.Deleted.Should().BeTrue();
+        agent.State.PendingRevocationTeamCredential!.ApiKeyId.Should().Be("key-alpha");
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.RevocationPending);
+        var eventTypes = eventStore.GetEvents(ScheduleActorId).Select(x => x.EventType).ToArray();
+        Array.IndexOf(eventTypes, TeamAutomationDeletionRequestedEvent.Descriptor.FullName).Should()
+            .BeLessThan(Array.IndexOf(eventTypes, ScheduledDispatchDeletedEvent.Descriptor.FullName));
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_ExactReplayShouldNotOwnTheEffectTwice()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-alpha");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, credential)),
+            });
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "test",
+            TeamAutomationOwner = owner.Clone(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+        };
+
+        await agent.HandleDeleteAsync(delete);
+        await agent.HandleDeleteAsync(delete.Clone());
+
+        var observations = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => string.Equals(
+                x.EventType,
+                TeamAutomationOperationObservedEvent.Descriptor.FullName,
+                StringComparison.Ordinal))
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Where(x => x.Stage == TeamAutomationOperationObservationStages.Delete)
+            .ToArray();
+        observations.Should().HaveCount(2);
+        observations[0].OwnsEffectAttempt.Should().BeTrue();
+        observations[1].OwnsEffectAttempt.Should().BeFalse();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType == TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TeamAutomationReauthorize_ShouldKeepUsingActiveCredentialUntilReplacementActivates()
+    {
+        var eventStore = new TestEventStore();
+        var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            serviceInvocationDispatch: serviceDispatch);
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var activeCredential = CreateTeamCredential("key-active");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = activeCredential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, activeCredential)),
+            });
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(
+            new BeginTeamAutomationCredentialOperationCommand
+            {
+                ScheduleId = "schedule-1",
+                Owner = owner.Clone(),
+                OperationId = "operation-beta",
+                IdempotencyKey = "idempotency-beta",
+                PermissionDigest = "digest-beta",
+                PolicyVersion = "policy-v2",
+                OperationKind = TeamAutomationOperationKindState.Reauthorize,
+            });
+        await agent.HandleFireAsync(new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(1)),
+            Manual = true,
+            IdempotencyKey = ManualFireIdempotencyKey,
+            TeamAutomationOwner = owner.Clone(),
+        });
+
+        serviceDispatch.Auths.Should().ContainSingle().Which!
+            .ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-active");
+        serviceDispatch.AuthorizationFacts.Should().ContainSingle().Which!
+            .PermissionDigest.Should().Be("digest-alpha");
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.ReplacementPending);
+    }
+
+    [Fact]
+    public async Task TeamAutomationReauthorize_ShouldExposeReplacedCredentialAndKeepReplacementActive()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var activeCredential = CreateTeamCredential("key-active");
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = activeCredential.Clone(),
+                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, activeCredential)),
+            });
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(
+            new BeginTeamAutomationCredentialOperationCommand
+            {
+                ScheduleId = "schedule-1",
+                Owner = owner.Clone(),
+                OperationId = "operation-beta",
+                IdempotencyKey = "idempotency-beta",
+                PermissionDigest = "digest-beta",
+                PolicyVersion = "policy-v2",
+                OperationKind = TeamAutomationOperationKindState.Reauthorize,
+            });
+        var replacement = CreateTeamCredential("key-replacement");
+        var replacementConfiguration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, replacement));
+        replacementConfiguration.Target.ServiceInvocation.AuthorizationFact.PermissionDigest = "digest-beta";
+        replacementConfiguration.Target.ServiceInvocation.AuthorizationFact.PolicyVersion = "policy-v2";
+
+        await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-beta",
+                IdempotencyKey = "idempotency-beta",
+                Credential = replacement.Clone(),
+                Configuration = replacementConfiguration,
+            });
+
+        var completion = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.Stage == TeamAutomationOperationObservationStages.Complete &&
+                         x.OperationId == "operation-beta");
+        completion.OwnsEffectAttempt.Should().BeTrue();
+        completion.PendingRevocationCredential!.ApiKeyId.Should().Be("key-active");
+        completion.NyxidRevocationPending.Should().BeTrue();
+        completion.VaultRevocationPending.Should().BeTrue();
+        agent.State.ActiveTeamCredential!.ApiKeyId.Should().Be("key-replacement");
+        agent.State.PendingRevocationTeamCredential!.ApiKeyId.Should().Be("key-active");
+        agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Active);
+        agent.State.TeamCredentialGeneration.Should().Be(2);
     }
 
     [Fact]
@@ -2377,6 +2767,101 @@ public sealed class ScheduledDispatchGAgentTests
 
         AssertScheduleOwnedCredentialFieldsStripped(replayedTriggerChat, "legacy-trigger");
         AssertScheduleOwnedCredentialFieldsStripped(replayedTargetChat, "legacy-target");
+    }
+
+    private static BeginTeamAutomationCredentialOperationCommand CreateTeamBeginCommand() => new()
+    {
+        ScheduleId = "schedule-1",
+        Owner = CreateTeamOwner(),
+        OperationId = "operation-alpha",
+        IdempotencyKey = "idempotency-alpha",
+        PermissionDigest = "digest-alpha",
+        PolicyVersion = "policy-v1",
+        OperationKind = TeamAutomationOperationKindState.Create,
+    };
+
+    private static TeamMemberAutomationOwnerState CreateTeamOwner() => new()
+    {
+        ScopeId = "scope-alpha",
+        MemberId = "member-alpha",
+    };
+
+    private static ScheduledInvocationAgentKeyCredentialReferenceState CreateTeamCredential(string apiKeyId)
+    {
+        var expiresAt = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeMilliseconds();
+        return new ScheduledInvocationAgentKeyCredentialReferenceState
+        {
+            ApiKeyId = apiKeyId,
+            KeyExpiresAtUnixMs = expiresAt,
+            SecretReference = new SecretReference
+            {
+                Ref = $"secret-{apiKeyId}",
+                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                OwnerScopeKey = "scope-alpha:member-alpha",
+                ExpiresAtUnixMs = expiresAt,
+            },
+        };
+    }
+
+    private static ScheduledDispatchCreateCommand CreateTeamConfigureCommand(
+        TeamMemberAutomationOwnerState owner,
+        ScheduledInvocationAgentKeyCredentialReferenceState credential)
+    {
+        var command = CreateConfigureCommand(
+            enabled: false,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
+            target: new ScheduledDispatchTargetState
+            {
+                Kind = ScheduledDispatchTargetKindState.ServiceInvocation,
+                ServiceInvocation = new ScheduledServiceInvocationTargetState
+                {
+                    Identity = new ServiceIdentity { ServiceId = "service-alpha" },
+                    EndpointId = "chat",
+                    Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+                    Auth = new ScheduledServiceInvocationAuthState
+                    {
+                        ScheduledInvocationAgentKey = credential.Clone(),
+                    },
+                    AuthorizationFact = new ScheduledInvocationAuthorizationFactState
+                    {
+                        PermissionDigest = "digest-alpha",
+                        PolicyVersion = "policy-v1",
+                        Owner = CreateCredentialOwner(),
+                    },
+                },
+            });
+        command.TeamAutomationOwner = owner.Clone();
+        return command;
+    }
+
+    private static ScheduledInvocationAuthorizationOwnerState CreateCredentialOwner() => new()
+    {
+        Authority = "nyxid",
+        OwnerKind = "personal",
+        OwnerSubject = "owner-alpha",
+    };
+
+    private static ScheduledDispatchConfiguredEvent ToConfiguredEvent(ScheduledDispatchCreateCommand command)
+    {
+        var configured = new ScheduledDispatchConfiguredEvent
+        {
+            ScheduleId = command.ScheduleId,
+            DisplayName = command.DisplayName,
+            TargetActorId = command.TargetActorId,
+            TriggerEnvelope = command.TriggerEnvelope?.Clone(),
+            CronExpression = command.CronExpression,
+            Timezone = command.Timezone,
+            Enabled = command.Enabled,
+            ConfiguredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            PayloadTypeUrl = command.PayloadTypeUrl,
+            Target = command.Target?.Clone(),
+            ScheduleKind = command.ScheduleKind,
+            ScheduleMode = command.ScheduleMode,
+            OneShotFireAt = command.OneShotFireAt?.Clone(),
+            TeamAutomationOwner = command.TeamAutomationOwner?.Clone(),
+        };
+        configured.Headers.Add(command.Headers);
+        return configured;
     }
 
     private static ScheduledDispatchGAgent CreateAgent(
@@ -2674,6 +3159,7 @@ public sealed class ScheduledDispatchGAgentTests
         public List<ScheduledServiceInvocationAuth?> Auths { get; } = [];
         public List<IReadOnlyDictionary<string, string>?> Headers { get; } = [];
         public List<bool> ProjectNyxIdAccessTokenToWorkflowCallerCredentials { get; } = [];
+        public List<ScheduledInvocationAuthorizationFact?> AuthorizationFacts { get; } = [];
 
         public Func<ScheduledServiceInvocationDispatchRequest, ScheduledServiceInvocationDispatchReceipt> ReceiptFactory { get; set; } =
             dispatch => new ScheduledServiceInvocationDispatchReceipt(
@@ -2693,6 +3179,7 @@ public sealed class ScheduledDispatchGAgentTests
             Auths.Add(dispatch.Auth);
             ProjectNyxIdAccessTokenToWorkflowCallerCredentials.Add(
                 dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential);
+            AuthorizationFacts.Add(dispatch.AuthorizationFact);
             Headers.Add(dispatch.Headers == null
                 ? null
                 : new Dictionary<string, string>(dispatch.Headers, StringComparer.Ordinal));

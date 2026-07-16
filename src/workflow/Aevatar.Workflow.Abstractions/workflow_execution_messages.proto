@@ -259,6 +259,21 @@ message BindWorkflowDefinitionEvent
   map<string, string> inline_workflow_yamls = 3;
   string scope_id = 4;
   string source_kind = 5;
+  WorkflowAuthorizationDependencies authorization_dependencies = 6;
+}
+
+enum WorkflowServiceGrantPolicy {
+  WORKFLOW_SERVICE_GRANT_POLICY_UNSPECIFIED = 0;
+  WORKFLOW_SERVICE_GRANT_POLICY_REQUIRED = 1;
+  WORKFLOW_SERVICE_GRANT_POLICY_NOT_REQUIRED_NO_EXTERNAL_SERVICE = 2;
+}
+
+message WorkflowAuthorizationDependencies {
+  repeated string connector_capability_refs = 1;
+  bool owner_llm_route_required = 2;
+  repeated string nyx_id_service_ids = 3;
+  repeated string nyx_id_service_slugs = 4;
+  WorkflowServiceGrantPolicy service_grant_policy = 5;
 }
 message WorkflowRunExecutionStartedEvent
 {

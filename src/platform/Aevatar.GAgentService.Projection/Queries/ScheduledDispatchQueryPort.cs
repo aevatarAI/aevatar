@@ -50,15 +50,46 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
 
     private static ProjectionDocumentFilter[] BuildFilters(ScheduledDispatchListQuery query)
     {
-        var filters = new List<ProjectionDocumentFilter>
+        var filters = new List<ProjectionDocumentFilter>();
+        if (!query.IncludeDeleted)
         {
-            new()
+            filters.Add(new ProjectionDocumentFilter
             {
                 FieldPath = nameof(ScheduledDispatchDocument.Deleted),
                 Operator = ProjectionDocumentFilterOperator.EqOrMissing,
                 Value = ProjectionDocumentValue.FromBool(false),
-            },
-        };
+            });
+        }
+        if (query.ExcludeTeamOwned)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.TeamOwned),
+                Operator = ProjectionDocumentFilterOperator.EqOrMissing,
+                Value = ProjectionDocumentValue.FromBool(false),
+            });
+        }
+        if (query.TeamAutomationOwner != null)
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(ScheduledDispatchDocument.TeamOwned),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromBool(true),
+            });
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.ScopeId)}",
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.TeamAutomationOwner.ScopeId),
+            });
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.MemberId)}",
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(query.TeamAutomationOwner.MemberId),
+            });
+        }
         if (query.TargetKind != null)
         {
             filters.Add(new ProjectionDocumentFilter
@@ -144,7 +175,20 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             ParseCredentialSourceKind(document.CredentialSourceKind),
             ParseScheduleMode(document.ScheduleMode),
             document.OneShotFireAt,
-            document.Completed);
+            document.Completed,
+            document.TeamOwned,
+            document.TeamAutomationOwner?.ScopeId ?? string.Empty,
+            document.TeamAutomationOwner?.MemberId ?? string.Empty,
+            ParseTeamAutomationLifecycleStatus(document.TeamAutomationLifecycleStatus),
+            document.CredentialExpiresAt,
+            document.TeamAutomationOperationId ?? string.Empty,
+            document.CredentialGeneration,
+            document.RevocationPending,
+            document.LastAuthorizationErrorCode ?? string.Empty,
+            document.StateVersion,
+            document.PermissionDigest ?? string.Empty,
+            document.PolicyVersion ?? string.Empty,
+            document.TeamAutomationIdempotencyKey ?? string.Empty);
     }
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>
@@ -196,4 +240,9 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
         Enum.TryParse<ScheduledDispatchScheduleMode>(value, ignoreCase: true, out var parsed)
             ? parsed
             : ScheduledDispatchScheduleMode.RecurringCron;
+
+    private static TeamAutomationLifecycleStatus ParseTeamAutomationLifecycleStatus(string? value) =>
+        Enum.TryParse<TeamAutomationLifecycleStatus>(value, ignoreCase: true, out var parsed)
+            ? parsed
+            : TeamAutomationLifecycleStatus.Unspecified;
 }

@@ -1,20 +1,20 @@
 namespace Aevatar.GAgents.Scheduled;
 
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+
 public interface IScheduledAgentApiKeyIssuer
 {
     Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
         string token,
-        ScheduledAgentServiceSlugs serviceSlugs,
-        string agentId,
-        string skillName,
-        string? scopeId,
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
+        string credentialName,
         CancellationToken ct);
 
     Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct);
 
 }
 
-public sealed record ScheduledAgentServiceSlugs(
+public sealed record ScheduledAgentServiceRequirements(
     string PrimaryOutboundSlug,
     string? FailureNotificationSlug,
     IReadOnlyList<string> RequiredServiceSlugs,

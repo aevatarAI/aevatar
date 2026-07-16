@@ -1392,6 +1392,59 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task GenericGetAndMutations_ShouldFailClosedForTeamOwnedScheduleBeforeActorDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var detail = CreateSummaryDetail(
+            "team-schedule",
+            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            ScheduledDispatchCredentialSourceKind.None);
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = detail with
+            {
+                Schedule = detail.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = "scope-alpha",
+                    TeamOwnerMemberId = "member-alpha",
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        (await service.GetAsync("team-schedule")).Should().BeNull();
+        var update = () => service.UpdateAsync(
+            "team-schedule", CreateEnvelopeConfiguration("team-schedule"));
+        var ensure = () => service.EnsureAsync(CreateEnvelopeConfiguration("team-schedule"));
+        var enable = () => service.EnableAsync("team-schedule", string.Empty);
+        var disable = () => service.DisableAsync("team-schedule", string.Empty);
+        var delete = () => service.DeleteAsync("team-schedule", string.Empty);
+        var runNow = () => service.RunNowAsync("team-schedule");
+
+        await update.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await ensure.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await enable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await disable.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await delete.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        await runNow.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+        actorPort.Ensured.Should().BeEmpty();
+        actorPort.Enabled.Should().BeEmpty();
+        actorPort.Disabled.Should().BeEmpty();
+        actorPort.Deleted.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunNowAsync_ShouldRejectWorkflowScheduleWithoutCredentialBeforeActorDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -1445,15 +1498,18 @@ public sealed class ScheduledDispatchApplicationServiceTests
             "chat",
             ScheduledDispatchScheduleKind.Workflow));
         queryPort.FilteredListRequests.Should().HaveCount(3);
-        queryPort.FilteredListRequests[0].Should().Be(new ScheduledDispatchListQuery(1, "cursor-1", true));
-        queryPort.FilteredListRequests[1].Should().Be(new ScheduledDispatchListQuery(200));
+        queryPort.FilteredListRequests[0].Should().Be(new ScheduledDispatchListQuery(
+            1, "cursor-1", true, ExcludeTeamOwned: true));
+        queryPort.FilteredListRequests[1].Should().Be(new ScheduledDispatchListQuery(
+            200, ExcludeTeamOwned: true));
         queryPort.FilteredListRequests[2].Should().Be(new ScheduledDispatchListQuery(
             25,
             "cursor-2",
             true,
             ScheduledDispatchTargetKind.ServiceInvocation,
             "chat",
-            ScheduledDispatchScheduleKind.Workflow));
+            ScheduledDispatchScheduleKind.Workflow,
+            ExcludeTeamOwned: true));
         preview.Timezone.Should().Be("UTC");
         preview.NextFireTimes.Should().HaveCount(100);
         await invalidPreview.Should().ThrowAsync<ArgumentException>();
@@ -1534,6 +1590,45 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 },
             },
             options => options.ComparingByMembers<ProjectionDocumentValue>());
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldApplyTeamOwnerFilterBeforePagingAndCount()
+    {
+        var reader = new RecordingScheduledDispatchDocumentReader();
+        var port = new ScheduledDispatchQueryPort(reader);
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha");
+
+        await port.ListAsync(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor",
+            IncludeTotalCount: true,
+            TeamAutomationOwner: owner));
+
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Take.Should().Be(25);
+        reader.LastQuery.Cursor.Should().Be("cursor");
+        reader.LastQuery.IncludeTotalCount.Should().BeTrue();
+        reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
+        {
+            FieldPath = nameof(ScheduledDispatchDocument.TeamOwned),
+            Operator = ProjectionDocumentFilterOperator.Eq,
+            Value = ProjectionDocumentValue.FromBool(true),
+        }, options => options.ComparingByMembers<ProjectionDocumentValue>());
+        reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
+        {
+            FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.ScopeId)}",
+            Operator = ProjectionDocumentFilterOperator.Eq,
+            Value = ProjectionDocumentValue.FromString("scope-alpha"),
+        }, options => options.ComparingByMembers<ProjectionDocumentValue>());
+        reader.LastQuery.Filters.Should().ContainEquivalentOf(new ProjectionDocumentFilter
+        {
+            FieldPath = $"{nameof(ScheduledDispatchDocument.TeamAutomationOwner)}.{nameof(TeamMemberAutomationOwnerDocument.MemberId)}",
+            Operator = ProjectionDocumentFilterOperator.Eq,
+            Value = ProjectionDocumentValue.FromString("member-alpha"),
+        }, options => options.ComparingByMembers<ProjectionDocumentValue>());
+        reader.LastQuery.Filters.Should().NotContain(filter =>
+            filter.FieldPath.EndsWith("CurrentTeamId", StringComparison.Ordinal));
     }
 
     [Fact]

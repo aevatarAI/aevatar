@@ -162,7 +162,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 FailureNotificationSlug: failureSlug,
                 ChannelTarget: target,
                 Caller: caller.Clone()),
-            ServiceSlugs: new ScheduledAgentServiceSlugs(
+            ServiceSlugs: new ScheduledAgentServiceRequirements(
                 primarySlug,
                 failureSlug,
                 requiredServiceSlugs,
@@ -641,7 +641,7 @@ internal sealed record ScheduledAgentCreateMapResult(
 internal sealed record ScheduledAgentCreatePlanResult(
     bool Success,
     ScheduledAgentCreatePlannedRequest? Request,
-    ScheduledAgentServiceSlugs? ServiceSlugs,
+    ScheduledAgentServiceRequirements? ServiceSlugs,
     string? ErrorJson)
 {
     public static ScheduledAgentCreatePlanResult Failed(string error) =>

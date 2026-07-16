@@ -199,7 +199,9 @@ internal sealed class WorkflowRunActorPort :
             if (string.IsNullOrWhiteSpace(workflowName))
                 return Task.FromResult(WorkflowYamlParseResult.Invalid("Workflow name is required."));
 
-            return Task.FromResult(WorkflowYamlParseResult.Success(workflowName));
+            return Task.FromResult(WorkflowYamlParseResult.Success(
+                workflowName,
+                WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow)));
         }
         catch (Exception ex)
         {

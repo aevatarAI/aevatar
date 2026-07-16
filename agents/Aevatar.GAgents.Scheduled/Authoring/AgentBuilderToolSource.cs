@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +19,9 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
     private readonly ICallerScopeResolver _callerScopeResolver;
     private readonly ScheduledAgentCreateRequestMapper _scheduledAgentMapper;
     private readonly IScheduledAgentCredentialLifecycle _scheduledAgentCredentialLifecycle;
+    private readonly IScheduledInvocationAuthorizationPlanner _scheduledInvocationAuthorizationPlanner;
+    private readonly IScheduledInvocationAuthorizationRevalidator _scheduledInvocationAuthorizationRevalidator;
+    private readonly ScheduledAgentCreatorOptions _scheduledAgentCreatorOptions;
     private readonly ILogger<AgentBuilderTool>? _toolLogger;
     private readonly ILogger<ScheduledAgentCreatorTool>? _creatorToolLogger;
 
@@ -29,6 +33,9 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         ICallerScopeResolver callerScopeResolver,
         ScheduledAgentCreateRequestMapper scheduledAgentMapper,
         IScheduledAgentCredentialLifecycle scheduledAgentCredentialLifecycle,
+        IScheduledInvocationAuthorizationPlanner scheduledInvocationAuthorizationPlanner,
+        IScheduledInvocationAuthorizationRevalidator scheduledInvocationAuthorizationRevalidator,
+        ScheduledAgentCreatorOptions? scheduledAgentCreatorOptions = null,
         ILogger<AgentBuilderTool>? toolLogger = null,
         ILogger<ScheduledAgentCreatorTool>? creatorToolLogger = null)
     {
@@ -38,8 +45,12 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
         _callerScopeResolver = callerScopeResolver ?? throw new ArgumentNullException(nameof(callerScopeResolver));
         _scheduledAgentMapper = scheduledAgentMapper ?? throw new ArgumentNullException(nameof(scheduledAgentMapper));
-        _scheduledAgentCredentialLifecycle = scheduledAgentCredentialLifecycle ??
-            throw new ArgumentNullException(nameof(scheduledAgentCredentialLifecycle));
+        _scheduledAgentCredentialLifecycle = scheduledAgentCredentialLifecycle ?? throw new ArgumentNullException(nameof(scheduledAgentCredentialLifecycle));
+        _scheduledInvocationAuthorizationPlanner = scheduledInvocationAuthorizationPlanner ??
+                                                   throw new ArgumentNullException(nameof(scheduledInvocationAuthorizationPlanner));
+        _scheduledInvocationAuthorizationRevalidator = scheduledInvocationAuthorizationRevalidator ??
+                                                       throw new ArgumentNullException(nameof(scheduledInvocationAuthorizationRevalidator));
+        _scheduledAgentCreatorOptions = scheduledAgentCreatorOptions ?? new ScheduledAgentCreatorOptions();
         _toolLogger = toolLogger;
         _creatorToolLogger = creatorToolLogger;
     }
@@ -60,6 +71,9 @@ public sealed class AgentBuilderToolSource : IAgentToolSource
                 _callerScopeResolver,
                 _scheduledAgentMapper,
                 _scheduledAgentCredentialLifecycle,
+                _scheduledInvocationAuthorizationPlanner,
+                _scheduledInvocationAuthorizationRevalidator,
+                _scheduledAgentCreatorOptions,
                 _creatorToolLogger),
         ];
         return Task.FromResult(tools);

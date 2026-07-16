@@ -13,7 +13,9 @@ using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Studio.Application.Provisioning;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -43,6 +45,7 @@ public static class ScheduledServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IRetiredActorSpec, ScheduledRetiredActorSpec>());
         services.TryAddSingleton<IClock, SystemClock>();
+        services.TryAddSingleton<IStudioScheduledCredentialMaterializer, StudioScheduledCredentialMaterializer>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
@@ -169,6 +172,9 @@ public static class ScheduledServiceCollectionExtensions
             sp.GetRequiredService<ICallerScopeResolver>(),
             sp.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
             sp.GetRequiredService<IScheduledAgentCredentialLifecycle>(),
+            sp.GetRequiredService<IScheduledInvocationAuthorizationPlanner>(),
+            sp.GetRequiredService<IScheduledInvocationAuthorizationRevalidator>(),
+            sp.GetRequiredService<ScheduledAgentCreatorOptions>(),
             sp.GetService<ILogger<AgentBuilderTool>>(),
             sp.GetService<ILogger<ScheduledAgentCreatorTool>>());
 }

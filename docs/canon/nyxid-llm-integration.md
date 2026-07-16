@@ -8,6 +8,12 @@ owner: eanzhao
 
 Aevatar 的 Agent 可以通过 NyxID LLM Gateway 使用用户在 NyxID 上配置的 LLM API Key（OpenAI、Anthropic、DeepSeek 等），无需在 Aevatar 端存储任何密钥。
 
+## Catalog lifecycle authority
+
+NyxID catalog snapshots are owned by a catalog actor per authenticated owner identity. Host and Identity adapters may use a transient bearer to read the external catalog, but dispatch only secret-free typed observe, refresh-failure, or invalidate commands. The actor commits the corresponding domain event and the unified projection pipeline materializes its actor-scoped current-state replica.
+
+An authenticated successful catalog response activates or refreshes the snapshot. A `401/403` response or explicit binding revocation invalidates it immediately; transient provider failures record a failure without extending `fresh_until`. Scheduling reads this replica only and never fetches or refreshes NyxID inside the query call stack.
+
 ## 原理
 
 ```

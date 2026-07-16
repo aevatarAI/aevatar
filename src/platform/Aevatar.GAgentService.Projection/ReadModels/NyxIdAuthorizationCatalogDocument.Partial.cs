@@ -1,0 +1,37 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+
+namespace Aevatar.GAgentService.Projection.ReadModels;
+
+public sealed partial class NyxIdAuthorizationCatalogDocument
+    : IProjectionReadModel<NyxIdAuthorizationCatalogDocument>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(UpdatedAtUtcValue);
+        set => UpdatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset ObservedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(ObservedAtUtcValue);
+        set => ObservedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset FreshUntil
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(FreshUntilUtcValue);
+        set => FreshUntilUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
+    public DateTimeOffset? InvalidatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(InvalidatedAtUtcValue);
+        set => InvalidatedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? LastRefreshFailedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(LastRefreshFailedAtUtcValue);
+        set => LastRefreshFailedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+}

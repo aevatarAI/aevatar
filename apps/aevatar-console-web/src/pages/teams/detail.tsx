@@ -616,15 +616,6 @@ const TeamDetailPage: React.FC = () => {
     preferredServiceId,
     teamMemberServiceIds: teamRuntimeServiceIds,
   });
-  const automationsServicesQuery = useQuery({
-    enabled: hasTeamIdentity && activeTab === "automations",
-    queryFn: () =>
-      scopeRuntimeApi.listServices(scopeId, {
-        appId: "default",
-      }),
-    queryKey: ["teams", "services", scopeId],
-    retry: false,
-  });
   const hasBoundWorkflowMembersForStudioLinks = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).some(isBoundWorkflowRosterMember),
@@ -666,9 +657,7 @@ const TeamDetailPage: React.FC = () => {
         (workflowsQuery.isLoading || servicesQuery.isLoading)));
   const automationServiceRuntimeByServiceId = React.useMemo(() => {
     const services =
-      activeTab === "automations"
-        ? automationsServicesQuery.data ?? servicesQuery.data ?? []
-        : activeTab === "members"
+      activeTab === "members"
           ? memberStudioLinkServicesQuery.data ?? servicesQuery.data ?? []
         : servicesQuery.data ?? [];
     return new Map(
@@ -691,7 +680,6 @@ const TeamDetailPage: React.FC = () => {
     );
   }, [
     activeTab,
-    automationsServicesQuery.data,
     memberStudioLinkServicesQuery.data,
     servicesQuery.data,
   ]);
@@ -806,7 +794,8 @@ const TeamDetailPage: React.FC = () => {
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
     trimText(preferredMemberId);
-  const selectedRosterMemberId = currentMemberId;
+  const selectedRosterMemberId =
+    activeTab === "automations" ? trimText(routeState.routeMemberId) : currentMemberId;
   React.useEffect(() => {
     const canonicalMemberId = trimText(currentMemberId);
     if (
@@ -974,10 +963,6 @@ const TeamDetailPage: React.FC = () => {
           publishedRunsHref: memberPublishedRunsHref,
           publishedServiceId,
           serviceId: publishedServiceId || "--",
-          serviceIdentity: automationServiceRuntime?.identity,
-          serviceRevisionId:
-            trimText(automationServiceRuntime?.activeServingRevisionId) ||
-            trimText(automationServiceRuntime?.defaultServingRevisionId),
           studioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
           studioHrefDisabledReason:
             isWorkflowMember && isBoundMember && !memberDraftWorkflowId
@@ -1365,9 +1350,19 @@ const TeamDetailPage: React.FC = () => {
     (tab: TeamDetailTab) => {
       const includeRuntimeContext = tab === "overview";
       setActiveTab(tab);
+      if (tab === "automations" && currentMemberId) {
+        history.push(
+          buildTeamMemberAutomationsHref({
+            memberId: currentMemberId,
+            scopeId,
+            teamId: selectedTeamId,
+          }),
+        );
+        return;
+      }
       history.push(
         buildTeamDetailHref({
-          memberId: currentMemberId || undefined,
+          memberId: includeRuntimeContext ? currentMemberId || undefined : undefined,
           scopeId,
           teamId: selectedTeamId || undefined,
           workflowId: includeRuntimeContext ? activeWorkflowId || undefined : undefined,
@@ -1989,12 +1984,9 @@ const TeamDetailPage: React.FC = () => {
           memberId: row.memberId,
           name: row.name,
           serviceId: row.serviceId,
-          serviceIdentity: row.serviceIdentity,
-          serviceRevisionId: row.serviceRevisionId,
           workflowSupported: row.workflowSupported,
         }))}
         scopeId={scopeId}
-        serviceIdentitiesLoading={automationsServicesQuery.isLoading}
         teamId={selectedTeamId}
       />
     );

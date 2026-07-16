@@ -232,6 +232,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "member-alpha",
+      routeMemberId: "",
       runId: "run-1",
       scopeId: "scope-alpha",
       serviceId: "service-1",
@@ -250,9 +251,23 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "member-alpha",
+      routeMemberId: "member-alpha",
       scopeId: "scope-alpha",
       teamId: "t-alpha",
       workflowId: "wf-alpha",
+    });
+  });
+
+  it("does not treat a query-only member as a canonical automation route", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?memberId=member-alpha&tab=automations",
+        "/scopes/scope-alpha/teams/t-alpha",
+      ),
+    ).toMatchObject({
+      memberId: "member-alpha",
+      routeMemberId: "",
+      tab: "automations",
     });
   });
 
@@ -264,6 +279,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "member-alpha",
+      routeMemberId: "member-alpha",
       scopeId: "scope-alpha",
       tab: "automations",
       teamId: "t-alpha",
@@ -278,6 +294,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "",
+      routeMemberId: "",
       scopeId: "",
       teamId: "",
       workflowId: "wf-alpha",
@@ -319,6 +336,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "",
+      routeMemberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",
@@ -337,6 +355,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "",
+      routeMemberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",

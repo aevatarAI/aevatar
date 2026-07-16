@@ -434,6 +434,26 @@ message ScheduledDispatchDocument {
   google.protobuf.Timestamp one_shot_fire_at_utc_value = 39;
   bool completed = 40;
   google.protobuf.Timestamp completed_at_utc_value = 41;
+  bool team_owned = 42;
+  TeamMemberAutomationOwnerDocument team_automation_owner = 43;
+  string team_automation_lifecycle_status = 44;
+  google.protobuf.Timestamp credential_expires_at_utc_value = 45;
+  string team_automation_operation_id = 46;
+  int64 credential_generation = 47;
+  string nyxid_revocation_status = 48;
+  string vault_revocation_status = 49;
+  bool revocation_pending = 50;
+  string last_authorization_error_code = 51;
+  string permission_digest = 52;
+  string policy_version = 53;
+  string team_automation_idempotency_key = 54;
+  reserved 55 to 57;
+}
+
+message TeamMemberAutomationOwnerDocument {
+  string scope_id = 1;
+  string member_id = 2;
+  reserved 3;
 }
 
 message ScheduledDispatchFireRecordDocument {

@@ -1,5 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -15,11 +17,10 @@ public interface IScheduledAgentCredentialLifecycle
 {
     Task<ScheduledAgentCredentialProvisionResult> ProvisionAsync(
         string token,
-        ScheduledAgentServiceSlugs serviceSlugs,
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
+        string credentialName,
         string agentId,
         OwnerScope ownerScope,
-        string skillName,
-        string? scopeId,
         string purpose,
         string ownerScopeKey,
         string auditReason,
@@ -54,17 +55,31 @@ public sealed class ScheduledAgentCredentialLifecycle
 
     public async Task<ScheduledAgentCredentialProvisionResult> ProvisionAsync(
         string token,
-        ScheduledAgentServiceSlugs serviceSlugs,
+        ValidatedScheduledInvocationAuthorizationPlan validatedPlan,
+        string credentialName,
         string agentId,
         OwnerScope ownerScope,
-        string skillName,
-        string? scopeId,
         string purpose,
         string ownerScopeKey,
         string auditReason,
         CancellationToken ct = default)
     {
-        var issuedKey = await _apiKeyIssuer.IssueAsync(token, serviceSlugs, agentId, skillName, scopeId, ct);
+        ArgumentNullException.ThrowIfNull(validatedPlan);
+        var issuedKey = await _apiKeyIssuer.IssueAsync(token, validatedPlan, credentialName, ct);
+        return await CompleteProvisionAsync(
+            token, issuedKey, agentId, ownerScope, purpose, ownerScopeKey, auditReason, ct);
+    }
+
+    private async Task<ScheduledAgentCredentialProvisionResult> CompleteProvisionAsync(
+        string token,
+        ScheduledAgentApiKeyIssueResult issuedKey,
+        string agentId,
+        OwnerScope ownerScope,
+        string purpose,
+        string ownerScopeKey,
+        string auditReason,
+        CancellationToken ct)
+    {
         if (!issuedKey.Success)
         {
             if (!string.IsNullOrWhiteSpace(issuedKey.ApiKeyId))
@@ -310,6 +325,14 @@ public sealed class ScheduledAgentCredentialLifecycle
         !string.IsNullOrWhiteSpace(descriptor.Purpose) &&
         !string.IsNullOrWhiteSpace(descriptor.OwnerScopeKey) &&
         !string.IsNullOrWhiteSpace(descriptor.SubjectId);
+
+    private static string ToNyxIdRevocationErrorCode(UserAgentApiKeyRevocationFailureKind failureKind) =>
+        failureKind switch
+        {
+            UserAgentApiKeyRevocationFailureKind.Unauthorized => "nyxid_revocation_unauthorized",
+            UserAgentApiKeyRevocationFailureKind.Transient => "nyxid_revocation_transient",
+            _ => "nyxid_revocation_provider_error",
+        };
 
 }
 

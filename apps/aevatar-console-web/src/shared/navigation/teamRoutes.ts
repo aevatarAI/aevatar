@@ -10,6 +10,7 @@ type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
 type QueryValue = string | undefined;
 type TeamDetailRouteState = {
   readonly memberId: string;
+  readonly routeMemberId: string;
   readonly runId: string;
   readonly scopeId: string;
   readonly serviceId: string;
@@ -324,6 +325,7 @@ export function readTeamDetailRouteState(
 
   return {
     memberId,
+    routeMemberId: memberIdFromPath === 'new' ? '' : memberIdFromPath,
     runId: trimOptional(params.get('runId')),
     scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),
