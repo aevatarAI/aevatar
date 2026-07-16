@@ -9,4 +9,8 @@ public sealed class GAgentServiceDemoOptions
     public string AppId { get; set; } = "gagent-service";
 
     public string Namespace { get; set; } = "samples";
+
+    public TimeSpan ReadinessObservationTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan ReadinessObservationPollInterval { get; set; } = TimeSpan.FromMilliseconds(200);
 }

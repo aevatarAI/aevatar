@@ -17,6 +17,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
     private readonly IOptions<GAgentServiceDemoOptions> _options;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<GAgentServiceDemoBootstrapHostedService> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public GAgentServiceDemoBootstrapHostedService(
         IServiceCommandPort commandPort,
@@ -24,7 +25,8 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         IServiceServingQueryPort servingQueryPort,
         IOptions<GAgentServiceDemoOptions> options,
         IHostEnvironment hostEnvironment,
-        ILogger<GAgentServiceDemoBootstrapHostedService> logger)
+        ILogger<GAgentServiceDemoBootstrapHostedService> logger,
+        TimeProvider? timeProvider = null)
     {
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _lifecycleQueryPort = lifecycleQueryPort ?? throw new ArgumentNullException(nameof(lifecycleQueryPort));
@@ -32,6 +34,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _hostEnvironment = hostEnvironment ?? throw new ArgumentNullException(nameof(hostEnvironment));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -157,6 +160,10 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
                 ct);
         }
 
+        var trafficView = await _servingQueryPort.GetServiceTrafficViewAsync(identity, ct);
+        if (HasExpectedActiveTrafficView(trafficView, identity, expectedTarget))
+            return;
+
         var deployments = await _lifecycleQueryPort.GetServiceDeploymentsAsync(identity, ct);
         if (!HasExpectedDeployment(deployments, expectedTarget))
         {
@@ -180,6 +187,41 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
                     Targets = { expectedTarget.Clone() },
                 },
                 ct);
+        }
+
+        await ObserveExpectedActiveTrafficViewAsync(identity, expectedTarget, options, ct);
+    }
+
+    private async Task ObserveExpectedActiveTrafficViewAsync(
+        ServiceIdentity identity,
+        ServiceServingTargetSpec expectedTarget,
+        GAgentServiceDemoOptions options,
+        CancellationToken ct)
+    {
+        var serviceKey = ServiceKeys.Build(identity);
+        var timeout = options.ReadinessObservationTimeout < TimeSpan.Zero
+            ? TimeSpan.Zero
+            : options.ReadinessObservationTimeout;
+        var pollInterval = options.ReadinessObservationPollInterval < TimeSpan.Zero
+            ? TimeSpan.Zero
+            : options.ReadinessObservationPollInterval;
+        var deadline = _timeProvider.GetUtcNow().Add(timeout);
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var trafficView = await _servingQueryPort.GetServiceTrafficViewAsync(identity, ct);
+            if (HasExpectedActiveTrafficView(trafficView, identity, expectedTarget))
+                return;
+
+            if (_timeProvider.GetUtcNow() >= deadline)
+            {
+                throw new InvalidOperationException(
+                    $"Demo service '{serviceKey}' has no active serving traffic view.");
+            }
+
+            if (pollInterval > TimeSpan.Zero)
+                await Task.Delay(pollInterval, _timeProvider, ct);
         }
     }
 
@@ -251,6 +293,27 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
             string.Equals(x.RevisionId, expectedTarget.RevisionId, StringComparison.Ordinal) &&
             string.Equals(x.PrimaryActorId, expectedTarget.PrimaryActorId, StringComparison.Ordinal) &&
             string.Equals(x.Status, ServiceDeploymentStatus.Active.ToString(), StringComparison.Ordinal));
+    }
+
+    private static bool HasExpectedActiveTrafficView(
+        ServiceTrafficViewSnapshot? snapshot,
+        ServiceIdentity identity,
+        ServiceServingTargetSpec expectedTarget)
+    {
+        if (snapshot == null)
+            return false;
+
+        if (!string.Equals(snapshot.ServiceKey, ServiceKeys.Build(identity), StringComparison.Ordinal))
+            return false;
+
+        return snapshot.Endpoints.Any(endpoint =>
+            string.Equals(endpoint.EndpointId, "chat", StringComparison.Ordinal) &&
+            endpoint.Targets.Any(target =>
+                string.Equals(target.DeploymentId, expectedTarget.DeploymentId, StringComparison.Ordinal) &&
+                string.Equals(target.RevisionId, expectedTarget.RevisionId, StringComparison.Ordinal) &&
+                string.Equals(target.PrimaryActorId, expectedTarget.PrimaryActorId, StringComparison.Ordinal) &&
+                target.AllocationWeight == expectedTarget.AllocationWeight &&
+                string.Equals(target.ServingState, expectedTarget.ServingState.ToString(), StringComparison.Ordinal)));
     }
 
     private static bool HasExpectedServingTarget(
