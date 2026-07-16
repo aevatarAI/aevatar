@@ -39,17 +39,17 @@ if [[ "${actual_runner_version}" != "${RUNNER_VERSION}" || "${actual_codex_label
 fi
 
 configured_environment="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${IMAGE}")"
-if rg -i '(^|_)(OPENAI|NYXID|OPENSANDBOX|OPEN_SANDBOX)(_.*)?=' <<< "${configured_environment}"; then
+if grep -Eiq '(^|_)(OPENAI|NYXID|OPENSANDBOX|OPEN_SANDBOX)(_.*)?=' <<< "${configured_environment}"; then
     echo "Runner image must not contain provider or control-plane credentials." >&2
     exit 1
 fi
-if ! rg -x 'SSL_CERT_FILE=/opt/opensandbox/mitmproxy-ca-cert.pem' <<< "${configured_environment}" >/dev/null; then
+if ! grep -Fxq 'SSL_CERT_FILE=/opt/opensandbox/mitmproxy-ca-cert.pem' <<< "${configured_environment}"; then
     echo "Runner image must trust the OpenSandbox Credential Proxy CA path." >&2
     exit 1
 fi
 
 image_history="$(docker history --no-trunc --format '{{.CreatedBy}}' "${IMAGE}")"
-if rg -i '(OPENAI_API_KEY|NYXID_LLM_TOKEN|NYXID_LLM_DELEGATION_TOKEN|OPEN_SANDBOX_API_KEY|OPENSANDBOX_API_KEY)=' <<< "${image_history}"; then
+if grep -Eiq '(OPENAI_API_KEY|NYXID_LLM_TOKEN|NYXID_LLM_DELEGATION_TOKEN|OPEN_SANDBOX_API_KEY|OPENSANDBOX_API_KEY)=' <<< "${image_history}"; then
     echo "Runner image history must not contain credential assignments." >&2
     exit 1
 fi
