@@ -238,6 +238,7 @@ public enum WorkflowChatRunStartError
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
     InvalidFileInput = 12,
+    InvalidChatHistory = 13,
 }
 
 public enum WorkflowProjectionCompletionStatus

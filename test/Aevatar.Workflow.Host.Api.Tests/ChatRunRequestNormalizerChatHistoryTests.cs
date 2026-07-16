@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 
@@ -43,7 +44,7 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
     [InlineData("   ", " turn-a ", " original user text ")]
     [InlineData(" conversation-a ", "   ", " original user text ")]
     [InlineData(" conversation-a ", " turn-a ", "   ")]
-    public void Normalize_ShouldDropChatHistoryWriteIntent_WhenAnyRequiredFieldIsBlank(
+    public void Normalize_ShouldRejectChatHistoryWriteIntent_WhenAnyRequiredFieldIsBlank(
         string? conversationId,
         string? turnId,
         string? userText)
@@ -61,7 +62,8 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
 
         var result = ChatRunRequestNormalizer.Normalize(input);
 
-        result.Succeeded.Should().BeTrue();
-        result.Request!.ChatHistory.Should().BeNull();
+        result.Succeeded.Should().BeFalse();
+        result.Request.Should().BeNull();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidChatHistory);
     }
 }

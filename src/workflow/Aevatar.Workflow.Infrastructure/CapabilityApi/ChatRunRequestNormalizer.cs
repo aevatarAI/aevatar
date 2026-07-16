@@ -172,6 +172,10 @@ internal static class ChatRunRequestNormalizer
         if (callerCredentialResult.Error != WorkflowChatRunStartError.None)
             return ChatRunRequestNormalizationResult.Failed(callerCredentialResult.Error);
 
+        var chatHistory = NormalizeChatHistory(input.ChatHistory);
+        if (input.ChatHistory is not null && chatHistory is null)
+            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidChatHistory);
+
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 Prompt: rawPrompt,
@@ -183,7 +187,7 @@ internal static class ChatRunRequestNormalizer
                 LlmControl: NormalizeLlmControl(input.LlmControl),
                 CallerCredential: callerCredentialResult.Credential,
                 Headers: normalizedContext.Headers,
-                ChatHistory: NormalizeChatHistory(input.ChatHistory)));
+                ChatHistory: chatHistory));
     }
 
     private static WorkflowChatHistoryWriteIntent? NormalizeChatHistory(ChatHistoryWriteIntentInput? source)
