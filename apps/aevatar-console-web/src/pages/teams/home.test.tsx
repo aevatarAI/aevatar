@@ -161,7 +161,6 @@ describe("TeamsHomePage", () => {
     renderWithQueryClient(React.createElement(TeamsHomePage));
 
     expect(await screen.findByRole("button", { name: "查看团队" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看成员" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "调试入口工作流" })).toBeNull();
     expect(screen.queryByRole("button", { name: "调试工作流" })).toBeNull();
@@ -196,7 +195,6 @@ describe("TeamsHomePage", () => {
     expect(
       await screen.findByRole("button", { name: "View team" }, { timeout: 3000 }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "View team" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "View members" })).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Debug entry workflow" }),

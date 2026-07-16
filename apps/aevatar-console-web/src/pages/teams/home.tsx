@@ -767,9 +767,6 @@ function buildTeamRosterPreview(input: {
         parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
         right.memberId.localeCompare(left.memberId),
     )[0];
-  const entryMember = entryMemberId
-    ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
-    : undefined;
   const runtimeSignalPreview = entryMemberPreview ?? mostImportantMemberPreview;
   const latestRun = runtimeSignalPreview?.latestRun ?? null;
   const hasWorkflowMember = sortedMembers.some(isWorkflowMember);
