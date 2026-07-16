@@ -6,7 +6,6 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
-using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -17,7 +16,6 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
@@ -37,8 +35,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private const string LarkDocxCreateToolName = "lark_docx_create";
 
     private readonly NyxIdApiClient? _nyxIdApiClient;
-    private readonly ILarkCardKitClient? _larkCardKitClient;
-    private readonly ILarkOutboundDispatcher? _larkOutboundDispatcher;
+    private readonly ISkillRunnerOutboundDeliveryPort? _outboundDeliveryPort;
     private readonly IOwnerLlmConfigSource? _ownerLlmConfigSource;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
     private readonly ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? _workflowDispatchService;
@@ -66,8 +63,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService = null,
         IToolApprovalHandler? approvalHandler = null,
         IClock? clock = null,
-        ILarkOutboundDispatcher? larkOutboundDispatcher = null,
-        ILarkCardKitClient? larkCardKitClient = null)
+        ISkillRunnerOutboundDeliveryPort? outboundDeliveryPort = null)
         : this(
             BuildToolMiddlewareChain(toolMiddlewares),
             llmProviderFactory,
@@ -81,8 +77,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             workflowDispatchService,
             approvalHandler,
             clock,
-            larkOutboundDispatcher,
-            larkCardKitClient)
+            outboundDeliveryPort)
     {
     }
 
@@ -99,8 +94,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>? workflowDispatchService,
         IToolApprovalHandler? approvalHandler,
         IClock? clock,
-        ILarkOutboundDispatcher? larkOutboundDispatcher,
-        ILarkCardKitClient? larkCardKitClient)
+        ISkillRunnerOutboundDeliveryPort? outboundDeliveryPort)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -111,8 +105,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             approvalHandler)
     {
         _nyxIdApiClient = nyxIdApiClient;
-        _larkOutboundDispatcher = larkOutboundDispatcher;
-        _larkCardKitClient = larkCardKitClient;
+        _outboundDeliveryPort = outboundDeliveryPort;
         _ownerLlmConfigSource = ownerLlmConfigSource;
         _remoteSkillFetcher = remoteSkillFetcher;
         _workflowDispatchService = workflowDispatchService;
@@ -443,12 +436,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         try
         {
             var result = await ExecuteSkillAsync(now, command.Reason, CancellationToken.None);
-            // Streaming-edit delivery happens in-line during ExecuteSkillAsync via the
-            // SkillRunnerStreamingReplySink (POST initial + PUT each delta — Lark's text-edit
-            // verb; PATCH on the same path is reserved for cards). When streaming can't be
-            // configured (no NyxID client, missing outbound config) ExecuteSkillAsync falls
-            // back to a one-shot SendOutputAsync at finalize, so we never need a second
-            // outbound call here. Persist the run as completed using the buffered final text.
+            // Streaming delivery happens in-line during ExecuteSkillAsync via the
+            // SkillRunnerStreamingReplySink. When streaming can't be configured,
+            // ExecuteSkillAsync falls back to a one-shot SendOutputAsync at finalize, so
+            // we never need a second outbound call here. Persist the run as completed
+            // using the buffered final text.
             await PersistDomainEventAsync(new SkillRunnerExecutionCompletedEvent
             {
                 CompletedAt = Timestamp.FromDateTimeOffset(now),
@@ -482,7 +474,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 Id,
                 command.RetryAttempt);
 
-            // If Lark already has a visible card, retrying the whole run would create a
+            // If the channel already has a visible card/message, retrying the whole run would create a
             // second card/message. Persist the failure immediately and let the failure
             // notification carry the recovery signal instead of duplicating the report.
             if (ex is not SkillRunnerVisibleDeliveryException &&
@@ -915,9 +907,9 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     /// <summary>
     /// Sends the chunk sequence produced by <see cref="SkillRunnerOutputChunker.Split"/>.
-    /// Default Auto output prefers a single CardKit interactive message after the run has
-    /// passed the tool-success safety net; explicit Text output can still use the legacy
-    /// streaming-edit sink for chunk[0]. Overflow chunks are posted as plain text.
+    /// Default Auto output prefers one channel-native card-style message after the run has
+    /// passed the tool-success safety net; explicit Text output can still use the streaming
+    /// sink for chunk[0]. Overflow chunks are posted as plain text.
     /// </summary>
     /// <remarks>
     /// Failure semantics match the pre-chunking single-message path: any send rejection
@@ -944,19 +936,19 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 DeliveryStatus.Succeeded,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: streamingState.PlatformMessageId,
+                providerMessageId: streamingState.PlatformMessageId,
                 cardId: string.Empty,
                 ct);
         }
-        else if (preferCardKit && chunks.Count == 1 && await TryDispatchCardKitOutputAsync(chunks[0], requestId, ct))
+        else if (preferCardKit && chunks.Count == 1 && await TryDispatchCardOutputAsync(chunks[0], requestId, ct))
         {
             return;
         }
         else
         {
-            // No CardKit/text streaming sink (explicit text mode, no NyxID client, missing
-            // outbound config, or tests injecting a null client). Fall back to a one-shot
-            // text send so the user still receives the report.
+            // No card/text streaming sink (explicit text mode, missing outbound config, or
+            // tests injecting a null client). Fall back to a one-shot text send so the user
+            // still receives the report.
             await SendTextOutputAsync(chunks[0], providerSlugOverride: null, requestId, ct);
         }
 
@@ -967,110 +959,66 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private bool ShouldPreferCardKitOutput() =>
         State.OutboundConfig?.OutputFormat is null or SkillRunnerOutputFormat.Auto;
 
-    private async Task<bool> TryDispatchCardKitOutputAsync(string output, string requestId, CancellationToken ct)
+    private async Task<bool> TryDispatchCardOutputAsync(string output, string requestId, CancellationToken ct)
     {
-        var sink = await TryCreateCardKitSinkAsync(ct);
-        if (sink is null)
+        if (!ShouldPreferCardKitOutput())
             return false;
 
-        var result = await sink.SendFinalAsync(output, ct);
-        if (result.Succeeded)
+        try
         {
+            var receipt = await SendOutputThroughPortAsync(
+                output,
+                SkillRunnerOutboundDeliveryStyle.Card,
+                providerSlugOverride: null,
+                ct);
             await PersistDeliveryProducedAsync(
                 DeliveryKind.StreamingCard,
                 DeliveryStatus.Succeeded,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: result.MessageId,
-                cardId: result.CardId,
+                providerMessageId: ResolvePlatformMessageId(receipt),
+                cardId: string.Empty,
                 ct);
             return true;
         }
-
-        if (!result.VisibleMessageCreated)
+        catch (NotSupportedException ex)
         {
             await PersistDeliveryProducedAsync(
                 DeliveryKind.StreamingCard,
                 DeliveryStatus.FailedPreSend,
                 requestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
-                cardId: result.CardId,
+                providerMessageId: string.Empty,
+                cardId: string.Empty,
                 ct);
             Logger.LogWarning(
-                "Skill runner {ActorId} CardKit delivery failed before any visible Lark card was sent; falling back to text. card_id={CardId}, lark_code={LarkCode}, detail={Detail}",
-                Id,
-                result.CardId,
-                result.LarkCode,
-                result.Detail);
+                ex,
+                "Skill runner {ActorId} card-style delivery is unsupported by the resolved channel; falling back to text.",
+                Id);
             return false;
         }
-
-        await PersistDeliveryProducedAsync(
-            DeliveryKind.StreamingCard,
-            DeliveryStatus.FailedPostSend,
-            requestId,
-            sourceEventId: string.Empty,
-            larkMessageId: result.MessageId,
-            cardId: result.CardId,
-            ct);
-        throw new SkillRunnerVisibleDeliveryException(BuildLarkRejectionMessage(result.LarkCode, result.Detail));
-    }
-
-    private async Task<SkillRunnerCardKitReplySink?> TryCreateCardKitSinkAsync(CancellationToken ct)
-    {
-        if (!ShouldPreferCardKitOutput())
-            return null;
-
-        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
-        if (client is null)
+        catch (InvalidOperationException ex)
         {
+            await PersistDeliveryProducedAsync(
+                DeliveryKind.StreamingCard,
+                DeliveryStatus.FailedPreSend,
+                requestId,
+                sourceEventId: string.Empty,
+                providerMessageId: string.Empty,
+                cardId: string.Empty,
+                ct);
             Logger.LogWarning(
-                "Skill runner {ActorId} has no NyxIdApiClient registered; CardKit delivery is disabled, falling back to text.",
+                ex,
+                "Skill runner {ActorId} card-style delivery failed before any visible channel message was confirmed; falling back to text.",
                 Id);
-            return null;
+            return false;
         }
-
-        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
-            string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
-        {
-            Logger.LogWarning(
-                "Skill runner {ActorId} has incomplete outbound config (NyxProviderSlug/ConversationId); CardKit delivery is disabled, falling back to text.",
-                Id);
-            return null;
-        }
-
-        var nyxApiKey = await ResolveNyxApiKeyAsync(ct);
-        if (string.IsNullOrWhiteSpace(nyxApiKey))
-        {
-            Logger.LogWarning(
-                "Skill runner {ActorId} could not resolve Nyx API key; CardKit delivery is disabled, falling back to text.",
-                Id);
-            return null;
-        }
-
-        var primary = LarkConversationTargets.Resolve(
-            State.OutboundConfig.LarkReceiveId,
-            State.OutboundConfig.LarkReceiveIdType,
-            State.OutboundConfig.ConversationId);
-
-        return new SkillRunnerCardKitReplySink(
-            ResolveLarkCardKitClient(client, State.OutboundConfig.NyxProviderSlug),
-            ResolveLarkOutboundDispatcher(client),
-            new LarkSendNewMessageRequest(
-                NyxApiKey: nyxApiKey,
-                State.OutboundConfig.NyxProviderSlug,
-                MessageType: "interactive",
-                ContentJson: string.Empty,
-                PrimaryTarget: primary,
-                FallbackTarget: ResolveFallbackTarget()),
-            Logger);
     }
 
     /// <summary>
-    /// Constructs the legacy text streaming-edit sink for explicit text output. Auto output
-    /// now uses CardKit after the run passes the tool-success safety net, which avoids Lark's
-    /// text-message edit cap and prevents partial hallucinated reports from becoming visible.
+    /// Constructs the text streaming sink for explicit text output. Auto output uses
+    /// card-style delivery after the run passes the tool-success safety net, which prevents
+    /// partial hallucinated reports from becoming visible.
     /// </summary>
     private async Task<SkillRunnerStreamingReplySink?> TryCreateStreamingSinkAsync(CancellationToken ct)
     {
@@ -1088,19 +1036,6 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         if (State.OutboundConfig?.OutputFormat != SkillRunnerOutputFormat.Text)
             return null;
-
-        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
-        if (client is null)
-        {
-            // Tests and very early bootstrap can run without an injected NyxID client; falling
-            // back to one-shot SendOutputAsync is correct, but a log line makes the degradation
-            // visible (otherwise streaming-edit silently never engages and the only symptom is
-            // the wall-of-text UX users complained about in #423).
-            Logger.LogWarning(
-                "Skill runner {ActorId} has no NyxIdApiClient registered; streaming-edit delivery is disabled, falling back to one-shot SendOutputAsync.",
-                Id);
-            return null;
-        }
 
         if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
             string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
@@ -1120,23 +1055,19 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             return null;
         }
 
-        var primary = LarkConversationTargets.Resolve(
-            State.OutboundConfig.LarkReceiveId,
-            State.OutboundConfig.LarkReceiveIdType,
-            State.OutboundConfig.ConversationId);
+        var outbound = State.OutboundConfig.Clone();
+#pragma warning disable CS0612 // legacy state field used as the port credential input
+        outbound.NyxApiKey = nyxApiKey;
+#pragma warning restore CS0612
 
         return new SkillRunnerStreamingReplySink(
-            ResolveLarkOutboundDispatcher(client),
-            new LarkSendNewMessageRequest(
-                NyxApiKey: nyxApiKey,
-                State.OutboundConfig.NyxProviderSlug,
-                MessageType: "text",
-                ContentJson: string.Empty,
-                PrimaryTarget: primary,
-                FallbackTarget: ResolveFallbackTarget()),
-            BuildLarkRejectionMessage,
-            Logger,
-            client);
+            ResolveOutboundDeliveryPort(),
+            new SkillRunnerOutboundDeliveryRequest(
+                Id,
+                outbound,
+                Text: string.Empty,
+                SkillRunnerOutboundDeliveryStyle.Text),
+            Logger);
     }
 
     /// <summary>
@@ -1509,7 +1440,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 signal.Status,
                 string.IsNullOrWhiteSpace(signal.RequestId) ? requestId : signal.RequestId,
                 signal.SourceEventId,
-                signal.LarkMessageId,
+                signal.ProviderMessageId,
                 signal.CardId,
                 ct);
         }
@@ -1520,7 +1451,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         DeliveryStatus status,
         string? requestId,
         string? sourceEventId,
-        string? larkMessageId,
+        string? providerMessageId,
         string? cardId,
         CancellationToken ct) =>
         PersistDomainEventAsync(new DeliveryProducedEvent
@@ -1530,7 +1461,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(),
             Status = status,
-            LarkMessageId = NormalizeOptional(larkMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(providerMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(requestId) ?? string.Empty,
             SourceEventId = NormalizeOptional(sourceEventId) ?? string.Empty,
@@ -1540,17 +1471,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private DeliveryTarget BuildDeliveryTarget()
     {
         var outbound = State.OutboundConfig;
-        var target = LarkConversationTargets.Resolve(
-            outbound?.LarkReceiveId,
-            outbound?.LarkReceiveIdType,
-            outbound?.ConversationId);
+        var channelAddress = ResolveChannelAddress(outbound);
+        var address = channelAddress.Primary;
         return new DeliveryTarget
         {
-            Channel = ChannelId.From("lark"),
+            Channel = ChannelId.From(ResolveOutboundPlatform(outbound)),
             ConversationKey = outbound?.ConversationId ?? string.Empty,
             Platform = ResolveOutboundPlatform(outbound),
-            ReceiveId = target.ReceiveId ?? string.Empty,
-            ReceiveIdType = target.ReceiveIdType ?? string.Empty,
+            AddressId = address.AddressId,
+            AddressType = address.AddressType,
             ConversationId = outbound?.ConversationId ?? string.Empty,
         };
     }
@@ -1644,15 +1573,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
     private static string BuildLongOutputDocumentDecisionPrompt(string output) =>
         $"""
-        The scheduled skill output below is too long for one Lark message.
+        The scheduled skill output below is too long for one channel message.
 
-        Decide whether the full content should be delivered as a Lark cloud document.
+        Decide whether the full content should be delivered as a cloud document.
         If yes, call the {LarkDocxCreateToolName} tool exactly once with:
         - title: a concise title for this report
         - markdown_text: the complete output exactly as provided
         - visibility: readable
 
-        If the tool result reports success=true with document_url, answer with one short user-facing Lark message that includes the document URL.
+        If the tool result reports success=true with document_url, answer with one short user-facing message that includes the document URL.
         If you do not call the tool, if the tool fails, or if there is no document_url, answer with DOCX_FALLBACK.
         Do not summarize, omit, or rewrite the report body in the final message.
 
@@ -1794,7 +1723,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         SendTextOutputAsync(output, providerSlugOverride: null, requestId: null, ct);
 
     /// <summary>
-    /// Posts <paramref name="output"/> as a Lark text message. <paramref name="providerSlugOverride"/>
+    /// Posts <paramref name="output"/> as a channel-native text message. <paramref name="providerSlugOverride"/>
     /// is non-null only on the failure-notification fallback path (#423 §C); when set, the proxy
     /// routing slug temporarily replaces the agent's primary <c>NyxProviderSlug</c> so a message
     /// can still reach the user via the inbound channel-bot after the primary outbound has been
@@ -1807,76 +1736,27 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         string? requestId,
         CancellationToken ct)
     {
-        var client = _nyxIdApiClient ?? Services.GetService<NyxIdApiClient>();
-        if (client is null)
-        {
-            Logger.LogWarning("Skill runner {ActorId} has no NyxIdApiClient registered; skipping outbound delivery", Id);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(State.OutboundConfig?.NyxProviderSlug) ||
-            string.IsNullOrWhiteSpace(State.OutboundConfig?.ConversationId))
-        {
-            Logger.LogWarning("Skill runner {ActorId} has incomplete outbound config; skipping outbound delivery", Id);
-            return;
-        }
-
-        var nyxApiKey = await ResolveNyxApiKeyAsync(ct);
-        if (string.IsNullOrWhiteSpace(nyxApiKey))
-        {
-            Logger.LogWarning("Skill runner {ActorId} could not resolve Nyx API key; skipping outbound delivery", Id);
-            return;
-        }
-
-        var slug = string.IsNullOrWhiteSpace(providerSlugOverride)
-            ? State.OutboundConfig.NyxProviderSlug
-            : providerSlugOverride!;
         var deliveryRequestId = ResolveDeliveryRequestId(requestId);
-
-        var deliveryTarget = LarkConversationTargets.Resolve(
-            State.OutboundConfig.LarkReceiveId,
-            State.OutboundConfig.LarkReceiveIdType,
-            State.OutboundConfig.ConversationId);
-        if (deliveryTarget.FellBackToPrefixInference)
+        SkillRunnerOutboundDeliveryReceipt receipt;
+        try
         {
-            // No typed receive_id captured at create time; only legacy state predating the
-            // typed fields hits this path. Keep the breadcrumb so format drift is observable
-            // when the prefix heuristic stops matching.
-            Logger.LogDebug(
-                "Skill runner {ActorId} resolved Lark receive target by prefix inference (legacy state): conversationId={ConversationId}, receiveIdType={ReceiveIdType}",
-                Id,
-                State.OutboundConfig.ConversationId,
-                deliveryTarget.ReceiveIdType);
+            receipt = await SendOutputThroughPortAsync(
+                output,
+                SkillRunnerOutboundDeliveryStyle.Text,
+                providerSlugOverride,
+                ct);
         }
-
-        var outcome = await ResolveLarkOutboundDispatcher(client).SendNewMessageAsync(
-            new LarkSendNewMessageRequest(
-                NyxApiKey: nyxApiKey,
-                slug,
-                MessageType: "text",
-                ContentJson: JsonSerializer.Serialize(new { text = output }),
-                PrimaryTarget: deliveryTarget,
-                FallbackTarget: ResolveFallbackTarget()),
-            ct);
-
-        if (!outcome.Succeeded)
+        catch
         {
             await PersistDeliveryProducedAsync(
                 DeliveryKind.TextMessage,
                 DeliveryStatus.FailedPreSend,
                 requestId: deliveryRequestId,
                 sourceEventId: string.Empty,
-                larkMessageId: string.Empty,
+                providerMessageId: string.Empty,
                 cardId: string.Empty,
                 ct);
-            // Surface downstream rejection so HandleTriggerAsync sees a real failure instead of
-            // persisting SkillRunnerExecutionCompletedEvent on a silently-dropped Lark response.
-            // The Error field on SkillRunnerExecutionFailedEvent ends up in `/agent-status`'s
-            // `last_error`, so for known recurring stale-state codes we expand the bare Lark
-            // message into actionable recovery guidance — otherwise the user sees a cryptic
-            // `99992361 open_id cross app` and has no way to know they need to rebuild the
-            // agent.
-            throw new InvalidOperationException(BuildLarkRejectionMessage(outcome.LarkCode, outcome.Detail));
+            throw;
         }
 
         await PersistDeliveryProducedAsync(
@@ -1884,8 +1764,32 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             DeliveryStatus.Succeeded,
             requestId: deliveryRequestId,
             sourceEventId: string.Empty,
-            larkMessageId: outcome.MessageId,
+            providerMessageId: ResolvePlatformMessageId(receipt),
             cardId: string.Empty,
+            ct);
+    }
+
+    private async Task<SkillRunnerOutboundDeliveryReceipt> SendOutputThroughPortAsync(
+        string output,
+        SkillRunnerOutboundDeliveryStyle style,
+        string? providerSlugOverride,
+        CancellationToken ct)
+    {
+        var outbound = State.OutboundConfig?.Clone();
+        if (outbound is not null)
+        {
+#pragma warning disable CS0612 // legacy state field used as the port credential input
+            outbound.NyxApiKey = await ResolveNyxApiKeyAsync(ct);
+#pragma warning restore CS0612
+        }
+
+        return await ResolveOutboundDeliveryPort().SendAsync(
+            new SkillRunnerOutboundDeliveryRequest(
+                Id,
+                outbound,
+                output,
+                style,
+                providerSlugOverride),
             ct);
     }
 
@@ -1898,6 +1802,21 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return string.IsNullOrEmpty(normalized) ? null : normalized;
     }
 
+    private static ChannelDeliveryAddress ResolveChannelAddress(SkillRunnerOutboundConfig? outbound)
+    {
+        var address = outbound?.ChannelAddress;
+        return UserAgentCatalogChannelAddress.FromParts(
+            NormalizeOptional(address?.Platform) ?? ResolveOutboundPlatform(outbound),
+            NormalizeOptional(address?.ProviderSlug) ?? NormalizeOptional(outbound?.NyxProviderSlug),
+            NormalizeOptional(address?.ConversationId) ?? NormalizeOptional(outbound?.ConversationId),
+#pragma warning disable CS0612 // deprecated fields are read only as a channel_address compatibility bridge
+            NormalizeOptional(address?.Primary?.AddressId) ?? NormalizeOptional(outbound?.LarkReceiveId) ?? NormalizeOptional(outbound?.ConversationId),
+            NormalizeOptional(address?.Primary?.AddressType) ?? NormalizeOptional(outbound?.LarkReceiveIdType),
+            NormalizeOptional(address?.Fallback?.AddressId) ?? NormalizeOptional(outbound?.LarkReceiveIdFallback),
+            NormalizeOptional(address?.Fallback?.AddressType) ?? NormalizeOptional(outbound?.LarkReceiveIdTypeFallback));
+#pragma warning restore CS0612
+    }
+
     private static string ResolveOutboundPlatform(SkillRunnerOutboundConfig? outbound)
     {
         if (!string.IsNullOrWhiteSpace(outbound?.OwnerScope?.Platform))
@@ -1906,69 +1825,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         return ResolvePlatform(outbound?.Platform);
     }
 
-    private LarkReceiveTarget? ResolveFallbackTarget()
-    {
-        var fallbackId = State.OutboundConfig.LarkReceiveIdFallback?.Trim();
-        var fallbackType = State.OutboundConfig.LarkReceiveIdTypeFallback?.Trim();
-        return string.IsNullOrEmpty(fallbackId) || string.IsNullOrEmpty(fallbackType)
-            ? null
-            : new LarkReceiveTarget(fallbackId, fallbackType, FellBackToPrefixInference: false);
-    }
+    private ISkillRunnerOutboundDeliveryPort ResolveOutboundDeliveryPort() =>
+        _outboundDeliveryPort ??
+        Services.GetService<ISkillRunnerOutboundDeliveryPort>() ??
+        throw new InvalidOperationException("SkillRunner outbound delivery port is not registered.");
 
-    private ILarkOutboundDispatcher ResolveLarkOutboundDispatcher(NyxIdApiClient client) =>
-        _larkOutboundDispatcher ?? Services.GetService<ILarkOutboundDispatcher>() ?? new LarkOutboundDispatcher(client, Logger);
-
-    /// <summary>
-    /// Resolves the CardKit client for a scheduled run. Prefers an injected/DI instance; falls
-    /// back to a per-agent <see cref="LarkCardKitClient"/> bound to this agent's own Nyx provider
-    /// slug so the CardKit wire protocol stays the single shared implementation used by both the
-    /// scheduled and direct-chat paths.
-    /// </summary>
-    private ILarkCardKitClient ResolveLarkCardKitClient(NyxIdApiClient client, string providerSlug)
-    {
-        if (_larkCardKitClient is { } injected)
-            return injected;
-
-        if (Services.GetService<ILarkCardKitClient>() is { } fromDi)
-            return fromDi;
-
-        var effectiveSlug = string.IsNullOrWhiteSpace(providerSlug) ? "api-lark-bot" : providerSlug;
-        return new LarkCardKitClient(new LarkToolOptions { ProviderSlug = effectiveSlug }, client);
-    }
-
-    private static string BuildLarkRejectionMessage(int? larkCode, string detail)
-    {
-        if (larkCode == LarkBotErrorCodes.OpenIdCrossApp)
-        {
-            // The agent's persisted OutboundConfig was captured before union_id ingress existed
-            // (PR #409 added that), so `LarkReceiveIdType=open_id` is permanently scoped to a
-            // different Lark app than the customer outbound. Self-heal is not possible without
-            // a fresh ingress event carrying union_id; the user must rebuild the agent.
-            return
-                $"Lark message delivery rejected (code={larkCode}): {detail}. " +
-                "This agent was created before cross-app union_id ingress existed; " +
-                "delete and recreate it (`/agents` → Delete → recreate) to pick up the cross-app safe target.";
-        }
-
-        if (larkCode == LarkBotErrorCodes.UserIdCrossTenant)
-        {
-            // Even union_id is rejected — the relay-side ingress and outbound apps are in
-            // different Lark tenants. No user-id-based identifier survives that boundary;
-            // recreating the agent makes the new chat_id-preferred path take effect (chat_id
-            // bypasses user-id translation entirely as long as the same app is on both ends).
-            return
-                $"Lark message delivery rejected (code={larkCode}): {detail}. " +
-                "The outbound Lark app is in a different tenant than the inbound app, so " +
-                "user-id translation is impossible. Delete and recreate the agent " +
-                "(`/agents` → Delete → recreate) so the new chat_id-preferred outbound path " +
-                "takes effect, or align the NyxID `s/api-lark-bot` proxy with the channel-bot that " +
-                "received the inbound event.";
-        }
-
-        return larkCode is { } code
-            ? $"Lark message delivery rejected (code={code}): {detail}"
-            : $"Lark message delivery rejected: {detail}";
-    }
+    private static string ResolvePlatformMessageId(SkillRunnerOutboundDeliveryReceipt receipt) =>
+        string.IsNullOrWhiteSpace(receipt.PlatformMessageId)
+            ? receipt.SentActivityId
+            : receipt.PlatformMessageId;
 
     /// <summary>
     /// Best-effort delivery of a failure-notification message after the run has already failed.
@@ -2029,9 +1894,12 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         {
             [ChannelMetadataKeys.ConversationId] = State.OutboundConfig?.ConversationId ?? string.Empty,
         };
-        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveId, State.OutboundConfig?.LarkReceiveId);
-        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkReceiveIdType, State.OutboundConfig?.LarkReceiveIdType);
-        AddIfNotEmpty(metadata, ChannelMetadataKeys.LarkOutboundProxySlug, State.OutboundConfig?.NyxProviderSlug);
+        var channelAddress = ResolveChannelAddress(State.OutboundConfig);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryAddressId, channelAddress.Primary.AddressId);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryAddressType, channelAddress.Primary.AddressType);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryFallbackAddressId, channelAddress.Fallback?.AddressId);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.DeliveryFallbackAddressType, channelAddress.Fallback?.AddressType);
+        AddIfNotEmpty(metadata, ChannelMetadataKeys.OutboundProviderSlug, State.OutboundConfig?.NyxProviderSlug);
 
         return metadata;
     }
@@ -2087,7 +1955,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                 ?? throw new InvalidOperationException("Scheduled Nyx API key secret vault is unavailable.");
             var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
                 reference.Ref,
-                CredentialSecretPurposes.ScheduledNyxApiKey,
+                ResolveScheduledAgentKeyPurpose(reference),
                 reference.OwnerScopeKey,
                 State.OutboundConfig?.ApiKeyId ?? string.Empty,
                 "scheduled-skill-runner"),
@@ -2097,6 +1965,11 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
 
         return State.OutboundConfig?.NyxApiKey?.Trim() ?? string.Empty;
     }
+
+    private static string ResolveScheduledAgentKeyPurpose(SecretReference reference) =>
+        string.IsNullOrWhiteSpace(reference.Purpose)
+            ? CredentialSecretPurposes.ScheduledNyxApiKey
+            : reference.Purpose.Trim();
 
     private string BuildExecutionPrompt(DateTimeOffset now, string? reason)
     {
@@ -2109,6 +1982,8 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
     private async Task UpsertRegistryAsync(CancellationToken ct)
     {
         var ownerScope = State.OutboundConfig?.OwnerScope;
+        var targetPlatform = ResolveOutboundPlatform(State.OutboundConfig);
+        var channelAddress = ResolveChannelAddress(State.OutboundConfig);
 
         var command = new UserAgentCatalogUpsertCommand
         {
@@ -2123,10 +1998,15 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
             ApiKeyId = State.OutboundConfig?.ApiKeyId ?? string.Empty,
             ScheduleCron = State.ScheduleCron ?? string.Empty,
             ScheduleTimezone = State.ScheduleTimezone ?? string.Empty,
-            LarkReceiveId = State.OutboundConfig?.LarkReceiveId ?? string.Empty,
-            LarkReceiveIdType = State.OutboundConfig?.LarkReceiveIdType ?? string.Empty,
-            LarkReceiveIdFallback = State.OutboundConfig?.LarkReceiveIdFallback ?? string.Empty,
-            LarkReceiveIdTypeFallback = State.OutboundConfig?.LarkReceiveIdTypeFallback ?? string.Empty,
+            TargetPlatform = targetPlatform,
+            ChannelAddress = UserAgentCatalogChannelAddress.FromParts(
+                targetPlatform,
+                State.OutboundConfig?.NyxProviderSlug,
+                State.OutboundConfig?.ConversationId,
+                channelAddress.Primary.AddressId,
+                channelAddress.Primary.AddressType,
+                channelAddress.Fallback?.AddressId,
+                channelAddress.Fallback?.AddressType),
             OutputFormat = State.OutboundConfig?.OutputFormat ?? SkillRunnerOutputFormat.Auto,
         };
 

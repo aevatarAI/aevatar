@@ -56,12 +56,41 @@ internal static class ChatRunRequestNormalizer
 
     private static CallerCredentialNormalizationResult NormalizeCallerCredential(WorkflowCallerCredential? source)
     {
-        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
+        if (source == null)
+            return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.None);
+
+        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(source.BearerToken);
         if (parsed.IsInvalid)
             return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.InvalidCallerCredential);
+
+        var authority = NormalizeCallerNyxIdAuthority(source.NyxIdAuthority);
+        if (parsed.IsMissing && authority == null)
+            return new CallerCredentialNormalizationResult(null, WorkflowChatRunStartError.None);
+
         return new CallerCredentialNormalizationResult(
-            parsed.IsMissing ? null : new WorkflowCallerCredential(parsed.NormalizedBearerToken),
+            new WorkflowCallerCredential(
+                parsed.IsMissing ? null : parsed.NormalizedBearerToken,
+                authority),
             WorkflowChatRunStartError.None);
+    }
+
+    private static WorkflowCallerNyxIdAuthority? NormalizeCallerNyxIdAuthority(
+        WorkflowCallerNyxIdAuthority? authority)
+    {
+        if (authority == null)
+            return null;
+
+        var platform = NormalizeOptional(authority.Platform);
+        var externalUserId = NormalizeOptional(authority.ExternalUserId);
+        var scope = NormalizeOptional(authority.Scope);
+        if (platform == null || externalUserId == null || scope == null)
+            return null;
+
+        return new WorkflowCallerNyxIdAuthority(
+            platform,
+            NormalizeOptional(authority.Tenant) ?? string.Empty,
+            externalUserId,
+            scope);
     }
 
     private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)

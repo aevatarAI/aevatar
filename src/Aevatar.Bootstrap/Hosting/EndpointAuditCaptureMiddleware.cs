@@ -15,6 +15,7 @@ public sealed class EndpointAuditCaptureMiddleware
     private const string AttemptedSuffix = ".attempted";
     private const string AnonymousCanonicalActorKey = "system:endpoint-audit-anonymous";
     private const string UnknownScopeId = "unknown";
+    private static readonly TimeSpan TerminalAppendTimeout = TimeSpan.FromSeconds(5);
 
     private readonly RequestDelegate _next;
     private readonly IAuditTrailAppender? _appender;
@@ -45,7 +46,12 @@ public sealed class EndpointAuditCaptureMiddleware
             return;
         }
 
-        if (context.User.Identity?.IsAuthenticated != true)
+        // Unauthenticated callers are skipped by default so 401 challenges are
+        // not recorded (no authenticated actor to hash). Endpoints that opt in
+        // via CaptureUnauthenticated (explicit AllowAnonymous ingress: OAuth
+        // callbacks, HMAC-signed webhooks, relay ingress) are still recorded,
+        // hashing the fixed anonymous canonical actor key.
+        if (context.User.Identity?.IsAuthenticated != true && !metadata.CaptureUnauthenticated)
         {
             await _next(context);
             return;
@@ -84,10 +90,10 @@ public sealed class EndpointAuditCaptureMiddleware
             }
 
             var outcome = EndpointAuditOutcomeClassifier.Classify(context, capturedException);
-            await AppendBestEffortAsync(
+            await AppendTerminalBestEffortAsync(
                 _appender,
                 () => BuildRecord(context, metadata, _identityHasher, metadata.OperationName, outcome),
-                context.RequestAborted);
+                metadata.OperationName);
         }
     }
 
@@ -152,6 +158,63 @@ public sealed class EndpointAuditCaptureMiddleware
                 ex,
                 "Endpoint audit append failed.");
         }
+    }
+
+    private async Task AppendTerminalBestEffortAsync(
+        IAuditTrailAppender appender,
+        Func<AuditRecord> recordFactory,
+        string operationName)
+    {
+        using var deadline = new CancellationTokenSource(TerminalAppendTimeout, _timeProvider);
+        Task<AuditTrailAppendResult> appendTask;
+        try
+        {
+            appendTask = appender.AppendAsync(recordFactory(), deadline.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogDebug(ex, "Endpoint audit append cancelled.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Endpoint audit append failed.");
+            return;
+        }
+
+        try
+        {
+            await appendTask.WaitAsync(TerminalAppendTimeout, _timeProvider);
+        }
+        catch (TimeoutException ex)
+        {
+            ObserveLateTerminalAppendFault(appendTask, operationName);
+            _logger.LogError(
+                ex,
+                "Endpoint terminal audit append timed out after {TimeoutSeconds}s. operation={OperationName}",
+                TerminalAppendTimeout.TotalSeconds,
+                operationName);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogDebug(ex, "Endpoint audit append cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Endpoint audit append failed.");
+        }
+    }
+
+    private void ObserveLateTerminalAppendFault(Task appendTask, string operationName)
+    {
+        _ = appendTask.ContinueWith(
+            task => _logger.LogError(
+                task.Exception,
+                "Endpoint terminal audit append failed after its deadline. operation={OperationName}",
+                operationName),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task EnsureRequestCapturedBestEffortAsync(
@@ -234,6 +297,14 @@ public sealed class EndpointAuditCaptureMiddleware
 
     private static AuditActorKind ResolveActorKind(ClaimsPrincipal user)
     {
+        // Anonymous ingress (opt-in CaptureUnauthenticated): no authenticated
+        // caller, so the record is a system-captured governance fact keyed by the
+        // fixed anonymous canonical actor key.
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            return AuditActorKind.System;
+        }
+
         return FirstClaimValue(user, "client_id", "app_id") is null
             ? AuditActorKind.NyxidUser
             : AuditActorKind.Service;
@@ -241,6 +312,11 @@ public sealed class EndpointAuditCaptureMiddleware
 
     private static AuditCredentialSource ResolveCredentialSource(ClaimsPrincipal user)
     {
+        if (user.Identity?.IsAuthenticated != true)
+        {
+            return AuditCredentialSource.System;
+        }
+
         return FirstClaimValue(user, "client_id", "app_id") is null
             ? AuditCredentialSource.BearerToken
             : AuditCredentialSource.ServiceAccount;

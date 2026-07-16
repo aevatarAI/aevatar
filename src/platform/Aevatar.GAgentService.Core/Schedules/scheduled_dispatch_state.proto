@@ -5,6 +5,7 @@ option csharp_namespace = "Aevatar.GAgentService.Core.Schedules";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/any.proto";
 import "agent_messages.proto";
+import "Credentials/credential_secret_references.proto";
 import "service_endpoint.proto";
 
 message ScheduledDispatchState
@@ -44,6 +45,10 @@ message ScheduledDispatchState
   // when it reactivates against the earliest still-armed occurrence.
   int32 overdue_fire_detected_count = 29;
   google.protobuf.Timestamp last_overdue_fire_at_utc_value = 30;
+  ScheduledDispatchScheduleModeState schedule_mode = 31;
+  google.protobuf.Timestamp one_shot_fire_at_utc_value = 32;
+  bool completed = 33;
+  google.protobuf.Timestamp completed_at_utc_value = 34;
 }
 
 enum ScheduledDispatchScheduleKindState
@@ -51,6 +56,12 @@ enum ScheduledDispatchScheduleKindState
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_GENERIC = 0;
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_WORKFLOW = 1;
   SCHEDULED_DISPATCH_SCHEDULE_KIND_STATE_SKILL_RUNNER = 2;
+}
+
+enum ScheduledDispatchScheduleModeState
+{
+  SCHEDULED_DISPATCH_SCHEDULE_MODE_STATE_RECURRING_CRON = 0;
+  SCHEDULED_DISPATCH_SCHEDULE_MODE_STATE_ONE_SHOT_AT_UTC = 1;
 }
 
 enum ScheduledDispatchRuntimeCallbackBackendState
@@ -76,6 +87,7 @@ message ScheduledDispatchTargetState
   aevatar.EventEnvelope envelope = 3;
   ScheduledServiceInvocationTargetState service_invocation = 4;
   reserved 5;
+  ScheduledDispatchCredentialRequirementTargetKindState credential_requirement_target_kind = 6;
 }
 
 enum ScheduledDispatchTargetKindState
@@ -84,6 +96,16 @@ enum ScheduledDispatchTargetKindState
   SCHEDULED_DISPATCH_TARGET_KIND_STATE_ENVELOPE = 1;
   SCHEDULED_DISPATCH_TARGET_KIND_STATE_SERVICE_INVOCATION = 2;
   reserved 3;
+}
+
+enum ScheduledDispatchCredentialRequirementTargetKindState
+{
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_UNSPECIFIED = 0;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_ENVELOPE = 1;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_STATIC_SERVICE = 2;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_SCRIPTING_SERVICE = 3;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_WORKFLOW_SERVICE = 4;
+  SCHEDULED_DISPATCH_CREDENTIAL_REQUIREMENT_TARGET_KIND_STATE_CONNECTOR = 5;
 }
 
 message ScheduledServiceInvocationTargetState
@@ -98,13 +120,25 @@ message ScheduledServiceInvocationTargetState
 
 message ScheduledServiceInvocationAuthState
 {
-  ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1;
+  ScheduledServiceInvocationNyxIdCredentialSourceState sender_nyx_id = 1 [deprecated = true];
   // Legacy field. Older schedule events may contain a raw bearer here; reducers
   // must not copy it into current state or runtime dispatch. Keep the field
   // readable until old events have been migrated, then reserve it.
-  string durable_sender_bearer_token = 2;
-  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3;
+  string durable_sender_bearer_token = 2 [deprecated = true];
+  ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState scope_owner_nyx_id = 3 [deprecated = true];
   bool legacy_durable_sender_bearer_blocked = 4;
+  oneof source {
+    ScheduledServiceInvocationNyxIdCredentialSourceState nyx_id = 5;
+    ScheduledServiceInvocationDurableCredentialReferenceState durable = 6;
+    ScheduledInvocationAgentKeyCredentialReferenceState scheduled_invocation_agent_key = 7;
+  }
+}
+
+message ScheduledInvocationAgentKeyCredentialReferenceState
+{
+  aevatar.credentials.SecretReference secret_reference = 1;
+  string api_key_id = 2;
+  int64 key_expires_at_unix_ms = 3;
 }
 
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
@@ -117,6 +151,20 @@ message ScheduledServiceInvocationNyxIdCredentialSourceState
 {
   ScheduledServiceInvocationNyxIdSubjectRefState subject = 1;
   string scope = 2;
+  ScheduledServiceInvocationNyxIdCredentialRoleState role = 3;
+}
+
+enum ScheduledServiceInvocationNyxIdCredentialRoleState
+{
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_UNSPECIFIED = 0;
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_SENDER = 1;
+  SCHEDULED_SERVICE_INVOCATION_NYX_ID_CREDENTIAL_ROLE_STATE_SCOPE_OWNER = 2;
+}
+
+message ScheduledServiceInvocationDurableCredentialReferenceState
+{
+  string credential_id = 1;
+  aevatar.credentials.SecretReference secret_reference = 2;
 }
 
 message ScheduledServiceInvocationNyxIdSubjectRefState
@@ -139,6 +187,8 @@ message ScheduledDispatchCreateCommand
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
   ScheduledDispatchScheduleKindState schedule_kind = 11;
+  ScheduledDispatchScheduleModeState schedule_mode = 12;
+  google.protobuf.Timestamp one_shot_fire_at = 13;
 }
 
 message ScheduledDispatchUpdateCommand
@@ -154,6 +204,8 @@ message ScheduledDispatchUpdateCommand
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
   ScheduledDispatchScheduleKindState schedule_kind = 11;
+  ScheduledDispatchScheduleModeState schedule_mode = 12;
+  google.protobuf.Timestamp one_shot_fire_at = 13;
 }
 
 message ScheduledDispatchEnsureCommand
@@ -169,6 +221,8 @@ message ScheduledDispatchEnsureCommand
   string payload_type_url = 9;
   ScheduledDispatchTargetState target = 10;
   ScheduledDispatchScheduleKindState schedule_kind = 11;
+  ScheduledDispatchScheduleModeState schedule_mode = 12;
+  google.protobuf.Timestamp one_shot_fire_at = 13;
 }
 
 message ScheduledDispatchConfiguredEvent
@@ -186,6 +240,8 @@ message ScheduledDispatchConfiguredEvent
   ScheduledDispatchTargetState target = 11;
   reserved 12;
   ScheduledDispatchScheduleKindState schedule_kind = 13;
+  ScheduledDispatchScheduleModeState schedule_mode = 14;
+  google.protobuf.Timestamp one_shot_fire_at = 15;
 }
 
 message ScheduledDispatchEnableCommand
@@ -219,6 +275,12 @@ message ScheduledDispatchDeletedEvent
 {
   string reason = 1;
   google.protobuf.Timestamp deleted_at = 2;
+}
+
+message ScheduledDispatchCompletedEvent
+{
+  string reason = 1;
+  google.protobuf.Timestamp completed_at = 2;
 }
 
 message ScheduledDispatchNextFireIntentRecordedEvent

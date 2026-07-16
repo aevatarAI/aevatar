@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -41,7 +42,11 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     [Fact]
     public async Task RemoteApprovalNotifyAsync_WhenLarkTarget_ShouldSendInteractiveCardThroughNyxProxy()
     {
-        var registry = BuildRegistry(BuildTarget("agent-remote-1", "lark", "oc_chat_1"));
+        var registry = BuildRegistry(BuildTarget(
+            "agent-remote-1",
+            "lark",
+            "legacy-conversation",
+            larkReceiveId: "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_remote_1"}}""");
         var port = new NyxIdRelayRemoteToolApprovalNotificationPort(
             new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
@@ -115,7 +120,11 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     [Fact]
     public async Task DeliverAsync_WhenLarkTarget_ShouldSendComposedInteractiveCardThroughNyxProxy()
     {
-        var registry = BuildRegistry(BuildTarget("agent-lark-1", "lark", "oc_chat_1"));
+        var registry = BuildRegistry(BuildTarget(
+            "agent-lark-1",
+            "lark",
+            "legacy-conversation",
+            larkReceiveId: "oc_chat_1"));
         var handler = new RecordingHandler("""{"code":0,"data":{"message_id":"om_1"}}""");
         var port = new NyxIdRelayChannelInteractionNotificationPort(
             new ChannelDeliveryTargetResolver(registry, NullLogger<ChannelDeliveryTargetResolver>.Instance),
@@ -263,6 +272,26 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
             .BeFalse("platform route contracts must be adapted inside the Lark boundary");
     }
 
+    [Fact]
+    public void ChannelDeliveryTargetResolver_ShouldNotExposeLarkShapedTargetMembers()
+    {
+        var memberNames = typeof(ChannelDeliveryTargetResolver)
+            .GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+            .Select(static member => member.Name)
+            .Concat(typeof(ChannelDeliveryTargetResolver)
+                .GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
+                .SelectMany(static type => type
+                    .GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+                    .Select(static member => member.Name)
+                    .Append(type.Name)))
+            .ToArray();
+
+        memberNames.Should().NotContain(static name =>
+                name.Contains("Lark", StringComparison.Ordinal) ||
+                name.Contains("RoutedChannelNativeDeliveryTarget", StringComparison.Ordinal),
+            "Lark receive target construction belongs to the Lark platform adapter");
+    }
+
     private static ChannelInteractionNotificationRequest BuildApprovalRequest(string deliveryTargetId) =>
         new()
         {
@@ -328,17 +357,21 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
     private static UserAgentDeliveryTarget BuildTarget(
         string deliveryTargetId,
         string platform,
-        string conversationId) =>
+        string conversationId,
+        string? larkReceiveId = null) =>
         new(
             AgentId: deliveryTargetId,
             Platform: platform,
             ConversationId: conversationId,
             NyxProviderSlug: platform == "telegram" ? "api-telegram-bot" : "api-lark-bot",
             NyxApiKey: "nyx-api-key-1",
-            LarkReceiveId: platform == "lark" ? conversationId : string.Empty,
-            LarkReceiveIdType: platform == "lark" ? "chat_id" : string.Empty,
-            LarkReceiveIdFallback: string.Empty,
-            LarkReceiveIdTypeFallback: string.Empty,
+            ChannelAddress: new Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress(
+                platform,
+                platform == "telegram" ? "api-telegram-bot" : "api-lark-bot",
+                conversationId,
+                new Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddressEndpoint(
+                    platform == "lark" ? larkReceiveId ?? conversationId : conversationId,
+                    platform == "lark" ? "chat_id" : string.Empty)),
             OutputFormat: SkillRunnerOutputFormat.Auto,
             TemplateName: string.Empty,
             AgentType: string.Empty);
@@ -399,13 +432,21 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
         public ChannelId Channel { get; } = ChannelId.From(platform);
         public int SendCallCount { get; private set; }
 
-        public Task SendAsync(
+        public Task<EmitResult> SendAsync(
             ChannelNativeDeliveryTarget target,
             ChannelNativeMessage message,
             CancellationToken cancellationToken)
         {
             SendCallCount++;
-            return Task.CompletedTask;
+            return Task.FromResult(EmitResult.Sent($"test:{platform}:{SendCallCount}"));
         }
+
+        public Task<EmitResult> UpdateAsync(
+            ChannelNativeDeliveryTarget target,
+            string platformMessageId,
+            ChannelNativeMessage message,
+            bool isFinal,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(EmitResult.Sent(platformMessageId, platformMessageId: platformMessageId));
     }
 }

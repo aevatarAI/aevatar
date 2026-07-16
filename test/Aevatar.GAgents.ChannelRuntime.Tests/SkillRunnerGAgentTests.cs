@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -12,6 +13,7 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
@@ -118,6 +120,27 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
         initialized.OutboundConfig.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
         _agent.State.OutboundConfig.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+    }
+
+    [Fact]
+    public async Task HandleInitializeAsync_WithChannelAddress_ShouldLeaveDeprecatedLarkAddressFieldsEmpty()
+    {
+        await _agent.HandleInitializeAsync(CreateInitializeCommand());
+
+        var persisted = await _store.GetEventsAsync("skill-runner-test");
+        var initialized = persisted.Should().ContainSingle().Subject.EventData.Unpack<SkillRunnerInitializedEvent>();
+        initialized.OutboundConfig.ChannelAddress.Primary.AddressId.Should().Be("oc_chat_1");
+        initialized.OutboundConfig.ChannelAddress.Primary.AddressType.Should().Be("chat_id");
+#pragma warning disable CS0612
+        initialized.OutboundConfig.LarkReceiveId.Should().BeEmpty();
+        initialized.OutboundConfig.LarkReceiveIdType.Should().BeEmpty();
+        initialized.OutboundConfig.LarkReceiveIdFallback.Should().BeEmpty();
+        initialized.OutboundConfig.LarkReceiveIdTypeFallback.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveId.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveIdType.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveIdFallback.Should().BeEmpty();
+        _agent.State.OutboundConfig.LarkReceiveIdTypeFallback.Should().BeEmpty();
+#pragma warning restore CS0612
     }
 
     [Fact]
@@ -1351,7 +1374,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task SendOutputAsync_ShouldUseTypedReceiveTarget_WhenLarkReceiveIdIsPopulated()
+    public async Task SendOutputAsync_ShouldUseChannelAddressTarget_WhenPrimaryAddressIsPopulated()
     {
         // Initialize with typed fields set (the shape AgentBuilderTool now writes for p2p flows).
         // Even though the legacy ConversationId is an `oc_*` chat id (which Lark would also accept
@@ -1359,8 +1382,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // production 400 where the relay's ConversationId fell through to ou_*.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_chat_legacy";
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_1"}}""");
@@ -1377,17 +1399,54 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var delivery = await ReadSingleDeliveryProducedEventAsync(_store, "skill-runner-test");
         delivery.DeliveryKind.Should().Be(DeliveryKind.TextMessage);
         delivery.Status.Should().Be(DeliveryStatus.Succeeded);
-        delivery.LarkMessageId.Should().Be("om_1");
-        delivery.Target.ReceiveId.Should().Be("ou_user_1");
+        delivery.ProviderMessageId.Should().Be("om_1");
+        delivery.Target.AddressId.Should().Be("ou_user_1");
         _agent.State.LastSuccessfulDelivery.Should().NotBeNull();
-        _agent.State.LastSuccessfulDelivery!.LarkMessageId.Should().Be("om_1");
+        _agent.State.LastSuccessfulDelivery!.ProviderMessageId.Should().Be("om_1");
+    }
+
+    [Fact]
+    public async Task SendOutputAsync_ShouldReadLegacyLarkAddressWireFields_WhenChannelAddressIsMissing()
+    {
+        var store = new InMemoryEventStore();
+        using var provider = BuildServiceProvider(store);
+        const string actorId = "skill-runner-legacy-address-state";
+#pragma warning disable CS0612 // legacy fields simulate state serialized before channel_address existed
+        await AppendLegacyInitializedEventAsync(
+            store,
+            actorId,
+            new SkillRunnerOutboundConfig
+            {
+                ConversationId = "oc_chat_legacy",
+                NyxProviderSlug = "api-lark-bot",
+                NyxApiKey = "nyx-api-key",
+                LarkReceiveId = "ou_user_1",
+                LarkReceiveIdType = "open_id",
+            });
+#pragma warning restore CS0612
+        var agent = CreateAgent(actorId, provider);
+        await agent.ActivateAsync();
+
+        var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_legacy_address"}}""");
+        AttachNyxIdApiClient(agent, handler);
+
+        await InvokeSendOutputAsync(agent, "legacy address report body");
+
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString()
+            .Should().Be("https://nyx.example.com/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages?receive_id_type=open_id");
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("receive_id").GetString().Should().Be("ou_user_1");
+        var delivery = await ReadSingleDeliveryProducedEventAsync(store, actorId);
+        delivery.Target.AddressId.Should().Be("ou_user_1");
+        delivery.Target.AddressType.Should().Be("open_id");
     }
 
     [Fact]
     public async Task SendOutputAsync_ShouldFallBackToConversationIdPrefixInference_ForLegacyState()
     {
-        // Backward compatibility: state persisted before the typed lark_receive_id fields existed
-        // still resolves through the prefix heuristic on ConversationId. The send still succeeds
+        // Backward compatibility: state persisted before generic channel_address existed still
+        // resolves through the prefix heuristic on ConversationId. The send still succeeds
         // (no exception); the sender emits a Debug breadcrumb that is not visible to xUnit.
         var store = new InMemoryEventStore();
         using var provider = BuildServiceProvider(store);
@@ -1422,8 +1481,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // Lark reports business errors as HTTP 200 with `code != 0`. Ignoring the response would
         // let HandleTriggerAsync persist SkillRunnerExecutionCompletedEvent on a silent failure.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":230002,"msg":"invalid receive_id"}""");
@@ -1442,8 +1500,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // HTTP non-2xx from NyxID gets packaged into a Nyx envelope that ProxyRequestAsync returns
         // verbatim. Ignoring it would mask transport / auth failures.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"error":true,"message":"upstream timeout"}""");
@@ -1459,14 +1516,13 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     public async Task SendOutputAsync_ShouldIncludeRecreateHint_When_LarkRejectsAsCrossAppOpenId()
     {
         // PR #409 review (pulls/409#review-4175198266): after this fix new agents capture
-        // union_id, but agents created before the fix still have `LarkReceiveIdType=open_id`
+        // union_id, but agents created before the fix still have an open_id delivery address
         // pinned to a relay-app-scoped `ou_*`. Their next scheduled run hits Lark
         // `99992361 open_id cross app` and the user sees the bare error in `/agent-status`'s
         // `last_error` with no clue what to do. Surface explicit "delete and recreate" guidance
         // so the failure becomes self-documenting.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "ou_relay_app_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_relay_app_user_1", "open_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler(
@@ -1496,10 +1552,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // shape end-to-end.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
-        initialize.OutboundConfig.LarkReceiveIdFallback = "on_user_1";
-        initialize.OutboundConfig.LarkReceiveIdTypeFallback = "union_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_dm_chat_1", "chat_id", "on_user_1", "union_id");
         await _agent.HandleInitializeAsync(initialize);
 
         // First (primary) attempt: NyxIdApiClient.SendAsync HTTP-400 envelope wrapping Lark
@@ -1527,8 +1580,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // unwrap together.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "on_relay_tenant_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "union_id";
+        SetChannelAddress(initialize.OutboundConfig, "on_relay_tenant_user_1", "union_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler(
@@ -1555,10 +1607,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // body uses the fallback `receive_id` / `receive_id_type`.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
-        initialize.OutboundConfig.LarkReceiveIdFallback = "on_user_1";
-        initialize.OutboundConfig.LarkReceiveIdTypeFallback = "union_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_dm_chat_1", "chat_id", "on_user_1", "union_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new SequencedHandler(
@@ -1583,10 +1632,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // recovery hint for the actual failure mode rather than a misleading retry.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
-        initialize.OutboundConfig.LarkReceiveIdFallback = "on_user_1";
-        initialize.OutboundConfig.LarkReceiveIdTypeFallback = "union_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_dm_chat_1", "chat_id", "on_user_1", "union_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new SequencedHandler(
@@ -1609,8 +1655,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // surfaced with the same recreate guidance so legacy agents (still pinned to union_id)
         // give users a way to recover without reading source.
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "on_relay_tenant_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "union_id";
+        SetChannelAddress(initialize.OutboundConfig, "on_relay_tenant_user_1", "union_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler(
@@ -1639,8 +1684,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // the outbound URL while the receive_id, body, and api key stay identical.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot-channel-loning";
         await _agent.HandleInitializeAsync(initialize);
 
@@ -1670,8 +1714,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // a last-resort attempt — better than the user seeing nothing.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot-channel-revoked";
         await _agent.HandleInitializeAsync(initialize);
 
@@ -1700,8 +1743,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // mis-capture doesn't pay double-POST cost just to fail twice.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot";
         await _agent.HandleInitializeAsync(initialize);
 
@@ -1726,8 +1768,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // field being populated.
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         await _agent.HandleInitializeAsync(initialize);
 
         var handler = new RecordingHandler("""{"code":0,"msg":"success","data":{"message_id":"om_success"}}""");
@@ -1749,8 +1790,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         // /agent-status, the one path users have to recover regardless of Lark visibility).
         var initialize = CreateInitializeCommand();
         initialize.OutboundConfig.ConversationId = "oc_dm_chat_1";
-        initialize.OutboundConfig.LarkReceiveId = "ou_user_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "open_id";
+        SetChannelAddress(initialize.OutboundConfig, "ou_user_1", "open_id");
         initialize.OutboundConfig.FailureNotificationProviderSlug = "api-lark-bot-channel-loning";
         await _agent.HandleInitializeAsync(initialize);
 
@@ -1810,6 +1850,32 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BuildExecutionLlmControl_ShouldResolveScheduledInvocationAgentKeyPurpose()
+    {
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "owner-scope:scheduled-agent",
+            "key-scheduled-agent",
+            "scheduled-agent-key",
+            "test"));
+        using var provider = BuildServiceProvider(
+            new InMemoryEventStore(),
+            services => services.AddSingleton<ISecretVault>(secretVault));
+        var agent = CreateAgent("skill-runner-scheduled-agent-key", provider);
+        await agent.ActivateAsync();
+        var initialize = CreateInitializeCommand();
+        initialize.OutboundConfig.ApiKeyId = "key-scheduled-agent";
+        initialize.OutboundConfig.NyxApiKeyReference = stored.Reference;
+        await agent.HandleInitializeAsync(initialize);
+
+        var control = await InvokeBuildExecutionLlmControlAsync(agent);
+
+        control.NyxIdAccessToken.Should().Be("scheduled-agent-key");
+        control.NyxIdOrgToken.Should().Be("scheduled-agent-key");
+    }
+
+    [Fact]
     public async Task BuildExecutionLlmControl_ShouldOmitOverrides_WhenOwnerLlmConfigFieldsAreEmpty()
     {
         // Bot owners who haven't saved any LLM preference get OwnerLlmConfig.Empty (or empty
@@ -1848,50 +1914,34 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ExecuteSkillAsync_AutoOutput_ShouldUseCardKitWithoutTextEdit()
+    public async Task ExecuteSkillAsync_AutoOutput_ShouldUseChannelNativeCardWithoutTextEdit()
     {
         var provider = new StubStreamingProviderFactory("a", "b", "c");
         var agent = CreateAgent("skill-runner-cardkit-auto", providerFactory: provider);
         await agent.ActivateAsync();
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_chat_1", "chat_id");
         await agent.HandleInitializeAsync(initialize);
-        var handler = new SequencedHandler(
-            """{"code":0,"msg":"success","data":{"card_id":"card_auto"}}""",
-            """{"code":0,"msg":"success","data":{"message_id":"om_card"}}""",
-            """{"code":0,"msg":"success","data":{}}""",
-            """{"code":0,"msg":"success","data":{}}""");
+        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_card"}}""");
         AttachNyxIdApiClient(agent, handler);
 
         var output = await InvokeExecuteSkillAsync(agent);
 
         output.Should().Be("abc");
-        handler.Requests.Should().HaveCount(4);
+        handler.Requests.Should().ContainSingle();
         handler.Requests[0].Method.Method.Should().Be("POST");
-        handler.Requests[0].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/cardkit/v1/cards");
-        ExtractCardKitCreateType(handler.Bodies[0]!).Should().Be("card_json");
-        handler.Requests[1].Method.Method.Should().Be("POST");
-        handler.Requests[1].RequestUri!.ToString()
+        handler.Requests[0].RequestUri!.ToString()
             .Should().Contain("/open-apis/im/v1/messages?receive_id_type=chat_id");
-        ExtractLarkMessageType(handler.Bodies[1]!).Should().Be("interactive");
-        ExtractInteractiveCardId(handler.Bodies[1]!).Should().Be("card_auto");
-        handler.Requests[2].Method.Method.Should().Be("PUT");
-        handler.Requests[2].RequestUri!.AbsolutePath.Should()
-            .EndWith("/open-apis/cardkit/v1/cards/card_auto/elements/streaming_main/content");
-        ExtractCardKitStreamContent(handler.Bodies[2]!).Should().Be("abc");
-        handler.Requests[3].Method.Method.Should().Be("PATCH");
-        handler.Requests[3].RequestUri!.AbsolutePath.Should()
-            .EndWith("/open-apis/cardkit/v1/cards/card_auto/settings");
-        ExtractCardKitSettings(handler.Bodies[3]!).Should().Contain("streaming_mode");
+        ExtractLarkMessageType(handler.Bodies[0]!).Should().Be("interactive");
+        handler.Bodies[0].Should().Contain("abc");
+        CountOccurrences(handler.Bodies[0]!, "abc").Should().Be(1);
         var deliveries = await ReadDeliveryProducedEventsAsync(_store, "skill-runner-cardkit-auto");
         deliveries.Should().ContainSingle(delivery =>
             delivery.DeliveryKind == DeliveryKind.StreamingCard &&
             delivery.Status == DeliveryStatus.Succeeded &&
-            delivery.LarkMessageId == "om_card" &&
-            delivery.CardId == "card_auto");
+            delivery.ProviderMessageId == "om_card");
         agent.State.LastSuccessfulDelivery.Should().NotBeNull();
-        agent.State.LastSuccessfulDelivery!.CardId.Should().Be("card_auto");
+        agent.State.LastSuccessfulDelivery!.ProviderMessageId.Should().Be("om_card");
     }
 
     [Fact]
@@ -1903,12 +1953,11 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var initialize = CreateInitializeCommand();
         initialize.OutputFormat = SkillRunnerOutputFormat.Text;
         initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.Text;
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_chat_1", "chat_id");
         await agent.HandleInitializeAsync(initialize);
         var handler = new SequencedHandler(
             """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""",
-            """{"code":0,"msg":"success","data":{}}""");
+            """{"code":0,"msg":"success","data":{"message_id":"om_stream"}}""");
         AttachNyxIdApiClient(agent, handler);
 
         var output = await InvokeExecuteSkillAsync(agent);
@@ -1922,7 +1971,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleTriggerAsync_WhenCardKitFailsAfterVisibleCard_ShouldPersistFailureWithoutRetry()
+    public async Task HandleTriggerAsync_WhenChannelNativeCardFailsBeforeVisibleMessage_ShouldFallBackToText()
     {
         var scheduler = new RecordingCallbackScheduler();
         using var serviceProvider = BuildServiceProvider(
@@ -1935,42 +1984,36 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             providerFactory: provider);
         await agent.ActivateAsync();
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_chat_1", "chat_id");
         await agent.HandleInitializeAsync(initialize);
         var handler = new SequencedHandler(
-            """{"code":0,"msg":"success","data":{"card_id":"card_partial"}}""",
-            """{"code":0,"msg":"success","data":{"message_id":"om_card"}}""",
             """{"code":230099,"msg":"card is unavailable"}""",
-            """{"code":0,"msg":"success","data":{}}""",
             """{"code":0,"msg":"success","data":{"message_id":"om_failure"}}""");
         AttachNyxIdApiClient(agent, handler);
 
         await agent.HandleTriggerAsync(new TriggerSkillRunnerExecutionCommand { Reason = "manual" });
 
-        var failed = await ReadSingleFailedEventAsync(
+        var completed = await ReadSingleCompletedEventAsync(
             serviceProvider.GetRequiredService<IEventStore>() as InMemoryEventStore
             ?? throw new InvalidOperationException("test store missing"),
             "skill-runner-cardkit-visible-failure");
-        failed.Error.Should().Contain("230099");
-        scheduler.Timeouts.Should().BeEmpty("a retry would create another visible card");
-        handler.Requests.Should().HaveCount(5);
-        handler.Requests[2].RequestUri!.AbsolutePath.Should()
-            .EndWith("/open-apis/cardkit/v1/cards/card_partial/elements/streaming_main/content");
-        handler.Requests[4].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/im/v1/messages");
-        ExtractLarkText(handler.Bodies[4]!).Should().Contain("Skill runner failed");
+        completed.Output.Should().Be("visible but stream failed");
+        scheduler.Timeouts.Should().BeEmpty();
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[0].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/im/v1/messages");
+        handler.Requests[1].RequestUri!.AbsolutePath.Should().EndWith("/open-apis/im/v1/messages");
+        ExtractLarkText(handler.Bodies[1]!).Should().Contain("visible but stream failed");
         var deliveries = await ReadDeliveryProducedEventsAsync(
             serviceProvider.GetRequiredService<IEventStore>() as InMemoryEventStore
             ?? throw new InvalidOperationException("test store missing"),
             "skill-runner-cardkit-visible-failure");
         deliveries.Should().Contain(delivery =>
             delivery.DeliveryKind == DeliveryKind.StreamingCard &&
-            delivery.Status == DeliveryStatus.FailedPostSend &&
-            delivery.CardId == "card_partial");
+            delivery.Status == DeliveryStatus.FailedPreSend);
         deliveries.Should().Contain(delivery =>
             delivery.DeliveryKind == DeliveryKind.TextMessage &&
             delivery.Status == DeliveryStatus.Succeeded &&
-            delivery.LarkMessageId == "om_failure");
+            delivery.ProviderMessageId == "om_failure");
     }
 
     [Fact]
@@ -2448,11 +2491,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                     },
                 ]),
             new StubStreamingTurn(["Full output moved to https://example.feishu.cn/docx/doccn_123"]));
-        var handler = new SequencedHandler(
-            """{"code":0,"msg":"success","data":{"card_id":"card_doc_link"}}""",
-            """{"code":0,"msg":"success","data":{"message_id":"om_doc_link"}}""",
-            """{"code":0,"msg":"success","data":{}}""",
-            """{"code":0,"msg":"success","data":{}}""");
+        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_doc_link"}}""");
         var docxTool = new FixedResultTool(
             "lark_docx_create",
             """{"success":true,"document_token":"doccn_123","document_url":"https://example.feishu.cn/docx/doccn_123","visibility_applied":true}""");
@@ -2462,8 +2501,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             toolSources: [new SingleToolSource(docxTool)]);
         await agent.ActivateAsync();
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_chat_1", "chat_id");
         await agent.HandleInitializeAsync(initialize);
         AttachNyxIdApiClient(agent, handler);
 
@@ -2475,18 +2513,17 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         provider.Requests[1].ToolContext.Should().NotBeNull();
         var docxToolContext = provider.Requests[1].ToolContext!;
         docxToolContext.Routing.MaxToolRoundsOverride.Should().Be(2);
-        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveId, "oc_chat_1");
-        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveIdType, "chat_id");
-        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkOutboundProxySlug, "api-lark-bot");
+        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.DeliveryAddressId, "oc_chat_1");
+        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.DeliveryAddressType, "chat_id");
+        docxToolContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.OutboundProviderSlug, "api-lark-bot");
         provider.Requests[2].Messages.Any(message =>
             message.Role == "tool" &&
             message.Content is not null &&
             message.Content.Contains("https://example.feishu.cn/docx/doccn_123", StringComparison.Ordinal))
             .Should().BeTrue();
-        handler.Requests.Should().HaveCount(4);
-        ExtractLarkMessageType(handler.Bodies[1]!).Should().Be("interactive");
-        ExtractInteractiveCardId(handler.Bodies[1]!).Should().Be("card_doc_link");
-        ExtractCardKitStreamContent(handler.Bodies[2]!).Should().Be("Full output moved to https://example.feishu.cn/docx/doccn_123");
+        handler.Requests.Should().ContainSingle();
+        ExtractLarkMessageType(handler.Bodies[0]!).Should().Be("interactive");
+        handler.Bodies[0].Should().Contain("Full output moved to https://example.feishu.cn/docx/doccn_123");
     }
 
     [Fact]
@@ -2518,8 +2555,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var initialize = CreateInitializeCommand();
         initialize.OutputFormat = SkillRunnerOutputFormat.FeishuDoc;
         initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.FeishuDoc;
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_chat_1", "chat_id");
         await agent.HandleInitializeAsync(initialize);
         AttachNyxIdApiClient(agent, handler);
 
@@ -2536,8 +2572,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         }
         docxTool.LastContext.Should().NotBeNull();
         docxTool.LastContext!.Request.RequestId.Should().EndWith(":lark-docx");
-        docxTool.LastContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveId, "oc_chat_1");
-        docxTool.LastContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.LarkReceiveIdType, "chat_id");
+        docxTool.LastContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.DeliveryAddressId, "oc_chat_1");
+        docxTool.LastContext.ExternalMetadata.Should().Contain(ChannelMetadataKeys.DeliveryAddressType, "chat_id");
         handler.Requests.Should().ContainSingle();
         ExtractLarkText(handler.Bodies[0]!).Should().Be("Full output moved to https://example.feishu.cn/docx/doccn_forced");
     }
@@ -2558,8 +2594,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var initialize = CreateInitializeCommand();
         initialize.OutputFormat = SkillRunnerOutputFormat.Text;
         initialize.OutboundConfig.OutputFormat = SkillRunnerOutputFormat.Text;
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_chat_1", "chat_id");
         await agent.HandleInitializeAsync(initialize);
         AttachNyxIdApiClient(agent, handler);
 
@@ -2588,8 +2623,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var agent = CreateAgent("skill-runner-docx-fallback", providerFactory: provider);
         await agent.ActivateAsync();
         var initialize = CreateInitializeCommand();
-        initialize.OutboundConfig.LarkReceiveId = "oc_chat_1";
-        initialize.OutboundConfig.LarkReceiveIdType = "chat_id";
+        SetChannelAddress(initialize.OutboundConfig, "oc_chat_1", "chat_id");
         await agent.HandleInitializeAsync(initialize);
         AttachNyxIdApiClient(agent, handler);
 
@@ -2636,11 +2670,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
     public async Task ExecuteSkillAsync_BelowLimitOutput_ShouldNotInvokeDocDecision()
     {
         var provider = new StubStreamingProviderFactory("short output");
-        var handler = new SequencedHandler(
-            """{"code":0,"msg":"success","data":{"card_id":"card_short"}}""",
-            """{"code":0,"msg":"success","data":{"message_id":"om_short"}}""",
-            """{"code":0,"msg":"success","data":{}}""",
-            """{"code":0,"msg":"success","data":{}}""");
+        var handler = new SequencedHandler("""{"code":0,"msg":"success","data":{"message_id":"om_short"}}""");
         var agent = CreateAgent("skill-runner-docx-not-needed", providerFactory: provider);
         await agent.ActivateAsync();
         await agent.HandleInitializeAsync(CreateInitializeCommand());
@@ -2650,9 +2680,9 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
 
         result.Should().Be("short output");
         provider.Requests.Should().ContainSingle();
-        handler.Requests.Should().HaveCount(4);
-        ExtractLarkMessageType(handler.Bodies[1]!).Should().Be("interactive");
-        ExtractCardKitStreamContent(handler.Bodies[2]!).Should().Be("short output");
+        handler.Requests.Should().ContainSingle();
+        ExtractLarkMessageType(handler.Bodies[0]!).Should().Be("interactive");
+        handler.Bodies[0].Should().Contain("short output");
     }
 
     [Fact]
@@ -2899,17 +2929,22 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+        var port = new SkillRunnerTestOutboundDeliveryPort();
+        port.AttachClient("skill-runner-streaming-test", client);
         return new SkillRunnerStreamingReplySink(
-            new LarkOutboundDispatcher(client, NullLogger<LarkOutboundDispatcher>.Instance),
-            new LarkSendNewMessageRequest(
-                "nyx-api-key",
-                "api-lark-bot",
-                MessageType: "text",
-                ContentJson: string.Empty,
-                PrimaryTarget: new LarkReceiveTarget("oc_chat_1", "chat_id", FellBackToPrefixInference: false)),
-            (_, detail) => detail,
-            logger: null,
-            editClient: client);
+            port,
+            new SkillRunnerOutboundDeliveryRequest(
+                "skill-runner-streaming-test",
+                new SkillRunnerOutboundConfig
+                {
+                    ConversationId = "oc_chat_1",
+                    NyxProviderSlug = "api-lark-bot",
+                    NyxApiKey = "nyx-api-key",
+                    ChannelAddress = CreateChannelAddress(),
+                },
+                Text: string.Empty,
+                SkillRunnerOutboundDeliveryStyle.Text),
+            logger: null);
     }
 
     private static Task InvokeStreamingRunStateAsync(object runState, string methodName, string text)
@@ -2926,6 +2961,19 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
         content.Should().NotBeNull();
         using var contentDocument = JsonDocument.Parse(content!);
         return contentDocument.RootElement.GetProperty("text").GetString()!;
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private static string ExtractLarkMessageType(string body)
@@ -2991,6 +3039,8 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             BindingFlags.Instance | BindingFlags.NonPublic);
         field.Should().NotBeNull();
         field!.SetValue(agent, client);
+        if (agent.Services.GetService<ISkillRunnerOutboundDeliveryPort>() is SkillRunnerTestOutboundDeliveryPort port)
+            port.AttachClient(agent.Id, client);
     }
 
     private static Task InvokeSendOutputAsync(SkillRunnerGAgent agent, string output)
@@ -3162,6 +3212,136 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
                 request.PrimaryTarget,
                 usedFallback: false));
         }
+
+        public Task<LarkUpdateMessageResult> UpdateMessageAsync(
+            LarkUpdateMessageRequest request,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(LarkUpdateMessageResult.Updated(request.MessageId));
+        }
+    }
+
+    private sealed class SkillRunnerTestOutboundDeliveryPort : ISkillRunnerOutboundDeliveryPort
+    {
+        private readonly IServiceProvider? _services;
+        private readonly ConcurrentDictionary<string, NyxIdApiClient> _clients = new(StringComparer.Ordinal);
+
+        public SkillRunnerTestOutboundDeliveryPort(IServiceProvider? services = null)
+        {
+            _services = services;
+        }
+
+        public void AttachClient(string agentId, NyxIdApiClient client)
+        {
+            _clients[agentId] = client;
+        }
+
+        public async Task<SkillRunnerOutboundDeliveryReceipt> SendAsync(
+            SkillRunnerOutboundDeliveryRequest request,
+            CancellationToken ct)
+        {
+            return await DeliverAsync(request, platformMessageId: null, isFinal: false, ct).ConfigureAwait(false);
+        }
+
+        public async Task<SkillRunnerOutboundDeliveryReceipt> UpdateAsync(
+            SkillRunnerOutboundDeliveryRequest request,
+            string platformMessageId,
+            bool isFinal,
+            CancellationToken ct)
+        {
+            return await DeliverAsync(request, platformMessageId, isFinal, ct).ConfigureAwait(false);
+        }
+
+        private async Task<SkillRunnerOutboundDeliveryReceipt> DeliverAsync(
+            SkillRunnerOutboundDeliveryRequest request,
+            string? platformMessageId,
+            bool isFinal,
+            CancellationToken ct)
+        {
+            var dispatcher = ResolveDispatcher(request.AgentId);
+            var sender = new LarkChannelNativeMessageSender(dispatcher);
+            var producer = new LarkChannelNativeMessageProducer(new LarkMessageComposer());
+            var target = BuildTarget(request);
+            var content = BuildContent(request);
+            var context = new ComposeContext
+            {
+                Conversation = new ConversationReference
+                {
+                    CanonicalKey = $"lark:{target.ConversationId}",
+                },
+            };
+            var native = producer.Produce(content, context);
+            var routedTarget = new LarkChannelNativeDeliveryTargetAdapter().Adapt(target);
+            var result = string.IsNullOrWhiteSpace(platformMessageId)
+                ? await sender.SendAsync(routedTarget, native, ct)
+                : await sender.UpdateAsync(routedTarget, platformMessageId, native, isFinal, ct);
+            return new SkillRunnerOutboundDeliveryReceipt(
+                result.SentActivityId,
+                result.PlatformMessageId,
+                result.Capability);
+        }
+
+        private ILarkOutboundDispatcher ResolveDispatcher(string agentId)
+        {
+            if (_services?.GetService<ILarkOutboundDispatcher>() is { } dispatcher)
+                return dispatcher;
+
+            if (_clients.TryGetValue(agentId, out var client))
+                return new LarkOutboundDispatcher(client, NullLogger<LarkOutboundDispatcher>.Instance);
+
+            return new RecordingLarkOutboundDispatcher();
+        }
+
+        private static UserAgentDeliveryTarget BuildTarget(SkillRunnerOutboundDeliveryRequest request)
+        {
+            var outbound = request.OutboundConfig ?? throw new InvalidOperationException("Test outbound config is missing.");
+            return new UserAgentDeliveryTarget(
+                AgentId: request.AgentId,
+                Platform: "lark",
+                ConversationId: outbound.ConversationId,
+                NyxProviderSlug: string.IsNullOrWhiteSpace(request.ProviderSlugOverride)
+                    ? outbound.NyxProviderSlug
+                    : request.ProviderSlugOverride.Trim(),
+                NyxApiKey: outbound.NyxApiKey,
+                ChannelAddress: UserAgentCatalogChannelAddress.ToModel(
+                    outbound.ChannelAddress,
+                    "lark",
+                    string.IsNullOrWhiteSpace(request.ProviderSlugOverride)
+                        ? outbound.NyxProviderSlug
+                        : request.ProviderSlugOverride.Trim(),
+                    outbound.ConversationId,
+#pragma warning disable CS0612 // deprecated fields simulate state serialized before channel_address existed
+                    outbound.LarkReceiveId,
+                    outbound.LarkReceiveIdType,
+                    outbound.LarkReceiveIdFallback,
+                    outbound.LarkReceiveIdTypeFallback),
+#pragma warning restore CS0612
+                OutputFormat: outbound.OutputFormat,
+                TemplateName: string.Empty,
+                AgentType: string.Empty);
+        }
+
+        private static MessageContent BuildContent(SkillRunnerOutboundDeliveryRequest request)
+        {
+            var content = new MessageContent
+            {
+                Text = request.Style == SkillRunnerOutboundDeliveryStyle.Card
+                    ? "Scheduled run output"
+                    : request.Text,
+            };
+            if (request.Style == SkillRunnerOutboundDeliveryStyle.Card)
+            {
+                content.Cards.Add(new CardBlock
+                {
+                    Kind = CardBlockKind.Section,
+                    Title = "Scheduled run output",
+                    Text = request.Text,
+                });
+            }
+
+            return content;
+        }
     }
 
     /// <summary>
@@ -3208,7 +3388,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             toolSources: toolSources,
             remoteSkillFetcher: remoteSkillFetcher,
             workflowDispatchService: workflowDispatchService,
-            larkOutboundDispatcher: resolvedServices.GetService<ILarkOutboundDispatcher>())
+            outboundDeliveryPort: resolvedServices.GetService<ISkillRunnerOutboundDeliveryPort>())
         {
             Services = resolvedServices,
             EventSourcingBehaviorFactory =
@@ -3231,6 +3411,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             typeof(IEventSourcingBehaviorFactory<>),
             typeof(DefaultEventSourcingBehaviorFactory<>));
         configure?.Invoke(services);
+        services.AddSingleton<ISkillRunnerOutboundDeliveryPort>(sp => new SkillRunnerTestOutboundDeliveryPort(sp));
         return services.BuildServiceProvider();
     }
 
@@ -3252,6 +3433,7 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             ApiKeyId = FixedScheduledSecretVault.ApiKeyId,
             NyxApiKey = string.Empty,
             NyxApiKeyReference = FixedScheduledSecretVault.Reference(),
+            ChannelAddress = CreateChannelAddress(),
         },
     };
 
@@ -3283,8 +3465,42 @@ public sealed class SkillRunnerGAgentTests : IAsyncLifetime
             ApiKeyId = FixedScheduledSecretVault.ApiKeyId,
             NyxApiKey = string.Empty,
             NyxApiKeyReference = FixedScheduledSecretVault.Reference(),
+            ChannelAddress = CreateChannelAddress(),
         },
     };
+
+    private static Aevatar.GAgents.Scheduled.ChannelDeliveryAddress CreateChannelAddress(
+        string conversationId = "oc_chat_1",
+        string addressId = "oc_chat_1",
+        string addressType = "chat_id",
+        string? fallbackAddressId = null,
+        string? fallbackAddressType = null,
+        string platform = "lark",
+        string providerSlug = "api-lark-bot") =>
+        UserAgentCatalogChannelAddress.FromParts(
+            platform,
+            providerSlug,
+            conversationId,
+            addressId,
+            addressType,
+            fallbackAddressId,
+            fallbackAddressType);
+
+    private static void SetChannelAddress(
+        SkillRunnerOutboundConfig outbound,
+        string addressId,
+        string addressType,
+        string? fallbackAddressId = null,
+        string? fallbackAddressType = null)
+    {
+        outbound.ChannelAddress = CreateChannelAddress(
+            outbound.ConversationId,
+            addressId,
+            addressType,
+            fallbackAddressId,
+            fallbackAddressType,
+            providerSlug: outbound.NyxProviderSlug);
+    }
 
     private static InitializeSkillRunnerCommand CreateInitializeCommandWithExternalSource(
         string sourceId = "webhook-main")

@@ -4,7 +4,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using FluentAssertions;
 using Xunit;
-using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgents.Platform.Lark;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

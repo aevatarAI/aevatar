@@ -256,6 +256,7 @@ public abstract class ScopeServiceEndpointTestKit
             FakeServiceTrafficViewQueryReader trafficViewReader,
             FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
             FakeServiceRevisionCatalogQueryReader revisionCatalog,
+            FakeMemberPublishedServiceResolver memberPublishedServiceResolver,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
             FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
@@ -283,6 +284,7 @@ public abstract class ScopeServiceEndpointTestKit
             TrafficViewReader = trafficViewReader;
             InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
+            MemberPublishedServiceResolver = memberPublishedServiceResolver;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
             StaticGAgentStreamInvocationPort = staticGAgentStreamInvocationPort;
@@ -329,6 +331,8 @@ public abstract class ScopeServiceEndpointTestKit
         public FakeServiceInvocationCatalogQueryReader InvocationCatalogReader { get; }
 
         public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
+
+        public FakeMemberPublishedServiceResolver MemberPublishedServiceResolver { get; }
 
         public FakeTeamEntryMemberResolver TeamEntryMemberResolver { get; }
 
@@ -378,6 +382,7 @@ public abstract class ScopeServiceEndpointTestKit
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
             var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(serviceCatalogReader, trafficViewReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+            var memberPublishedServiceResolver = new FakeMemberPublishedServiceResolver();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
@@ -415,7 +420,7 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(lifecycleQueryPort);
             builder.Services.AddSingleton<IServiceServingQueryPort>(servingQueryPort);
-            builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
+            builder.Services.AddSingleton<IMemberPublishedServiceResolver>(memberPublishedServiceResolver);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
             builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
@@ -551,6 +556,7 @@ public abstract class ScopeServiceEndpointTestKit
                 trafficViewReader,
                 invocationCatalogReader,
                 revisionCatalog,
+                memberPublishedServiceResolver,
                 teamEntryMemberResolver,
                 interactionService,
                 staticGAgentStreamInvocationPort,
@@ -869,6 +875,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public IReadOnlyList<ServiceRunSnapshot> Snapshots => _snapshots;
 
+        public List<ServiceRunQuery> Queries { get; } = [];
+
         public void Upsert(ServiceRunSnapshot snapshot)
         {
             _snapshots.RemoveAll(x =>
@@ -905,6 +913,7 @@ public abstract class ScopeServiceEndpointTestKit
 
         public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(ServiceRunQuery query, CancellationToken ct = default)
         {
+            Queries.Add(query);
             var bridged = MaterializeForQuery(query.ScopeId, query.ServiceId).ToList();
             IEnumerable<ServiceRunSnapshot> results = bridged;
             if (!string.IsNullOrWhiteSpace(query.ScopeId))
@@ -986,6 +995,30 @@ public abstract class ScopeServiceEndpointTestKit
                 UpdatedAt: binding.UpdatedAt ?? DateTimeOffset.UtcNow,
                 LastOutput: string.Empty,
                 LastError: string.Empty);
+    }
+
+    protected sealed class FakeMemberPublishedServiceResolver : IMemberPublishedServiceResolver
+    {
+        private readonly DefaultMemberPublishedServiceResolver _fallback = new();
+
+        public List<MemberPublishedServiceResolveRequest> Calls { get; } = [];
+
+        public MemberPublishedServiceResolution? Result { get; set; }
+
+        public Exception? Exception { get; set; }
+
+        public Task<MemberPublishedServiceResolution> ResolveAsync(
+            MemberPublishedServiceResolveRequest request,
+            CancellationToken ct = default)
+        {
+            Calls.Add(request);
+            if (Exception != null)
+                throw Exception;
+
+            return Result == null
+                ? _fallback.ResolveAsync(request, ct)
+                : Task.FromResult(Result);
+        }
     }
 
     protected sealed class FakeTeamEntryMemberResolver : ITeamEntryMemberResolver

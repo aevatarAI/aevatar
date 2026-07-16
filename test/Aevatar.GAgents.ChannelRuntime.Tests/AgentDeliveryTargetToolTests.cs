@@ -63,17 +63,15 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
-        var secretVault = new InMemorySecretVault();
+        var credentialLifecycle = Substitute.For<IScheduledAgentCredentialLifecycle>();
 
-        var missingQuery = () => new AgentDeliveryTargetTool(null!, commandPort, resolver, secretVault);
-        var missingCommand = () => new AgentDeliveryTargetTool(queryPort, null!, resolver, secretVault);
-        var missingResolver = () => new AgentDeliveryTargetTool(queryPort, commandPort, null!, secretVault);
-        var missingSecretVault = () => new AgentDeliveryTargetTool(queryPort, commandPort, resolver, null!);
+        var missingQuery = () => new AgentDeliveryTargetTool(null!, commandPort, resolver, credentialLifecycle);
+        var missingCommand = () => new AgentDeliveryTargetTool(queryPort, null!, resolver, credentialLifecycle);
+        var missingResolver = () => new AgentDeliveryTargetTool(queryPort, commandPort, null!, credentialLifecycle);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
         missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
-        missingSecretVault.Should().Throw<ArgumentNullException>().WithParameterName("secretVault");
     }
 
     [Fact]
@@ -229,8 +227,10 @@ public sealed class AgentDeliveryTargetToolTests
             captured.AgentType.Should().Be("delivery_target");
             captured.TemplateName.Should().Be("explicit_delivery_target");
             captured.TargetPlatform.Should().Be("lark");
-            captured.LarkReceiveId.Should().BeEmpty();
-            captured.LarkReceiveIdType.Should().BeEmpty();
+            captured.ChannelAddress.Platform.Should().Be("lark");
+            captured.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-2");
+            captured.ChannelAddress.Primary.AddressId.Should().Be("oc_9f1b8d3835674963417954fad20f8a3c");
+            captured.ChannelAddress.Primary.AddressType.Should().BeEmpty();
             captured.OwnerScope.Should().NotBeNull();
             captured.OwnerScope!.MatchesStrictly(caller).Should().BeTrue();
 
@@ -265,7 +265,11 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), new RecordingApiKeyIssuer());
+        var tool = new AgentDeliveryTargetTool(
+            queryPort,
+            commandPort,
+            resolver,
+            CreateCredentialLifecycle(commandPort, new InMemorySecretVault(), new RecordingApiKeyIssuer()));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -291,8 +295,10 @@ public sealed class AgentDeliveryTargetToolTests
             captured!.TargetPlatform.Should().Be("email");
             captured.ConversationId.Should().Be("approvals@example.com");
             captured.NyxProviderSlug.Should().Be("api-email-outbound");
-            captured.LarkReceiveId.Should().BeEmpty();
-            captured.LarkReceiveIdType.Should().BeEmpty();
+            captured.ChannelAddress.Platform.Should().Be("email");
+            captured.ChannelAddress.ProviderSlug.Should().Be("api-email-outbound");
+            captured.ChannelAddress.Primary.AddressId.Should().Be("approvals@example.com");
+            captured.ChannelAddress.Primary.AddressType.Should().BeEmpty();
         }
         finally
         {
@@ -314,7 +320,11 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
+        var tool = new AgentDeliveryTargetTool(
+            queryPort,
+            commandPort,
+            resolver,
+            CreateCredentialLifecycle(commandPort, new InMemorySecretVault(), issuer));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -364,8 +374,10 @@ public sealed class AgentDeliveryTargetToolTests
             queryPort,
             commandPort,
             resolver,
-            new InMemorySecretVault(),
-            new RecordingApiKeyIssuer());
+            CreateCredentialLifecycle(
+                commandPort,
+                new InMemorySecretVault(),
+                new RecordingApiKeyIssuer()));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -410,7 +422,11 @@ public sealed class AgentDeliveryTargetToolTests
         resolver.TryResolveAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<OwnerScope?>(caller));
 
-        var tool = new AgentDeliveryTargetTool(queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
+        var tool = new AgentDeliveryTargetTool(
+            queryPort,
+            commandPort,
+            resolver,
+            CreateCredentialLifecycle(commandPort, new InMemorySecretVault(), issuer));
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
         {
@@ -429,7 +445,13 @@ public sealed class AgentDeliveryTargetToolTests
                 """);
 
             await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("dispatch failed");
-            issuer.RevokedApiKeyIds.Should().ContainSingle().Which.Should().Be("key-aelf-twitter-approval");
+            await commandPort.Received(1).RequestCredentialRevocationAsync(
+                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
+                    intent.AgentId == "aelf-twitter-approval" &&
+                    intent.ApiKeyId == "key-aelf-twitter-approval" &&
+                    intent.OwnerScope.MatchesStrictly(caller)),
+                Arg.Any<CancellationToken>(),
+                "session-token");
         }
         finally
         {
@@ -449,8 +471,15 @@ public sealed class AgentDeliveryTargetToolTests
                     AgentId = "aelf-twitter-approval",
                     ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
                     NyxProviderSlug = "api-lark-bot-2",
-                    LarkReceiveId = "oc_9f1b8d3835674963417954fad20f8a3c",
-                    LarkReceiveIdType = "chat_id",
+                    ChannelAddress = Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress.Empty with
+                    {
+                        Platform = "lark",
+                        ProviderSlug = "api-lark-bot-2",
+                        ConversationId = "oc_9f1b8d3835674963417954fad20f8a3c",
+                        Primary = new Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddressEndpoint(
+                            "oc_9f1b8d3835674963417954fad20f8a3c",
+                            "chat_id"),
+                    },
                     TargetPlatform = "lark",
                     OwnerScope = OwnerScope.ForNyxIdNative("user-1"),
                     AgentType = "delivery_target",
@@ -616,6 +645,66 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_Upsert_UsesRequestedDeliveryPlatformInsteadOfCallerPlatform()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-1", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "agent-1",
+                ConversationId = "oc_chat_existing",
+                NyxProviderSlug = "api-lark-bot",
+                TargetPlatform = "lark",
+                OwnerScope = caller,
+            }));
+
+        UserAgentCatalogUpsertCommand? captured = null;
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.UpsertAsync(Arg.Do<UserAgentCatalogUpsertCommand>(command => captured = command), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(callerScopeResolver);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "upsert",
+                  "agent_id": "agent-1",
+                  "platform": "lark",
+                  "conversation_id": "oc_chat_1",
+                  "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+            doc.RootElement.GetProperty("platform").GetString().Should().Be("lark");
+            captured.Should().NotBeNull();
+            captured!.TargetPlatform.Should().Be("lark");
+            captured.ChannelAddress.Platform.Should().Be("lark");
+            captured.OwnerScope!.Platform.Should().Be(OwnerScope.NyxIdPlatform);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Delete_Requires_Confirm()
     {
         var caller = OwnerScope.ForNyxIdNative("user-1");
@@ -689,7 +778,10 @@ public sealed class AgentDeliveryTargetToolTests
             var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-2","confirm":true}""");
 
             result.Should().Contain("not found");
-            await commandPort.DidNotReceive().TombstoneAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            await commandPort.DidNotReceive().TombstoneAsync(
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<string>());
         }
         finally
         {
@@ -709,14 +801,20 @@ public sealed class AgentDeliveryTargetToolTests
                 AgentId = "agent-3",
                 ConversationId = "oc_chat_3",
                 NyxProviderSlug = "api-lark-bot",
+                ApiKeyId = "key-agent-3",
                 OwnerScope = caller,
             }));
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; test asserts caller-scoped guard and command dispatch.
-        commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>())
+        commandPort.TombstoneAsync("agent-3", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
+        commandPort.RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var issuer = new RecordingApiKeyIssuer();
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
         callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
@@ -726,6 +824,7 @@ public sealed class AgentDeliveryTargetToolTests
         services.AddSingleton(queryPort);
         services.AddSingleton(commandPort);
         services.AddSingleton(callerScopeResolver);
+        services.AddSingleton<IScheduledAgentApiKeyIssuer>(issuer);
         var tool = CreateTool(services);
 
         AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
@@ -738,7 +837,76 @@ public sealed class AgentDeliveryTargetToolTests
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
-            await commandPort.Received(1).TombstoneAsync("agent-3", Arg.Any<CancellationToken>());
+            await commandPort.Received(1).TombstoneAsync(
+                "agent-3",
+                Arg.Any<CancellationToken>(),
+                "session-token");
+            issuer.RevokedApiKeyIds.Should().BeEmpty();
+            await commandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Delete_DoesNotRecordRevocationAttemptInToolLayer()
+    {
+        var caller = OwnerScope.ForNyxIdNative("user-1");
+
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        queryPort.GetForCallerAsync("agent-pending-revoke", Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UserAgentCatalogReadModelEntry?>(new UserAgentCatalogReadModelEntry
+            {
+                AgentId = "agent-pending-revoke",
+                ConversationId = "oc_chat_pending",
+                NyxProviderSlug = "api-lark-bot",
+                ApiKeyId = "key-pending-revoke",
+                OwnerScope = caller,
+            }));
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        commandPort.TombstoneAsync("agent-pending-revoke", Arg.Any<CancellationToken>(), Arg.Any<string>())
+            .Returns(Task.CompletedTask);
+        commandPort.RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var issuer = new RecordingApiKeyIssuer
+        {
+            RevokeResult = ScheduledAgentApiKeyRevokeResult.Pending(
+                403,
+                "api key owner mismatch",
+                UserAgentApiKeyRevocationFailureKind.Unauthorized),
+        };
+
+        var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
+        callerScopeResolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(caller));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(commandPort);
+        services.AddSingleton(callerScopeResolver);
+        services.AddSingleton<IScheduledAgentApiKeyIssuer>(issuer);
+        var tool = CreateTool(services);
+
+        AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+        {
+            [LLMRequestMetadataKeys.NyxIdAccessToken] = "session-token",
+        });
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"delete","agent_id":"agent-pending-revoke","confirm":true}""");
+
+            using var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("api_key_revocation_status").GetString().Should().Be("pending");
+            issuer.RevokedApiKeyIds.Should().BeEmpty();
+            await commandPort.DidNotReceive().RecordApiKeyRevocationAttemptAsync(
+                Arg.Any<UserAgentCatalogRecordApiKeyRevocationAttemptCommand>(),
+                Arg.Any<CancellationToken>());
         }
         finally
         {
@@ -767,7 +935,7 @@ public sealed class AgentDeliveryTargetToolTests
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; accepted JSON remains a tool-boundary concern.
-        commandPort.TombstoneAsync("agent-7", Arg.Any<CancellationToken>())
+        commandPort.TombstoneAsync("agent-7", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
 
         var callerScopeResolver = Substitute.For<ICallerScopeResolver>();
@@ -810,7 +978,7 @@ public sealed class AgentDeliveryTargetToolTests
         queryPort.QueryByCallerAsync(Arg.Any<OwnerScope>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<UserAgentCatalogReadModelEntry>>(Array.Empty<UserAgentCatalogReadModelEntry>()));
 
-        var source = new AgentDeliveryTargetToolSource(queryPort, commandPort, callerScopeResolver, new InMemorySecretVault());
+        var source = new AgentDeliveryTargetToolSource(queryPort, commandPort, callerScopeResolver);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().ContainSingle();
@@ -878,17 +1046,14 @@ public sealed class AgentDeliveryTargetToolTests
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
         var resolver = Substitute.For<ICallerScopeResolver>();
-        var secretVault = new InMemorySecretVault();
 
-        var missingQuery = () => new AgentDeliveryTargetToolSource(null!, commandPort, resolver, secretVault);
-        var missingCommand = () => new AgentDeliveryTargetToolSource(queryPort, null!, resolver, secretVault);
-        var missingResolver = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, null!, secretVault);
-        var missingSecretVault = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, resolver, null!);
+        var missingQuery = () => new AgentDeliveryTargetToolSource(null!, commandPort, resolver);
+        var missingCommand = () => new AgentDeliveryTargetToolSource(queryPort, null!, resolver);
+        var missingResolver = () => new AgentDeliveryTargetToolSource(queryPort, commandPort, null!);
 
         missingQuery.Should().Throw<ArgumentNullException>().WithParameterName("queryPort");
         missingCommand.Should().Throw<ArgumentNullException>().WithParameterName("commandPort");
         missingResolver.Should().Throw<ArgumentNullException>().WithParameterName("callerScopeResolver");
-        missingSecretVault.Should().Throw<ArgumentNullException>().WithParameterName("secretVault");
     }
 
     [Fact]
@@ -1086,7 +1251,7 @@ public sealed class AgentDeliveryTargetToolTests
         // Refactor (iter5/cluster-012):
         //   Old pattern: Stub manufactured a tombstone result just to satisfy a dead return shape.
         //   New principle: Stub returns Task.CompletedTask; accepted JSON remains a tool-boundary concern.
-        commandPort.TombstoneAsync("agent-slow", Arg.Any<CancellationToken>())
+        commandPort.TombstoneAsync("agent-slow", Arg.Any<CancellationToken>(), Arg.Any<string>())
             .Returns(Task.CompletedTask);
 
         var resolver = Substitute.For<ICallerScopeResolver>();
@@ -1124,13 +1289,30 @@ public sealed class AgentDeliveryTargetToolTests
     private static AgentDeliveryTargetTool CreateTool(IServiceCollection? services = null)
     {
         var provider = (services ?? CreateDefaultServices()).BuildServiceProvider();
+        var commandPort = provider.GetService<IUserAgentCatalogCommandPort>() ??
+                          Substitute.For<IUserAgentCatalogCommandPort>();
+        var credentialLifecycle = provider.GetService<IScheduledAgentCredentialLifecycle>();
+        var issuer = provider.GetService<IScheduledAgentApiKeyIssuer>();
+        if (credentialLifecycle is null && issuer is not null)
+        {
+            credentialLifecycle = CreateCredentialLifecycle(
+                commandPort,
+                provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
+                issuer);
+        }
+
         return new AgentDeliveryTargetTool(
             provider.GetRequiredService<IUserAgentCatalogQueryPort>(),
-            provider.GetService<IUserAgentCatalogCommandPort>() ?? Substitute.For<IUserAgentCatalogCommandPort>(),
+            commandPort,
             provider.GetRequiredService<ICallerScopeResolver>(),
-            provider.GetService<ISecretVault>() ?? new InMemorySecretVault(),
-            provider.GetService<IScheduledAgentApiKeyIssuer>());
+            credentialLifecycle);
     }
+
+    private static IScheduledAgentCredentialLifecycle CreateCredentialLifecycle(
+        IUserAgentCatalogCommandPort commandPort,
+        ISecretVault secretVault,
+        IScheduledAgentApiKeyIssuer issuer) =>
+        new ScheduledAgentCredentialLifecycle(secretVault, commandPort, issuer);
 
     private static IServiceCollection CreateDefaultServices()
     {
@@ -1164,6 +1346,7 @@ public sealed class AgentDeliveryTargetToolTests
     {
         public List<IssueCall> Issues { get; } = [];
         public List<string> RevokedApiKeyIds { get; } = [];
+        public ScheduledAgentApiKeyRevokeResult RevokeResult { get; init; } = ScheduledAgentApiKeyRevokeResult.Complete();
 
         public Task<ScheduledAgentApiKeyIssueResult> IssueAsync(
             string token,
@@ -1177,11 +1360,12 @@ public sealed class AgentDeliveryTargetToolTests
             return Task.FromResult(ScheduledAgentApiKeyIssueResult.Succeeded($"key-{agentId}", "secret-created-key"));
         }
 
-        public Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct)
+        public Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct)
         {
             RevokedApiKeyIds.Add(apiKeyId);
-            return Task.CompletedTask;
+            return Task.FromResult(RevokeResult);
         }
+
     }
 
     private sealed record IssueCall(

@@ -33,6 +33,7 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Shared\ProjectionActivationPlanProviderTestBase.cs" Link="Shared\ProjectionActivationPlanProviderTestBase.cs" />

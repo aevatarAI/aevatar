@@ -2,6 +2,7 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.GAgents.Channel.Identity;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 
@@ -11,6 +12,18 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 [Collection(NyxIdRedirectUriEnvCollection.Name)]
 public sealed class AevatarOAuthClientBootstrapServiceTests
 {
+    [Fact]
+    public async Task StartAsync_WhenDisabled_ShouldNotDispatchBootstrapIntent()
+    {
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch, enabled: false);
+
+        await service.StartAsync(CancellationToken.None);
+
+        dispatch.Commands.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task StartAsync_DispatchesOneBootstrapIntent()
     {
@@ -26,7 +39,6 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
-        command.DefaultServiceSlugs.Should().Equal("aevatar");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
     }
@@ -60,23 +72,8 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         command.NyxidAuthority.Should().Be(environment.Authority);
         command.RedirectUri.Should().Be(environment.RedirectUri);
         command.RedirectUris.Should().Equal(environment.RedirectUri, environment.ConsoleRedirectUri);
-        command.DefaultServiceSlugs.Should().Equal("aevatar");
         command.ClientName.Should().Be("aevatar");
         command.ForceReprovision.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task DispatchBootstrapIntentAsync_UsesConfiguredDefaultServiceSlugs()
-    {
-        using var environment = new OAuthBootstrapEnvironment(defaultServiceSlugs: "aevatar, custom-aevatar ");
-        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
-            static _ => OAuthClientReceipt());
-        var service = NewService(dispatch);
-
-        await service.DispatchBootstrapIntentAsync(CancellationToken.None);
-
-        dispatch.Commands.Should().ContainSingle();
-        dispatch.Commands[0].DefaultServiceSlugs.Should().Equal("aevatar", "custom-aevatar");
     }
 
     [Fact]
@@ -90,6 +87,100 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         await act.Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("*InvalidTarget*");
+    }
+
+    [Fact]
+    public async Task DispatchBootstrapIntentAsync_BlocksPersistentLocal_WhenAuthorityFallsBackToProduction()
+    {
+        using var environment = new OAuthBootstrapEnvironment(
+            environmentName: "PersistentLocal",
+            configureAuthority: false);
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch);
+
+        var act = () => service.DispatchBootstrapIntentAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*PersistentLocal*{NyxIdAuthorityResolver.OverrideEnvVar}*Dynamic Client Registration*");
+        dispatch.Commands.Should().BeEmpty("bootstrap must fail before the actor can execute DCR against production NyxID");
+    }
+
+    [Fact]
+    public async Task DispatchBootstrapIntentAsync_BlocksPersistentLocal_WhenRedirectBaseUrlFallsBackToProduction()
+    {
+        using var environment = new OAuthBootstrapEnvironment(
+            environmentName: "PersistentLocal",
+            configureRedirectBaseUrl: false);
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch);
+
+        var act = () => service.DispatchBootstrapIntentAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*PersistentLocal*{NyxIdRedirectUriResolver.OverrideEnvVar}*Dynamic Client Registration*");
+        dispatch.Commands.Should().BeEmpty("bootstrap must fail before redirect drift can trigger DCR with the production callback");
+    }
+
+    [Fact]
+    public async Task DispatchBootstrapIntentAsync_BlocksPersistentLocal_WhenRedirectOverrideIsWildcard()
+    {
+        using var environment = new OAuthBootstrapEnvironment(
+            environmentName: "PersistentLocal",
+            redirectBaseUrl: "http://+:8080");
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch);
+
+        var act = () => service.DispatchBootstrapIntentAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*PersistentLocal*{NyxIdRedirectUriResolver.OverrideEnvVar}*Dynamic Client Registration*");
+        dispatch.Commands.Should().BeEmpty("wildcard listen addresses resolve to production default and must fail closed locally");
+    }
+
+    [Fact]
+    public async Task DispatchBootstrapIntentAsync_BlocksDistributed_WhenProductionDefaultsWouldBeUsed()
+    {
+        using var environment = new OAuthBootstrapEnvironment(
+            environmentName: "Distributed",
+            configureAuthority: false,
+            configureRedirectBaseUrl: false,
+            configureAdditionalRedirectUris: false);
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch);
+
+        var act = () => service.DispatchBootstrapIntentAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*Distributed*{NyxIdAuthorityResolver.OverrideEnvVar}*{NyxIdRedirectUriResolver.OverrideEnvVar}*Dynamic Client Registration*");
+        dispatch.Commands.Should().BeEmpty("Distributed is a runtime profile, not proof that production NyxID defaults are safe");
+    }
+
+    [Fact]
+    public async Task DispatchBootstrapIntentAsync_AllowsUnsetEnvironmentProductionDefaults()
+    {
+        using var environment = new OAuthBootstrapEnvironment(
+            environmentName: null,
+            configureAuthority: false,
+            configureRedirectBaseUrl: false,
+            configureAdditionalRedirectUris: false);
+        var dispatch = new RecordingCommandDispatch<EnsureAevatarOAuthClientProvisionedCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch);
+
+        await service.DispatchBootstrapIntentAsync(CancellationToken.None);
+
+        dispatch.Commands.Should().ContainSingle();
+        dispatch.Commands[0].NyxidAuthority.Should().Be(NyxIdAuthorityResolver.DefaultAuthority);
+        dispatch.Commands[0].RedirectUri.Should().Be(
+            $"{NyxIdRedirectUriResolver.DefaultPublicBaseUrl}{NyxIdRedirectUriResolver.CallbackPath}");
     }
 
     [Fact]
@@ -129,8 +220,12 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
     }
 
     private static AevatarOAuthClientBootstrapService NewService(
-        ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch) =>
-        new(dispatch, NullLogger<AevatarOAuthClientBootstrapService>.Instance);
+        ICommandDispatchService<EnsureAevatarOAuthClientProvisionedCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch,
+        bool enabled = true) =>
+        new(
+            dispatch,
+            Options.Create(new AevatarOAuthClientBootstrapOptions { Enabled = enabled }),
+            NullLogger<AevatarOAuthClientBootstrapService>.Instance);
 
     private static ChannelIdentityOAuthAcceptedReceipt OAuthClientReceipt() =>
         new(
@@ -177,29 +272,45 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         private readonly string? _oldRedirectBaseUrl;
         private readonly string? _oldAdditionalRedirectUris;
         private readonly string? _oldForceDcrOnStartup;
-        private readonly string? _oldDefaultServiceSlugs;
+        private readonly string? _oldAspNetCoreEnvironment;
+        private readonly string? _oldDotNetEnvironment;
 
-        public string Authority { get; } = "https://nyxid.test";
-        public string RedirectBaseUrl { get; } = "https://aevatar.test";
+        public string Authority { get; }
+        public string RedirectBaseUrl { get; }
         public string RedirectUri => $"{RedirectBaseUrl}{NyxIdRedirectUriResolver.CallbackPath}";
         public string ConsoleRedirectUri { get; } = "https://console.test/auth/callback";
 
-        public OAuthBootstrapEnvironment(bool forceDcrOnStartup = false, string? defaultServiceSlugs = null)
+        public OAuthBootstrapEnvironment(
+            bool forceDcrOnStartup = false,
+            string? environmentName = "PersistentLocal",
+            bool configureAuthority = true,
+            bool configureRedirectBaseUrl = true,
+            bool configureAdditionalRedirectUris = true,
+            string authority = "https://nyxid.test",
+            string redirectBaseUrl = "https://aevatar.test")
         {
+            Authority = authority;
+            RedirectBaseUrl = redirectBaseUrl;
             _oldAuthority = Environment.GetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar);
             _oldRedirectBaseUrl = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar);
             _oldAdditionalRedirectUris = Environment.GetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar);
             _oldForceDcrOnStartup = Environment.GetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar);
-            _oldDefaultServiceSlugs = Environment.GetEnvironmentVariable(AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar);
-            Environment.SetEnvironmentVariable(NyxIdAuthorityResolver.OverrideEnvVar, Authority);
-            Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, RedirectBaseUrl);
-            Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, ConsoleRedirectUri);
+            _oldAspNetCoreEnvironment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+            _oldDotNetEnvironment = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", environmentName);
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", null);
+            Environment.SetEnvironmentVariable(
+                NyxIdAuthorityResolver.OverrideEnvVar,
+                configureAuthority ? Authority : null);
+            Environment.SetEnvironmentVariable(
+                NyxIdRedirectUriResolver.OverrideEnvVar,
+                configureRedirectBaseUrl ? RedirectBaseUrl : null);
+            Environment.SetEnvironmentVariable(
+                NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar,
+                configureAdditionalRedirectUris ? ConsoleRedirectUri : null);
             Environment.SetEnvironmentVariable(
                 AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar,
                 forceDcrOnStartup ? "true" : null);
-            Environment.SetEnvironmentVariable(
-                AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar,
-                defaultServiceSlugs);
         }
 
         public void Dispose()
@@ -208,7 +319,8 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _oldRedirectBaseUrl);
             Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.AdditionalRedirectUrisEnvVar, _oldAdditionalRedirectUris);
             Environment.SetEnvironmentVariable(AevatarOAuthClientBootstrapService.ForceDcrOnStartupEnvVar, _oldForceDcrOnStartup);
-            Environment.SetEnvironmentVariable(AevatarOAuthClientDefaultServiceOptions.DefaultServiceSlugsEnvVar, _oldDefaultServiceSlugs);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", _oldAspNetCoreEnvironment);
+            Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", _oldDotNetEnvironment);
         }
     }
 

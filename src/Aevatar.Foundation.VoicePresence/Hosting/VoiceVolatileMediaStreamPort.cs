@@ -85,7 +85,7 @@ public sealed class VoiceVolatileMediaStreamPort(
             if (!_activeRelays.TryAdd(attachedHandle.ActiveTransportLeaseId, relay))
             {
                 await relay.DisposeAsync();
-                throw new InvalidOperationException("Voice transport already attached.");
+                throw new VoiceTransportAlreadyAttachedException();
             }
 
             relay.Start(ct => RunLeaseRenewalAsync(attachedHandle, relay, ct));

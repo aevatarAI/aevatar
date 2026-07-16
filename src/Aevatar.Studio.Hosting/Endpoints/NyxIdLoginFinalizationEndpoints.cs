@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
@@ -11,6 +13,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -26,6 +29,12 @@ public static class NyxIdLoginFinalizationEndpoints
 
         app.MapPost("/api/auth/nyxid/finalize", HandleFinalizeAsync)
             .WithTags("Auth")
+            .WithEndpointAudit(
+                "identity.login.finalize",
+                AuditSensitivityLevel.Confidential,
+                "external_identity_binding",
+                EndpointAuditTargetResolvers.Static("external_identity_binding", "login-finalize"),
+                captureUnauthenticated: true)
             .AllowAnonymous()
             .Produces<NyxIdLoginFinalizationResponse>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
@@ -35,6 +44,7 @@ public static class NyxIdLoginFinalizationEndpoints
 
     internal static async Task<IResult> HandleConfigAsync(
         [FromServices] IAevatarOAuthClientProvider oauthClientProvider,
+        [FromServices] IOptions<NyxIdBrokerOptions> brokerOptions,
         CancellationToken ct = default)
     {
         try
@@ -45,7 +55,11 @@ public static class NyxIdLoginFinalizationEndpoints
                 ClientId: snapshot.ClientId,
                 Scope: string.IsNullOrWhiteSpace(snapshot.OauthScope)
                     ? AevatarOAuthClientScopes.AuthorizationScope
-                    : snapshot.OauthScope.Trim()));
+                    : snapshot.OauthScope.Trim(),
+                Resources: AevatarOAuthClientResources.RequiredResourceUris(
+                    snapshot.NyxIdAuthority,
+                    brokerOptions.Value.RequiredLlmServiceSlug,
+                    brokerOptions.Value.AdditionalRequiredServiceSlugs)));
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -83,6 +97,15 @@ public static class NyxIdLoginFinalizationEndpoints
             exchange = await brokerCallback
                 .ExchangeAuthorizationCodeAsync(request.Code.Trim(), request.CodeVerifier.Trim(), request.RedirectUri.Trim(), ct)
                 .ConfigureAwait(false);
+        }
+        catch (NyxIdRequiredServiceAccessException ex)
+        {
+            logger.LogInformation(ex, "NyxID login did not grant every required service resource.");
+            return Results.Json(new
+            {
+                error = "required_service_access_missing",
+                detail = "Return to login and allow access to the Aevatar and default LLM services in NyxID.",
+            }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception ex)
         {
@@ -227,6 +250,14 @@ public static class NyxIdLoginFinalizationEndpoints
         catch (BindingScopeMismatchException ex)
         {
             logger.LogInformation(ex, "NyxID owner binding lacks required scope for {Platform}:{Tenant}:{User}; refreshing local binding.",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return ExistingBindingProbeResult.Stale;
+        }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            logger.LogInformation(ex, "NyxID owner binding lacks required service access for {Platform}:{Tenant}:{User}; refreshing local binding.",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -421,7 +452,8 @@ public static class NyxIdLoginFinalizationEndpoints
 public sealed record NyxIdLoginConfigurationResponse(
     string BaseUrl,
     string ClientId,
-    string Scope);
+    string Scope,
+    IReadOnlyList<string> Resources);
 
 public sealed record NyxIdLoginFinalizationRequest
 {

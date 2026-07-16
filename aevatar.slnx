@@ -16,7 +16,6 @@
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Lark\Aevatar.GAgents.Platform.Lark.csproj" />
     <Project Path="agents\platforms\Aevatar.GAgents.Platform.Telegram\Aevatar.GAgents.Platform.Telegram.csproj" />
     <Project Path="agents\Aevatar.GAgents.Channel.Runtime\Aevatar.GAgents.Channel.Runtime.csproj" />
-    <Project Path="agents\Aevatar.GAgents.Authoring.Lark\Aevatar.GAgents.Authoring.Lark.csproj" />
     <Project Path="agents\Aevatar.GAgents.Scheduled\Aevatar.GAgents.Scheduled.csproj" />
     <Project Path="agents\Aevatar.GAgents.StatusDashboard\Aevatar.GAgents.StatusDashboard.csproj" />
     <Project Path="agents\Aevatar.GAgents.Device\Aevatar.GAgents.Device.csproj" />
@@ -38,6 +37,9 @@
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
     <File Path="Directory.Build.props" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/secret-store/Aevatar.SecretStore.Tools.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aevatar.Audit.Abstractions/Aevatar.Audit.Abstractions.csproj" />
@@ -182,6 +184,7 @@
     <Project Path="test\Aevatar.Foundation.Abstractions.Tests\Aevatar.Foundation.Abstractions.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Core.Tests\Aevatar.Foundation.Core.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.Runtime.Hosting.Tests\Aevatar.Foundation.Runtime.Hosting.Tests.csproj" />
+    <Project Path="test/Aevatar.SecretStore.Tools.Tests/Aevatar.SecretStore.Tools.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.Tests\Aevatar.Foundation.VoicePresence.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.MiniCPM.Tests\Aevatar.Foundation.VoicePresence.MiniCPM.Tests.csproj" />
     <Project Path="test\Aevatar.Foundation.VoicePresence.OpenAI.Tests\Aevatar.Foundation.VoicePresence.OpenAI.Tests.csproj" />

@@ -149,7 +149,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Channel?.MessageId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.DeliveryTargetId),
-                AgentToolExecutionContext.Normalize(payload.Channel?.DurableReplyCredentialRef)),
+                FromWorkflowResultDeliveryCredentialPayload(payload.Channel?.WorkflowResultDeliveryCredential),
+                AgentToolExecutionContext.Normalize(payload.Channel?.BotRegistrationId)),
             new AgentToolSenderBindingContext(
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId),
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
@@ -200,7 +201,8 @@ public static class AgentToolExecutionContextMapper
                 MessageId = context.Channel.MessageId ?? string.Empty,
                 PlatformMessageId = context.Channel.PlatformMessageId ?? string.Empty,
                 DeliveryTargetId = context.Channel.DeliveryTargetId ?? string.Empty,
-                DurableReplyCredentialRef = context.Channel.DurableReplyCredentialRef ?? string.Empty,
+                WorkflowResultDeliveryCredential = context.Channel.WorkflowResultDeliveryCredential?.Clone(),
+                BotRegistrationId = context.Channel.BotRegistrationId ?? string.Empty,
             },
             SenderBinding = new AgentToolSenderBindingContextPayload
             {
@@ -251,6 +253,10 @@ public static class AgentToolExecutionContextMapper
             ExternalMetadata = StripOwnedControlKeys(metadata),
         };
     }
+
+    private static ChannelWorkflowResultDeliveryCredential? FromWorkflowResultDeliveryCredentialPayload(
+        ChannelWorkflowResultDeliveryCredential? payload) =>
+        string.IsNullOrWhiteSpace(payload?.SecretReference?.Ref) ? null : payload.Clone();
 
     private static AgentSkillRecoveryContext FromSkillRecoveryPayload(AgentSkillRecoveryContextPayload? payload)
     {

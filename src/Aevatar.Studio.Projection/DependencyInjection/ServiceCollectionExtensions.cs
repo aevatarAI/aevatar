@@ -131,6 +131,23 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamCreatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamUpdatedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamArchivedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberRenamedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberBindingCompletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberBindingFailedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberBindingRejectedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamEntryMemberChangedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ActorRegisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ActorUnregisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConnectorCatalogSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConnectorDraftSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConnectorDraftDeletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleCatalogSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleDraftSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleDraftDeletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, UserConfigUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, UserConfigGithubUsernameUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, MemoryEntriesClearedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConversationDeletedAuditTranslator>());
         services.AddAuditCommittedFactMaterializer<StudioMaterializationContext>();
 
         services.AddProjectionArtifactMaterializer<

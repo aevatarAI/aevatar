@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Aevatar.Foundation.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowProtocol = Aevatar.Workflow.Abstractions;
@@ -7,6 +9,7 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 public static class WorkflowCallerCredentialExtractor
 {
     private const string BearerPrefix = "Bearer ";
+    private const string DefaultNyxIdCapabilityScope = "proxy";
 
     public static WorkflowCallerCredentialExtractionResult Extract(HttpContext? http)
     {
@@ -22,9 +25,44 @@ public static class WorkflowCallerCredentialExtractor
         var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(bearerToken);
         if (parsed.IsValid)
             return WorkflowCallerCredentialExtractionResult.Success(
-                new WorkflowCallerCredential(parsed.NormalizedBearerToken));
+                new WorkflowCallerCredential(
+                    parsed.NormalizedBearerToken,
+                    ResolveAuthenticatedNyxIdAuthority(http)));
 
         return WorkflowCallerCredentialExtractionResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
+    }
+
+    private static WorkflowCallerNyxIdAuthority? ResolveAuthenticatedNyxIdAuthority(HttpContext? http)
+    {
+        var principal = http?.User;
+        if (principal?.Identity?.IsAuthenticated != true)
+            return null;
+
+        var externalUserId = ReadFirstClaim(
+            principal,
+            "uid",
+            "sub",
+            ClaimTypes.NameIdentifier,
+            "user_id");
+        return string.IsNullOrWhiteSpace(externalUserId)
+            ? null
+            : new WorkflowCallerNyxIdAuthority(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                externalUserId,
+                DefaultNyxIdCapabilityScope);
+    }
+
+    private static string? ReadFirstClaim(ClaimsPrincipal principal, params string[] claimTypes)
+    {
+        foreach (var claimType in claimTypes)
+        {
+            var value = principal.FindFirst(claimType)?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
     }
 }
 

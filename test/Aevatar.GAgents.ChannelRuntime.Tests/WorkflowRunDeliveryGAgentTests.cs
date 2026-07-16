@@ -1,10 +1,10 @@
 using System.Net;
 using System.Text;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -13,255 +13,385 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
-using Aevatar.Workflow.Application.Abstractions.Projections;
-using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class WorkflowRunDeliveryGAgentTests
 {
-    private const string DeliveryActorId = "workflow-run-delivery:workflow-actor:wf-command";
+    private const string DeliveryId = "delivery-alpha";
+    private static readonly string DeliveryActorId = WorkflowRunDeliveryActorIds.FromDeliveryId(DeliveryId);
+    private const string WorkflowActorId = "workflow-actor-2675";
+    private const string WorkflowCommandId = "workflow-command-2675";
+    private const string AgentKey = "nyxid-agent-key-2675";
+    private static readonly DateTimeOffset Now = new(2026, 7, 14, 3, 4, 5, TimeSpan.Zero);
 
     [Fact]
-    public async Task TerminalWorkflowEvent_ShouldDispatchContinuationAndReplyWithDurableCredential()
+    public async Task ReserveBeforeStartTerminal_ShouldUseVerifiedNotificationAsAcceptedIdentityAndDeliver()
     {
-        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
-        var nyxHandler = new RecordingJsonHandler();
-        var outboundPort = CreateOutboundPort(nyxHandler);
-        var deferredDispatchPort = new DeferredDispatchPort();
-        var credentialProvider = new RecordingCredentialProvider
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+
+        await context.Agent.HandleEventAsync(Envelope(Reserve(context.TimeProvider), "registration-port"));
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+
+        AssertDelivered(context.Agent, handler, "completed output");
+
+        await context.Agent.HandleEventAsync(Envelope(Start(), "registration-port"));
+
+        AssertDelivered(context.Agent, handler, "completed output");
+    }
+
+    [Fact]
+    public async Task StartBeforeTerminal_ShouldDeliverWhenNotificationArrives()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+
+        AssertDelivered(context.Agent, handler, "completed output");
+        context.Scheduler.PurgedActorIds.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+    }
+
+    [Fact]
+    public async Task TerminalBeforeReserve_ShouldSurviveUntilReservationAndStart()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Unspecified);
+        context.Agent.State.PendingTerminalNotification.Should().NotBeNull();
+
+        await context.Agent.HandleEventAsync(Envelope(Reserve(context.TimeProvider), "registration-port"));
+
+        AssertDelivered(context.Agent, handler, "completed output");
+    }
+
+    [Fact]
+    public async Task TerminalBeforeReserve_WithWrongCommand_ShouldBeDiscardedAndWaitForMatchingTerminal()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        var stale = Terminal(context.TimeProvider);
+        stale.WorkflowCommandId = "stale-command";
+
+        await context.Agent.HandleEventAsync(Envelope(stale, WorkflowActorId));
+        await context.Agent.HandleEventAsync(Envelope(Reserve(context.TimeProvider), "registration-port"));
+        await context.Agent.HandleEventAsync(Envelope(Start(), "registration-port"));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Started);
+        context.Agent.State.PendingTerminalNotification.Should().BeNull();
+        handler.Requests.Should().BeEmpty();
+
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+        AssertDelivered(context.Agent, handler, "completed output");
+    }
+
+    [Fact]
+    public async Task IdentityAndCommandMismatches_ShouldNeverDeliver()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), "attacker-actor"));
+
+        var wrongActor = Terminal(context.TimeProvider);
+        wrongActor.WorkflowActorId = "other-workflow-actor";
+        await context.Agent.HandleEventAsync(Envelope(wrongActor, "other-workflow-actor"));
+
+        var wrongCommand = Terminal(context.TimeProvider);
+        wrongCommand.WorkflowCommandId = "other-workflow-command";
+        await context.Agent.HandleEventAsync(Envelope(wrongCommand, WorkflowActorId));
+
+        var wrongDelivery = Terminal(context.TimeProvider);
+        wrongDelivery.DeliveryId = "other-delivery";
+        await context.Agent.HandleEventAsync(Envelope(wrongDelivery, WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Started);
+        context.Agent.State.PendingTerminalNotification.Should().BeNull();
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DuplicateOrConflictingTerminalStatus_ShouldNotRepeatOutboundDelivery()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+        var failed = Terminal(context.TimeProvider, WorkflowRunTerminalStatus.Failed);
+
+        await context.Agent.HandleEventAsync(Envelope(failed, WorkflowActorId));
+        await context.Agent.HandleEventAsync(Envelope(failed.Clone(), WorkflowActorId));
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        context.Agent.State.TerminalOutcome.Should().Be(WorkflowRunTerminalStatus.Failed);
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Body.Should().Contain("Workflow failed (workflow_run_error): execution failed");
+    }
+
+    [Fact]
+    public async Task SameTerminalDuplicate_WhenPendingAttemptWasInterrupted_ShouldResumeDelivery()
+    {
+        var handler = new RecordingJsonHandler { CancelNextRequest = true };
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+        var terminal = Terminal(context.TimeProvider);
+
+        var firstAttempt = () => context.Agent.HandleEventAsync(Envelope(terminal, WorkflowActorId));
+        await firstAttempt.Should().ThrowAsync<OperationCanceledException>();
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Started);
+        context.Agent.State.PendingTerminalNotification.Should().NotBeNull();
+
+        await context.Agent.HandleEventAsync(Envelope(terminal.Clone(), WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        context.Agent.State.PendingTerminalNotification.Should().BeNull();
+        handler.Requests.Should().HaveCount(2);
+        context.Scheduler.PurgedActorIds.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+    }
+
+    [Fact]
+    public async Task PendingTerminal_ShouldRetryOnActivationWithoutProjectionState()
+    {
+        var eventStore = new InMemoryEventStore();
+        var timeProvider = new FakeTimeProvider(Now);
+        var scheduler = new RecordingCallbackScheduler();
+        var first = await CreateContextAsync(
+            new RecordingJsonHandler(),
+            eventStore: eventStore,
+            timeProvider: timeProvider,
+            scheduler: scheduler);
+        await ReserveAndStartAsync(first);
+        var buffered = new WorkflowRunDeliveryTerminalNotificationBufferedEvent
         {
-            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
+            DeliveryId = DeliveryId,
+            WorkflowCommandId = WorkflowCommandId,
+            PublisherActorId = WorkflowActorId,
+            Notification = Terminal(timeProvider),
+            BufferedAtUnixMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         };
-        var agent = await CreateAgentAsync(projectionPort, outboundPort, deferredDispatchPort, credentialProvider);
-        var dispatchPort = new DirectActorDispatchPort(agent);
-        deferredDispatchPort.Inner = dispatchPort;
-
-        await agent.HandleEventAsync(Envelope(StartRequest()));
-
-        projectionPort.LastSink.Should().NotBeNull();
-        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
-        {
-            RunFinished = new WorkflowRunFinishedEventPayload
+        await eventStore.AppendAsync(
+            DeliveryActorId,
+            [new StateEvent
             {
-                Result = Any.Pack(new WorkflowRunResultPayload { Output = "workflow completed text" }),
-            },
-        });
+                EventId = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
+                Version = 3,
+                EventType = WorkflowRunDeliveryTerminalNotificationBufferedEvent.Descriptor.FullName,
+                EventData = Any.Pack(buffered),
+                AgentId = DeliveryActorId,
+            }],
+            expectedVersion: 2);
 
-        dispatchPort.Dispatches.Should().ContainSingle();
-        var continuation = dispatchPort.Dispatches.Single().Envelope.Payload.Unpack<WorkflowRunDeliveryTerminalFrameObserved>();
-        continuation.Status.Should().Be("completed");
-        continuation.Text.Should().Be("workflow completed text");
+        var recoveredHandler = new RecordingJsonHandler();
+        var recovered = await CreateContextAsync(
+            recoveredHandler,
+            eventStore: eventStore,
+            timeProvider: timeProvider,
+            scheduler: scheduler);
+
+        AssertDelivered(recovered.Agent, recoveredHandler, "completed output");
+    }
+
+    [Fact]
+    public async Task MissingCredentialResolution_ShouldFailClosedWithoutHttp()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler, new StaticCredentialResolver(null));
+        await ReserveAndStartAsync(context);
+
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        context.Agent.State.ErrorCode.Should().Be("credential_handle_missing");
+        handler.Requests.Should().BeEmpty();
+        context.Scheduler.PurgedActorIds.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+    }
+
+    [Fact]
+    public async Task CredentialResolverFailure_ShouldFailClosedWithoutHttp()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(
+            handler,
+            new StaticCredentialResolver(exception: new InvalidOperationException("vault unavailable")));
+        await ReserveAndStartAsync(context);
+
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        context.Agent.State.ErrorCode.Should().Be("resolver_unavailable");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task MalformedReservationCredential_ShouldPersistProductFailure()
+    {
+        var context = await CreateContextAsync(new RecordingJsonHandler());
+        var reserve = Reserve(context.TimeProvider);
+        reserve.WorkflowResultDeliveryCredential = new ChannelWorkflowResultDeliveryCredential();
+
+        await context.Agent.HandleEventAsync(Envelope(reserve, "registration-port"));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        context.Agent.State.ErrorCode.Should().Be("channel_workflow_delivery_unavailable");
+        context.Agent.State.ErrorSummary.ToLowerInvariant().Should().NotContain("credential");
+    }
+
+    [Fact]
+    public async Task ReservationExpiry_ShouldUseDurableSelfTimeoutAndRejectStaleCallbacks()
+    {
+        var context = await CreateContextAsync(new RecordingJsonHandler());
+        await context.Agent.HandleEventAsync(Envelope(Reserve(context.TimeProvider), "registration-port"));
+        var scheduled = context.Scheduler.Timeouts.Should().ContainSingle().Which;
+        var expiry = scheduled.TriggerEnvelope.Payload.Unpack<WorkflowRunDeliveryReservationExpiryReached>();
+
+        await context.Agent.HandleEventAsync(scheduled.TriggerEnvelope.Clone());
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Reserved);
+
+        context.TimeProvider.Advance(TimeSpan.FromMinutes(6));
+        var stale = expiry.Clone();
+        stale.WorkflowCommandId = "stale-command";
+        await context.Agent.HandleEventAsync(SelfEnvelope(stale));
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Reserved);
+
+        await context.Agent.HandleEventAsync(SelfEnvelope(expiry));
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        context.Agent.State.ErrorCode.Should().Be("workflow_run_delivery_reservation_expired");
+        context.Scheduler.PurgedActorIds.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+    }
+
+    [Fact]
+    public async Task LongReservationExpiry_ShouldScheduleInRuntimeSafeSegments()
+    {
+        var context = await CreateContextAsync(new RecordingJsonHandler());
+        var reserve = Reserve(context.TimeProvider);
+        reserve.ExpiresAtUnixMs = context.TimeProvider.GetUtcNow().AddDays(30).ToUnixTimeMilliseconds();
+
+        await context.Agent.HandleEventAsync(Envelope(reserve, "registration-port"));
+
+        var first = context.Scheduler.Timeouts.Should().ContainSingle().Which;
+        first.DueTime.TotalMilliseconds.Should().BeLessThanOrEqualTo(int.MaxValue);
+        first.DueTime.Should().BeLessThan(TimeSpan.FromDays(30));
+
+        context.TimeProvider.Advance(first.DueTime + TimeSpan.FromMilliseconds(1));
+        await context.Agent.HandleEventAsync(first.TriggerEnvelope.Clone());
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Reserved);
+        context.Scheduler.Timeouts.Should().HaveCount(2);
+        context.Scheduler.Timeouts[1].DueTime.Should().BePositive();
+        context.Scheduler.Timeouts[1].DueTime.TotalMilliseconds.Should().BeLessThanOrEqualTo(int.MaxValue);
+    }
+
+    [Fact]
+    public async Task AbandonAndLateTimeoutOrTerminal_ShouldBeIdempotent()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await context.Agent.HandleEventAsync(Envelope(Reserve(context.TimeProvider), "registration-port"));
+        var timeout = context.Scheduler.Timeouts.Should().ContainSingle().Which.TriggerEnvelope.Clone();
+
+        await context.Agent.HandleEventAsync(Envelope(new WorkflowRunDeliveryAbandonRequested
+        {
+            DeliveryId = DeliveryId,
+            WorkflowCommandId = WorkflowCommandId,
+            Reason = "workflow command rejected",
+        }, "registration-port"));
+        context.TimeProvider.Advance(TimeSpan.FromMinutes(6));
+        await context.Agent.HandleEventAsync(timeout);
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Abandoned);
+        handler.Requests.Should().BeEmpty();
+        context.Scheduler.PurgedActorIds.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+    }
+
+    [Fact]
+    public async Task TerminalActivation_ShouldRetryCallbackPurgeAfterPriorFailure()
+    {
+        var eventStore = new InMemoryEventStore();
+        var timeProvider = new FakeTimeProvider(Now);
+        var scheduler = new RecordingCallbackScheduler
+        {
+            PurgeFailure = new InvalidOperationException("scheduler unavailable"),
+        };
+        var first = await CreateContextAsync(
+            new RecordingJsonHandler(),
+            eventStore: eventStore,
+            timeProvider: timeProvider,
+            scheduler: scheduler);
+        await ReserveAndStartAsync(first);
+        await first.Agent.HandleEventAsync(Envelope(Terminal(timeProvider), WorkflowActorId));
+
+        first.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        scheduler.PurgeAttempts.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+        scheduler.PurgedActorIds.Should().BeEmpty();
+
+        scheduler.PurgeFailure = null;
+        var recovered = await CreateContextAsync(
+            new RecordingJsonHandler(),
+            eventStore: eventStore,
+            timeProvider: timeProvider,
+            scheduler: scheduler);
+
+        recovered.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        scheduler.PurgeAttempts.Should().HaveCount(2);
+        scheduler.PurgedActorIds.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+    }
+
+    private static async Task ReserveAndStartAsync(TestContext context)
+    {
+        await context.Agent.HandleEventAsync(Envelope(Reserve(context.TimeProvider), "registration-port"));
+        await context.Agent.HandleEventAsync(Envelope(Start(), "registration-port"));
+    }
+
+    private static void AssertDelivered(
+        WorkflowRunDeliveryGAgent agent,
+        RecordingJsonHandler handler,
+        string text)
+    {
         agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
-        agent.State.TerminalStatus.Should().Be("completed");
-        agent.State.TerminalText.Should().Be("workflow completed text");
-        nyxHandler.Requests.Should().ContainSingle();
-        nyxHandler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
-        nyxHandler.Requests[0].Authorization.Should().Be("Bearer nyxid_ag_secret_1");
-        nyxHandler.Requests[0].Body.Should().Contain("\"message_id\":\"reply-message-1\"");
-        nyxHandler.Requests[0].Body.Should().Contain("\"text\":\"workflow completed text\"");
-        credentialProvider.ResolvedRefs.Should().ContainSingle("secrets://nyx/reply-1");
+        agent.State.PendingTerminalNotification.Should().BeNull();
+        agent.State.TerminalOutcome.Should().Be(WorkflowRunTerminalStatus.Completed);
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Path.Should().Be("/api/v1/channel-relay/reply");
+        handler.Requests[0].Authorization.Should().Be($"Bearer {AgentKey}");
+        handler.Requests[0].Body.Should().Contain($"\"text\":\"{text}\"");
     }
 
-    [Fact]
-    public async Task StartValidationFailure_ShouldPersistFailedTerminalState()
-    {
-        var eventStore = new InMemoryEventStore();
-        var agent = await CreateAgentAsync(
-            new RecordingWorkflowExecutionProjectionPort(),
-            CreateOutboundPort(new RecordingJsonHandler()),
-            new DeferredDispatchPort(),
-            new RecordingCredentialProvider(),
-            eventStore);
-
-        var invalid = StartRequest();
-        invalid.ReplyMessageId = string.Empty;
-        await agent.HandleEventAsync(Envelope(invalid));
-
-        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
-        agent.State.ErrorCode.Should().Be("reply_message_id_required");
-        var failed = await LastFailedEventAsync(eventStore);
-        failed.ErrorCode.Should().Be("reply_message_id_required");
-        failed.Attempt.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task ProjectionDisabled_ShouldPersistFailedTerminalState()
-    {
-        var eventStore = new InMemoryEventStore();
-        var projectionPort = new RecordingWorkflowExecutionProjectionPort { ProjectionEnabledValue = false };
-        var agent = await CreateAgentAsync(
-            projectionPort,
-            CreateOutboundPort(new RecordingJsonHandler()),
-            new DeferredDispatchPort(),
-            new RecordingCredentialProvider(),
-            eventStore);
-
-        await agent.HandleEventAsync(Envelope(StartRequest()));
-
-        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
-        agent.State.ErrorCode.Should().Be("projection_disabled");
-        projectionPort.LastSink.Should().BeNull();
-        var failed = await LastFailedEventAsync(eventStore);
-        failed.ErrorCode.Should().Be("projection_disabled");
-    }
-
-    [Fact]
-    public async Task ProjectionUnavailable_ShouldPersistFailedTerminalState()
-    {
-        var eventStore = new InMemoryEventStore();
-        var projectionPort = new RecordingWorkflowExecutionProjectionPort { ReturnAttachment = false };
-        var agent = await CreateAgentAsync(
-            projectionPort,
-            CreateOutboundPort(new RecordingJsonHandler()),
-            new DeferredDispatchPort(),
-            new RecordingCredentialProvider(),
-            eventStore);
-
-        await agent.HandleEventAsync(Envelope(StartRequest()));
-
-        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
-        agent.State.ErrorCode.Should().Be("projection_unavailable");
-        var failed = await LastFailedEventAsync(eventStore);
-        failed.ErrorCode.Should().Be("projection_unavailable");
-    }
-
-    [Fact]
-    public async Task OutboundSendFailure_ShouldPersistFailedTerminalState()
-    {
-        var eventStore = new InMemoryEventStore();
-        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
-        var nyxHandler = new RecordingJsonHandler(HttpStatusCode.BadRequest, """{"error":"invalid_reply"}""");
-        var credentialProvider = new RecordingCredentialProvider
-        {
-            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
-        };
-        var deferredDispatchPort = new DeferredDispatchPort();
-        var agent = await CreateAgentAsync(
-            projectionPort,
-            CreateOutboundPort(nyxHandler),
-            deferredDispatchPort,
-            credentialProvider,
-            eventStore);
-        var dispatchPort = new DirectActorDispatchPort(agent);
-        deferredDispatchPort.Inner = dispatchPort;
-
-        await agent.HandleEventAsync(Envelope(StartRequest()));
-        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
-        {
-            RunFinished = new WorkflowRunFinishedEventPayload
-            {
-                Result = Any.Pack(new WorkflowRunResultPayload { Output = "workflow completed text" }),
-            },
-        });
-
-        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
-        agent.State.ErrorCode.Should().Be("relay_reply_rejected");
-        agent.State.DeliveryAttempt.Should().Be(1);
-        agent.State.TerminalStatus.Should().Be("completed");
-        var failed = await LastFailedEventAsync(eventStore);
-        failed.ErrorCode.Should().Be("relay_reply_rejected");
-        failed.Attempt.Should().Be(1);
-        failed.TerminalText.Should().Be("workflow completed text");
-    }
-
-    [Fact]
-    public async Task TerminalWorkflowEvent_WhenContinuationDispatchFails_ShouldRemainRetryable()
-    {
-        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
-        var nyxHandler = new RecordingJsonHandler();
-        var credentialProvider = new RecordingCredentialProvider
-        {
-            ["secrets://nyx/reply-1"] = "nyxid_ag_secret_1",
-        };
-        var deferredDispatchPort = new DeferredDispatchPort();
-        var agent = await CreateAgentAsync(
-            projectionPort,
-            CreateOutboundPort(nyxHandler),
-            deferredDispatchPort,
-            credentialProvider);
-        deferredDispatchPort.Inner = new ThrowingDispatchPort(new InvalidOperationException("dispatch rejected"));
-        await agent.HandleEventAsync(Envelope(StartRequest()));
-        var terminalFrame = new WorkflowRunEventEnvelope
-        {
-            RunFinished = new WorkflowRunFinishedEventPayload
-            {
-                Result = Any.Pack(new WorkflowRunResultPayload { Output = "workflow completed text" }),
-            },
-        };
-
-        var failedPush = async () => await projectionPort.LastSink!.PushAsync(terminalFrame);
-        await failedPush.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("dispatch rejected");
-        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Started);
-        nyxHandler.Requests.Should().BeEmpty();
-
-        var dispatchPort = new DirectActorDispatchPort(agent);
-        deferredDispatchPort.Inner = dispatchPort;
-        await projectionPort.LastSink!.PushAsync(terminalFrame);
-
-        dispatchPort.Dispatches.Should().ContainSingle();
-        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
-        agent.State.TerminalText.Should().Be("workflow completed text");
-        nyxHandler.Requests.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task MissingResolvedCredential_ShouldPersistFailedTerminalStateWithoutHttpRequest()
-    {
-        var eventStore = new InMemoryEventStore();
-        var projectionPort = new RecordingWorkflowExecutionProjectionPort();
-        var nyxHandler = new RecordingJsonHandler();
-        var deferredDispatchPort = new DeferredDispatchPort();
-        var agent = await CreateAgentAsync(
-            projectionPort,
-            CreateOutboundPort(nyxHandler),
-            deferredDispatchPort,
-            new RecordingCredentialProvider(),
-            eventStore);
-        var dispatchPort = new DirectActorDispatchPort(agent);
-        deferredDispatchPort.Inner = dispatchPort;
-
-        await agent.HandleEventAsync(Envelope(StartRequest()));
-        await projectionPort.LastSink!.PushAsync(new WorkflowRunEventEnvelope
-        {
-            RunFinished = new WorkflowRunFinishedEventPayload
-            {
-                Result = Any.Pack(new WorkflowRunResultPayload { Output = "workflow completed text" }),
-            },
-        });
-
-        agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
-        agent.State.ErrorCode.Should().Be("durable_reply_credential_missing");
-        nyxHandler.Requests.Should().BeEmpty();
-        var failed = await LastFailedEventAsync(eventStore);
-        failed.ErrorCode.Should().Be("durable_reply_credential_missing");
-    }
-
-    private static async Task<WorkflowRunDeliveryGAgent> CreateAgentAsync(
-        RecordingWorkflowExecutionProjectionPort projectionPort,
-        NyxIdRelayOutboundPort outboundPort,
-        DeferredDispatchPort dispatchPort,
-        RecordingCredentialProvider? credentialProvider = null,
-        InMemoryEventStore? eventStore = null)
+    private static async Task<TestContext> CreateContextAsync(
+        HttpMessageHandler handler,
+        IWorkflowResultDeliveryCredentialResolver? credentialResolver = null,
+        InMemoryEventStore? eventStore = null,
+        FakeTimeProvider? timeProvider = null,
+        RecordingCallbackScheduler? scheduler = null)
     {
         eventStore ??= new InMemoryEventStore();
+        timeProvider ??= new FakeTimeProvider(Now);
+        scheduler ??= new RecordingCallbackScheduler();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(scheduler)
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
         var agent = new WorkflowRunDeliveryGAgent(
-            projectionPort,
-            dispatchPort,
-            outboundPort,
-            credentialProvider ?? new RecordingCredentialProvider(),
-            NullLogger<WorkflowRunDeliveryGAgent>.Instance)
+            CreateOutboundPort(handler),
+            credentialResolver ?? new StaticCredentialResolver(AgentKey),
+            scheduler,
+            NullLogger<WorkflowRunDeliveryGAgent>.Instance,
+            timeProvider)
         {
             Services = services,
             EventSourcingBehaviorFactory =
@@ -271,43 +401,78 @@ public sealed class WorkflowRunDeliveryGAgentTests
             .GetMethod("SetId", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(agent, [DeliveryActorId]);
         await agent.ActivateAsync();
-        return agent;
+        return new TestContext(agent, timeProvider, scheduler);
     }
 
-    private static EventEnvelope Envelope<T>(T payload)
-        where T : Google.Protobuf.IMessage =>
+    private static WorkflowRunDeliveryReserveRequested Reserve(FakeTimeProvider timeProvider) => new()
+    {
+        DeliveryId = DeliveryId,
+        ExpectedWorkflowCommandId = WorkflowCommandId,
+        ChannelPlatform = "lark",
+        ReplyMessageId = "reply-message-2675",
+        PlatformMessageId = "platform-message-2675",
+        RegistrationScopeId = "scope-2675",
+        WorkflowResultDeliveryCredential = Credential(),
+        BotRegistrationId = "bot-registration-2675",
+        ExpiresAtUnixMs = timeProvider.GetUtcNow().AddMinutes(5).ToUnixTimeMilliseconds(),
+    };
+
+    private static WorkflowRunDeliveryStartRequested Start() => new()
+    {
+        DeliveryId = DeliveryId,
+        WorkflowActorId = WorkflowActorId,
+        WorkflowRunId = "workflow-run-2675",
+        WorkflowCommandId = WorkflowCommandId,
+        WorkflowCorrelationId = "workflow-correlation-2675",
+        StreamTopic = "aevatar://actors/workflow-actor-2675/runs/workflow-command-2675",
+    };
+
+    private static WorkflowRunTerminalNotification Terminal(
+        FakeTimeProvider timeProvider,
+        WorkflowRunTerminalStatus status = WorkflowRunTerminalStatus.Completed) =>
+        new()
+        {
+            DeliveryId = DeliveryId,
+            WorkflowActorId = WorkflowActorId,
+            WorkflowRunId = "workflow-run-2675",
+            WorkflowCommandId = WorkflowCommandId,
+            WorkflowCorrelationId = "workflow-correlation-2675",
+            Status = status,
+            Output = status == WorkflowRunTerminalStatus.Completed ? "completed output" : string.Empty,
+            Error = status == WorkflowRunTerminalStatus.Completed ? string.Empty : "execution failed",
+            TerminalAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
+        };
+
+    private static EventEnvelope Envelope<T>(T payload, string publisherActorId)
+        where T : IMessage =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Timestamp = Timestamp.FromDateTimeOffset(Now),
             Payload = Any.Pack(payload),
-            Route = EnvelopeRouteSemantics.CreateDirect("test", DeliveryActorId),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, DeliveryActorId),
         };
 
-    private static WorkflowRunDeliveryStartRequested StartRequest() =>
+    private static EventEnvelope SelfEnvelope<T>(T payload)
+        where T : IMessage =>
         new()
         {
-            DeliveryId = DeliveryActorId,
-            WorkflowActorId = "workflow-actor",
-            WorkflowRunId = "wf-command",
-            WorkflowCommandId = "wf-command",
-            WorkflowCorrelationId = "wf-correlation",
-            StreamTopic = "aevatar://actors/workflow-actor/runs/wf-command",
-            ChannelPlatform = "lark",
-            ReplyMessageId = "reply-message-1",
-            PlatformMessageId = "platform-message-1",
-            RegistrationScopeId = "registration-scope-1",
-            DurableReplyCredentialRef = "secrets://nyx/reply-1",
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(Now),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(DeliveryActorId, TopologyAudience.Self),
         };
 
-    private static async Task<WorkflowRunDeliveryFailedEvent> LastFailedEventAsync(IEventStore eventStore)
+    private static ChannelWorkflowResultDeliveryCredential Credential() => new()
     {
-        var events = await eventStore.GetEventsAsync(DeliveryActorId);
-        return events
-            .Where(x => x.EventData.Is(WorkflowRunDeliveryFailedEvent.Descriptor))
-            .Select(x => x.EventData.Unpack<WorkflowRunDeliveryFailedEvent>())
-            .Last();
-    }
+        SecretReference = new SecretReference
+        {
+            Ref = "sec-delivery-2675",
+            Purpose = "channel.workflow-result-delivery-agent-key",
+            OwnerScopeKey = "scope-2675",
+        },
+        SubjectId = "nyx-key-2675",
+    };
 
     private static NyxIdRelayOutboundPort CreateOutboundPort(HttpMessageHandler handler)
     {
@@ -321,116 +486,70 @@ public sealed class WorkflowRunDeliveryGAgentTests
             [new PlainTextComposer("lark")]);
     }
 
-    private sealed class DeferredDispatchPort : IActorDispatchPort
-    {
-        public IActorDispatchPort? Inner { get; set; }
+    private sealed record TestContext(
+        WorkflowRunDeliveryGAgent Agent,
+        FakeTimeProvider TimeProvider,
+        RecordingCallbackScheduler Scheduler);
 
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
-            (Inner ?? throw new InvalidOperationException("Dispatch port is not bound."))
-            .DispatchAsync(actorId, envelope, ct);
-    }
-
-    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+        public List<string> PurgeAttempts { get; } = [];
+        public List<string> PurgedActorIds { get; } = [];
+        public Exception? PurgeFailure { get; set; }
+
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(
+            CancellationToken ct = default)
+        {
+            Timeouts.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
-                1,
+                Timeouts.Count,
                 RuntimeCallbackBackend.InMemory));
+        }
 
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
             RuntimeCallbackTimerRequest request,
             CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(
-                request.ActorId,
-                request.CallbackId,
-                1,
-                RuntimeCallbackBackend.InMemory));
+            throw new NotSupportedException();
 
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
-
-        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
-    }
-
-    private sealed class DirectActorDispatchPort(WorkflowRunDeliveryGAgent agent) : IActorDispatchPort
-    {
-        public List<(string ActorId, EventEnvelope Envelope)> Dispatches { get; } = [];
-
-        public async Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
         {
-            Dispatches.Add((actorId, envelope.Clone()));
-            await agent.HandleEventAsync(envelope, ct);
-            return DispatchAdmissionFactory.Create(actorId, envelope);
+            PurgeAttempts.Add(actorId);
+            if (PurgeFailure is not null)
+                return Task.FromException(PurgeFailure);
+
+            PurgedActorIds.Add(actorId);
+            return Task.CompletedTask;
         }
     }
 
-    private sealed class ThrowingDispatchPort(Exception exception) : IActorDispatchPort
+    private sealed class StaticCredentialResolver : IWorkflowResultDeliveryCredentialResolver
     {
-        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
-            Task.FromException<DispatchAdmission>(exception);
-    }
+        private readonly string? _agentKey;
+        private readonly Exception? _exception;
 
-    private sealed class RecordingWorkflowExecutionProjectionPort : IWorkflowExecutionProjectionPort
-    {
-        public bool ProjectionEnabledValue { get; init; } = true;
-        public bool ReturnAttachment { get; init; } = true;
-        public bool ProjectionEnabled => ProjectionEnabledValue;
-        public IEventSink<WorkflowRunEventEnvelope>? LastSink { get; private set; }
-
-        public Task<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?> AttachExistingActorProjectionAsync(
-            string rootActorId,
-            string commandId,
-            IEventSink<WorkflowRunEventEnvelope> sink,
-            CancellationToken ct = default)
+        public StaticCredentialResolver(string? agentKey = null, Exception? exception = null)
         {
-            LastSink = sink;
-            if (!ReturnAttachment)
-                return Task.FromResult<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?>(null);
-
-            return Task.FromResult<EventSinkProjectionAttachment<IWorkflowExecutionProjectionLease>?>(
-                new(new RecordingWorkflowExecutionProjectionLease(rootActorId, commandId), new NoopAsyncDisposable()));
+            _agentKey = agentKey;
+            _exception = exception;
         }
 
-        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
-            IWorkflowExecutionProjectionLease lease,
-            IEventSink<WorkflowRunEventEnvelope> sink,
-            CancellationToken ct = default)
-        {
-            LastSink = sink;
-            return Task.FromResult<IAsyncDisposable?>(new NoopAsyncDisposable());
-        }
-
-        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task ReleaseActorProjectionAsync(IWorkflowExecutionProjectionLease lease, CancellationToken ct = default) =>
-            Task.CompletedTask;
-    }
-
-    private sealed record RecordingWorkflowExecutionProjectionLease(string ActorId, string CommandId)
-        : IWorkflowExecutionProjectionLease;
-
-    private sealed class NoopAsyncDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public Task<string?> ResolveAsync(
+            ChannelWorkflowResultDeliveryCredential credential,
+            CancellationToken ct = default) =>
+            _exception is null
+                ? Task.FromResult(_agentKey)
+                : Task.FromException<string?>(_exception);
     }
 
     private sealed class RecordingJsonHandler : HttpMessageHandler
     {
-        private readonly HttpStatusCode _statusCode;
-        private readonly string _responseBody;
         public List<(string Path, string? Authorization, string Body)> Requests { get; } = [];
-
-        public RecordingJsonHandler(
-            HttpStatusCode statusCode = HttpStatusCode.OK,
-            string responseBody = """{"message_id":"reply-1","platform_message_id":"platform-1"}""")
-        {
-            _statusCode = statusCode;
-            _responseBody = responseBody;
-        }
+        public bool CancelNextRequest { get; set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -439,25 +558,22 @@ public sealed class WorkflowRunDeliveryGAgentTests
             Requests.Add((
                 request.RequestUri?.PathAndQuery ?? string.Empty,
                 request.Headers.Authorization?.ToString(),
-                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
-            return new HttpResponseMessage(_statusCode)
+                request.Content is null
+                    ? string.Empty
+                    : await request.Content.ReadAsStringAsync(cancellationToken)));
+            if (CancelNextRequest)
+            {
+                CancelNextRequest = false;
+                throw new OperationCanceledException("relay request interrupted");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    _responseBody,
+                    """{"message_id":"reply-2675","platform_message_id":"platform-2675"}""",
                     Encoding.UTF8,
                     "application/json"),
             };
-        }
-    }
-
-    private sealed class RecordingCredentialProvider : Dictionary<string, string>, ICredentialProvider
-    {
-        public List<string> ResolvedRefs { get; } = [];
-
-        public Task<string?> ResolveAsync(string credentialRef, CancellationToken ct = default)
-        {
-            ResolvedRefs.Add(credentialRef);
-            return Task.FromResult(TryGetValue(credentialRef, out var value) ? value : null);
         }
     }
 

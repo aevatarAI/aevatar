@@ -38,7 +38,6 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
         var scope = request.GetProperty("scope").GetString();
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
-        request.TryGetProperty("default_services", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -65,27 +64,6 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
             .Equal(
                 "https://aevatar.test/api/oauth/nyxid-callback",
                 "https://console.test/auth/callback");
-    }
-
-    [Fact]
-    public async Task RegisterPublicClient_SendsDefaultServiceSlugs_WhenSupplied()
-    {
-        var handler = StubHandler.Json(HttpStatusCode.OK, new { client_id = "client-issued" });
-        var registrar = new NyxIdDynamicClientRegistrationClient(
-            new HttpClient(handler), NullLogger<NyxIdDynamicClientRegistrationClient>.Instance);
-
-        await registrar.RegisterPublicClientAsync(
-            "https://nyxid.test",
-            "aevatar",
-            ["https://aevatar.test/api/oauth/nyxid-callback"],
-            [" aevatar ", "aevatar", "scope-service"]);
-
-        var request = await handler.Last!.Content!.ReadFromJsonAsync<JsonElement>();
-        request.GetProperty("default_services")
-            .EnumerateArray()
-            .Select(static item => item.GetString())
-            .Should()
-            .Equal("aevatar", "scope-service");
     }
 
     [Fact]

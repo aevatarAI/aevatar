@@ -401,6 +401,14 @@ message TransportExtras {
   // alongside `nyx_registration_scope_id`. Empty for non-relay traffic or when the registration
   // did not record a slug, in which case downstream falls back to the configured default.
   string nyx_provider_slug = 14;
+  // Provider-interpreted primary outbound address for this ingress turn.
+  string delivery_address_id = 15;
+  // Provider-interpreted type for `delivery_address_id`.
+  string delivery_address_type = 16;
+  // Optional provider-interpreted fallback outbound address for this ingress turn.
+  string delivery_fallback_address_id = 17;
+  // Provider-interpreted type for `delivery_fallback_address_id`.
+  string delivery_fallback_address_type = 18;
 }
 
 // Represents one normalized activity flowing through the channel pipeline.

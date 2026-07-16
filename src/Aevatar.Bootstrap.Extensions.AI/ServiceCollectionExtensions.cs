@@ -301,12 +301,19 @@ public static class ServiceCollectionExtensions
         var openAIProviderConfig = BuildOpenAIVoiceProviderConfig(configuration, options);
         var miniCpmProviderConfig = BuildMiniCpmVoiceProviderConfig(configuration, options);
         var nyxIdRealtimeBrokerEnabled = IsNyxIdRealtimeBrokerEnabled(configuration);
+        // The openai module registers below when EITHER a raw ApiKey OR the NyxID ephemeral broker is
+        // available (ADR-0033 forbids long-lived keys in production, so broker-only is the normal shape).
+        // Default-provider resolution must use the same availability, or broker-only deployments register
+        // the module solely as "voice_presence_openai" while the auto-enable/mount/read default path uses
+        // "voice_presence" — the module factory then never mounts a module for the enabled name, the
+        // session-lease signal is silently dropped, and /ws/voice loops on 503 voice_capability_not_ready.
+        var openAIVoiceAvailable = IsOpenAIVoiceConfigured(openAIProviderConfig) || nyxIdRealtimeBrokerEnabled;
         var resolvedDefaultProvider = ResolveVoicePresenceDefaultProvider(
             voiceOptions.DefaultProvider,
-            openAIProviderConfig,
+            openAIVoiceAvailable,
             miniCpmProviderConfig);
 
-        if (IsOpenAIVoiceConfigured(openAIProviderConfig) || nyxIdRealtimeBrokerEnabled)
+        if (openAIVoiceAvailable)
         {
             registrations.Add(new VoicePresenceModuleRegistration(
                 BuildVoicePresenceModuleNames(
@@ -422,12 +429,12 @@ public static class ServiceCollectionExtensions
 
     private static string? ResolveVoicePresenceDefaultProvider(
         string? requestedProvider,
-        VoiceProviderConfig openAIProviderConfig,
+        bool openAIVoiceAvailable,
         VoiceProviderConfig miniCpmProviderConfig)
     {
         var normalizedRequested = NormalizeVoicePresenceProviderName(requestedProvider);
         if (string.Equals(normalizedRequested, "openai", StringComparison.OrdinalIgnoreCase) &&
-            IsOpenAIVoiceConfigured(openAIProviderConfig))
+            openAIVoiceAvailable)
         {
             return "openai";
         }
@@ -438,7 +445,7 @@ public static class ServiceCollectionExtensions
             return "minicpm";
         }
 
-        if (IsOpenAIVoiceConfigured(openAIProviderConfig))
+        if (openAIVoiceAvailable)
             return "openai";
 
         if (IsMiniCpmVoiceConfigured(miniCpmProviderConfig))
@@ -1109,8 +1116,8 @@ public static class ServiceCollectionExtensions
     // source and cannot drift. Every nyxid registration path resolves its default through these
     // helpers, which apply per-deployment config overrides on top.
     private static string ResolveNyxIdDefaultRoute(IConfiguration configuration) =>
-        configuration["Aevatar:NyxId:DefaultRoute"] is { Length: > 0 } route
-            ? route
+        configuration["Aevatar:NyxId:DefaultRoute"] is { } route && !string.IsNullOrWhiteSpace(route)
+            ? route.Trim()
             : LlmDefaults.NyxIdRoute;
 
     private static string ResolveNyxIdDefaultModel(IConfiguration configuration, AevatarAIFeatureOptions options) =>
@@ -1189,7 +1196,7 @@ public static class ServiceCollectionExtensions
         services.AddOrnnSkills(o =>
         {
             if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
-                o.NyxIdSlug = options.OrnnNyxIdSlug;
+                o.NyxIdSlug = options.OrnnNyxIdSlug.Trim();
         });
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, WorkflowOrnnSkillPublishAssetValidator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IOrnnSkillPublishAssetValidator, ScriptOrnnSkillPublishAssetValidator>());
@@ -1205,7 +1212,7 @@ public static class ServiceCollectionExtensions
         services.AddOrnnSkillClient(o =>
         {
             if (!string.IsNullOrWhiteSpace(options.OrnnNyxIdSlug))
-                o.NyxIdSlug = options.OrnnNyxIdSlug;
+                o.NyxIdSlug = options.OrnnNyxIdSlug.Trim();
         });
 
         services.AddSystemSkillOverlay(o =>

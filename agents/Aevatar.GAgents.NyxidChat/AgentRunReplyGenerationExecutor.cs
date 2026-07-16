@@ -723,6 +723,17 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             TriggerBindingReconcile(subject);
             return control;
         }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Sender NyxID binding lacks a required service during deferred re-mint; preserving the binding for in-place /init grant review and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                request.CorrelationId,
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return control;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(
@@ -805,7 +816,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return true;
     }
 
-    private void TriggerBindingReconcile(ExternalSubjectRef subject)
+    private void TriggerBindingReconcile(
+        ExternalSubjectRef subject,
+        string reason = InvalidGrantRevokeReason)
     {
         var reconciler = _bindingRevocationReconciler;
         if (reconciler is null)
@@ -817,7 +830,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             try
             {
                 await reconciler
-                    .ReconcileRevokedAsync(subjectSnapshot, InvalidGrantRevokeReason, CancellationToken.None)
+                    .ReconcileRevokedAsync(subjectSnapshot, reason, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

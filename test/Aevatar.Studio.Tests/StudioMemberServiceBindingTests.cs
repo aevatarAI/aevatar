@@ -422,6 +422,16 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("RecordPublishedBinding");
+            return Task.CompletedTask;
+        }
+
         public Task RenameAsync(
             string scopeId,
             string memberId,

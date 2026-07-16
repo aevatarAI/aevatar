@@ -156,6 +156,94 @@ public sealed class IdentityOAuthCallbackEndpointTests
         text.Should().Contain("/whoami");
     }
 
+    [Fact]
+    public async Task MissingRequiredService_ReturnsConflictWithoutBindingDispatch()
+    {
+        var subject = SampleSubject();
+        var broker = NewBroker(subject, "unused-binding");
+        broker.ExchangeAuthorizationCodeAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<BrokerAuthorizationCodeResult>>(_ => throw new NyxIdRequiredServiceAccessException(
+                ["https://nyxid.test/api/v1/proxy/s/aevatar"]));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            Substitute.For<IExternalIdentityBindingQueryPort>(),
+            bindingDispatch,
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>(),
+            format: "json");
+
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        bindingDispatch.Commands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BindingGrantUpdated_KeepsExistingBindingAndReturnsSuccess()
+    {
+        var subject = SampleSubject();
+        var existing = new BindingId { Value = "bnd_existing" };
+        var expectedHash = NyxIdRemoteCapabilityBroker.HashBindingId(existing.Value);
+        var broker = NewBroker(
+            subject,
+            bindingId: null,
+            bindingUpdated: true,
+            expectedBindingHash: expectedHash);
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(existing));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+        var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            queryPort,
+            bindingDispatch,
+            capabilityDispatch,
+            format: "json");
+
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+        context.Response.Body.Position = 0;
+        using var document = JsonDocument.Parse(await new StreamReader(context.Response.Body).ReadToEndAsync());
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        document.RootElement.GetProperty("status").GetString().Should().Be("binding_grant_updated");
+        document.RootElement.GetProperty("binding_id_changed").GetBoolean().Should().BeFalse();
+        bindingDispatch.Commands.Should().BeEmpty();
+        capabilityDispatch.Commands.Should().BeEmpty();
+        await broker.DidNotReceive().RevokeBindingByIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task BindingGrantUpdated_RejectsWhenLocalBindingChangedDuringReview()
+    {
+        var subject = SampleSubject();
+        var broker = NewBroker(
+            subject,
+            bindingId: null,
+            bindingUpdated: true,
+            expectedBindingHash: NyxIdRemoteCapabilityBroker.HashBindingId("bnd_old"));
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd_new" }));
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            queryPort,
+            new RecordingCommandDispatch<CommitBindingCommand>(),
+            new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>(),
+            format: "json");
+
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+        context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+    }
+
     // Refactor (iter27/cluster-028-identity-oauth-endpoint):
     //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
     //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
@@ -186,19 +274,27 @@ public sealed class IdentityOAuthCallbackEndpointTests
         ExternalUserId = "ou_user_y",
     };
 
-    private static INyxIdBrokerCallbackClient NewBroker(ExternalSubjectRef subject, string bindingId)
+    private static INyxIdBrokerCallbackClient NewBroker(
+        ExternalSubjectRef subject,
+        string? bindingId,
+        bool bindingUpdated = false,
+        string? expectedBindingHash = null)
     {
         var broker = Substitute.For<INyxIdBrokerCallbackClient>();
         broker.TryDecodeStateTokenAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(CallbackStateDecode.Ok(
                 correlationId: "correlation-1",
                 subject: subject,
-                verifier: "pkce-verifier")));
+                verifier: "pkce-verifier",
+                expectedBindingHash: expectedBindingHash)));
         broker.ExchangeAuthorizationCodeAsync(
                 Arg.Any<string>(),
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new BrokerAuthorizationCodeResult(bindingId, IdToken: null, AccessToken: null)));
+            .Returns(Task.FromResult(new BrokerAuthorizationCodeResult(bindingId, IdToken: null, AccessToken: null)
+            {
+                BindingUpdated = bindingUpdated,
+            }));
         return broker;
     }
 

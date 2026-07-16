@@ -7,6 +7,7 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
 import "Credentials/credential_secret_references.proto";
+import "channel_delivery_address.proto";
 import "delivery_ledger.proto";
 
 // ─── Skill Runner (persistent scheduled agent) ───
@@ -115,18 +116,12 @@ message SkillRunnerOutboundConfig {
   string api_key_id = 5;
   // Deprecated: superseded by owner_scope.platform. Issue #466.
   string platform = 6 [deprecated = true];
-  // Authoritative Lark outbound delivery target captured at create time. When
-  // both fields are present, SkillRunnerGAgent.SendOutputAsync uses them
-  // verbatim; conversation_id stays for LLM metadata propagation only.
-  string lark_receive_id = 7;
-  string lark_receive_id_type = 8;
-  // Secondary outbound delivery target. Used by SkillRunnerGAgent.SendOutputAsync
-  // when the primary chat_id-typed send is rejected with Lark `230002 bot not in
-  // chat` — the failure mode for cross-app same-tenant deployments where the
-  // outbound app is not a member of the inbound DM. See
-  // UserAgentCatalogEntry.lark_receive_id_fallback for the recommended pinning.
-  string lark_receive_id_fallback = 9;
-  string lark_receive_id_type_fallback = 10;
+  // Deprecated compatibility bridge for state serialized before channel_address.
+  // New writes must leave these empty and use channel_address instead.
+  string lark_receive_id = 7 [deprecated = true];
+  string lark_receive_id_type = 8 [deprecated = true];
+  string lark_receive_id_fallback = 9 [deprecated = true];
+  string lark_receive_id_type_fallback = 10 [deprecated = true];
   // Caller scope captured at create time. Replaces owner_nyx_user_id+platform
   // for new agents; the deprecated scattered fields remain for legacy state.
   aevatar.OwnerScope owner_scope = 11;
@@ -143,6 +138,9 @@ message SkillRunnerOutboundConfig {
   string failure_notification_provider_slug = 12;
   SkillRunnerOutputFormat output_format = 13;
   aevatar.credentials.SecretReference nyx_api_key_reference = 14;
+  // Generic outbound channel address captured at create time. Provider adapters
+  // interpret endpoint ids and endpoint types at the platform boundary.
+  ChannelDeliveryAddress channel_address = 15;
 }
 
 message SkillRunnerState {

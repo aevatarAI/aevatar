@@ -50,6 +50,28 @@ public sealed class ChatRuntimeStudioAuthoringLLMStreamPortTests
         provider.LastSystemPrompt.Should().Contain(expectedPromptText);
     }
 
+    [Fact]
+    public async Task StreamAsync_WhenWorkflowAuthoring_ShouldConstrainPromptToCanonicalRootSchema()
+    {
+        var provider = new SplitStreamingProviderFactory([new LLMStreamChunk { DeltaContent = "ok" }]);
+        var port = CreatePort(provider);
+
+        _ = await port.StreamAsync(
+                new StudioAuthoringLLMRequest(
+                    StudioAuthoringKind.Workflow,
+                    "prompt",
+                    "request-workflow-schema",
+                    null),
+                CancellationToken.None)
+            .ToListAsync();
+
+        provider.LastSystemPrompt.Should().Contain("The only supported top-level fields are: name, description, configuration, roles, steps.");
+        provider.LastSystemPrompt.Should().Contain("Do not emit top-level fields from other workflow dialects, including version, inputs, outputs, triggers, on, env, or jobs.");
+        provider.LastSystemPrompt.Should().NotContain("stream_buffer_capacity");
+        provider.LastSystemPrompt.Should().NotContain("agent_type: RoleGAgent");
+        provider.LastSystemPrompt.Should().NotContain("agent_id: role");
+    }
+
     private static ChatRuntimeStudioAuthoringLLMStreamPort CreatePort(SplitStreamingProviderFactory provider) =>
         new(
             provider,

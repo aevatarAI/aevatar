@@ -26,7 +26,8 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
     public string Description =>
         "Bind workflow YAML to an existing Studio member in the caller's current Aevatar scope. " +
         "Use this after creating a team/member when the workflow should appear on that member's Studio workflow page. " +
-        "Supply member_id and workflow_yaml, plus optional workflow_id; do not provide scope_id because scope is taken from the session context.";
+        "Supply member_id and workflow_yaml, plus optional workflow_id; do not provide scope_id because scope is taken from the session context. " +
+        "The result acknowledges dispatch and includes a binding_run_url for observing completion.";
 
     public string ParametersSchema => """
         {
@@ -103,12 +104,15 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
                     Success: result.Success,
                     ScopeId: result.ScopeId,
                     MemberId: result.MemberId,
-                    BindingRunId: result.BindingRunId,
+                    Operation: result.Operation,
                     Status: result.Status,
+                    BindingRunId: result.BindingRunId,
                     AckStage: result.AckStage,
                     BindingRunRole: result.BindingRunRole,
-                    BindingRunUrl: $"/api/scopes/{Uri.EscapeDataString(result.ScopeId)}/members/{Uri.EscapeDataString(result.MemberId)}/binding-runs/{Uri.EscapeDataString(result.BindingRunId)}",
-                    MemberWorkflowUrl: $"/api/scopes/{Uri.EscapeDataString(result.ScopeId)}/members/{Uri.EscapeDataString(result.MemberId)}/binding"),
+                    BindingRunUrl: BuildBindingRunUrl(result),
+                    MemberWorkflowUrl: $"/api/scopes/{Uri.EscapeDataString(result.ScopeId)}/members/{Uri.EscapeDataString(result.MemberId)}/binding",
+                    WorkflowId: result.WorkflowId,
+                    RevisionId: result.RevisionId),
                 s_jsonOptions);
         }
         catch (InvalidOperationException ex)
@@ -132,6 +136,11 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? BuildBindingRunUrl(StudioMemberWorkflowBindingResult result) =>
+        string.IsNullOrWhiteSpace(result.BindingRunId)
+            ? null
+            : $"/api/scopes/{Uri.EscapeDataString(result.ScopeId)}/members/{Uri.EscapeDataString(result.MemberId)}/binding-runs/{Uri.EscapeDataString(result.BindingRunId)}";
 
     private static string? FindUnknownArgument(string argumentsJson)
     {
@@ -157,12 +166,15 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
         bool Success,
         string ScopeId,
         string MemberId,
-        string BindingRunId,
+        string Operation,
         string Status,
-        string AckStage,
-        string BindingRunRole,
-        string BindingRunUrl,
-        string MemberWorkflowUrl);
+        string? BindingRunId,
+        string? AckStage,
+        string? BindingRunRole,
+        string? BindingRunUrl,
+        string MemberWorkflowUrl,
+        string? WorkflowId,
+        string? RevisionId);
 
     private sealed record BindStudioMemberWorkflowErrorJson(BindStudioMemberWorkflowErrorBody Error);
 

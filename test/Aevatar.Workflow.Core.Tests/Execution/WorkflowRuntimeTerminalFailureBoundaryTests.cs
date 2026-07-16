@@ -157,7 +157,7 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
     }
 
     [Fact]
-    public async Task Kernel_ShouldNotStartCompensation_WhenCompensableStepDispatchPublishFailsBeforeExecutorReceipt()
+    public async Task Kernel_ShouldQueryRunLedger_WhenCompensableStepDispatchPublishFailsBeforeExecutorReceipt()
     {
         var workflow = new WorkflowDefinition
         {
@@ -212,7 +212,77 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
             .Select(x => x.Event)
             .Should()
             .NotContain(x => x.Is(CompensationRequestEvent.Descriptor));
-        host.CompensationStartAttempts.Should().Be(0);
+        host.CompensationStartAttempts.Should().Be(1);
+        host.TerminalStepAttempts.Should().ContainSingle().Which.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Kernel_ShouldCompensatePreviouslyCompletedStep_WhenNextStepDispatchPublishFails()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "charge",
+                    Type = "tool_call",
+                    Compensation = "refund",
+                },
+                new StepDefinition { Id = "notify", Type = "notify" },
+                new StepDefinition { Id = "refund", Type = "tool_call" },
+            ],
+        };
+        var host = new RecordingStateHost
+        {
+            RunId = "run-1",
+            StartCompensationWhenLedgerRecorded = true,
+        };
+        var module = new WorkflowExecutionKernel(workflow, host);
+        var ctx = new RecordingEventHandlerContext
+        {
+            FailPublish = evt => evt is StepRequestEvent { StepId: "notify" },
+        };
+
+        await module.HandleAsync(
+            Envelope(new StartWorkflowEvent
+            {
+                RunId = "run-1",
+                WorkflowName = "wf",
+                Input = "hello",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var chargeRequest = ctx.Published
+            .Select(x => x.Event)
+            .Where(x => x.Is(StepRequestEvent.Descriptor))
+            .Select(x => x.Unpack<StepRequestEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                RunId = "run-1",
+                StepId = "charge",
+                ExecutionId = chargeRequest.ExecutionId,
+                Success = true,
+                Output = "charged",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        host.CompensationStartAttempts.Should().Be(1);
+        host.CompensableDispatches.Should().ContainSingle()
+            .Which.StepId.Should().Be("charge");
+        ctx.Published.Select(x => x.Event)
+            .Should()
+            .ContainSingle(x => x.Is(CompensationRequestEvent.Descriptor));
     }
 
     [Fact]
@@ -573,8 +643,8 @@ public sealed class WorkflowRuntimeTerminalFailureBoundaryTests
                 var dispatch = CompensableDispatches[^1];
                 return Task.FromResult(new WorkflowCompensationTransitionResult(
                     WorkflowCompensationTransitionStatus.Started,
-                    terminalStep?.StepId ?? string.Empty,
                     dispatch.CompensationStepId,
+                    terminalStep?.StepId ?? string.Empty,
                     dispatch.IdempotencyKey,
                     string.Empty,
                     "compensation-exec-1"));

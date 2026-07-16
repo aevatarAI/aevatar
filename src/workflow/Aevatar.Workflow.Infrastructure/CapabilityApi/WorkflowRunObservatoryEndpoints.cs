@@ -18,6 +18,8 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 //   - A caller with aevatar admin access may pass
 //     `scope=<id>` or `scope=__all__` to view another scope / all scopes (G2 auth matrix). Admin status is never
 //     self-asserted by a query param; a non-admin cross-scope request is denied BEFORE any cross-scope query runs.
+//   - A caller with aevatar admin access may also use /admin/runs/{runId} when they know only the run id and need
+//     the service to resolve the owning scope from the workflow current-state read model.
 //   - Endpoint audit metadata marks these read surfaces; the host audit middleware writes sanitized request/outcome
 //     artifacts and never stores the bearer (G5).
 //   - The read-only guard (GET-only + query-ports-only) and inline-page guard still hold; the NyxID authorizer
@@ -99,6 +101,28 @@ public static class WorkflowRunObservatoryEndpoints
                 WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
+        data.MapGet("/admin/runs/{runId}", GetAdminRun)
+            .WithName("GetWorkflowObservatoryAdminRun")
+            .WithSummary("Admin-only run timeline + summary + usage, resolved by run id across all scopes.")
+            .WithEndpointAudit(
+                "workflow.observatory.admin.get-run",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
+            .RequireAuthorization();
+
+        data.MapGet("/admin/runs/{runId}/graph", GetAdminRunGraph)
+            .WithName("GetWorkflowObservatoryAdminRunGraph")
+            .WithSummary("Admin-only run topology, resolved by run id across all scopes.")
+            .WithEndpointAudit(
+                "workflow.observatory.admin.get-run-graph",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
+            .RequireAuthorization();
+
         data.MapGet("/resolve-scope", ResolveScope)
             .WithName("ResolveWorkflowObservatoryScope")
             .WithSummary("Admin-only: resolve a NyxID email to candidate scope id(s).")
@@ -147,7 +171,7 @@ public static class WorkflowRunObservatoryEndpoints
     internal static async Task<IResult> ListRuns(
         HttpContext http,
         [FromServices] IWorkflowRunObservatoryQueryService observatory,
-        [FromServices] IWorkflowRunAdminOverviewQueryService adminOverview,
+        [FromServices] IWorkflowRunAdminQueryService adminQuery,
         [FromServices] IPlatformAdminAuthorizer authorizer,
         [FromServices] ILoggerFactory loggerFactory,
         string? scope = null,
@@ -184,7 +208,7 @@ public static class WorkflowRunObservatoryEndpoints
             return denied;
 
         var runs = string.Equals(scope, AllScopesToken, StringComparison.Ordinal)
-            ? await adminOverview.ListAllRunsAsync(filter, ct)
+            ? await adminQuery.ListAllRunsAsync(filter, ct)
             : await observatory.ListRunsForScopeAsync(scope!, filter, ct);
         return Results.Json(runs);
     }
@@ -238,6 +262,40 @@ public static class WorkflowRunObservatoryEndpoints
         }
 
         var graph = await observatory.GetRunGraphForScopeAsync(targetScope, runId, ct);
+        return graph == null ? Results.NotFound() : Results.Json(graph);
+    }
+
+    internal static async Task<IResult> GetAdminRun(
+        HttpContext http,
+        string runId,
+        [FromServices] IWorkflowRunAdminQueryService adminQuery,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
+    {
+        var denied = await AuthorizeAdminReadAsync(
+            http, runId, action: "admin-detail", authorizer, loggerFactory, ct);
+        if (denied is not null)
+            return denied;
+
+        var detail = await adminQuery.GetRunAsync(runId, ct);
+        return detail == null ? Results.NotFound() : Results.Json(detail);
+    }
+
+    internal static async Task<IResult> GetAdminRunGraph(
+        HttpContext http,
+        string runId,
+        [FromServices] IWorkflowRunAdminQueryService adminQuery,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
+    {
+        var denied = await AuthorizeAdminReadAsync(
+            http, runId, action: "admin-graph", authorizer, loggerFactory, ct);
+        if (denied is not null)
+            return denied;
+
+        var graph = await adminQuery.GetRunGraphAsync(runId, ct);
         return graph == null ? Results.NotFound() : Results.Json(graph);
     }
 
@@ -305,6 +363,29 @@ public static class WorkflowRunObservatoryEndpoints
         }
 
         return (null, caller, token);
+    }
+
+    private static async Task<IResult?> AuthorizeAdminReadAsync(
+        HttpContext http,
+        string runId,
+        string action,
+        IPlatformAdminAuthorizer authorizer,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var ownScopeId))
+            return Results.Unauthorized();
+
+        var (denied, _, _) = await AuthorizeCrossScopeAsync(
+            http,
+            ownScopeId,
+            targetScope: AllScopesToken,
+            runId,
+            action,
+            authorizer,
+            loggerFactory,
+            ct);
+        return denied;
     }
 
     private static IResult DeniedResult() =>

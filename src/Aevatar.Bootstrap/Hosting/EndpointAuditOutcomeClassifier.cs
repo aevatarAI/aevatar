@@ -10,9 +10,21 @@ public static class EndpointAuditOutcomeClassifier
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (exception is not null || EndpointAuditHttpContextState.TryGetException(context, out _))
+        if (exception is OperationCanceledException)
+        {
+            return AuditOutcome.Cancelled;
+        }
+
+        if (exception is not null)
         {
             return AuditOutcome.Error;
+        }
+
+        if (EndpointAuditHttpContextState.TryGetException(context, out var capturedException))
+        {
+            return capturedException is OperationCanceledException
+                ? AuditOutcome.Cancelled
+                : AuditOutcome.Error;
         }
 
         return context.Response.StatusCode switch

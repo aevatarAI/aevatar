@@ -33,10 +33,43 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
+        html.Should().Contain("\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\"]");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
+        if (path == "/admin")
+        {
+            html.Should().Contain("searchParams.append('resource'");
+            html.Should().Contain("id=\"obs-run-in\"");
+            html.Should().Contain("/api/workflow/observatory/admin/runs/");
+            html.Should().Contain("/api/workflow/observatory/runs/");
+            html.Should().NotContain("obsLooksLikeRunId");
+        }
+        else if (path == "/auto/callback")
+        {
+            html.Should().Contain("form.append(\"resource\"");
+        }
+        else
+        {
+            html.Should().Contain("searchParams.append(\"resource\"");
+            html.Should().Contain(path == "/workflow/skills"
+                ? "f.append(\"resource\""
+                : "form.append(\"resource\"");
+        }
+    }
+
+    [Fact]
+    public async Task AdminShell_AuditRefresh_ShouldReloadOnEntryAndGlobalRefresh()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("if(!AUDIT_LOADING) loadAuditTrail();");
+        html.Should().Contain("if((curParts()[0]||defaultModule())==='audit')");
+        html.Should().Contain("toast('正在刷新审计日志');");
+        html.Should().NotContain(
+            "if(!AUDIT_LOADED||AUDIT_LOADING){ if(!AUDIT_LOADING) loadAuditTrail(); }");
     }
 
     private static async Task<WebApplication> CreateAppAsync()

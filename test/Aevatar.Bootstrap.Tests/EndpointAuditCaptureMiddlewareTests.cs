@@ -16,7 +16,9 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.Bootstrap.Tests;
 
@@ -180,6 +182,29 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     }
 
     [Fact]
+    public async Task AnnotatedAnonymousIngress_WhenUnauthenticatedAndOptedIn_ShouldAppendRecordsWithAnonymousActor()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        await using var app = await CreateHostAsync(appender);
+
+        // No Authorization header -> unauthenticated caller, but the ingress
+        // endpoint opts into anonymous capture, so the attempt is still recorded.
+        var response = await app.GetTestClient().PostAsync(
+            "/audited/anon-ingress/ingress-1",
+            new StringContent("{}", Encoding.UTF8, "application/json"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        appender.Records.Should().HaveCount(2);
+        appender.Records.Should().OnlyContain(record =>
+            record.AuditActorId == "hashed-anonymous" &&
+            record.IdentityKeyId == "kid-test" &&
+            record.ActorKind == AuditActorKind.System &&
+            record.CredentialSource == AuditCredentialSource.System &&
+            record.CapturePlane == AuditCapturePlane.BoundaryEndpoint &&
+            record.OperationName.StartsWith("test.anon.ingress", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task TokenShapedRequestValue_ShouldNotEnterAppendedRecords()
     {
         var appender = new RecordingAuditTrailAppender();
@@ -245,6 +270,104 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         var response = await app.GetTestClient().SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+    }
+
+    [Fact]
+    public async Task RequestCancellation_ShouldAppendCancelledTerminalRecordWithHostOwnedToken()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        using var requestCancellation = new CancellationTokenSource();
+        var context = CreateAuditedContext(
+            "request-cancelled",
+            "test.widget.cancel",
+            requestCancellation.Token);
+        RequestDelegate next = _ =>
+        {
+            requestCancellation.Cancel();
+            return Task.FromException(new OperationCanceledException(requestCancellation.Token));
+        };
+        var middleware = new EndpointAuditCaptureMiddleware(
+            next,
+            [appender],
+            [new FakeAuditActorIdentityHasher()],
+            NullLogger<EndpointAuditCaptureMiddleware>.Instance);
+
+        Func<Task> act = () => middleware.InvokeAsync(context);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("test.widget.cancel.attempted");
+        appender.Records[1].OperationName.Should().Be("test.widget.cancel");
+        appender.Records[1].Outcome.Should().Be(AuditOutcome.Cancelled);
+        appender.CancellationStates.Should().Equal(false, false);
+    }
+
+    [Fact]
+    public async Task TerminalAppend_WhenAppenderIgnoresCancellation_ShouldRespectDeadlineAndObserveLateFault()
+    {
+        var appender = new NonCooperativeAuditTrailAppender();
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-07-14T10:00:00Z"));
+        var loggerProvider = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
+        var middleware = new EndpointAuditCaptureMiddleware(
+            _ => Task.CompletedTask,
+            [appender],
+            [new FakeAuditActorIdentityHasher()],
+            loggerFactory.CreateLogger<EndpointAuditCaptureMiddleware>(),
+            timeProvider);
+        var context = CreateAuditedContext("request-timeout", "test.widget.timeout");
+
+        var invocation = middleware.InvokeAsync(context);
+        await appender.TerminalAppendStarted.Task;
+
+        invocation.IsCompleted.Should().BeFalse();
+        timeProvider.Advance(TimeSpan.FromSeconds(5));
+        await invocation;
+
+        appender.Records.Should().HaveCount(2);
+        appender.Records[0].OperationName.Should().Be("test.widget.timeout.attempted");
+        appender.Records[1].OperationName.Should().Be("test.widget.timeout");
+        appender.TerminalCancellationToken.IsCancellationRequested.Should().BeTrue();
+        loggerProvider.Messages.Should().Contain(message =>
+            message.LogLevel == LogLevel.Error &&
+            message.Text.Contains("timed out after 5s", StringComparison.Ordinal));
+
+        appender.FailTerminal(new InvalidOperationException("late terminal failure"));
+
+        loggerProvider.Messages.Should().Contain(message =>
+            message.LogLevel == LogLevel.Error &&
+            message.Text.Contains("failed after its deadline", StringComparison.Ordinal));
+    }
+
+    private static DefaultHttpContext CreateAuditedContext(
+        string traceIdentifier,
+        string operationName,
+        CancellationToken requestAborted = default)
+    {
+        var context = new DefaultHttpContext
+        {
+            TraceIdentifier = traceIdentifier,
+            RequestAborted = requestAborted,
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", "user-123"),
+                new Claim("scope_id", "scope-a"),
+            ], "Test")),
+        };
+        context.Request.Method = HttpMethods.Post;
+        context.Request.Path = "/audited/widgets/widget-1";
+        var metadata = new EndpointAuditMetadata(
+            operationName,
+            AuditSensitivityLevel.Confidential,
+            "widget",
+            _ => ValueTask.FromResult<EndpointAuditTarget?>(new EndpointAuditTarget("widget", "widget-1")),
+            _ => ValueTask.FromResult("request captured"),
+            _ => ValueTask.FromResult("result captured"));
+        context.SetEndpoint(new Endpoint(
+            _ => Task.CompletedTask,
+            new EndpointMetadataCollection(metadata),
+            "audited endpoint"));
+        return context;
     }
 
     private static async Task<WebApplication> CreateHostAsync(
@@ -352,6 +475,15 @@ public sealed class EndpointAuditCaptureMiddlewareTests
                 EndpointAuditTargetResolvers.FromRouteValues("workflow-run", "scopeId", "memberId", "runId"),
                 EndpointAuditSanitizers.WithRouteValues("scopeId", "memberId", "runId"))
             .RequireAuthorization();
+        app.MapPost("/audited/anon-ingress/{ingressId}", (string ingressId) => Results.Accepted($"/audited/anon-ingress/{ingressId}"))
+            .WithEndpointAudit(
+                "test.anon.ingress",
+                AuditSensitivityLevel.Confidential,
+                "anon-ingress",
+                EndpointAuditTargetResolvers.FromRouteValue("anon-ingress", "ingressId"),
+                EndpointAuditSanitizers.WithRouteValues("ingressId"),
+                captureUnauthenticated: true)
+            .AllowAnonymous();
         app.MapGet("/plain", () => Results.Ok()).RequireAuthorization();
 
         await app.StartAsync();
@@ -436,12 +568,16 @@ public sealed class EndpointAuditCaptureMiddlewareTests
     {
         public List<AuditRecord> Records { get; } = [];
 
+        public List<bool> CancellationStates { get; } = [];
+
         public bool ThrowOnAppend { get; init; }
 
         public Task<AuditTrailAppendResult> AppendAsync(
             AuditRecord record,
             CancellationToken cancellationToken = default)
         {
+            CancellationStates.Add(cancellationToken.IsCancellationRequested);
+            cancellationToken.ThrowIfCancellationRequested();
             if (ThrowOnAppend)
             {
                 throw new InvalidOperationException("append failed");
@@ -455,12 +591,53 @@ public sealed class EndpointAuditCaptureMiddlewareTests
         }
     }
 
+    private sealed class NonCooperativeAuditTrailAppender : IAuditTrailAppender
+    {
+        private readonly TaskCompletionSource<AuditTrailAppendResult> _terminalCompletion = new();
+        private int _appendCount;
+
+        public List<AuditRecord> Records { get; } = [];
+
+        public TaskCompletionSource TerminalAppendStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public CancellationToken TerminalCancellationToken { get; private set; }
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            if (Interlocked.Increment(ref _appendCount) == 1)
+            {
+                return Task.FromResult(AuditTrailAppendResult.Appended(
+                    record.AuditId,
+                    record.AuditActorId,
+                    record.OccurredAt.ToDateTimeOffset()));
+            }
+
+            TerminalCancellationToken = cancellationToken;
+            TerminalAppendStarted.TrySetResult();
+            return _terminalCompletion.Task;
+        }
+
+        public void FailTerminal(Exception exception)
+        {
+            if (!_terminalCompletion.TrySetException(exception))
+                throw new InvalidOperationException("Terminal append was already completed.");
+        }
+    }
+
     private sealed class FakeAuditActorIdentityHasher : IAuditActorIdentityHasher
     {
         public AuditActorIdentity Hash(string canonicalActorKey)
         {
-            canonicalActorKey.Should().Be("nyxid:user-123");
-            return new AuditActorIdentity("hashed-user-123", "kid-test");
+            return canonicalActorKey switch
+            {
+                "nyxid:user-123" => new AuditActorIdentity("hashed-user-123", "kid-test"),
+                "system:endpoint-audit-anonymous" => new AuditActorIdentity("hashed-anonymous", "kid-test"),
+                _ => throw new InvalidOperationException($"Unexpected canonical actor key: {canonicalActorKey}"),
+            };
         }
 
         public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId)

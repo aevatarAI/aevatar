@@ -264,6 +264,15 @@ message StudioMemberBindingCompletedEvent {
   string expected_actor_id = 7;
 }
 
+message StudioMemberPublishedBindingRecordedEvent {
+  string published_service_id = 1;
+  string revision_id = 2;
+  StudioMemberImplementationKind implementation_kind = 3;
+  StudioMemberImplementationRef implementation_ref = 4;
+  google.protobuf.Timestamp recorded_at_utc = 5;
+  string expected_actor_id = 6;
+}
+
 message StudioMemberBindingFailedEvent {
   string binding_run_id = 1;
   StudioMemberBindingFailure failure = 2;

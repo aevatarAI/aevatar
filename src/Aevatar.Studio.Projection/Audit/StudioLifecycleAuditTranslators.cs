@@ -124,6 +124,117 @@ public sealed class StudioTeamArchivedAuditTranslator : StudioAuditTranslatorBas
             true);
 }
 
+public sealed class StudioMemberRenamedAuditTranslator : StudioAuditTranslatorBase<StudioMemberRenamedEvent>
+{
+    public override string EventTypeUrl =>
+        AuditCommittedEventTypeUrl.FromDescriptor(StudioMemberRenamedEvent.Descriptor);
+
+    protected override CommittedAuditSeed BuildSeed(
+        CommittedAuditTranslationContext context,
+        StudioMemberRenamedEvent evt) =>
+        StudioSeed(
+            "studio.member.renamed",
+            "studio_member",
+            context.OriginActorId,
+            "",
+            "Studio member display name updated.",
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["display_name"] = evt.DisplayName,
+            });
+}
+
+public sealed class StudioMemberBindingCompletedAuditTranslator
+    : StudioAuditTranslatorBase<StudioMemberBindingCompletedEvent>
+{
+    public override string EventTypeUrl =>
+        AuditCommittedEventTypeUrl.FromDescriptor(StudioMemberBindingCompletedEvent.Descriptor);
+
+    protected override CommittedAuditSeed BuildSeed(
+        CommittedAuditTranslationContext context,
+        StudioMemberBindingCompletedEvent evt) =>
+        StudioSeed(
+            "studio.member.binding.completed",
+            "studio_member",
+            context.OriginActorId,
+            "",
+            "Studio member binding completed.",
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["binding_run_id"] = evt.BindingRunId,
+                ["published_service_id"] = evt.PublishedServiceId,
+                ["revision_id"] = evt.RevisionId,
+                ["implementation_kind"] = evt.ImplementationKind.ToString(),
+            });
+}
+
+public sealed class StudioMemberBindingFailedAuditTranslator
+    : StudioAuditTranslatorBase<StudioMemberBindingFailedEvent>
+{
+    public override string EventTypeUrl =>
+        AuditCommittedEventTypeUrl.FromDescriptor(StudioMemberBindingFailedEvent.Descriptor);
+
+    protected override CommittedAuditSeed BuildSeed(
+        CommittedAuditTranslationContext context,
+        StudioMemberBindingFailedEvent evt) =>
+        StudioSeed(
+            "studio.member.binding.failed",
+            "studio_member",
+            context.OriginActorId,
+            "",
+            "Studio member binding failed.",
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["binding_run_id"] = evt.BindingRunId,
+                ["failure_code"] = evt.Failure?.Code ?? string.Empty,
+                ["failure_message"] = evt.Failure?.Message ?? string.Empty,
+            });
+}
+
+public sealed class StudioMemberBindingRejectedAuditTranslator
+    : StudioAuditTranslatorBase<StudioMemberBindingRejectedEvent>
+{
+    public override string EventTypeUrl =>
+        AuditCommittedEventTypeUrl.FromDescriptor(StudioMemberBindingRejectedEvent.Descriptor);
+
+    protected override CommittedAuditSeed BuildSeed(
+        CommittedAuditTranslationContext context,
+        StudioMemberBindingRejectedEvent evt) =>
+        StudioSeed(
+            "studio.member.binding.rejected",
+            "studio_member",
+            evt.MemberId,
+            evt.ScopeId,
+            "Studio member binding rejected.",
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["binding_run_id"] = evt.BindingRunId,
+                ["failure_code"] = evt.Failure?.Code ?? string.Empty,
+                ["failure_message"] = evt.Failure?.Message ?? string.Empty,
+            });
+}
+
+public sealed class StudioTeamEntryMemberChangedAuditTranslator
+    : StudioAuditTranslatorBase<StudioTeamEntryMemberChangedEvent>
+{
+    public override string EventTypeUrl =>
+        AuditCommittedEventTypeUrl.FromDescriptor(StudioTeamEntryMemberChangedEvent.Descriptor);
+
+    protected override CommittedAuditSeed BuildSeed(
+        CommittedAuditTranslationContext context,
+        StudioTeamEntryMemberChangedEvent evt) =>
+        StudioSeed(
+            "studio.team.entry-member.changed",
+            "studio_team",
+            evt.TeamId,
+            evt.ScopeId,
+            "Studio team entry member changed.",
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["entry_member_id"] = evt.HasEntryMemberId ? evt.EntryMemberId : string.Empty,
+            });
+}
+
 public abstract class StudioAuditTranslatorBase<TEvent> : IAuditCommittedEventTranslator
     where TEvent : class, IMessage<TEvent>, new()
 {

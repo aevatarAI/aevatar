@@ -115,7 +115,7 @@ public static class NyxIdRedirectUriResolver
             return DefaultPublicBaseUrl;
 
         var trimmed = raw.Trim();
-        if (IsWildcardListenAddress(trimmed))
+        if (!TryResolveExplicitBaseUrl(trimmed, out var baseUrl))
         {
             logger?.LogWarning(
                 "Ignoring {EnvVar}='{Value}': it is a Kestrel listen address (wildcard / unspecified host) " +
@@ -128,7 +128,21 @@ public static class NyxIdRedirectUriResolver
             return DefaultPublicBaseUrl;
         }
 
-        return trimmed;
+        return baseUrl;
+    }
+
+    internal static bool TryResolveExplicitBaseUrl(string? raw, out string baseUrl)
+    {
+        baseUrl = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        var trimmed = raw.Trim();
+        if (IsWildcardListenAddress(trimmed))
+            return false;
+
+        baseUrl = trimmed;
+        return true;
     }
 
     /// <summary>

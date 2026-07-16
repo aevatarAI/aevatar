@@ -93,7 +93,10 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             NyxChannelBotId = cmd.NyxChannelBotId ?? string.Empty,
             NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = cmd.NyxConversationRouteId ?? string.Empty,
-            NyxReplyCredentialRef = cmd.NyxReplyCredentialRef?.Trim() ?? string.Empty,
+            WorkflowResultDeliveryCredential = cmd.WorkflowResultDeliveryCredential?.Clone(),
+            // Canonical skill-name form matches SkillInvocationTriggerParser output
+            // (lowercase, no leading trigger token) so inbound routing compares 1:1.
+            DefaultSkillName = (cmd.DefaultSkillName ?? string.Empty).Trim().TrimStart('/').ToLowerInvariant(),
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 

@@ -428,6 +428,12 @@ message ScheduledDispatchDocument {
   string prompt = 33;
   int32 overdue_fire_detected_count = 34;
   google.protobuf.Timestamp last_overdue_fire_at_utc_value = 35;
+  string credential_requirement_target_kind = 36;
+  string credential_source_kind = 37;
+  string schedule_mode = 38;
+  google.protobuf.Timestamp one_shot_fire_at_utc_value = 39;
+  bool completed = 40;
+  google.protobuf.Timestamp completed_at_utc_value = 41;
 }
 
 message ScheduledDispatchFireRecordDocument {

@@ -22,6 +22,19 @@ public static class ChannelMetadataKeys
     public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
     /// <summary>
+    /// Provider slug used for outbound delivery back to the current channel. This is the generic
+    /// channel-delivery route selected by the inbound adapter.
+    /// </summary>
+    public const string OutboundProviderSlug = "channel.outbound.provider_slug";
+    /// <summary>Provider-interpreted primary outbound address for the current channel turn.</summary>
+    public const string DeliveryAddressId = "channel.delivery.address_id";
+    /// <summary>Provider-interpreted type for <see cref="DeliveryAddressId"/>.</summary>
+    public const string DeliveryAddressType = "channel.delivery.address_type";
+    /// <summary>Optional provider-interpreted fallback outbound address for the current channel turn.</summary>
+    public const string DeliveryFallbackAddressId = "channel.delivery.fallback_address_id";
+    /// <summary>Provider-interpreted type for <see cref="DeliveryFallbackAddressId"/>.</summary>
+    public const string DeliveryFallbackAddressType = "channel.delivery.fallback_address_type";
+    /// <summary>
     /// Everyone @-mentioned in the inbound message, as a readable list of <c>name &lt;canonical_id&gt;</c>
     /// entries (on Lark the canonical id is the mentioned party's <c>open_id</c>), in the order their
     /// <c>@_user_N</c> placeholders appear in the message text. Surfaced into the agent's
@@ -63,26 +76,6 @@ public static class ChannelMetadataKeys
     /// Distinct from card-action operator identity.
     /// </summary>
     public const string LarkSubjectEmployeeId = "channel.lark.subject_employee_id";
-    /// <summary>
-    /// Authoritative outbound Lark <c>receive_id</c> for the current workflow run, captured at
-    /// agent-create time. Propagated via <c>WorkflowChatRunRequest.Metadata</c> so workflow
-    /// modules can surface their result back into the same chat without having to look up the
-    /// catalog at execution time.
-    /// </summary>
-    public const string LarkReceiveId = "channel.lark.receive_id";
-    /// <summary>Companion to <see cref="LarkReceiveId"/> — its <c>receive_id_type</c>.</summary>
-    public const string LarkReceiveIdType = "channel.lark.receive_id_type";
-    /// <summary>
-    /// NyxID outbound proxy slug used to deliver Lark messages from inside a workflow run
-    /// (default <c>api-lark-bot</c>). The <c>outbound</c> qualifier is deliberate — this is
-    /// specifically the routing target for Lark <em>send</em> calls (e.g.
-    /// <c>open-apis/im/v1/messages</c>) initiated by the workflow runtime, not a generic Lark
-    /// API field. PR #461 review item #4 flagged the original name (<c>channel.lark.proxy_slug</c>)
-    /// as ambiguous between "Lark API surface" and "NyxID provider routing" — the
-    /// <c>outbound_proxy_slug</c> form makes the routing-side semantics explicit.
-    /// </summary>
-    public const string LarkOutboundProxySlug = "channel.lark.outbound_proxy_slug";
-
     /// <summary>
     /// NyxID provider slug of the inbound channel-bot that received this turn's webhook
     /// event. Equivalent to <c>ChannelInboundEvent.NyxProviderSlug</c>, surfaced as request

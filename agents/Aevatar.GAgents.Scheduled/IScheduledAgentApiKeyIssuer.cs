@@ -10,7 +10,8 @@ public interface IScheduledAgentApiKeyIssuer
         string? scopeId,
         CancellationToken ct);
 
-    Task TryRevokeAsync(string token, string apiKeyId, CancellationToken ct);
+    Task<ScheduledAgentApiKeyRevokeResult> RevokeAsync(string token, string apiKeyId, CancellationToken ct);
+
 }
 
 public sealed record ScheduledAgentServiceSlugs(
@@ -18,3 +19,19 @@ public sealed record ScheduledAgentServiceSlugs(
     string? FailureNotificationSlug,
     IReadOnlyList<string> RequiredServiceSlugs,
     bool RequiresOrnnService = true);
+
+public sealed record ScheduledAgentApiKeyRevokeResult(
+    bool Completed,
+    int HttpStatus,
+    string Error,
+    UserAgentApiKeyRevocationFailureKind FailureKind)
+{
+    public static ScheduledAgentApiKeyRevokeResult Complete(int httpStatus = 0) =>
+        new(true, httpStatus, string.Empty, UserAgentApiKeyRevocationFailureKind.None);
+
+    public static ScheduledAgentApiKeyRevokeResult Pending(
+        int httpStatus,
+        string error,
+        UserAgentApiKeyRevocationFailureKind failureKind) =>
+        new(false, httpStatus, error ?? string.Empty, failureKind);
+}

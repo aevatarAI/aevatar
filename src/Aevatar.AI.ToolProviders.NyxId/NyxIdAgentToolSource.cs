@@ -52,7 +52,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
             new NyxIdProxyTool(_client, _logger, _fileArtifactIngress, _options.EffectiveProxyFileArtifactMaxBytes),
-            new NyxIdCodeExecuteTool(_client, _logger),
+            new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),
@@ -70,7 +70,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
         //   Old pattern: NyxID remote fallback registration could be mistaken for local execution gating.
         //   New principle: ssh_exec exposure requires a local approval handler/middleware; remote fallback is separate.
-        // ssh_exec is opt-in. The tool's Auto/RequiresApproval=true contract relies on the
+        // SSH-backed execution tools are opt-in. Their Auto/RequiresApproval=true contract relies on the
         // host wiring an approval middleware around tool execution; without that middleware,
         // a host would let the LLM run remote shell commands directly. Make hosts opt in
         // explicitly so that exposure is a deliberate decision. A deployment may also opt
@@ -81,11 +81,13 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             if (!_options.BypassSshExecApproval && !_toolApprovalHandlerAvailable)
             {
                 throw new InvalidOperationException(
-                    "NyxID ssh_exec is enabled but no IToolApprovalHandler is registered. " +
-                    "Register a local approval handler or explicitly set BypassSshExecApproval before exposing ssh_exec.");
+                    "NyxID SSH execution tools are enabled but no IToolApprovalHandler is registered. " +
+                    "Register a local approval handler or explicitly set BypassSshExecApproval before exposing them.");
             }
 
-            tools.Add(new NyxIdSshExecTool(_client, _options, _logger));
+            var sshExecutor = new NyxIdSshCommandExecutor(_client, _logger);
+            tools.Add(new NyxIdSshExecTool(sshExecutor, _options));
+            tools.Add(new NyxIdCodexExecTool(sshExecutor, _options));
         }
 
         _logger.LogInformation(

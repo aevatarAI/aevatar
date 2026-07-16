@@ -87,6 +87,7 @@ public sealed class ChannelsEndpointsTests
                 ["Aevatar:BackendConsole:OidcAuthority"] = "https://id.example.test",
                 ["Aevatar:BackendConsole:OidcClientId"] = "client-example",
                 ["Aevatar:BackendConsole:OidcScope"] = "openid profile",
+                ["Aevatar:BackendConsole:NyxApiBaseUrl"] = "https://api.example.test",
                 ["Aevatar:BackendConsole:StorageKey"] = "console:test",
             })
             .Build();
@@ -109,6 +110,9 @@ public sealed class ChannelsEndpointsTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
+        html.Should().Contain("\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain("searchParams.append(\"resource\"");
+        html.Should().Contain("form.append(\"resource\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
     }
 }

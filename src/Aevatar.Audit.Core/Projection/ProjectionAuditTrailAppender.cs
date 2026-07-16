@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Core.Sanitization;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,13 +10,16 @@ namespace Aevatar.Audit.Core.Projection;
 public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
 {
     private readonly IAuditTrailArtifactStore? _store;
+    private readonly AuditRecordSanitizer _sanitizer;
     private readonly ILogger<ProjectionAuditTrailAppender> _logger;
 
     public ProjectionAuditTrailAppender(
         IEnumerable<IAuditTrailArtifactStore> stores,
+        AuditRecordSanitizer? sanitizer = null,
         ILogger<ProjectionAuditTrailAppender>? logger = null)
     {
         _store = SelectSingleOrDefault(stores, nameof(stores));
+        _sanitizer = sanitizer ?? new AuditRecordSanitizer();
         _logger = logger ?? NullLogger<ProjectionAuditTrailAppender>.Instance;
     }
 
@@ -30,9 +34,20 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
         if (_store is null)
             return AuditTrailAppendResult.StoreUnavailable(auditId, "Audit trail artifact store is not registered.");
 
+        Audit.AuditRecord sanitized;
         try
         {
-            var contentHash = ComputeContentHash(record);
+            sanitized = _sanitizer.Sanitize(record);
+        }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex, "Audit trail record validation failed. auditId={AuditId}", auditId);
+            return AuditTrailAppendResult.Conflict(auditId, "Audit record is invalid.");
+        }
+
+        try
+        {
+            var contentHash = ComputeContentHash(sanitized);
             var existing = await _store.GetAsync(auditId, ct);
             if (existing != null)
             {
@@ -41,10 +56,10 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
                     : AuditTrailAppendResult.Conflict(auditId, "Audit id already exists with different content.");
             }
 
-            var observedAt = record.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
-            var document = AuditTrailDocumentFactory.Create(record, auditId, contentHash, observedAt);
+            var observedAt = sanitized.OccurredAt.ToDateTimeOffset();
+            var document = AuditTrailDocumentFactory.Create(sanitized, auditId, contentHash, observedAt);
             var write = await _store.UpsertAsync(document, ct);
-            return ToAppendResult(write, auditId, record.AuditActorId ?? string.Empty, observedAt);
+            return ToAppendResult(write, auditId, sanitized.AuditActorId, observedAt);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

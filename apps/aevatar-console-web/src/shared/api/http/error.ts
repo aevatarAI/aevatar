@@ -72,11 +72,6 @@ function readResponseErrorFromPayload(
     return message;
   }
 
-  const error = readJsonErrorText(payload.error);
-  if (error) {
-    return error;
-  }
-
   const detail = readJsonErrorText(payload.detail);
   const title = readJsonErrorText(payload.title);
   if (detail && title) {
@@ -94,6 +89,11 @@ function readResponseErrorFromPayload(
 
   if (title) {
     return title;
+  }
+
+  const error = readJsonErrorText(payload.error);
+  if (error) {
+    return error;
   }
 
   const code = readJsonErrorText(payload.code);

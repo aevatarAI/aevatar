@@ -543,6 +543,13 @@ public sealed class StudioMemberServicePatchTests
             return Task.CompletedTask;
         }
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("member patch must not record published bindings.");
+
         public Task RenameAsync(
             string scopeId,
             string memberId,

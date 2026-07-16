@@ -172,6 +172,12 @@ message WorkflowRunState
   // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
   // non-scheduled runs. Observatory filter dimension for "this schedule's runs".
   string schedule_id = 36;
+  WorkflowCompletionNotificationTarget completion_notification_target = 37;
+  string workflow_correlation_id = 38;
+  WorkflowRunTerminalNotification pending_terminal_notification = 39;
+  int32 terminal_notification_attempt = 40;
+  WorkflowRunTerminalNotificationDeliveryStatus terminal_notification_delivery_status = 41;
+  string terminal_notification_retry_callback_id = 42;
 }
 
 message WorkflowRunExecutionContextState
@@ -197,6 +203,8 @@ message WorkflowCallerCredentialState
 {
   string bearer_token = 1;
   aevatar.credentials.RuntimeSecretReference runtime_secret_reference = 2;
+  aevatar.credentials.DurableCallerCredentialRef durable_caller_credential = 3;
+  WorkflowCallerNyxIdAuthority nyx_id_authority = 4;
 }
 
 message WorkflowToolRuntimeContextState

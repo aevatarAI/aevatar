@@ -83,6 +83,10 @@ public sealed class ObservatoryRunDetail
 
     public string FinalError { get; init; } = string.Empty;
 
+    // Diagnostics derived from committed current-state/readmodel facts and the run-report artifact. They are
+    // query-time explanations, not durable log entries or deletion tombstones.
+    public IReadOnlyList<ObservatoryRunDiagnostic> Diagnostics { get; init; } = [];
+
     // 06-26 detail enrichment: per-step structured trace (status / timing / params / per-step usage). The step
     // OUTPUT is a 240-char preview by current materialization; the FULL per-step output lives in Timeline
     // (role.reply Content / tool-call ResultJson), which this detail already carries.
@@ -93,6 +97,27 @@ public sealed class ObservatoryRunDetail
     public ObservatoryRunStatistics Statistics { get; init; } = new();
 
     public ObservatoryUsageTotals UsageTotals { get; init; } = new();
+}
+
+public sealed class ObservatoryRunDiagnostic
+{
+    public DateTimeOffset? TimestampUtc { get; init; }
+
+    public string Severity { get; init; } = string.Empty;
+
+    public string Code { get; init; } = string.Empty;
+
+    public string Source { get; init; } = string.Empty;
+
+    public string Message { get; init; } = string.Empty;
+
+    public string Hint { get; init; } = string.Empty;
+
+    public string StepId { get; init; } = string.Empty;
+
+    public string StepType { get; init; } = string.Empty;
+
+    public string TargetRole { get; init; } = string.Empty;
 }
 
 // 06-26 detail enrichment: read-only per-step view DTO mirroring the committed run-report step trace.

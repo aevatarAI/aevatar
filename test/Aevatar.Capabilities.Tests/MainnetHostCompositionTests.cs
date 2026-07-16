@@ -1,4 +1,6 @@
+using Aevatar.GAgents.Scheduled;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
@@ -29,15 +31,15 @@ using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgents.Authoring.Lark;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
-using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -95,6 +97,13 @@ public sealed class MainnetHostCompositionTests
         app.MapAevatarMainnetHost();
         await app.StartAsync();
 
+        var brokerOptions = app.Services.GetRequiredService<IOptions<NyxIdBrokerOptions>>().Value;
+        brokerOptions.RequiredLlmServiceSlug.Should().Be(LlmDefaults.NyxIdRoute);
+        brokerOptions.AdditionalRequiredServiceSlugs.Should().Equal(
+            OrnnOptions.DefaultNyxIdSlug,
+            NyxIdToolOptions.DefaultSandboxServiceSlug);
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .SandboxServiceSlug.Should().Be(NyxIdToolOptions.DefaultSandboxServiceSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
@@ -102,13 +111,18 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExternalApprovalContinuationDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<UserAgentApiKeyRevocationDocument, string>>()
+            .Should()
+            .NotBeNull();
         var readModelDescriptors = app.Services.GetServices<IProjectionReadModelDescriptor>().ToList();
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(18);
+        readModelDescriptors.Should().HaveCount(19);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
+        readModelDescriptors.Should()
+            .ContainSingle(static descriptor => descriptor.Name == "user-agent-api-key-revocation");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
         readModelDescriptors.Should()
@@ -176,6 +190,96 @@ public sealed class MainnetHostCompositionTests
             .NotContain(middleware => middleware is ToolApprovalMiddleware);
 
         await app.StopAsync();
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithInvalidAdditionalNyxIdServiceSlug_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:AdditionalRequiredServiceSlugs:0"] = "Invalid/Service",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*AdditionalRequiredServiceSlugs[0]*1-80 character NyxID service slug*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithLlmResourcePolicyDrift_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:DefaultRoute"] = "llm-provider-route",
+        });
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.RequiredLlmServiceSlug = "drifted-authorization-route");
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*RequiredLlmServiceSlug*llm-provider-route*Aevatar:NyxId:DefaultRoute*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutOrnnProviderResource_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.AdditionalRequiredServiceSlugs = [NyxIdToolOptions.DefaultSandboxServiceSlug]);
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage($"*AdditionalRequiredServiceSlugs*{OrnnOptions.DefaultNyxIdSlug}*Aevatar:Ornn:NyxIdSlug*");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithoutSandboxProviderResource_ShouldFailStartupValidation()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.Services.PostConfigure<NyxIdBrokerOptions>(options =>
+            options.AdditionalRequiredServiceSlugs = [OrnnOptions.DefaultNyxIdSlug]);
+
+        using var app = builder.Build();
+        var act = () => app.Services.GetRequiredService<IStartupValidator>().Validate();
+
+        act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage(
+                $"*AdditionalRequiredServiceSlugs*{NyxIdToolOptions.DefaultSandboxServiceSlug}*" +
+                "Aevatar:NyxId:SandboxServiceSlug*");
     }
 
     [Fact]
@@ -651,6 +755,37 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldReconcileProjectionIndicesBeforeStartupReaders()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+            ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+            ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] = "http://127.0.0.1:9200",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var hostedServices = builder.Services
+            .Where(static descriptor => descriptor.ServiceType == typeof(IHostedService))
+            .ToList();
+        var reconcileIndex = hostedServices.FindIndex(static descriptor =>
+            descriptor.ImplementationType == typeof(ElasticsearchProjectionIndexReconcileHostedService));
+        var revocationMigrationIndex = hostedServices.FindIndex(static descriptor =>
+            descriptor.ImplementationType?.Name == "UserAgentApiKeyRevocationReadModelKeyMigrationService");
+
+        reconcileIndex.Should().BeGreaterThanOrEqualTo(0);
+        revocationMigrationIndex.Should().BeGreaterThan(reconcileIndex);
+        hostedServices.Should().ContainSingle(static descriptor =>
+            descriptor.ImplementationType == typeof(ElasticsearchProjectionIndexReconcileHostedService));
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldAssertChannelIdentityElasticsearchAcl()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -667,6 +802,23 @@ public sealed class MainnetHostCompositionTests
 
         aclOptions.GrantMatchesGrainEventStoreInternal.Should().BeTrue();
         aclOptions.GrantDescription.Should().Contain("aevatar-oauth-clients");
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_InProduction_ShouldRegisterDistributedIdentityAssertionReplayGuard()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(environmentName: Environments.Production);
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var descriptor = builder.Services.Last(service =>
+            service.ServiceType == typeof(IIdentityAssertionReplayGuard));
+        descriptor.ImplementationType.Should().Be(typeof(DistributedIdentityAssertionReplayGuard));
     }
 
     [Theory]

@@ -2,6 +2,8 @@ using System.Reflection;
 using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -1076,22 +1078,22 @@ public sealed class ConversationGAgentDedupTests
         delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
         delivery.RequestId.ShouldBe("llm:corr-delivered");
         delivery.SourceEventId.ShouldBe("corr-delivered");
-        delivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        delivery.ProviderMessageId.ShouldBe("om_delivery_ok");
         delivery.CardId.ShouldBeEmpty();
         delivery.Target.Channel.Value.ShouldBe("slack");
         delivery.Target.ConversationKey.ShouldBe("conv:slack:C1");
         delivery.Target.Platform.ShouldBe("slack");
-        delivery.Target.ReceiveId.ShouldBeEmpty();
-        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.AddressId.ShouldBeEmpty();
+        delivery.Target.AddressType.ShouldBeEmpty();
         delivery.Target.ConversationId.ShouldBe("conv:slack:C1");
         delivery.Target.ReplyMessageId.ShouldBeEmpty();
         var recentDelivery = agent.State.RecentDeliveries.ShouldHaveSingleItem();
         recentDelivery.RequestId.ShouldBe("llm:corr-delivered");
         recentDelivery.Status.ShouldBe(DeliveryStatus.Succeeded);
-        recentDelivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        recentDelivery.ProviderMessageId.ShouldBe("om_delivery_ok");
         agent.State.LastSuccessfulDelivery.ShouldNotBeNull();
         agent.State.LastSuccessfulDelivery!.RequestId.ShouldBe("llm:corr-delivered");
-        agent.State.LastSuccessfulDelivery.LarkMessageId.ShouldBe("om_delivery_ok");
+        agent.State.LastSuccessfulDelivery.ProviderMessageId.ShouldBe("om_delivery_ok");
     }
 
     [Fact]
@@ -1131,12 +1133,12 @@ public sealed class ConversationGAgentDedupTests
         delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
         delivery.RequestId.ShouldBe("llm:corr-delivery-failed");
         delivery.SourceEventId.ShouldBe("corr-delivery-failed");
-        delivery.LarkMessageId.ShouldBeEmpty();
+        delivery.ProviderMessageId.ShouldBeEmpty();
         delivery.Target.Channel.Value.ShouldBe("slack");
         delivery.Target.ConversationKey.ShouldBe("conv:slack:C1");
         delivery.Target.Platform.ShouldBe("slack");
-        delivery.Target.ReceiveId.ShouldBeEmpty();
-        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.AddressId.ShouldBeEmpty();
+        delivery.Target.AddressType.ShouldBeEmpty();
         delivery.Target.ConversationId.ShouldBe("conv:slack:C1");
         delivery.Target.ReplyMessageId.ShouldBeEmpty();
         events.Last().EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
@@ -1681,6 +1683,80 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task ActivateAsync_AfterRelayRunDispatchFailure_RestoresRuntimeCredentialsFromReferences()
+    {
+        const string sentinelReplyToken = "sentinel-dispatch-recovery-reply-token";
+        const string sentinelUserAccessToken = "sentinel-dispatch-recovery-user-token";
+        const string actorId = "conv-dispatch-recovery";
+        var eventStore = new InMemoryEventStore();
+        var runtimeSecretStore = new InMemoryRuntimeSecretStore();
+        var firstRunner = new RecordingTurnRunner
+        {
+            InboundResultFactory = activity =>
+            {
+                var request = CreateNeedsLlmReply(activity);
+                request.RunId = "agent-run-dispatch-recovery";
+                return ConversationTurnResult.LlmReplyRequested(request);
+            },
+        };
+        var (firstAgent, _) = await CreateAgentAsync(
+            firstRunner,
+            actorId,
+            new FailingRunDispatcher(),
+            store: eventStore,
+            runtimeSecretStore: runtimeSecretStore);
+        var inboundActivity = CreateActivity("act-dispatch-recovery", "conv:slack:C1");
+        inboundActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "relay-msg-dispatch-recovery",
+            CorrelationId = "corr-dispatch-recovery",
+        };
+        inboundActivity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = sentinelUserAccessToken,
+        };
+
+        await firstAgent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            ReplyToken = sentinelReplyToken,
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+            CorrelationId = "callback-dispatch-recovery",
+        });
+
+        var persisted = firstAgent.State.PendingLlmReplyRequests.ShouldHaveSingleItem();
+        persisted.ReplyToken.ShouldBeEmpty();
+        persisted.Activity.TransportExtras.NyxUserAccessToken.ShouldBeEmpty();
+        persisted.RelayReplyTokenRef.Ref.ShouldNotBeNullOrWhiteSpace();
+        persisted.RelayUserAccessTokenRef.Ref.ShouldNotBeNullOrWhiteSpace();
+
+        var recoveredDispatcher = new RecordingRunDispatcher();
+        await CreateAgentAsync(
+            new RecordingTurnRunner(),
+            actorId,
+            recoveredDispatcher,
+            store: eventStore,
+            runtimeSecretStore: runtimeSecretStore);
+
+        var recovered = recoveredDispatcher.Dispatched.ShouldHaveSingleItem();
+        recovered.ReplyToken.ShouldBe(sentinelReplyToken);
+        recovered.ReplyTokenExpiresAtUnixMs.ShouldBeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        recovered.Activity.TransportExtras.NyxUserAccessToken.ShouldBe(sentinelUserAccessToken);
+
+        var events = await eventStore.GetEventsAsync(actorId);
+        foreach (var sentinel in new[] { sentinelReplyToken, sentinelUserAccessToken })
+        {
+            var sentinelBytes = Encoding.UTF8.GetBytes(sentinel);
+            foreach (var record in events)
+            {
+                var payloadBytes = record.EventData?.Value?.ToByteArray() ?? Array.Empty<byte>();
+                ContainsSubsequence(payloadBytes, sentinelBytes)
+                    .ShouldBeFalse($"persisted event {record.EventType} must not contain raw runtime credential bytes");
+            }
+        }
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_PrefersRunEchoedReplyToken_OverActorRuntimeDict()
     {
         // The outbound reply consumes the run-echoed reply_token from LlmReplyReadyEvent
@@ -1939,22 +2015,22 @@ public sealed class ConversationGAgentDedupTests
         delivery.ProducedAtVersion.ShouldBe(deliveryRecord.Version);
         delivery.RequestId.ShouldBe("llm:act-stream-sc");
         delivery.SourceEventId.ShouldBe("act-stream-sc");
-        delivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        delivery.ProviderMessageId.ShouldBe("nyx-relay-stream:om_stream");
         delivery.CardId.ShouldBeEmpty();
         delivery.Target.Channel.Value.ShouldBe("lark");
         delivery.Target.ConversationKey.ShouldBe("conv:lark:grp");
         delivery.Target.Platform.ShouldBe("lark");
-        delivery.Target.ReceiveId.ShouldBe("relay-msg-1");
-        delivery.Target.ReceiveIdType.ShouldBeEmpty();
+        delivery.Target.AddressId.ShouldBe("relay-msg-1");
+        delivery.Target.AddressType.ShouldBeEmpty();
         delivery.Target.ConversationId.ShouldBe("conv:lark:grp");
         delivery.Target.ReplyMessageId.ShouldBe("relay-msg-1");
         var recentDelivery = agent.State.RecentDeliveries.ShouldHaveSingleItem();
         recentDelivery.RequestId.ShouldBe("llm:act-stream-sc");
         recentDelivery.Status.ShouldBe(DeliveryStatus.Succeeded);
-        recentDelivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        recentDelivery.ProviderMessageId.ShouldBe("nyx-relay-stream:om_stream");
         agent.State.LastSuccessfulDelivery.ShouldNotBeNull();
         agent.State.LastSuccessfulDelivery!.RequestId.ShouldBe("llm:act-stream-sc");
-        agent.State.LastSuccessfulDelivery.LarkMessageId.ShouldBe("nyx-relay-stream:om_stream");
+        agent.State.LastSuccessfulDelivery.ProviderMessageId.ShouldBe("nyx-relay-stream:om_stream");
     }
 
     [Fact]
@@ -2819,7 +2895,8 @@ public sealed class ConversationGAgentDedupTests
         ChatRouteResolver? chatRouteResolver = null,
         IEventStore? store = null,
         IEventPublisher? eventPublisher = null,
-        RecordingActorDispatchPort? dispatchPort = null)
+        RecordingActorDispatchPort? dispatchPort = null,
+        IRuntimeSecretStore? runtimeSecretStore = null)
     {
         store ??= new InMemoryEventStore();
         var services = new ServiceCollection();
@@ -2836,6 +2913,8 @@ public sealed class ConversationGAgentDedupTests
             services.AddSingleton(queryPort);
         if (chatRouteResolver is not null)
             services.AddSingleton(chatRouteResolver);
+        if (runtimeSecretStore is not null)
+            services.AddSingleton(runtimeSecretStore);
         services.AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
         var sp = services.BuildServiceProvider();
@@ -3101,6 +3180,12 @@ public sealed class ConversationGAgentDedupTests
             Dispatched.Add(request.Clone());
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FailingRunDispatcher : IChannelLlmReplyRunDispatcher
+    {
+        public Task DispatchAsync(NeedsLlmReplyEvent request, CancellationToken ct) =>
+            Task.FromException(new InvalidOperationException("simulated actor dispatch failure"));
     }
 
     private sealed class StaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot) : IChatRoutePolicyQueryPort

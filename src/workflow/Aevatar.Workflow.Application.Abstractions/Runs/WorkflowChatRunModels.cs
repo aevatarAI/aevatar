@@ -58,7 +58,15 @@ public sealed record WorkflowLlmControl(
     string? RoutePreference = null,
     string? SenderNyxIdAccessToken = null);
 
-public sealed record WorkflowCallerCredential(string? BearerToken = null);
+public sealed record WorkflowCallerNyxIdAuthority(
+    string Platform,
+    string Tenant,
+    string ExternalUserId,
+    string Scope);
+
+public sealed record WorkflowCallerCredential(
+    string? BearerToken = null,
+    WorkflowCallerNyxIdAuthority? NyxIdAuthority = null);
 
 public sealed record WorkflowExternalIngressContext(
     string RouteKey,
@@ -74,6 +82,11 @@ public sealed record WorkflowChatHistoryWriteIntent(
     string ConversationId,
     string TurnId,
     string UserText);
+
+public sealed record WorkflowCompletionNotificationTarget(
+    string ActorId,
+    string DeliveryId,
+    long ExpiresAtUnixMs);
 
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
@@ -194,7 +207,8 @@ public sealed record WorkflowChatRunRequest(
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
     WorkflowChatHistoryWriteIntent? ChatHistory = null,
-    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 

@@ -48,7 +48,8 @@ public sealed class ScopeServiceTokenAuthenticationTests
         jwtOptions.TokenValidationParameters.ValidIssuers.Should().Contain("https://aevatar.example.com");
         jwtOptions.TokenValidationParameters.IssuerSigningKeys.Should().ContainSingle()
             .Which.KeyId.Should().Be("scope-kid-1");
-        jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver.Should().NotBeNull();
+        jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver.Should().BeNull();
+        jwtOptions.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration.Should().NotBeNull();
         jwtOptions.TokenValidationParameters.ValidAudiences.Should().Contain("aevatar-scope-services");
     }
 

@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -8,9 +9,8 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgents.Authoring.Lark;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Abstractions;
-using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using NSubstitute;
 using Xunit;
@@ -2232,15 +2232,18 @@ public sealed class ConversationReplyGeneratorTests
     {
         var providerFactory = new RecordingProviderFactory();
         var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions());
         var agentBuilderSource = new AgentBuilderToolSource(
             Substitute.For<IUserAgentCatalogQueryPort>(),
             Substitute.For<ISkillRunnerExecutionQueryPort>(),
-            nyxClientFactory,
             Substitute.For<ISkillRunnerCommandPort>(),
-            Substitute.For<IUserAgentCatalogCommandPort>(),
+            Substitute.For<IScheduledDispatchApplicationService>(),
+            Substitute.For<IScheduledWorkflowAgentCreationPort>(),
+            catalogCommandPort,
             Substitute.For<ICallerScopeResolver>(),
-            new ScheduledAgentCreateRequestMapper(new InMemorySecretVault()),
-            new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions()));
+            new ScheduledAgentCreateRequestMapper(),
+            new ScheduledAgentCredentialLifecycle(new InMemorySecretVault(), catalogCommandPort, issuer));
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
             toolSources: [agentBuilderSource]);

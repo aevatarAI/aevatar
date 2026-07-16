@@ -91,9 +91,10 @@ describe('authFetch', () => {
         ok: true,
         status: 200,
         json: async () => ({
-          baseUrl: "https://nyx.example",
+          baseUrl: "https://nyx-ui.example",
           clientId: "broker-client-1",
           scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+          resources: ["https://nyx-api.example/api/v1/proxy/s/aevatar"],
         }),
       } as Response)
       .mockResolvedValueOnce({
@@ -113,7 +114,7 @@ describe('authFetch', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/nyxid/config");
-    expect(fetchMock.mock.calls[1][0]).toBe("https://nyx.example/oauth/token");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://nyx-ui.example/oauth/token");
     const [input, init] = fetchMock.mock.calls[2] as [
       string,
       RequestInit | undefined,

@@ -293,7 +293,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var bindingPort = new RecordingMemberWorkflowBindingPort();
         var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
 
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        using var context = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
               "member_id": "member-alpha",
@@ -313,9 +313,18 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("success").GetBoolean().Should().BeTrue();
         root.GetProperty("scope_id").GetString().Should().Be("scope-current");
         root.GetProperty("member_id").GetString().Should().Be("member-alpha");
+        root.GetProperty("operation").GetString().Should().Be(StudioMemberWorkflowBindingOperationNames.Bind);
+        root.GetProperty("status").GetString().Should().Be("accepted");
         root.GetProperty("binding_run_id").GetString().Should().Be("binding-run-1");
+        root.GetProperty("ack_stage").GetString().Should().Be("dispatch_accepted");
+        root.GetProperty("binding_run_role").GetString().Should().Be("candidate");
+        root.GetProperty("binding_run_url").GetString()
+            .Should().Be("/api/scopes/scope-current/members/member-alpha/binding-runs/binding-run-1");
         root.GetProperty("member_workflow_url").GetString()
             .Should().Be("/api/scopes/scope-current/members/member-alpha/binding");
+        root.GetProperty("workflow_id").GetString().Should().Be("workflow-alpha");
+        root.TryGetProperty("revision_id", out _).Should().BeFalse();
+        root.TryGetProperty("service_id", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -790,10 +799,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 Success: true,
                 ScopeId: request.ScopeId,
                 MemberId: request.MemberId,
-                BindingRunId: "binding-run-1",
+                Operation: StudioMemberWorkflowBindingOperationNames.Bind,
                 Status: "accepted",
+                BindingRunId: "binding-run-1",
                 AckStage: "dispatch_accepted",
-                BindingRunRole: "candidate"));
+                BindingRunRole: "candidate",
+                WorkflowId: request.WorkflowId,
+                RevisionId: null));
         }
     }
 

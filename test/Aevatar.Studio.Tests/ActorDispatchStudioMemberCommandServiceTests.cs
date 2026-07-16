@@ -181,6 +181,43 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
     }
 
     [Fact]
+    public async Task RecordPublishedBindingAsync_ShouldDispatchPublishedBindingRecordedEvent()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+
+        await service.RecordPublishedBindingAsync(
+            ScopeId,
+            "m-1",
+            new StudioMemberPublishedBindingRecordRequest(
+                PublishedServiceId: "member-m-1",
+                RevisionId: "rev-updated",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                ImplementationRef: new StudioMemberImplementationRefResponse(
+                    MemberImplementationKindNames.Workflow,
+                    WorkflowId: "workflow-1",
+                    WorkflowRevision: "rev-updated"),
+                ExpectedActorId: "workflow-definition:workflow-1"),
+            CancellationToken.None);
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-member:scope-1:m-1");
+        dispatch.Dispatches.Should().ContainSingle();
+        var dispatched = dispatch.Dispatches[0];
+        dispatched.ActorId.Should().Be("studio-member:scope-1:m-1");
+        dispatched.Envelope.Payload.Is(StudioMemberPublishedBindingRecordedEvent.Descriptor).Should().BeTrue();
+        var evt = dispatched.Envelope.Payload.Unpack<StudioMemberPublishedBindingRecordedEvent>();
+        evt.PublishedServiceId.Should().Be("member-m-1");
+        evt.RevisionId.Should().Be("rev-updated");
+        evt.ImplementationKind.Should().Be(StudioMemberImplementationKind.Workflow);
+        evt.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-1");
+        evt.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-updated");
+        evt.ExpectedActorId.Should().Be("workflow-definition:workflow-1");
+        evt.RecordedAtUtc.Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task RenameAsync_ShouldDispatchRenamedEventToCanonicalActor()
     {
         var bootstrap = new RecordingBootstrap();

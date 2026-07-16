@@ -55,9 +55,10 @@ ORNN_BASE_URL=https://ornn.chrono-ai.fun
 AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
-The browser must not configure its own NyxID OAuth client id. Authorization
-starts from the backend-provided `baseUrl`, `clientId`, and `scope`, so the
-client id matches backend token finalization.
+The browser must not configure its own NyxID OAuth client id or service access.
+Authorization starts from the backend-provided `baseUrl`, `clientId`, `scope`,
+and RFC 8707 `resources`, so the client id and required Aevatar service match
+backend token finalization.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.

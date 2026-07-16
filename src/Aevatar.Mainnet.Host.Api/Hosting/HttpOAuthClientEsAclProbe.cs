@@ -22,15 +22,11 @@ namespace Aevatar.Mainnet.Host.Api.Hosting;
 /// and builds its <see cref="HttpClient"/> the same way
 /// <c>ElasticsearchProjectionDocumentStore</c> does (a raw HttpClient, no Elastic
 /// SDK dependency). It only ever performs read-only security lookups:
-/// <c>POST _security/user/_has_privileges</c> (confirms the security layer is
-/// reachable and that the internal service identity can read the index) and
-/// <c>GET _security/role_mapping</c> (enumerates the configured mappings for the
-/// observed-state description). It classifies conservatively: a reachable,
-/// authenticated security layer is reported as <see cref="EsAclProbeStatus.Restricted"/>;
-/// only a cluster whose security is disabled (so the index has no ACL at all) is
-/// reported as <see cref="EsAclProbeStatus.Unrestricted"/>; transport/auth errors
-/// are <see cref="EsAclProbeStatus.Unverifiable"/> so the guard never crashes on
-/// a probe failure.
+/// <c>POST _security/user/_has_privileges</c> confirms whether the configured service
+/// identity can read the index and whether Elasticsearch security is enabled. That API does
+/// not prove that other users or wildcard roles cannot read the index, so a successful probe
+/// remains <see cref="EsAclProbeStatus.Unverifiable"/> until an effective-privilege audit is
+/// available. A cluster whose security is disabled is <see cref="EsAclProbeStatus.Unrestricted"/>.
 /// </remarks>
 public sealed class HttpOAuthClientEsAclProbe : IOAuthClientEsAclProbe, IDisposable
 {
@@ -83,17 +79,7 @@ public sealed class HttpOAuthClientEsAclProbe : IOAuthClientEsAclProbe, IDisposa
 
         try
         {
-            var hasPrivileges = await ProbeHasPrivilegesAsync(cancellationToken);
-            if (hasPrivileges.Status is EsAclProbeStatus.Unrestricted or EsAclProbeStatus.Unverifiable)
-            {
-                // Security disabled or unreachable — the has-privileges call already
-                // gives the definitive classification; skip role-mapping enumeration.
-                return hasPrivileges;
-            }
-
-            var roleMappingSummary = await ProbeRoleMappingsAsync(cancellationToken);
-            return EsAclProbeResult.Restricted(
-                $"Elasticsearch security API is reachable and enforcing; internal service identity has read on '{IndexName}'. {roleMappingSummary}");
+            return await ProbeHasPrivilegesAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -143,50 +129,9 @@ public sealed class HttpOAuthClientEsAclProbe : IOAuthClientEsAclProbe, IDisposa
         }
 
         var hasRead = TryReadIndexHasRead(body);
-        // Security layer is reachable and authenticated. Whether the internal
-        // identity itself has read or not, the presence of an enforcing security
-        // layer means the index is not world-readable at the cluster level.
-        return EsAclProbeResult.Restricted(
-            $"_has_privileges succeeded (indexReadGranted={hasRead}).");
-    }
-
-    private async Task<string> ProbeRoleMappingsAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var response = await _httpClient.GetAsync("_security/role_mapping", cancellationToken);
-            if (!response.IsSuccessStatusCode)
-                return $"role_mapping lookup returned {(int)response.StatusCode}.";
-
-            var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            using var jsonDoc = JsonDocument.Parse(body);
-            if (jsonDoc.RootElement.ValueKind != JsonValueKind.Object)
-                return "role_mapping response had no mappings.";
-
-            var names = jsonDoc.RootElement
-                .EnumerateObject()
-                .Select(static property => property.Name)
-                .ToArray();
-            return names.Length == 0
-                ? "no security role mappings are configured."
-                : $"{names.Length} security role mapping(s) configured: [{string.Join(", ", names)}].";
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Role-mapping enumeration is descriptive-only (it enriches the observed
-            // state, it does not drive the classification), so a failure here is
-            // logged and folded into the returned description rather than propagated.
-            _logger.LogWarning(
-                ex,
-                "AevatarOAuthClient ES ACL probe could not enumerate Elasticsearch role mappings. index={IndexName} errorType={ErrorType}",
-                IndexName,
-                ex.GetType().Name);
-            return $"role_mapping lookup failed ({ex.GetType().Name}).";
-        }
+        return EsAclProbeResult.Unverifiable(
+            $"Elasticsearch security is enabled and the configured identity has read={hasRead} " +
+            $"on '{IndexName}', but _has_privileges does not prove that wildcard roles or other identities are denied.");
     }
 
     private static bool IsSecurityNotEnabled(HttpStatusCode statusCode, string body)

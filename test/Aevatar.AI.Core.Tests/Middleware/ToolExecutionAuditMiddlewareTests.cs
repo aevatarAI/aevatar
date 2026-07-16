@@ -309,7 +309,8 @@ public sealed class ToolExecutionAuditMiddlewareTests
                 Request = new AgentToolRequestIdentity("request-error", "call-error"),
                 Caller = new AgentToolCallerContext("scope-error", "owner-error", "session-error"),
             });
-        var exception = new InvalidOperationException("tool exploded");
+        const string secret = "provider-secret-token";
+        var exception = new InvalidOperationException($"tool exploded with Authorization: Bearer {secret}");
 
         var act = async () => await middleware.InvokeAsync(context, () =>
         {
@@ -322,7 +323,8 @@ public sealed class ToolExecutionAuditMiddlewareTests
         var record = appender.Records.Should().ContainSingle().Subject;
         record.Outcome.Should().Be(AuditOutcome.Error);
         record.ErrorCode.Should().Be("tool_execution_exception");
-        record.ErrorSummary.Should().Be("tool exploded");
+        record.ErrorSummary.Should().Be(nameof(InvalidOperationException));
+        AuditText(record).Should().NotContain(secret);
         record.CredentialSource.Should().Be(AuditCredentialSource.BearerToken);
         record.Target.Kind.Should().Be("tool");
         record.Target.Id.Should().Be("call-error");

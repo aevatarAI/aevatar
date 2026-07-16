@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Aevatar.Bootstrap.Tests;
@@ -23,39 +24,40 @@ public sealed class PerIssuerSigningKeyResolverTests
     {
         var scopeKey = NamedSymmetricKey("scope-key");
         var oidcKey = NamedSymmetricKey("oidc-key");
-        var resolver = CreateResolver([ScopeIssuer], [scopeKey]);
+        var resolver = CreateResolver([OidcIssuer], [ScopeIssuer], [scopeKey]);
 
-        var resolved = InvokeResolve(resolver, ScopeIssuer, allConfiguredKeys: [scopeKey, oidcKey]).ToList();
+        var resolved = InvokeResolve(resolver, ScopeIssuer, discoveryKeys: [oidcKey]).ToList();
 
         resolved.Should().ContainSingle().Which.KeyId.Should().Be("scope-key");
         resolved.Should().NotContain(key => key.KeyId == "oidc-key");
     }
 
     [Fact]
-    public void Resolve_WhenIssuerIsUnknown_ShouldFallBackToAllConfiguredKeys()
+    public void Resolve_WhenIssuerIsAuthority_ShouldReturnOnlyDiscoveryKeys()
     {
         var scopeKey = NamedSymmetricKey("scope-key");
         var oidcKey = NamedSymmetricKey("oidc-key");
-        var resolver = CreateResolver([ScopeIssuer], [scopeKey]);
+        var resolver = CreateResolver([OidcIssuer], [ScopeIssuer], [scopeKey]);
 
-        var resolved = InvokeResolve(resolver, OidcIssuer, allConfiguredKeys: [oidcKey]).ToList();
+        var resolved = InvokeResolve(resolver, OidcIssuer, discoveryKeys: [oidcKey]).ToList();
 
-        // Non-breaking fallback: unknown issuer keeps every configured key in play (the OIDC key
-        // the base handler injected, plus the resolver's own scope keys as a genuine superset).
-        resolved.Select(key => key.KeyId).Should().Contain("oidc-key");
-        resolved.Select(key => key.KeyId).Should().Contain("scope-key");
+        resolved.Should().ContainSingle().Which.KeyId.Should().Be("oidc-key");
+        resolved.Should().NotContain(key => key.KeyId == "scope-key");
     }
 
     [Fact]
-    public void Resolve_WhenIssuerIsEmpty_ShouldFallBackToAllConfiguredKeys()
+    public void Resolve_WhenIssuerIsUnknown_ShouldFailClosed()
     {
         var scopeKey = NamedSymmetricKey("scope-key");
         var oidcKey = NamedSymmetricKey("oidc-key");
-        var resolver = CreateResolver([ScopeIssuer], [scopeKey]);
+        var resolver = CreateResolver([OidcIssuer], [ScopeIssuer], [scopeKey]);
 
-        var resolved = InvokeResolve(resolver, tokenIssuer: string.Empty, allConfiguredKeys: [oidcKey]).ToList();
+        var resolved = InvokeResolve(
+            resolver,
+            tokenIssuer: "https://unknown.example.com",
+            discoveryKeys: [oidcKey]).ToList();
 
-        resolved.Select(key => key.KeyId).Should().Contain("oidc-key");
+        resolved.Should().BeEmpty();
     }
 
     [Fact]
@@ -83,43 +85,52 @@ public sealed class PerIssuerSigningKeyResolverTests
         var jwtOptions = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<JwtBearerOptions>>()
             .Get(JwtBearerDefaults.AuthenticationScheme);
 
-        jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver.Should().NotBeNull();
+        jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver.Should().BeNull();
+        jwtOptions.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration.Should().NotBeNull();
 
         // The installed resolver returns the scope key for a token issued by the scope issuer.
         var scopeKeyId = jwtOptions.TokenValidationParameters.IssuerSigningKeys.Single().KeyId;
         var scopeToken = TokenWithIssuer(ScopeIssuer);
-        var resolvedForScopeIssuer = jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver!(
+        var resolvedForScopeIssuer = jwtOptions.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration!(
             token: string.Empty,
             securityToken: scopeToken,
             kid: "scope-kid-1",
-            validationParameters: jwtOptions.TokenValidationParameters).ToList();
+            validationParameters: jwtOptions.TokenValidationParameters,
+            configuration: new OpenIdConnectConfiguration()).ToList();
         resolvedForScopeIssuer.Should().ContainSingle().Which.KeyId.Should().Be(scopeKeyId);
 
-        // Unknown issuer still yields the configured keys (non-breaking fallback).
+        // Unknown issuers never receive either issuer's signing keys.
         var foreignToken = TokenWithIssuer("https://unknown.example.com");
-        var resolvedForUnknownIssuer = jwtOptions.TokenValidationParameters.IssuerSigningKeyResolver!(
+        var resolvedForUnknownIssuer = jwtOptions.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration!(
             token: string.Empty,
             securityToken: foreignToken,
             kid: "scope-kid-1",
-            validationParameters: jwtOptions.TokenValidationParameters).ToList();
-        resolvedForUnknownIssuer.Select(key => key.KeyId).Should().Contain(scopeKeyId);
+            validationParameters: jwtOptions.TokenValidationParameters,
+            configuration: new OpenIdConnectConfiguration()).ToList();
+        resolvedForUnknownIssuer.Should().BeEmpty();
     }
 
-    private static object CreateResolver(string[] scopeIssuers, SecurityKey[] scopeKeys)
+    private static object CreateResolver(
+        string[] authorityIssuers,
+        string[] scopeIssuers,
+        SecurityKey[] scopeKeys)
     {
         var type = ResolverType;
         var ctor = type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Single();
-        return ctor.Invoke([scopeIssuers, scopeKeys]);
+        return ctor.Invoke([authorityIssuers, scopeIssuers, scopeKeys]);
     }
 
     private static IEnumerable<SecurityKey> InvokeResolve(
         object resolver,
         string tokenIssuer,
-        SecurityKey[] allConfiguredKeys)
+        SecurityKey[] discoveryKeys)
     {
         var method = ResolverType.GetMethod("Resolve", BindingFlags.Public | BindingFlags.Instance)
             ?? throw new InvalidOperationException("Resolve not found.");
-        var parameters = new TokenValidationParameters { IssuerSigningKeys = allConfiguredKeys };
+        var parameters = new TokenValidationParameters();
+        var configuration = new OpenIdConnectConfiguration { Issuer = OidcIssuer };
+        foreach (var key in discoveryKeys)
+            configuration.SigningKeys.Add(key);
 
         // The delegate's issuer comes from securityToken.Issuer (its 3rd arg is the kid), so the
         // issuer under test is carried on a JwtSecurityToken. An empty issuer means "no token".
@@ -129,7 +140,7 @@ public sealed class PerIssuerSigningKeyResolverTests
 
         return (IEnumerable<SecurityKey>)method.Invoke(
             resolver,
-            [string.Empty, securityToken!, "kid-hint", parameters])!;
+            [string.Empty, securityToken!, "kid-hint", parameters, configuration])!;
     }
 
     private static Type ResolverType =>

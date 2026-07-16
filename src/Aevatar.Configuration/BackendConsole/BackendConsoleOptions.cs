@@ -10,6 +10,8 @@ public sealed class BackendConsoleOptions
 
     public string OidcScope { get; set; } = string.Empty;
 
+    public string[] OidcResources { get; set; } = [];
+
     public string NyxApiBaseUrl { get; set; } = string.Empty;
 
     public string StorageKey { get; set; } = string.Empty;

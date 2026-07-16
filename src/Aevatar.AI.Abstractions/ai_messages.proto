@@ -2,6 +2,7 @@ syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
 
+import "Credentials/credential_secret_references.proto";
 import "Protos/voice_presence.proto";
 
 enum ChatContentPartKind {
@@ -63,6 +64,7 @@ message ChatRequestEvent  {
   LLMControlContextPayload llm_control = 10;
   // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
   string connector_http_authorization = 11;
+  aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 12;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
@@ -175,13 +177,24 @@ message AgentToolCallerContextPayload {
 }
 
 message AgentToolChannelContextPayload {
+  reserved 7;
+  reserved "durable_reply_credential_ref";
   string platform = 1;
   string sender_id = 2;
   string registration_scope_id = 3;
   string message_id = 4;
   string platform_message_id = 5;
   string delivery_target_id = 6;
-  string durable_reply_credential_ref = 7;
+  ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 8;
+  string bot_registration_id = 9;
+}
+
+// Typed handle for a channel bot's workflow terminal-result delivery credential.
+// Carries the vault SecretReference plus the NyxID agent api-key id it authorizes
+// (the vault subject); never the secret material itself.
+message ChannelWorkflowResultDeliveryCredential {
+  aevatar.credentials.SecretReference secret_reference = 1;
+  string subject_id = 2;
 }
 
 message AgentToolSenderBindingContextPayload {
@@ -270,8 +283,8 @@ message ManagedWorkflowHandoffReceipt {
 }
 
 message WorkflowRunBackgroundDeliveryReceipt {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 10, 12;
+  reserved "bot_agent_key_id", "durable_reply_credential_ref";
   string delivery_actor_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -282,7 +295,6 @@ message WorkflowRunBackgroundDeliveryReceipt {
   string reply_message_id = 8;
   string platform_message_id = 9;
   string registration_scope_id = 11;
-  string durable_reply_credential_ref = 12;
 }
 
 message ToolResultEvent {

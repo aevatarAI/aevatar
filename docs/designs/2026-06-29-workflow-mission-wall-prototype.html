@@ -1,0 +1,953 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Aevatar Workflow Mission Wall Prototype</title>
+    <style>
+      :root {
+        --wall-bg: #09110f;
+        --wall-panel: #101916;
+        --wall-panel-2: #16231f;
+        --wall-line: rgba(201, 213, 206, 0.16);
+        --wall-line-strong: rgba(201, 213, 206, 0.28);
+        --text: #f8faf8;
+        --muted: #aebbb4;
+        --faint: #74847c;
+        --live: #2dd4bf;
+        --blue: #2563eb;
+        --blue-soft: #dbeafe;
+        --success: #16a34a;
+        --success-soft: #dcfce7;
+        --warning: #d97706;
+        --warning-soft: #fef3c7;
+        --error: #dc2626;
+        --error-soft: #fee2e2;
+        --canvas: #0d1714;
+        --canvas-2: #111d19;
+        --canvas-grid: rgba(201, 213, 206, 0.055);
+        --canvas-card: #14211d;
+        --canvas-card-2: #101a17;
+        --canvas-text: #f4f8f5;
+        --canvas-muted: #a7b7ae;
+        --canvas-line: rgba(201, 213, 206, 0.18);
+        --shadow-soft: 0 18px 46px rgba(0, 0, 0, 0.34);
+        --shadow-wall: 0 28px 80px rgba(0, 0, 0, 0.32);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        background: var(--wall-bg);
+        color: var(--text);
+        font-family:
+          "SF Pro Display",
+          "Aptos Display",
+          "Segoe UI",
+          sans-serif;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        overflow: hidden;
+      }
+
+      .wall {
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.024) 1px, transparent 1px),
+          linear-gradient(145deg, #09110f 0%, #111916 58%, #090d0b 100%);
+        background-size: 48px 48px, 48px 48px, auto;
+        display: grid;
+        grid-template-rows: 98px minmax(0, 1fr);
+        height: 100vh;
+        min-height: 760px;
+        padding: 18px;
+        width: 100vw;
+      }
+
+      .top-strip {
+        align-items: center;
+        background: rgba(16, 25, 22, 0.94);
+        border: 1px solid rgba(45, 212, 191, 0.22);
+        border-radius: 8px;
+        box-shadow: var(--shadow-wall);
+        display: grid;
+        gap: 18px;
+        grid-template-columns: minmax(330px, 1.35fr) repeat(6, minmax(126px, 0.55fr));
+        min-width: 0;
+        padding: 16px 18px;
+      }
+
+      .brand-kicker {
+        color: var(--live);
+        font-size: 12px;
+        font-weight: 820;
+        text-transform: uppercase;
+      }
+
+      .brand-title {
+        color: var(--text);
+        font-size: 30px;
+        font-weight: 780;
+        line-height: 1.06;
+        margin-top: 6px;
+        white-space: nowrap;
+      }
+
+      .metric {
+        border-left: 1px solid rgba(201, 213, 206, 0.16);
+        min-width: 0;
+        padding-left: 16px;
+      }
+
+      .metric-label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 760;
+        line-height: 1.2;
+        text-transform: uppercase;
+      }
+
+      .metric-value {
+        align-items: center;
+        color: var(--text);
+        display: flex;
+        font-size: 30px;
+        font-weight: 780;
+        gap: 9px;
+        line-height: 1.08;
+        margin-top: 7px;
+      }
+
+      .dot {
+        background: var(--live);
+        border-radius: 999px;
+        box-shadow: 0 0 18px rgba(45, 212, 191, 0.72);
+        display: inline-block;
+        height: 12px;
+        width: 12px;
+      }
+
+      .screen {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: 404px minmax(0, 1fr);
+        min-height: 0;
+        padding-top: 16px;
+      }
+
+      .panel {
+        background: rgba(16, 25, 22, 0.92);
+        border: 1px solid var(--wall-line);
+        border-radius: 8px;
+        box-shadow: var(--shadow-wall);
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .panel-head {
+        align-items: center;
+        border-bottom: 1px solid var(--wall-line);
+        display: flex;
+        justify-content: space-between;
+        min-height: 58px;
+        padding: 14px 16px;
+      }
+
+      .panel-title {
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 820;
+        text-transform: uppercase;
+      }
+
+      .panel-subtitle {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .run-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 14px;
+      }
+
+      .run-card {
+        background: linear-gradient(180deg, rgba(22, 35, 31, 0.98), rgba(13, 22, 19, 0.98));
+        border: 1px solid var(--wall-line);
+        border-left: 4px solid var(--faint);
+        border-radius: 8px;
+        min-height: 126px;
+        padding: 14px;
+      }
+
+      .run-card.focus {
+        border-color: rgba(217, 119, 6, 0.64);
+        border-left-color: var(--warning);
+        box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.16);
+      }
+
+      .run-card.running {
+        border-left-color: var(--blue);
+      }
+
+      .run-card.retrying {
+        border-left-color: var(--error);
+      }
+
+      .run-card.done {
+        border-left-color: var(--success);
+      }
+
+      .row {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        min-width: 0;
+      }
+
+      .run-name {
+        color: var(--text);
+        font-size: 20px;
+        font-weight: 760;
+        line-height: 1.15;
+        min-width: 0;
+      }
+
+      .run-team {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 650;
+        margin-top: 4px;
+      }
+
+      .pill {
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        flex: 0 0 auto;
+        font-size: 11px;
+        font-weight: 820;
+        line-height: 1;
+        padding: 6px 9px;
+        text-transform: uppercase;
+      }
+
+      .pill.live {
+        color: var(--blue-soft);
+      }
+
+      .pill.wait {
+        color: #fbbf24;
+      }
+
+      .pill.retry {
+        color: #f87171;
+      }
+
+      .pill.done {
+        color: #86efac;
+      }
+
+      .run-stage {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.35;
+        margin-top: 14px;
+      }
+
+      .progress-line {
+        background: rgba(255, 255, 255, 0.09);
+        border-radius: 999px;
+        height: 8px;
+        margin-top: 12px;
+        overflow: hidden;
+        width: 100%;
+      }
+
+      .progress-line span {
+        background: linear-gradient(90deg, var(--blue), var(--live));
+        display: block;
+        height: 100%;
+      }
+
+      .run-meta {
+        color: var(--muted);
+        display: flex;
+        font-size: 14px;
+        font-weight: 680;
+        justify-content: space-between;
+        margin-top: 12px;
+      }
+
+      .graph-panel {
+        display: grid;
+        grid-template-rows: 78px minmax(0, 1fr);
+      }
+
+      .graph-head {
+        align-items: center;
+        border-bottom: 1px solid var(--wall-line);
+        display: grid;
+        gap: 16px;
+        grid-template-columns: minmax(280px, 1fr) auto;
+        min-width: 0;
+        padding: 14px 18px;
+      }
+
+      .graph-title {
+        color: var(--text);
+        font-size: 20px;
+        font-weight: 780;
+        line-height: 1.15;
+      }
+
+      .graph-subtitle {
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 660;
+        margin-top: 6px;
+      }
+
+      .graph-badges {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .graph-badge {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--wall-line-strong);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 760;
+        line-height: 1;
+        padding: 8px 10px;
+        white-space: nowrap;
+      }
+
+      .graph-badge.focus {
+        border-color: rgba(217, 119, 6, 0.58);
+        color: #fbbf24;
+      }
+
+      .graph-badge.version {
+        border-color: rgba(96, 165, 250, 0.54);
+        color: #93c5fd;
+      }
+
+      .canvas-shell {
+        background:
+          linear-gradient(var(--canvas-grid) 1px, transparent 1px),
+          linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px),
+          linear-gradient(145deg, var(--canvas) 0%, #0a120f 100%);
+        background-size: 34px 34px, 34px 34px, auto;
+        border-radius: 0 0 8px 8px;
+        min-height: 0;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .canvas-frame {
+        border: 1px solid var(--canvas-line);
+        border-radius: 24px;
+        bottom: 20px;
+        left: 20px;
+        overflow: hidden;
+        position: absolute;
+        right: 20px;
+        top: 18px;
+      }
+
+      .canvas-toolbar {
+        align-items: center;
+        background: rgba(17, 29, 25, 0.94);
+        border-bottom: 1px solid var(--canvas-line);
+        color: var(--canvas-muted);
+        display: flex;
+        font-size: 13px;
+        font-weight: 700;
+        height: 44px;
+        justify-content: space-between;
+        padding: 0 16px;
+      }
+
+      .canvas-toolbar span {
+        color: var(--canvas-text);
+        font-weight: 820;
+      }
+
+      .flow-area {
+        height: calc(100% - 44px);
+        position: relative;
+      }
+
+      .window-label {
+        background: rgba(17, 29, 25, 0.96);
+        border: 1px solid rgba(45, 212, 191, 0.28);
+        border-radius: 999px;
+        color: #5eead4;
+        font-size: 12px;
+        font-weight: 780;
+        left: 16px;
+        padding: 7px 10px;
+        position: absolute;
+        top: 56px;
+        z-index: 4;
+      }
+
+      .edge-layer {
+        inset: 0;
+        pointer-events: none;
+        position: absolute;
+        z-index: 1;
+      }
+
+      .edge {
+        fill: none;
+        stroke-linecap: round;
+        stroke-width: 3;
+      }
+
+      .edge.next {
+        stroke: #1677ff;
+      }
+
+      .edge.branch {
+        stroke: #d97706;
+        stroke-dasharray: 10 9;
+      }
+
+      .edge.project {
+        stroke: #60a5fa;
+        stroke-dasharray: 7 8;
+      }
+
+      .node {
+        background: linear-gradient(180deg, var(--canvas-card), var(--canvas-card-2));
+        border: 1px solid var(--canvas-line);
+        border-radius: 24px;
+        box-shadow: var(--shadow-soft);
+        color: var(--canvas-text);
+        overflow: hidden;
+        position: absolute;
+        width: 292px;
+        z-index: 2;
+      }
+
+      .node.focused {
+        border-color: rgba(45, 212, 191, 0.78);
+        box-shadow:
+          0 0 0 2px rgba(45, 212, 191, 0.18),
+          0 0 28px rgba(45, 212, 191, 0.12),
+          var(--shadow-soft);
+      }
+
+      .node.waiting {
+        border-color: rgba(217, 119, 6, 0.82);
+        box-shadow:
+          0 0 0 2px rgba(217, 119, 6, 0.18),
+          0 0 28px rgba(217, 119, 6, 0.12),
+          var(--shadow-soft);
+      }
+
+      .node-top {
+        align-items: center;
+        border-bottom: 1px solid rgba(201, 213, 206, 0.12);
+        display: flex;
+        gap: 10px;
+        min-height: 58px;
+        padding: 12px 14px;
+      }
+
+      .icon {
+        align-items: center;
+        border-radius: 14px;
+        display: flex;
+        flex: 0 0 auto;
+        font-size: 12px;
+        font-weight: 860;
+        height: 32px;
+        justify-content: center;
+        width: 32px;
+      }
+
+      .icon.data {
+        background: rgba(96, 165, 250, 0.18);
+        color: #93c5fd;
+      }
+
+      .icon.ai {
+        background: rgba(45, 212, 191, 0.16);
+        color: #5eead4;
+      }
+
+      .icon.api {
+        background: rgba(22, 163, 74, 0.18);
+        color: #86efac;
+      }
+
+      .icon.human {
+        background: rgba(217, 119, 6, 0.18);
+        color: #fbbf24;
+      }
+
+      .icon.emit {
+        background: rgba(96, 165, 250, 0.18);
+        color: #93c5fd;
+      }
+
+      .node-label {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .step-id {
+        color: var(--canvas-text);
+        font-size: 14px;
+        font-weight: 720;
+        line-height: 1.25;
+      }
+
+      .step-subtitle {
+        color: var(--canvas-muted);
+        font-size: 12px;
+        line-height: 1.35;
+        margin-top: 3px;
+      }
+
+      .status {
+        border-radius: 999px;
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 820;
+        line-height: 1;
+        padding: 6px 8px;
+        text-transform: uppercase;
+      }
+
+      .status.completed {
+        background: rgba(22, 163, 74, 0.18);
+        color: #86efac;
+      }
+
+      .status.active {
+        background: rgba(45, 212, 191, 0.18);
+        color: #5eead4;
+      }
+
+      .status.waiting {
+        background: rgba(217, 119, 6, 0.18);
+        color: #fbbf24;
+      }
+
+      .status.idle {
+        background: rgba(201, 213, 206, 0.1);
+        color: var(--canvas-muted);
+      }
+
+      .node-body {
+        color: var(--canvas-muted);
+        font-size: 12px;
+        line-height: 1.55;
+        padding: 12px 14px 14px;
+      }
+
+      .node-body strong {
+        color: var(--canvas-text);
+        font-weight: 720;
+      }
+
+      .branch-label {
+        background: rgba(17, 29, 25, 0.94);
+        border: 1px solid rgba(217, 119, 6, 0.46);
+        border-radius: 999px;
+        color: #d97706;
+        font-size: 12px;
+        font-weight: 820;
+        padding: 6px 9px;
+        position: absolute;
+        z-index: 3;
+      }
+
+      .source-note {
+        background: rgba(17, 29, 25, 0.94);
+        border: 1px solid var(--canvas-line);
+        border-radius: 999px;
+        bottom: 94px;
+        color: var(--canvas-muted);
+        font-size: 12px;
+        font-weight: 720;
+        left: 16px;
+        padding: 8px 12px;
+        position: absolute;
+        z-index: 3;
+      }
+
+      .workflow-strip {
+        background: rgba(9, 17, 15, 0.94);
+        border-top: 1px solid var(--canvas-line);
+        bottom: 0;
+        left: 0;
+        min-height: 76px;
+        padding: 13px 16px 12px;
+        position: absolute;
+        right: 0;
+        z-index: 3;
+      }
+
+      .strip-head {
+        align-items: center;
+        color: var(--canvas-muted);
+        display: flex;
+        font-size: 12px;
+        font-weight: 760;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+
+      .strip-head strong {
+        color: var(--canvas-text);
+        font-weight: 820;
+      }
+
+      .strip-track {
+        display: grid;
+        gap: 5px;
+        grid-template-columns: repeat(24, minmax(0, 1fr));
+        position: relative;
+      }
+
+      .strip-window {
+        border: 2px solid rgba(45, 212, 191, 0.72);
+        border-radius: 8px;
+        bottom: -7px;
+        left: calc((100% - 115px) * 8 / 24 + 40px);
+        pointer-events: none;
+        position: absolute;
+        top: -7px;
+        width: calc((100% - 115px) * 5 / 24 + 20px);
+      }
+
+      .strip-step {
+        align-items: center;
+        background: rgba(201, 213, 206, 0.09);
+        border: 1px solid rgba(201, 213, 206, 0.14);
+        border-radius: 7px;
+        color: var(--canvas-muted);
+        display: flex;
+        font-size: 10px;
+        font-weight: 820;
+        height: 24px;
+        justify-content: center;
+        line-height: 1;
+      }
+
+      .strip-step.done {
+        background: rgba(22, 163, 74, 0.2);
+        border-color: rgba(22, 163, 74, 0.34);
+        color: #86efac;
+      }
+
+      .strip-step.active {
+        background: rgba(45, 212, 191, 0.22);
+        border-color: rgba(45, 212, 191, 0.48);
+        color: #5eead4;
+      }
+
+      .strip-step.wait {
+        background: rgba(217, 119, 6, 0.22);
+        border-color: rgba(217, 119, 6, 0.52);
+        color: #fbbf24;
+      }
+
+      .strip-step.next {
+        background: rgba(96, 165, 250, 0.14);
+        border-color: rgba(96, 165, 250, 0.28);
+        color: #93c5fd;
+      }
+
+      @media (max-width: 1500px) {
+        .top-strip {
+          grid-template-columns: minmax(280px, 1.35fr) repeat(5, minmax(106px, 0.55fr));
+        }
+
+        .metric.optional {
+          display: none;
+        }
+
+        .screen {
+          grid-template-columns: 352px minmax(0, 1fr);
+        }
+
+        .node {
+          width: 250px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wall">
+      <section class="top-strip">
+        <div>
+          <div class="brand-kicker">Aevatar Workflow Runtime</div>
+          <div class="brand-title">Published Run Mission Wall</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Live</div>
+          <div class="metric-value"><span class="dot"></span> On</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Running</div>
+          <div class="metric-value">12</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Waiting</div>
+          <div class="metric-value" style="color: #fbbf24">2</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Failed</div>
+          <div class="metric-value" style="color: #f87171">1</div>
+        </div>
+        <div class="metric optional">
+          <div class="metric-label">Retrying</div>
+          <div class="metric-value">3</div>
+        </div>
+        <div class="metric optional">
+          <div class="metric-label">Fresh</div>
+          <div class="metric-value" style="color: #93c5fd">2s</div>
+        </div>
+      </section>
+
+      <section class="screen">
+        <aside class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Published Run Window</div>
+            <div class="panel-subtitle">running + recent + priority</div>
+          </div>
+
+          <div class="run-list">
+            <article class="run-card focus">
+              <div class="row">
+                <div>
+                  <div class="run-name">Risk Review</div>
+                  <div class="run-team">RiskOps · Reviewer Member</div>
+                </div>
+                <div class="pill wait">Wait</div>
+              </div>
+              <div class="run-stage">release_gate · waiting for approval</div>
+              <div class="run-meta">
+                <span>12 / 24 steps</span>
+                <span>05:12</span>
+              </div>
+              <div class="progress-line"><span style="background: #fbbf24; width: 50%"></span></div>
+            </article>
+
+            <article class="run-card running">
+              <div class="row">
+                <div>
+                  <div class="run-name">Customer Onboarding</div>
+                  <div class="run-team">Growth Team · Intake Member</div>
+                </div>
+                <div class="pill live">Live</div>
+              </div>
+              <div class="run-stage">llm_call · classifying request</div>
+              <div class="run-meta">
+                <span>3 / 9 steps</span>
+                <span>01:24</span>
+              </div>
+              <div class="progress-line"><span style="width: 33%"></span></div>
+            </article>
+
+            <article class="run-card retrying">
+              <div class="row">
+                <div>
+                  <div class="run-name">Billing Reconciliation</div>
+                  <div class="run-team">Finance Ops · Connector Member</div>
+                </div>
+                <div class="pill retry">Retry</div>
+              </div>
+              <div class="run-stage">crm_lookup · retry 2 of 3</div>
+              <div class="run-meta">
+                <span>4 / 11 steps</span>
+                <span>03:49</span>
+              </div>
+              <div class="progress-line"><span style="background: #f87171; width: 36%"></span></div>
+            </article>
+
+            <article class="run-card done">
+              <div class="row">
+                <div>
+                  <div class="run-name">Invoice Classifier</div>
+                  <div class="run-team">Finance Ops · Document Member</div>
+                </div>
+                <div class="pill done">Done</div>
+              </div>
+              <div class="run-stage">completed 18s ago · retained on wall</div>
+              <div class="run-meta">
+                <span>5 / 5 steps</span>
+                <span>00:08</span>
+              </div>
+              <div class="progress-line"><span style="background: #86efac; width: 100%"></span></div>
+            </article>
+          </div>
+        </aside>
+
+        <section class="panel graph-panel">
+          <header class="graph-head">
+            <div>
+              <div class="graph-title">Risk Review · Workflow Step Replay</div>
+              <div class="graph-subtitle">Team RiskOps · Reviewer Member · selected published run</div>
+            </div>
+            <div class="graph-badges">
+              <div class="graph-badge focus">Focus: waiting approval · 2m</div>
+              <div class="graph-badge version">run v42 · fresh 2s</div>
+              <div class="graph-badge">GraphCanvas + ELK layered layout</div>
+            </div>
+          </header>
+
+          <div class="canvas-shell">
+            <div class="canvas-frame">
+              <div class="canvas-toolbar">
+                <div><span>Workflow steps 9-13 of 24</span> · current execution window</div>
+                <div>readmodel + live observation</div>
+              </div>
+
+              <div class="flow-area">
+                <div class="window-label">Current window: enlarged for 10-foot readability</div>
+                <svg class="edge-layer" viewBox="0 0 1398 760" preserveAspectRatio="none" aria-hidden="true">
+                  <path class="edge next" d="M382 182 C450 182, 488 182, 556 182" />
+                  <path class="edge next" d="M848 182 C914 182, 952 182, 1018 182" />
+                  <path class="edge branch" d="M702 318 C778 436, 912 500, 1018 500" />
+                  <path class="edge project" d="M1164 590 C1052 624, 896 622, 738 586" />
+                </svg>
+
+                <section class="node" style="left: 90px; top: 96px">
+                  <div class="node-top">
+                    <div class="icon data">DB</div>
+                    <div class="node-label">
+                      <div class="step-id">collect_sources</div>
+                      <div class="step-subtitle">retrieve_facts</div>
+                    </div>
+                    <div class="status completed">completed</div>
+                  </div>
+                  <div class="node-body">
+                    <div><strong>role:</strong> researcher</div>
+                    <div>3 sources · 1.8s</div>
+                  </div>
+                </section>
+
+                <section class="node focused" style="left: 556px; top: 96px">
+                  <div class="node-top">
+                    <div class="icon ai">AI</div>
+                    <div class="node-label">
+                      <div class="step-id">risk_review</div>
+                      <div class="step-subtitle">llm_call</div>
+                    </div>
+                    <div class="status active">active</div>
+                  </div>
+                  <div class="node-body">
+                    <div><strong>role:</strong> reviewer</div>
+                    <div>evaluating evidence summary</div>
+                  </div>
+                </section>
+
+                <section class="node" style="left: 1018px; top: 96px">
+                  <div class="node-top">
+                    <div class="icon api">API</div>
+                    <div class="node-label">
+                      <div class="step-id">chrono_lookup</div>
+                      <div class="step-subtitle">connector_call</div>
+                    </div>
+                    <div class="status completed">completed</div>
+                  </div>
+                  <div class="node-body">
+                    <div><strong>tool:</strong> ChronoStorage</div>
+                    <div>42 records · 820ms</div>
+                  </div>
+                </section>
+
+                <div class="branch-label" style="left: 876px; top: 432px">branch: approval</div>
+
+                <section class="node waiting" style="left: 1018px; top: 492px">
+                  <div class="node-top">
+                    <div class="icon human">HM</div>
+                    <div class="node-label">
+                      <div class="step-id">release_gate</div>
+                      <div class="step-subtitle">human_approval</div>
+                    </div>
+                    <div class="status waiting">waiting</div>
+                  </div>
+                  <div class="node-body">
+                    <div><strong>gate:</strong> release approval</div>
+                    <div>safe summary only</div>
+                  </div>
+                </section>
+
+                <section class="node" style="left: 556px; top: 526px">
+                  <div class="node-top">
+                    <div class="icon emit">EV</div>
+                    <div class="node-label">
+                      <div class="step-id">publish_result</div>
+                      <div class="step-subtitle">emit / projected</div>
+                    </div>
+                    <div class="status idle">next</div>
+                  </div>
+                  <div class="node-body">
+                    <div><strong>readmodel:</strong> WorkflowRunInsightReport</div>
+                    <div>selected run v42</div>
+                  </div>
+                </section>
+
+                <div class="source-note">React Flow renders · ELKjs layered layout positions long directed workflow graphs</div>
+                <div class="workflow-strip">
+                  <div class="strip-head">
+                    <div><strong>Workflow Step Overview</strong> · 24 steps total</div>
+                    <div>viewport steps 9-13 · approval blocked</div>
+                  </div>
+                  <div class="strip-track">
+                    <div class="strip-window"></div>
+                    <div class="strip-step done">01</div>
+                    <div class="strip-step done">02</div>
+                    <div class="strip-step done">03</div>
+                    <div class="strip-step done">04</div>
+                    <div class="strip-step done">05</div>
+                    <div class="strip-step done">06</div>
+                    <div class="strip-step done">07</div>
+                    <div class="strip-step done">08</div>
+                    <div class="strip-step done">09</div>
+                    <div class="strip-step done">10</div>
+                    <div class="strip-step active">11</div>
+                    <div class="strip-step done">12</div>
+                    <div class="strip-step wait">13</div>
+                    <div class="strip-step next">14</div>
+                    <div class="strip-step next">15</div>
+                    <div class="strip-step next">16</div>
+                    <div class="strip-step">17</div>
+                    <div class="strip-step">18</div>
+                    <div class="strip-step">19</div>
+                    <div class="strip-step">20</div>
+                    <div class="strip-step">21</div>
+                    <div class="strip-step">22</div>
+                    <div class="strip-step">23</div>
+                    <div class="strip-step">24</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

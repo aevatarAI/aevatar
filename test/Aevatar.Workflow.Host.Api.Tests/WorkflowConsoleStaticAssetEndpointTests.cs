@@ -35,9 +35,19 @@ public sealed class WorkflowConsoleStaticAssetEndpointTests
         html.Should().Contain("https://id.example.test");
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
+        html.Should().Contain("\"resources\":[\"https://api.example.test/api/v1/proxy/s/aevatar\"]");
+        html.Should().Contain("searchParams.append(\"resource\"");
+        html.Should().Contain("form.append(\"resource\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
+        if (endpoint == "observatory")
+        {
+            html.Should().Contain("\"aria-label\":\"完整 run id\"");
+            html.Should().Contain("/api/workflow/observatory/admin/runs/");
+            html.Should().Contain("detail.diagnostics");
+            html.Should().NotContain("indexOf(\":run:\")");
+        }
     }
 
     private static ServiceProvider BuildProvider()

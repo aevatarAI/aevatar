@@ -9,8 +9,10 @@ const zhCNMessages = {
   'common.language.zhCN': '中文',
   'common.user.logout': '退出登录',
   'common.user.settings': '设置',
+  'common.user.signIn': '登录',
   'menu.Connectors': '连接器',
   'menu.Create Team': '创建团队',
+  'menu.Chat': 'Chat',
   'menu.Deployments': '部署',
   'menu.Event Stream': '事件流',
   'menu.Files': '文件',
@@ -25,10 +27,12 @@ const zhCNMessages = {
   'menu.Team Member Published Runs': '团队成员发布运行记录',
   'menu.Team Member Workflow Studio': '团队成员 Workflow Studio',
   'menu.Topology': '拓扑',
+  'nav.groups.chat': 'Chat',
   'nav.groups.platform': '平台',
   'nav.groups.settings': '设置',
   'nav.groups.teams': '团队',
   'nav.items.deployments': '部署',
+  'nav.items.chat': 'Chat',
   'nav.items.eventStream': '事件流',
   'nav.items.governance': '治理',
   'nav.items.myTeams': '我的团队',
@@ -36,9 +40,129 @@ const zhCNMessages = {
   'nav.items.settings': '设置',
   'nav.items.topology': '拓扑',
   'pages.gagents.index.platformBreadcrumb': '平台',
+  'pages.chat.index.chatStopped': 'Chat 已停止。',
+  'pages.chat.index.composerPlaceholder': '描述你想要的 workflow，或询问当前配置...',
+  'pages.chat.index.confirmAndCreate': '确认并创建',
+  'pages.chat.index.confirmPrompt': '确认，请现在创建。',
+  'pages.chat.index.conversationTitle': '会话标题',
+  'pages.chat.index.deleteChat': '删除 {title}',
+  'pages.chat.index.emptyDescription': '描述你想创建的 Team、Member 或 Workflow。',
+  'pages.chat.index.historyStoredLocally': '历史记录会保存在当前浏览器。',
+  'pages.chat.index.newChat': '新会话',
+  'pages.chat.index.newChatAction': '新建会话',
+  'pages.chat.index.noChatHistory': '暂无会话历史',
+  'pages.chat.index.noScope': '当前账号没有解析出可用 scope，请刷新后重试。',
+  'pages.chat.index.openTeam': '打开 Team',
+  'pages.chat.index.openWorkflowStudio': '打开 Workflow Studio',
+  'pages.chat.index.renameChat': '重命名 {title}',
+  'pages.chat.index.renameChatTitle': '重命名会话',
+  'pages.chat.index.resolvingScope': '正在解析 scope',
+  'pages.chat.index.reviewPlan': '创建资源前请先确认计划。',
+  'pages.chat.index.scopeValue': 'Scope {scopeId}',
+  'pages.chat.index.status.completed': '已完成',
+  'pages.chat.index.status.creating': '创建中',
+  'pages.chat.index.status.draft': '草稿',
+  'pages.chat.index.status.error': '错误',
+  'pages.chat.index.status.needsConfirmation': '待确认',
+  'pages.chat.index.status.streaming': '生成中',
+  'pages.chat.index.status.studioReady': 'Studio 已就绪',
+  'pages.chat.index.time.daysAgo': '{count} 天前',
+  'pages.chat.index.time.hoursAgo': '{count} 小时前',
+  'pages.chat.index.time.justNow': '刚刚',
+  'pages.chat.index.time.minutesAgo': '{count} 分钟前',
+  'pages.chat.index.title': 'Chat',
+  'pages.chat.index.tokenSplit': '{input} 输入 / {output} 输出',
+  'pages.chat.index.totalTokens': '{count} tokens',
   'pages.gagents.index.teamMembersBreadcrumb': '团队成员',
   'pages.missioncontrol.index.missionControlBreadcrumb': '任务控制',
   'pages.missioncontrol.index.platformBreadcrumb': '平台',
+  'pages.missionwall.focus': '焦点',
+  'pages.missionwall.focusReason.failed': '失败',
+  'pages.missionwall.focusReason.latestRunning': '最新运行',
+  'pages.missionwall.focusReason.none': '无焦点',
+  'pages.missionwall.focusReason.recentlyCompleted': '最近完成',
+  'pages.missionwall.focusReason.retrying': '重试中',
+  'pages.missionwall.focusReason.staleLive': '过期',
+  'pages.missionwall.focusReason.staleProjection': '过期',
+  'pages.missionwall.focusReason.timedOut': '超时',
+  'pages.missionwall.focusReason.unknown': '未知',
+  'pages.missionwall.focusReason.waitingHuman': '等待审批',
+  'pages.missionwall.latencyMs': '{latency}ms',
+  'pages.missionwall.latencySeconds': '{latency}s',
+  'pages.missionwall.liveState.connected':
+    '已连接到已发布 workflow run read models。',
+  'pages.missionwall.liveState.empty':
+    '暂无可见的已发布 workflow runs。',
+  'pages.missionwall.liveState.loading': '正在加载已发布 workflow runs。',
+  'pages.missionwall.liveState.partialRunError':
+    '部分已发布 service runs 无法加载。',
+  'pages.missionwall.liveState.scopeUnavailable':
+    'Mission wall 无法加载已认证 scope。',
+  'pages.missionwall.liveState.snapshotUnavailable':
+    'Mission wall snapshot 无法加载。',
+  'pages.missionwall.liveStatus.degraded': '降级',
+  'pages.missionwall.liveStatus.disconnected': '已断开',
+  'pages.missionwall.liveStatus.idle': '空闲',
+  'pages.missionwall.liveStatus.live': 'On',
+  'pages.missionwall.liveStatus.unknown': '未知',
+  'pages.missionwall.metric.failed': '失败',
+  'pages.missionwall.metric.live': '实时',
+  'pages.missionwall.metric.retrying': '重试',
+  'pages.missionwall.metric.running': '运行中',
+  'pages.missionwall.metric.waiting': '等待中',
+  'pages.missionwall.noFocusExplain': '选择一个 workflow。',
+  'pages.missionwall.noFocusRun': '暂无焦点 run',
+  'pages.missionwall.branchLabel': 'branch: {label}',
+  'pages.missionwall.publishedRunWindow': 'Published Run Window',
+  'pages.missionwall.publishedRunWindowAria': 'Published run window',
+  'pages.missionwall.runProgress': '{completed} / {total} steps',
+  'pages.missionwall.runStage.failedAtStep': '{step} 失败',
+  'pages.missionwall.runStage.retryingAtStep': '重试 {step}',
+  'pages.missionwall.runStage.runningAtStep': '运行 {step}',
+  'pages.missionwall.runStage.staleAtStep': '{step} 已过期',
+  'pages.missionwall.runStage.timedOutAtStep': '{step} 超时',
+  'pages.missionwall.runStage.waitingAtStep': '等待 {step}',
+  'pages.missionwall.runtimeKicker': 'AEVATAR WORKFLOW RUNTIME',
+  'pages.missionwall.runtimeData.completed': '已完成',
+  'pages.missionwall.runtimeData.failed': '失败',
+  'pages.missionwall.runtimeData.retrying': '重试中',
+  'pages.missionwall.runtimeData.running': '运行中',
+  'pages.missionwall.runtimeData.stopped': '已停止',
+  'pages.missionwall.runtimeData.timedOut': '已超时',
+  'pages.missionwall.runtimeData.unknown': '未知',
+  'pages.missionwall.runtimeData.noRuntimeRun': '暂无可见 run',
+  'pages.missionwall.runtimeData.unnamedWorkflow': '未命名 Workflow',
+  'pages.missionwall.runtimeData.waiting': '等待中',
+  'pages.missionwall.status.completed': '完成',
+  'pages.missionwall.status.failed': '失败',
+  'pages.missionwall.status.retrying': '重试',
+  'pages.missionwall.status.running': '实时',
+  'pages.missionwall.status.published': '已发布',
+  'pages.missionwall.status.stale': '过期',
+  'pages.missionwall.status.stopped': '停止',
+  'pages.missionwall.status.timedOut': '超时',
+  'pages.missionwall.status.unknown': '未知',
+  'pages.missionwall.status.waiting': '等待',
+  'pages.missionwall.state.auditLoading': '正在加载选中 run',
+  'pages.missionwall.state.auditPendingTitle':
+    '这个 run 暂无步骤流',
+  'pages.missionwall.state.emptyKicker': '等待运行记录',
+  'pages.missionwall.state.emptyTitle': '暂无可见的已发布 workflow',
+  'pages.missionwall.state.loadingKicker': '加载运行态',
+  'pages.missionwall.state.loadingTitle': '正在加载 workflow runs',
+  'pages.missionwall.state.publishedWorkflowTitle': '暂无可见 run',
+  'pages.missionwall.stageSubtitle': 'Team {teamName} · {memberName}',
+  'pages.missionwall.stageTitle': '{workflowName} · Step Flow',
+  'pages.missionwall.stepStatus.active': '运行中',
+  'pages.missionwall.stepStatus.completed': '已完成',
+  'pages.missionwall.stepStatus.failed': '失败',
+  'pages.missionwall.stepStatus.idle': 'NEXT',
+  'pages.missionwall.stepStatus.retrying': '重试中',
+  'pages.missionwall.stepStatus.unknown': '未知',
+  'pages.missionwall.stepStatus.waiting': '等待中',
+  'pages.missionwall.title': 'Published Run Mission Wall',
+  'pages.missionwall.unknownEntryMember': '未知入口成员',
+  'pages.missionwall.unknownTeam': '未知团队',
   'pages.scopes.assets.legacyAssetsBreadcrumb': '旧版资产',
   'pages.scopes.assets.legacyAssetsContent':
     '团队主页现在位于 /scopes/:scopeId/teams。这里保留给旧资产深链、源码检查和目录详情使用，直到 scoped team 流程完全接管。',
@@ -53,8 +177,7 @@ const zhCNMessages = {
   'pages.scopes.invoke.legacyInvokeTitleHelp':
     '用于直接探测端点的旧版深链 playground。团队主页仍是主入口，这里处理原始载荷和旧操作流。',
   'pages.scopes.invoke.teamsBreadcrumb': '团队',
-  'pages.settings.index.accountContent':
-    '当前浏览器的身份、会话和访问详情。',
+  'pages.settings.index.accountContent': '当前浏览器的身份、会话和访问详情。',
   'pages.settings.index.llmContent': 'Chat 和 Studio 的个人默认配置。',
   'pages.settings.index.title': '设置',
   'pages.studio.index.studioBreadcrumb': 'Studio',
@@ -81,13 +204,15 @@ const zhCNMessages = {
   'teams.home.actions.viewMembers': '查看成员',
   'teams.home.actions.viewTeam': '查看团队',
   'teams.home.alerts.authFailedTitle': '当前登录态校验失败',
-  'teams.home.alerts.authUnavailableDescription': '登录状态暂时不可用，请刷新后重试。',
+  'teams.home.alerts.authUnavailableDescription':
+    '登录状态暂时不可用，请刷新后重试。',
   'teams.home.alerts.localAuthFallbackDescription':
     '{issue} 已使用本地登录信息继续加载团队。',
   'teams.home.alerts.localAuthFallbackTitle':
     '当前登录态校验失败，已使用本地登录信息',
   'teams.home.alerts.membersUnavailable': '当前工作区的成员清单暂时不可见。',
-  'teams.home.alerts.noScope': '当前登录状态还没有解析出可用的团队 Scope，请刷新后重试。',
+  'teams.home.alerts.noScope':
+    '当前登录状态还没有解析出可用的团队 Scope，请刷新后重试。',
   'teams.home.alerts.partialSignals': '部分团队信号暂时不可见',
   'teams.home.alerts.teamsUnavailable': '当前工作区的团队成员清单暂时不可见。',
   'teams.home.attention.draft': '草稿中',
@@ -98,10 +223,12 @@ const zhCNMessages = {
   'teams.home.attention.unknown': '待确认',
   'teams.home.attention.waiting': '待关注',
   'teams.home.attentionDetail.memberFailed': '最近一次成员运行处于异常状态。',
-  'teams.home.attentionDetail.memberHealthy': '最近一次成员运行正常，可继续进入详情查看。',
+  'teams.home.attentionDetail.memberHealthy':
+    '最近一次成员运行正常，可继续进入详情查看。',
   'teams.home.attentionDetail.memberNoBoundService':
     '当前成员已经准备好绑定，但还没有稳定的成员调用入口。',
-  'teams.home.attentionDetail.memberNoRecentRuns': '成员已绑定服务，最近还没有运行记录。',
+  'teams.home.attentionDetail.memberNoRecentRuns':
+    '成员已绑定服务，最近还没有运行记录。',
   'teams.home.attentionDetail.memberStage': '当前成员还处于 {stage} 阶段。',
   'teams.home.attentionDetail.memberWaiting':
     '最近一次成员运行正在等待人工或外部信号。',
@@ -190,9 +317,11 @@ const zhCNMessages = {
   'teams.detail.messages.archiveFailed': '团队归档失败。',
   'teams.detail.messages.archiveSuccess': '团队已归档。',
   'teams.detail.messages.entryClearFailed': '团队入口更新失败。',
-  'teams.detail.messages.entryClearSubmitted': '团队入口清除已提交，正在等待同步确认。',
+  'teams.detail.messages.entryClearSubmitted':
+    '团队入口清除已提交，正在等待同步确认。',
   'teams.detail.messages.entrySetFailed': '团队入口更新失败。',
-  'teams.detail.messages.entrySetSubmitted': '团队入口变更已提交，正在等待同步确认。',
+  'teams.detail.messages.entrySetSubmitted':
+    '团队入口变更已提交，正在等待同步确认。',
   'teams.detail.messages.nameRequired': '团队名称不能为空。',
   'teams.detail.messages.teamTestEmpty': '团队返回了空响应。',
   'teams.detail.messages.teamTestStopped': '团队测试已停止。',
@@ -210,15 +339,18 @@ const zhCNMessages = {
     '当前还没有足够事实来生成团队构成。',
   'teams.detail.overview.composition.empty.title': '暂无团队构成',
   'teams.detail.overview.composition.title': '团队构成',
-  'teams.detail.overview.configuration.bindingCurrentService': '当前会落到 {service}',
+  'teams.detail.overview.configuration.bindingCurrentService':
+    '当前会落到 {service}',
   'teams.detail.overview.configuration.bindingMode': '绑定方式',
   'teams.detail.overview.configuration.bindingNoService':
     '当前还没有匹配到主服务入口',
   'teams.detail.overview.configuration.primaryService': '主服务入口',
   'teams.detail.overview.configuration.title': '配置明细',
   'teams.detail.overview.configuration.versionIdentity': '版本标识',
+  'teams.detail.overview.configuration.versionStatus': '版本状态',
   'teams.detail.overview.configuration.workflow': '团队 Workflow',
-  'teams.detail.overview.entry.configuredCaption': '调用这支团队时会先路由到这个成员。',
+  'teams.detail.overview.entry.configuredCaption':
+    '调用这支团队时会先路由到这个成员。',
   'teams.detail.overview.entry.unconfigured': '未配置',
   'teams.detail.overview.entry.unconfiguredCaption':
     '测试或调用前，请先设置一个入口成员。',
@@ -234,7 +366,8 @@ const zhCNMessages = {
   'teams.detail.overview.configuration.versionAvailable': '当前服务版本可用。',
   'teams.detail.overview.configuration.versionPending': '服务版本待确认。',
   'teams.detail.overview.configuration.workflowLinked': 'Workflow 草稿已关联。',
-  'teams.detail.overview.configuration.workflowPending': 'Workflow 草稿尚未关联。',
+  'teams.detail.overview.configuration.workflowPending':
+    'Workflow 草稿尚未关联。',
   'teams.detail.overview.member.selectedCaption': '当前从团队成员中选中。',
   'teams.detail.overview.run.visibleCaption': '最近运行已可见。',
   'teams.detail.overview.service.boundCaption': '流量会通过已绑定服务路由。',
@@ -326,9 +459,11 @@ const zhCNMessages = {
   'teams.detail.test.errors.network.description':
     '网络请求中断，请检查登录状态或稍后重试。',
   'teams.detail.test.errors.network.title': '网络请求失败',
-  'teams.detail.test.errors.permissionDenied.description': '当前账号没有修改或测试这支团队的权限。',
+  'teams.detail.test.errors.permissionDenied.description':
+    '当前账号没有修改或测试这支团队的权限。',
   'teams.detail.test.errors.permissionDenied.title': '权限不足',
-  'teams.detail.test.errors.teamArchived.description': '归档后的团队不能继续发起测试。',
+  'teams.detail.test.errors.teamArchived.description':
+    '归档后的团队不能继续发起测试。',
   'teams.detail.test.errors.teamArchived.title': '团队已归档',
   'teams.detail.test.errors.teamNotFound.description':
     '这支团队在当前工作区中不可见，请返回团队列表重新选择。',
@@ -364,7 +499,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.cache.ttl.label': 'TTL 秒数',
   'shared.studio.nodeConfiguration.cache.ttl.placeholder': '600',
   'shared.studio.nodeConfiguration.checkpoint.name.label': '检查点名称',
-  'shared.studio.nodeConfiguration.checkpoint.name.placeholder': 'before_publish',
+  'shared.studio.nodeConfiguration.checkpoint.name.placeholder':
+    'before_publish',
   'shared.studio.nodeConfiguration.conditional.condition.label': '条件',
   'shared.studio.nodeConfiguration.conditional.condition.placeholder':
     'eq($input, "ok")',
@@ -372,7 +508,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.connectorCall.connector.placeholder':
     '已配置的 Connector 名称',
   'shared.studio.nodeConfiguration.connectorCall.method.label': '方法',
-  'shared.studio.nodeConfiguration.connectorCall.method.option.delete': 'DELETE',
+  'shared.studio.nodeConfiguration.connectorCall.method.option.delete':
+    'DELETE',
   'shared.studio.nodeConfiguration.connectorCall.method.option.get': 'GET',
   'shared.studio.nodeConfiguration.connectorCall.method.option.patch': 'PATCH',
   'shared.studio.nodeConfiguration.connectorCall.method.option.post': 'POST',
@@ -444,7 +581,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.llmCall.instruction.placeholder':
     '告诉这个角色该步骤要做什么。',
   'shared.studio.nodeConfiguration.mapReduce.delimiter.label': '分隔符',
-  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder': '\\n---\\n',
+  'shared.studio.nodeConfiguration.mapReduce.delimiter.placeholder':
+    '\\n---\\n',
   'shared.studio.nodeConfiguration.mapReduce.mapStepType.label': 'Map 步骤',
   'shared.studio.nodeConfiguration.mapReduce.mapTargetRole.label':
     'Map 目标角色',
@@ -522,10 +660,11 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.toolCall.tool.label': '工具',
   'shared.studio.nodeConfiguration.toolCall.tool.placeholder': 'web_search',
   'shared.studio.nodeConfiguration.transform.operation.label': '操作',
-  'shared.studio.nodeConfiguration.transform.operation.option.count': '统计行数',
-  'shared.studio.nodeConfiguration.transform.operation.option.identity': '原样传递',
-  'shared.studio.nodeConfiguration.transform.operation.option.join':
-    '合并分段',
+  'shared.studio.nodeConfiguration.transform.operation.option.count':
+    '统计行数',
+  'shared.studio.nodeConfiguration.transform.operation.option.identity':
+    '原样传递',
+  'shared.studio.nodeConfiguration.transform.operation.option.join': '合并分段',
   'shared.studio.nodeConfiguration.transform.operation.option.jsonExtract':
     '提取 JSON',
   'shared.studio.nodeConfiguration.transform.operation.option.lowercase':
@@ -541,7 +680,8 @@ const zhCNMessages = {
   'shared.studio.nodeConfiguration.transform.operation.option.uppercase':
     '转大写',
   'shared.studio.nodeConfiguration.waitSignal.signalName.label': '信号名',
-  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder': 'continue',
+  'shared.studio.nodeConfiguration.waitSignal.signalName.placeholder':
+    'continue',
   'shared.studio.nodeConfiguration.waitSignal.timeout.label': '超时毫秒',
   'shared.studio.nodeConfiguration.waitSignal.timeout.placeholder': '60000',
   'shared.studio.nodeConfiguration.while.condition.label': '条件',
@@ -564,15 +704,19 @@ const zhCNMessages = {
   'teams.members.actions.createFirst': '创建第一个成员',
   'teams.members.actions.createFirstWorkflow': '创建第一个工作流成员',
   'teams.members.actions.createWorkflowMember': '创建工作流成员',
+  'teams.members.actions.delete': '删除成员',
   'teams.members.actions.editInStudio': '在 Studio 中编辑',
   'teams.members.actions.automate': '自动化',
-  'teams.members.actions.invokeRequiresBinding': '请先绑定这个 Workflow 成员再调用。',
+  'teams.members.actions.invokeRequiresBinding':
+    '请先绑定这个 Workflow 成员再调用。',
   'teams.members.actions.invokeWorkflow': '调用',
   'teams.members.actions.publishedRuns': '发布运行记录',
-  'teams.members.actions.publishedRuns.publishFirst': '请先发布这个成员再查看发布运行记录。',
+  'teams.members.actions.publishedRuns.publishFirst':
+    '请先发布这个成员再查看发布运行记录。',
   'teams.members.actions.setEntry': '设为入口成员',
   'teams.members.actions.workflowOnly': '仅支持 Workflow',
-  'teams.members.actions.workflowOnlyTitle': '当前控制台暂只支持 Workflow 类型成员。',
+  'teams.members.actions.workflowOnlyTitle':
+    '当前控制台暂只支持 Workflow 类型成员。',
   'teams.members.actions.workflowStudio': 'Workflow Studio',
   'teams.automations.actions.addRecurringWork': '添加周期任务',
   'teams.automations.actions.create': '新建自动化',
@@ -602,13 +746,25 @@ const zhCNMessages = {
   'teams.automations.empty.createFirst': '创建第一个自动化',
   'teams.automations.empty.description':
     '从已发布成员创建自动化后，这支团队就会拥有可见的周期承诺。',
-  'teams.automations.empty.publishHint': '先发布一个 Workflow 成员，再安排周期任务。',
+  'teams.automations.empty.publishHint':
+    '先发布一个 Workflow 成员，再安排周期任务。',
   'teams.automations.empty.title': '还没有周期任务',
   'teams.automations.error.description':
     '刷新页面，或等定时任务服务可用后再试。',
   'teams.automations.error.title': '自动化加载失败',
+  'teams.automations.form.agentKeyConsent':
+    '我同意 Aevatar 为此定时任务创建专用的 Agent Key。',
+  'teams.automations.form.agentKeyExpiry': '到期时间：{time}',
+  'teams.automations.form.agentKeyManaged': '由 Aevatar 托管',
+  'teams.automations.form.agentKeyMode': '凭据模式：{mode}',
+  'teams.automations.form.agentKeyNoRawKey':
+    '浏览器不会接收 Agent Key 原文',
+  'teams.automations.form.agentKeyPlan':
+    '自动化专用 Agent Key',
+  'teams.automations.form.backendRequired': '暂不可创建',
   'teams.automations.form.cadence': '节奏',
   'teams.automations.form.cadenceAria': '自动化节奏',
+  'teams.automations.form.close': '关闭',
   'teams.automations.form.create': '创建自动化',
   'teams.automations.form.cron': 'Cron 表达式',
   'teams.automations.form.cronAria': 'Cron 表达式',
@@ -618,26 +774,52 @@ const zhCNMessages = {
   'teams.automations.form.displayName': '名称',
   'teams.automations.form.displayNameAria': '自动化名称',
   'teams.automations.form.displayNamePlaceholder': '每日升级摘要',
+  'teams.automations.form.editPromptHint':
+    '选填：留空也可以保存为无周期 Prompt。',
   'teams.automations.form.editTitle': '编辑自动化',
   'teams.automations.form.enabled': '启用',
-  'teams.automations.form.identityMissing': '正在等待这个成员的已发布服务身份。',
+  'teams.automations.form.identityMissing':
+    '正在等待这个成员的已发布服务身份。',
   'teams.automations.form.identityReady': '目标为该成员的已发布服务。',
   'teams.automations.form.member': '成员',
   'teams.automations.form.memberAria': '自动化成员',
+  'teams.automations.form.nodeGrants': '节点权限',
+  'teams.automations.form.permissionDigest':
+    '权限摘要：{permissionDigest}',
+  'teams.automations.form.planChanged':
+    '授权计划已变更，请刷新后重新确认。',
+  'teams.automations.form.policyVersion':
+    '策略版本：{policyVersion}',
   'teams.automations.form.preset.custom': '自定义 Cron',
   'teams.automations.form.preset.dailyMorning': '每天 · 09:00',
   'teams.automations.form.preset.hourly': '每小时',
   'teams.automations.form.preset.weekdaysMorning': '工作日 · 09:00',
   'teams.automations.form.preset.weeklyMonday': '周一 · 09:00',
+  'teams.automations.form.preparingReview': '正在准备审查',
   'teams.automations.form.preview': '预览后续运行',
   'teams.automations.form.previewEmpty': '先预览节奏，确认后续触发。',
   'teams.automations.form.previewHint': '保存前通过定时任务服务预览。',
   'teams.automations.form.prompt': '周期 Prompt（选填）',
   'teams.automations.form.promptAria': '周期 Prompt（选填）',
   'teams.automations.form.promptLimit': '选填，最多 {maxLength} 个字符。',
-  'teams.automations.form.promptPlaceholder': '汇总升级工单、受阻账号和后续负责人。',
+  'teams.automations.form.promptPlaceholder':
+    '汇总升级工单、受阻账号和后续负责人。',
+  'teams.automations.form.refreshReview': '刷新审查',
+  'teams.automations.form.reviewErrorBody':
+    '无法准备权限审查。草稿已保留，请重试。',
+  'teams.automations.form.reviewErrorTitle':
+    '权限审查需要处理',
+  'teams.automations.form.reviewPermissions': '审查权限',
+  'teams.automations.form.reviewPlaceholder':
+    '目标和运行节奏准备好后即可审查权限。',
+  'teams.automations.form.previewOnlyNotice':
+    '当前仅供预览。在接入专用后端契约前，不会创建自动化或 Agent Key。',
   'teams.automations.form.save': '保存修改',
   'teams.automations.form.scheduleReadsAs': '计划解读为',
+  'teams.automations.form.section.permissionReview':
+    '4. 审查 Agent Key 授权',
+  'teams.automations.form.section.permissionReviewHint':
+    '浏览器登录授权仅用于确认本次同意；自动化将使用由 Aevatar 托管的专用 Agent Key。',
   'teams.automations.form.section.schedule': '3. 运行节奏',
   'teams.automations.form.section.scheduleHint':
     '选择常用节奏，或切换到自定义 Cron 配置高级计划。',
@@ -647,13 +829,15 @@ const zhCNMessages = {
   'teams.automations.form.section.work': '2. 要执行的任务',
   'teams.automations.form.section.workHint':
     '给自动化命名，可选填写每次触发时发送给成员的 Prompt。',
+  'teams.automations.form.serviceGrants': '服务权限',
   'teams.automations.form.timezone': '时区',
   'teams.automations.form.timezoneAria': '时区',
   'teams.automations.form.title': '新建成员自动化',
   'teams.automations.member.publishFirst': '先发布这个成员，再添加周期任务。',
   'teams.automations.member.publishedServiceReady': '已发布服务可用',
   'teams.automations.member.unknown': '未知成员',
-  'teams.automations.member.workflowOnly': '只有 Workflow 成员可以添加周期任务。',
+  'teams.automations.member.workflowOnly':
+    '只有 Workflow 成员可以添加周期任务。',
   'teams.automations.messages.createFailed': '自动化未创建：{message}',
   'teams.automations.messages.createSuccess': '自动化已创建。',
   'teams.automations.messages.cronRequired': '请先填写 Cron 表达式。',
@@ -661,11 +845,15 @@ const zhCNMessages = {
   'teams.automations.messages.disableSuccess': '自动化已暂停。',
   'teams.automations.messages.enableSuccess': '自动化已恢复。',
   'teams.automations.messages.previewFailed': '预览失败：{message}',
-  'teams.automations.messages.promptTooLong': '周期 Prompt 最多 {maxLength} 个字符。',
+  'teams.automations.messages.promptTooLong':
+    '周期 Prompt 最多 {maxLength} 个字符。',
+  'teams.automations.messages.reviewFailed':
+    '无法准备权限审查：{message}',
   'teams.automations.messages.runNowFailed': '立即运行请求失败：{message}',
   'teams.automations.messages.runNowSuccess': '已请求立即运行。',
   'teams.automations.messages.serviceIdentityLoading': '服务身份仍在加载中。',
-  'teams.automations.messages.serviceIdentityMissing': '所选成员还没有服务身份。',
+  'teams.automations.messages.serviceIdentityMissing':
+    '所选成员还没有服务身份。',
   'teams.automations.messages.updateFailed': '自动化未更新：{message}',
   'teams.automations.messages.updateSuccess': '自动化已更新。',
   'teams.automations.noPublishedMember.description':
@@ -684,8 +872,7 @@ const zhCNMessages = {
   'teams.automations.preview.weekly.cadence': '周五 · 16:30',
   'teams.automations.preview.weekly.member': 'Release Manager',
   'teams.automations.preview.weekly.nextRun': '需要频道权限',
-  'teams.automations.preview.weekly.prompt':
-    '准备发布交接说明并标记部署风险。',
+  'teams.automations.preview.weekly.prompt': '准备发布交接说明并标记部署风险。',
   'teams.automations.preview.weekly.title': '每周发布交接',
   'teams.automations.previewOnly': '自动化 API 接入会在下一步完成。',
   'teams.automations.row.nextRun': '下次 {time}',
@@ -724,6 +911,16 @@ const zhCNMessages = {
   'teams.members.columns.role': '职责',
   'teams.members.columns.service': '服务',
   'teams.members.count': '{count} 个成员',
+  'teams.members.delete.confirm.body': '删除',
+  'teams.members.delete.confirm.body.suffix': '从这个团队中删除？',
+  'teams.members.delete.entry.warning':
+    '这个成员是团队入口成员。删除后会移除成员权威状态并从团队成员列表中清除；已发布服务产物、修订和历史运行记录会保留。',
+  'teams.members.delete.failed': '删除成员失败。',
+  'teams.members.delete.keep': '保留成员',
+  'teams.members.delete.success': '已删除成员 {member}。',
+  'teams.members.delete.title': '删除成员',
+  'teams.members.delete.warning':
+    '这会移除 Studio 成员权威状态并从团队成员列表中清除；已发布服务产物、修订和历史运行记录会保留。',
   'teams.members.description':
     '在这里查看团队成员、选择团队入口，并进入 Workflow Studio 编辑成员。只有已经绑定到发布服务的 Workflow 成员才可以调用。',
   'teams.members.empty.description':
@@ -742,7 +939,8 @@ const zhCNMessages = {
     '请先从列表中选择一支团队，再查看它的成员。',
   'teams.members.noSelection.title': '尚未选中真实团队',
   'teams.members.roster': '成员清单',
-  'teams.members.syncing.description': '团队已创建，成员清单正在同步。这里会自动刷新。',
+  'teams.members.syncing.description':
+    '团队已创建，成员清单正在同步。这里会自动刷新。',
   'teams.members.syncing.title': '成员清单正在同步',
   'teams.members.title': '团队成员',
   'teams.members.unavailable.description': '当前无法读取这支团队的成员清单。',
@@ -784,13 +982,11 @@ const zhCNMessages = {
   'pages.teammemberinvoke.workflow.only': '只有 Workflow 成员可以在这里调用。',
   'pages.teammemberinvoke.workflow.only.description':
     '这个页面只运行 Workflow 成员。其他实现类型请使用对应成员自己的入口。',
-  'pages.runs.memberPublishedRuns.auditUnavailable':
-    '发布运行审计暂不可见。',
+  'pages.runs.memberPublishedRuns.auditUnavailable': '发布运行审计暂不可见。',
   'pages.runs.memberPublishedRuns.backToTeamMembers': '返回团队成员',
   'pages.runs.memberPublishedRuns.details': '详情',
   'pages.runs.memberPublishedRuns.input': '输入',
-  'pages.runs.memberPublishedRuns.listUnavailable':
-    '发布运行记录暂不可见。',
+  'pages.runs.memberPublishedRuns.listUnavailable': '发布运行记录暂不可见。',
   'pages.runs.memberPublishedRuns.logs': '日志',
   'pages.runs.memberPublishedRuns.noAuditSteps':
     '这次发布运行没有记录审计步骤。',
@@ -800,16 +996,14 @@ const zhCNMessages = {
   'pages.runs.memberPublishedRuns.output': '输出',
   'pages.runs.memberPublishedRuns.publishedRuns': '发布运行记录',
   'pages.runs.memberPublishedRuns.refresh': '刷新',
-  'pages.runs.memberPublishedRuns.selectPublishedRun':
-    '选择一次发布运行',
+  'pages.runs.memberPublishedRuns.selectPublishedRun': '选择一次发布运行',
   'pages.runs.memberPublishedRuns.timeline': '时间线',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     '你可以在这里搭建或粘贴 workflow。保存时会创建可恢复的 workflow 草稿，直到成员关联完成物化。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     '这个成员还没有关联 Workflow 草稿。',
   'teamMemberWorkflowStudio.common.close': '关闭',
-  'teamMemberWorkflowStudio.executionPanel.consoleAria':
-    '草稿运行控制台',
+  'teamMemberWorkflowStudio.executionPanel.consoleAria': '草稿运行控制台',
   'teamMemberWorkflowStudio.executionPanel.duration': '耗时',
   'teamMemberWorkflowStudio.executionPanel.clear': '清空日志',
   'teamMemberWorkflowStudio.executionPanel.copyAll': '复制全部日志',
@@ -867,8 +1061,7 @@ const zhCNMessages = {
     '这个 tab 只展示能通过稳定 Workflow 或 Service 标识安全归属到当前 Workflow 成员的执行记录。',
   'teamMemberWorkflowStudio.executionsPanel.empty':
     '当前 Workflow 成员还没有可安全归属的执行记录。',
-  'teamMemberWorkflowStudio.executionsPanel.fallbackName':
-    'Workflow 执行',
+  'teamMemberWorkflowStudio.executionsPanel.fallbackName': 'Workflow 执行',
   'teamMemberWorkflowStudio.executionsPanel.inspect': '查看',
   'teamMemberWorkflowStudio.executionsPanel.sectionAria':
     'Workflow 执行记录',
@@ -895,8 +1088,7 @@ const zhCNMessages = {
     '确定删除当前选中的节点吗？此操作不可撤销。',
   'teamMemberWorkflowStudio.header.deleteConnection': '删除连接',
   'teamMemberWorkflowStudio.header.deleteNode': '删除节点',
-  'teamMemberWorkflowStudio.header.deleteSelectedConnection':
-    '删除选中的连接',
+  'teamMemberWorkflowStudio.header.deleteSelectedConnection': '删除选中的连接',
   'teamMemberWorkflowStudio.header.deleteSelectedNode': '删除选中的节点',
   'teamMemberWorkflowStudio.header.editWorkflowName': '编辑 Workflow 名称',
   'teamMemberWorkflowStudio.header.identityAria': 'Workflow 身份信息',
@@ -910,13 +1102,10 @@ const zhCNMessages = {
     '先保存这个成员，再调用它。',
   'teamMemberWorkflowStudio.header.more': '更多',
   'teamMemberWorkflowStudio.header.moreActions': '更多 Workflow 操作',
-  'teamMemberWorkflowStudio.header.nodeActionsAria':
-    'Workflow 草稿和节点操作',
-  'teamMemberWorkflowStudio.header.openAutomations':
-    '打开这个成员的周期任务',
+  'teamMemberWorkflowStudio.header.nodeActionsAria': 'Workflow 草稿和节点操作',
+  'teamMemberWorkflowStudio.header.openAutomations': '打开这个成员的周期任务',
   'teamMemberWorkflowStudio.header.pasteYaml': '粘贴 YAML',
-  'teamMemberWorkflowStudio.header.primaryActionsAria':
-    'Workflow 主操作',
+  'teamMemberWorkflowStudio.header.primaryActionsAria': 'Workflow 主操作',
   'teamMemberWorkflowStudio.header.prepareDraftRun': '准备草稿运行',
   'teamMemberWorkflowStudio.header.publishedRuns': '发布运行记录',
   'teamMemberWorkflowStudio.header.publishedRuns.open':
@@ -961,15 +1150,13 @@ const zhCNMessages = {
     '高级原始配置',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
     '只有当节点选项还没有引导字段时才使用这里。',
-  'teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration':
-    '应用原始 JSON',
+  'teamMemberWorkflowStudio.nodeDetail.applyRawConfiguration': '应用原始 JSON',
   'teamMemberWorkflowStudio.nodeDetail.configuration': '配置',
   'teamMemberWorkflowStudio.nodeDetail.configurationDescription':
     '编辑这个节点在草稿运行时会使用的字段。',
   'teamMemberWorkflowStudio.nodeDetail.noSemanticFields':
     '这个节点类型暂时没有引导字段。需要时可以使用高级原始配置。',
-  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria':
-    '原始节点配置',
+  'teamMemberWorkflowStudio.nodeDetail.rawConfigurationAria': '原始节点配置',
   'teamMemberWorkflowStudio.nodeDetail.rawConfigurationError':
     '原始节点配置必须是 JSON 对象。',
   'teamMemberWorkflowStudio.nodeDetail.sectionAria': '节点详情',
@@ -1010,12 +1197,10 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.draftRunPanel.filesLabel': '文件',
   'teamMemberWorkflowStudio.draftRunPanel.filesLimitHint':
     '支持图片、文档、音频、视频、CSV 和文本文件，单个文件最大 10 MB。',
-  'teamMemberWorkflowStudio.draftRunPanel.messageLabel':
-    '草稿运行输入',
+  'teamMemberWorkflowStudio.draftRunPanel.messageLabel': '草稿运行输入',
   'teamMemberWorkflowStudio.draftRunPanel.messagePlaceholder':
     '本次 Workflow 草稿运行的可选输入',
-  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached':
-    '未添加文件',
+  'teamMemberWorkflowStudio.draftRunPanel.noFilesAttached': '未添加文件',
   'teamMemberWorkflowStudio.draftRunPanel.removeEmptyFile':
     '开始草稿运行前请移除空文件 {name}。',
   'teamMemberWorkflowStudio.draftRunPanel.removeFile': '移除 {name}',
@@ -1036,15 +1221,13 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.runsPanel.title': '成员运行记录',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': '未知',
   'teamMemberWorkflowStudio.yamlImportPanel.cancel': '取消',
-  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
-    '关闭粘贴 YAML 面板',
+  'teamMemberWorkflowStudio.yamlImportPanel.closeAria': '关闭粘贴 YAML 面板',
   'teamMemberWorkflowStudio.yamlImportPanel.import': '导入',
   'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
     'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
   'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
     '粘贴 Workflow YAML 面板',
-  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
-    '导入到当前草稿',
+  'teamMemberWorkflowStudio.yamlImportPanel.subtitle': '导入到当前草稿',
   'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
   'teamMemberWorkflowStudio.yamlImportPanel.title': '粘贴 YAML',
   'teamMemberWorkflowStudio.yamlPanel.closeAria': '关闭 YAML 面板',
@@ -1068,12 +1251,9 @@ const zhCNMessages = {
   'pages.studio.studiomemberinvokeinspector.history': '历史',
   'pages.studio.studiomemberinvokeinspector.payload': '载荷',
   'pages.studio.studiomemberinvokeinspector.payload.base64': '载荷 base64',
-  'pages.studio.studiomemberinvokeinspector.payload.base64.2':
-    '载荷 base64',
-  'pages.studio.studiomemberinvokeinspector.payload.type.url':
-    '载荷类型 URL',
-  'pages.studio.studiomemberinvokeinspector.payload.type.url.2':
-    '载荷类型 URL',
+  'pages.studio.studiomemberinvokeinspector.payload.base64.2': '载荷 base64',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url': '载荷类型 URL',
+  'pages.studio.studiomemberinvokeinspector.payload.type.url.2': '载荷类型 URL',
   'pages.studio.studiomemberinvokeinspector.paste.encoded.protobuf.payload.when':
     '当文本无法构造该类型时，粘贴编码后的 protobuf 载荷。',
   'pages.studio.studiomemberinvokeinspector.revision': '版本',

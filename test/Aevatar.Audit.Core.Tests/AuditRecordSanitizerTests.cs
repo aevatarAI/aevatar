@@ -42,10 +42,21 @@ public sealed class AuditRecordSanitizerTests
     [Theory]
     [InlineData("Bearer caller-token")]
     [InlineData("-----BEGIN PRIVATE KEY----- secret -----END PRIVATE KEY-----")]
+    [InlineData("nyx_12345678901234567890")]
+    [InlineData("sk_12345678901234567890")]
     public void Sanitize_RejectsSecretBearingAnnotationValues(string annotationValue)
     {
         var record = CreateRecord();
         record.Annotations.Add("safe-diagnostic", annotationValue);
+
+        Should.Throw<ArgumentException>(() => new AuditRecordSanitizer().Sanitize(record));
+    }
+
+    [Fact]
+    public void Sanitize_RejectsFullKeyAnnotation()
+    {
+        var record = CreateRecord();
+        record.Annotations.Add("full-key", "redacted");
 
         Should.Throw<ArgumentException>(() => new AuditRecordSanitizer().Sanitize(record));
     }

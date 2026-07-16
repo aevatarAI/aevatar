@@ -7,6 +7,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -18,14 +19,17 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
     private readonly IEnumerable<IWorkflowToolSource> _toolSources;
     private readonly ILogger<ToolCallModule> _logger;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
     private volatile Lazy<Task<IReadOnlyDictionary<string, IWorkflowTool>>>? _toolIndex;
 
     public ToolCallModule(
         IEnumerable<IWorkflowToolSource> toolSources,
-        ILogger<ToolCallModule> logger)
+        ILogger<ToolCallModule> logger,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _callerAccessTokenProvider = callerAccessTokenProvider;
     }
 
     public string Name => "tool_call";
@@ -127,7 +131,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private static async Task<WorkflowToolExecutionResult> ExecuteToolAsync(
+    private async Task<WorkflowToolExecutionResult> ExecuteToolAsync(
         IWorkflowTool tool,
         string argumentsJson,
         StepRequestEvent request,
@@ -138,7 +142,10 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
     {
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
         var callerCredential = credential.Found
-            ? credential.Credential
+            ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                credential.Credential,
+                _callerAccessTokenProvider,
+                ct)
             : new WorkflowCallerCredential();
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
             ctx,

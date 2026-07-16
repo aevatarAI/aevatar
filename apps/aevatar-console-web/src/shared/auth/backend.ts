@@ -5,7 +5,9 @@ import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
 export type NyxIDBackendLoginConfig = Pick<
   NyxIDRuntimeConfig,
   "baseUrl" | "clientId" | "scope"
->;
+> & {
+  readonly resources: readonly string[];
+};
 
 export type NyxIDLoginFinalizationRequest = {
   readonly code: string;
@@ -22,6 +24,7 @@ export type NyxIDTokenRefreshRequest = {
   readonly baseUrl: string;
   readonly clientId: string;
   readonly refreshToken: string;
+  readonly resources: readonly string[];
 };
 
 type BackendLoginConfigResponse = {
@@ -31,6 +34,8 @@ type BackendLoginConfigResponse = {
   readonly ClientId?: unknown;
   readonly scope?: unknown;
   readonly Scope?: unknown;
+  readonly resources?: unknown;
+  readonly Resources?: unknown;
 };
 
 type BackendFinalizationResponse = {
@@ -137,6 +142,14 @@ function readOptionalStringArray(value: unknown): string[] | undefined {
     .filter(Boolean);
 }
 
+function readRequiredStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty string array.`);
+  }
+
+  return value.map((entry, index) => readString(entry, `${label}[${index}]`));
+}
+
 function decodeBackendLoginConfig(
   value: unknown,
 ): NyxIDBackendLoginConfig {
@@ -150,6 +163,10 @@ function decodeBackendLoginConfig(
     ),
     clientId: readString(record.clientId ?? record.ClientId, "clientId"),
     scope: readString(record.scope ?? record.Scope, "scope"),
+    resources: readRequiredStringArray(
+      record.resources ?? record.Resources,
+      "resources",
+    ),
   };
 }
 
@@ -301,11 +318,15 @@ export function refreshNyxIDTokenSet(
   const baseUrl = readString(request.baseUrl, "baseUrl").replace(/\/+$/, "");
   const clientId = readString(request.clientId, "clientId");
   const refreshToken = readString(request.refreshToken, "refreshToken");
+  const resources = readRequiredStringArray(request.resources, "resources");
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
     client_id: clientId,
   });
+  for (const resource of resources) {
+    body.append("resource", resource);
+  }
 
   return requestBackendJson(
     `${baseUrl}/oauth/token`,

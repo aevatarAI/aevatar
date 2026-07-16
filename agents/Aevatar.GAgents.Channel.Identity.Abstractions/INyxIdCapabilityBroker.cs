@@ -40,7 +40,9 @@ public interface INyxIdCapabilityBroker
     /// <see cref="BindingRevokedException"/> when NyxID reports
     /// <c>invalid_grant</c> on a previously-bound subject; throws
     /// <see cref="BindingScopeMismatchException"/> when NyxID reports
-    /// <c>invalid_scope</c> for an existing binding. Binding-required callers
+    /// <c>invalid_scope</c> for an existing binding; throws
+    /// <see cref="BindingServiceAccessMismatchException"/> when the binding's
+    /// token does not grant every required service resource. Binding-required callers
     /// can prompt the sender to re-run <c>/init</c>; normal LLM turns can
     /// continue with bot-owner fallback credentials.
     /// </summary>
@@ -54,6 +56,9 @@ public interface INyxIdCapabilityBroker
     /// <exception cref="BindingScopeMismatchException">
     /// NyxID reports the binding is missing the requested scope (HTTP 400
     /// <c>invalid_scope</c>).
+    /// </exception>
+    /// <exception cref="BindingServiceAccessMismatchException">
+    /// The binding does not grant every required NyxID service resource.
     /// </exception>
     Task<CapabilityHandle> IssueShortLivedAsync(
         ExternalSubjectRef externalSubject,
@@ -69,7 +74,8 @@ public interface INyxIdCapabilityBroker
     /// depend on the readmodel having observed the bind. Same exception contract
     /// as <see cref="IssueShortLivedAsync"/>: throws
     /// <see cref="BindingRevokedException"/> on NyxID <c>invalid_grant</c> and
-    /// <see cref="BindingScopeMismatchException"/> on <c>invalid_scope</c>.
+    /// <see cref="BindingScopeMismatchException"/> on <c>invalid_scope</c>, and
+    /// <see cref="BindingServiceAccessMismatchException"/> when service access is absent.
     /// </summary>
     Task<CapabilityHandle> IssueShortLivedByBindingIdAsync(
         ExternalSubjectRef externalSubject,
