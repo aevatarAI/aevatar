@@ -191,6 +191,11 @@ public sealed class WorkflowChatRunInteractionServiceTests
         deliveryPort.Reservations[0].UserText.Should().Be("original user text");
         deliveryPort.Reservations[0].WorkflowActorId.Should().Be("run-1");
         deliveryPort.Reservations[0].WorkflowCommandId.Should().Be(inner.Requests[0].CommandIdSeed);
+        var notificationTarget = inner.Requests[0].CompletionNotificationTarget;
+        notificationTarget.Should().NotBeNull();
+        notificationTarget!.ActorId.Should().Be(deliveryPort.Reservations[0].DeliveryId);
+        notificationTarget.DeliveryId.Should().Be(deliveryPort.Reservations[0].DeliveryId);
+        notificationTarget.ExpiresAtUnixMs.Should().BeGreaterThan(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         deliveryPort.Bindings.Should().ContainSingle();
         deliveryPort.Abandons.Should().BeEmpty();
     }

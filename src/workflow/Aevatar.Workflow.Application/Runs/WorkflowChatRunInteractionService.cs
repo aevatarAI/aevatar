@@ -1,5 +1,4 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
@@ -7,6 +6,7 @@ namespace Aevatar.Workflow.Application.Runs;
 
 internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunInteractionPort
 {
+    private static readonly TimeSpan ChatHistoryTerminalDeliveryLifetime = TimeSpan.FromMinutes(30);
     private readonly IWorkflowRunActorResolver _actorResolver;
     private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly IWorkflowRunProvisioningPort _runProvisioningPort;
@@ -94,7 +94,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         if (!_projectionPort.ProjectionEnabled)
             return AttemptStartResult.Failure(WorkflowChatRunStartError.ProjectionDisabled);
 
-        if (WorkflowCallerCredentialTokens.ParseOptional(request.CallerCredential?.BearerToken).IsInvalid)
+        if (Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens
+            .ParseOptional(request.CallerCredential?.BearerToken)
+            .IsInvalid)
             return AttemptStartResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
 
         var actorResolution = await _actorResolver.ResolveOrCreateAsync(request, ct).ConfigureAwait(false);
@@ -134,11 +136,17 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 await onAcceptedAsync(receipt, token).ConfigureAwait(false);
         }
 
+        var dispatchRequest = chatHistoryDelivery is null
+            ? attempt.Request
+            : attempt.Request with
+            {
+                CompletionNotificationTarget = CreateCompletionNotificationTarget(chatHistoryDelivery),
+            };
         CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> result;
         try
         {
             result = await _inner.ExecuteAsync(
-                attempt.Request,
+                dispatchRequest,
                 emitAsync,
                 OnAcceptedAsync,
                 ct).ConfigureAwait(false);
@@ -186,6 +194,13 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 ct)
             .ConfigureAwait(false);
     }
+
+    private static Application.Abstractions.Runs.WorkflowCompletionNotificationTarget CreateCompletionNotificationTarget(
+        WorkflowChatHistoryTerminalDeliveryReservation reservation) =>
+        new(
+            reservation.DeliveryId,
+            reservation.DeliveryId,
+            DateTimeOffset.UtcNow.Add(ChatHistoryTerminalDeliveryLifetime).ToUnixTimeMilliseconds());
 
     private async Task CleanupAttemptAsync(
         WorkflowChatRunInteractionAttempt attempt,

@@ -1,14 +1,11 @@
-using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
-using Aevatar.Workflow.Application.Abstractions.Projections;
-using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChatHistory;
 
@@ -18,23 +15,15 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     private const string ConversationAppendPublisherId = "chat-history-turn-delivery";
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
-    private readonly IWorkflowExecutionProjectionPort _projectionPort;
     private readonly TimeProvider _timeProvider;
-    private readonly ILogger<ChatTurnHistoryDeliveryGAgent> _logger;
-    private IEventSink<WorkflowRunEventEnvelope>? _sink;
-    private IAsyncDisposable? _liveSinkLease;
 
     public ChatTurnHistoryDeliveryGAgent(
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
-        IWorkflowExecutionProjectionPort projectionPort,
-        ILogger<ChatTurnHistoryDeliveryGAgent> logger,
         TimeProvider? timeProvider = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -45,6 +34,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             .Match(current, evt)
             .On<ChatTurnHistoryDeliveryReservedEvent>(ApplyReserved)
             .On<ChatTurnHistoryDeliveryBoundEvent>(ApplyBound)
+            .On<ChatTurnHistoryDeliveryTerminalFrameObserved>(ApplyTerminalFrameObserved)
             .On<ChatTurnHistoryDeliveryAppendDispatchedEvent>(ApplyAppendDispatched)
             .On<ChatTurnHistoryDeliveryAppendResultRecordedEvent>(ApplyAppendResultRecorded)
             .On<ChatTurnHistoryDeliveryAbandonedEvent>(ApplyAbandoned)
@@ -53,13 +43,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        if (State.Status == ChatTurnHistoryDeliveryStatus.Bound)
-            await AttachProjectionAsync(ct).ConfigureAwait(false);
-    }
-
-    protected override async Task OnDeactivateAsync(CancellationToken ct)
-    {
-        await DetachProjectionAsync(ct).ConfigureAwait(false);
+        await DispatchPendingTerminalAppendAsync(ct).ConfigureAwait(false);
     }
 
     [EventHandler]
@@ -123,25 +107,47 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             BoundAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
 
-        await AttachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
+        await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     [EventHandler]
-    public async Task HandleTerminalFrameObservedAsync(ChatTurnHistoryDeliveryTerminalFrameObserved command)
+    public async Task HandleTerminalNotificationAsync(WorkflowRunTerminalNotification notification)
     {
-        ArgumentNullException.ThrowIfNull(command);
-        if (!IsCurrentWorkflow(command.DeliveryId, command.WorkflowActorId, command.WorkflowCommandId))
-            return;
-        if (State.Status != ChatTurnHistoryDeliveryStatus.Bound)
+        ArgumentNullException.ThrowIfNull(notification);
+        if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound))
             return;
 
-        var observedAt = command.ObservedAtUnixMs > 0
-            ? command.ObservedAtUnixMs
-            : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-        var appendCommand = BuildAppendCommand(command, observedAt);
+        var publisherActorId = ActiveInboundEnvelope?.Route?.PublisherActorId?.Trim() ?? string.Empty;
+        if (!IsValidNotificationEnvelope(notification, publisherActorId) ||
+            !IsCurrentWorkflow(notification.DeliveryId, notification.WorkflowActorId, notification.WorkflowCommandId))
+        {
+            return;
+        }
+
+        var terminal = ToTerminalFrameObserved(notification);
+        if (State.TerminalStatus != ChatTurnTerminalStatus.Unspecified)
+        {
+            if (HasSameTerminalFrame(State, terminal))
+                await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        await PersistDomainEventAsync(terminal);
+        await DispatchPendingTerminalAppendAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task DispatchPendingTerminalAppendAsync(CancellationToken ct)
+    {
+        if (State.Status is not (ChatTurnHistoryDeliveryStatus.Reserved or ChatTurnHistoryDeliveryStatus.Bound) ||
+            State.TerminalStatus == ChatTurnTerminalStatus.Unspecified)
+        {
+            return;
+        }
+
+        var appendCommand = BuildAppendCommandFromState();
         var conversationActorId = ChatHistoryActorIds.Conversation(State.ScopeId, State.ConversationId);
         if (!await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false))
-            await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, CancellationToken.None)
+            await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct)
                 .ConfigureAwait(false);
 
         var envelope = new EventEnvelope
@@ -159,7 +165,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         };
         envelope.EnsureRuntime().EnsureDeduplication().OperationId = $"chat-history-append:{State.DeliveryId}";
 
-        var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, CancellationToken.None)
+        var admission = await _dispatchPort.DispatchAsync(conversationActorId, envelope, ct)
             .ConfigureAwait(false);
         if (!admission.Accepted)
         {
@@ -170,7 +176,6 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                     "append_dispatch_rejected",
                     "Chat history append dispatch was rejected.")
                 .ConfigureAwait(false);
-            await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
             return;
         }
 
@@ -180,13 +185,12 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             WorkflowActorId = State.WorkflowActorId,
             WorkflowCommandId = State.WorkflowCommandId,
             AppendAttempt = Math.Max(1, State.AppendAttempt + 1),
-            TerminalStatus = command.Status,
-            TerminalText = command.Text,
-            TerminalErrorCode = command.ErrorCode,
-            TerminalObservedAtUnixMs = observedAt,
+            TerminalStatus = State.TerminalStatus,
+            TerminalText = State.TerminalText,
+            TerminalErrorCode = State.TerminalErrorCode,
+            TerminalObservedAtUnixMs = State.TerminalObservedAtUnixMs,
             DispatchedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
-        await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     [EventHandler]
@@ -210,17 +214,14 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
                 : command.Reason.Trim(),
             AbandonedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
-        await DetachProjectionAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
-    private AppendChatTurnCommand BuildAppendCommand(
-        ChatTurnHistoryDeliveryTerminalFrameObserved command,
-        long observedAt)
+    private AppendChatTurnCommand BuildAppendCommandFromState()
     {
-        var sanitizedError = command.Status == ChatTurnTerminalStatus.Failed
-            ? SanitizeError(command.Text, command.ErrorCode)
-            : command.Status == ChatTurnTerminalStatus.Stopped
-                ? SanitizeError(string.Empty, command.ErrorCode)
+        var sanitizedError = State.TerminalStatus == ChatTurnTerminalStatus.Failed
+            ? SanitizeError(State.TerminalText, State.TerminalErrorCode)
+            : State.TerminalStatus == ChatTurnTerminalStatus.Stopped
+                ? SanitizeError(string.Empty, State.TerminalErrorCode)
                 : string.Empty;
 
         return new AppendChatTurnCommand
@@ -232,12 +233,13 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             {
                 TurnId = State.TurnId,
                 UserText = State.UserText,
-                AssistantText = command.Status == ChatTurnTerminalStatus.Completed
-                    ? command.Text?.Trim() ?? string.Empty
+                AssistantText = State.TerminalStatus == ChatTurnTerminalStatus.Completed
+                    ? State.TerminalText?.Trim() ?? string.Empty
                     : string.Empty,
-                TerminalStatus = command.Status,
+                TerminalStatus = State.TerminalStatus,
                 SanitizedError = sanitizedError,
-                TerminalTime = Timestamp.FromDateTimeOffset(DateTimeOffset.FromUnixTimeMilliseconds(observedAt)),
+                TerminalTime = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.FromUnixTimeMilliseconds(State.TerminalObservedAtUnixMs)),
             },
         };
     }
@@ -274,68 +276,6 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         });
     }
 
-    private async Task AttachProjectionAsync(CancellationToken ct)
-    {
-        if (_liveSinkLease != null || State.Status != ChatTurnHistoryDeliveryStatus.Bound)
-            return;
-
-        if (!_projectionPort.ProjectionEnabled)
-        {
-            await PersistFailureAsync(
-                    State.DeliveryId,
-                    State.WorkflowActorId,
-                    State.WorkflowCommandId,
-                    "projection_disabled",
-                    "Workflow execution projection is disabled.")
-                .ConfigureAwait(false);
-            return;
-        }
-
-        _sink = new ChatTurnHistoryDeliveryProjectionSink(
-            _dispatchPort,
-            Id,
-            State.DeliveryId,
-            State.WorkflowActorId,
-            State.WorkflowCommandId,
-            _timeProvider,
-            _logger);
-
-        var attachment = await _projectionPort.AttachExistingActorProjectionAsync(
-                State.WorkflowActorId,
-                State.WorkflowCommandId,
-                _sink,
-                ct)
-            .ConfigureAwait(false);
-        if (attachment == null)
-        {
-            await _sink.DisposeAsync().ConfigureAwait(false);
-            _sink = null;
-            await PersistFailureAsync(
-                    State.DeliveryId,
-                    State.WorkflowActorId,
-                    State.WorkflowCommandId,
-                    "projection_unavailable",
-                    "Workflow execution projection session is unavailable for chat history terminal delivery.")
-                .ConfigureAwait(false);
-            return;
-        }
-
-        _liveSinkLease = attachment.LiveSinkLease;
-    }
-
-    private async Task DetachProjectionAsync(CancellationToken ct)
-    {
-        var liveSinkLease = _liveSinkLease;
-        var sink = _sink;
-        _liveSinkLease = null;
-        _sink = null;
-
-        if (liveSinkLease != null)
-            await _projectionPort.DetachLiveSinkAsync(liveSinkLease, ct).ConfigureAwait(false);
-        if (sink != null)
-            await sink.DisposeAsync().ConfigureAwait(false);
-    }
-
     private async Task PersistFailureAsync(
         string deliveryId,
         string workflowActorId,
@@ -358,6 +298,80 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         string.Equals(State.DeliveryId, deliveryId, StringComparison.Ordinal) &&
         string.Equals(State.WorkflowActorId, workflowActorId, StringComparison.Ordinal) &&
         string.Equals(State.WorkflowCommandId, workflowCommandId, StringComparison.Ordinal);
+
+    private static bool IsValidNotificationEnvelope(
+        WorkflowRunTerminalNotification notification,
+        string publisherActorId) =>
+        !string.IsNullOrWhiteSpace(publisherActorId) &&
+        !string.IsNullOrWhiteSpace(notification.WorkflowActorId) &&
+        string.Equals(publisherActorId, notification.WorkflowActorId.Trim(), StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(notification.DeliveryId) &&
+        !string.IsNullOrWhiteSpace(notification.WorkflowCommandId) &&
+        notification.Status != WorkflowRunTerminalStatus.Unspecified;
+
+    private ChatTurnHistoryDeliveryTerminalFrameObserved ToTerminalFrameObserved(
+        WorkflowRunTerminalNotification notification) =>
+        new()
+        {
+            DeliveryId = notification.DeliveryId.Trim(),
+            WorkflowActorId = notification.WorkflowActorId.Trim(),
+            WorkflowCommandId = notification.WorkflowCommandId.Trim(),
+            Status = ToChatTurnTerminalStatus(notification.Status),
+            Text = ResolveTerminalText(notification),
+            ErrorCode = ResolveTerminalErrorCode(notification),
+            ObservedAtUnixMs = ResolveTerminalObservedAt(notification),
+        };
+
+    private long ResolveTerminalObservedAt(WorkflowRunTerminalNotification notification)
+    {
+        try
+        {
+            return notification.TerminalAt?.ToDateTimeOffset().ToUnixTimeMilliseconds()
+                   ?? _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        }
+        catch (InvalidOperationException)
+        {
+            return _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        }
+    }
+
+    private static ChatTurnTerminalStatus ToChatTurnTerminalStatus(WorkflowRunTerminalStatus status) =>
+        status switch
+        {
+            WorkflowRunTerminalStatus.Completed => ChatTurnTerminalStatus.Completed,
+            WorkflowRunTerminalStatus.Failed => ChatTurnTerminalStatus.Failed,
+            WorkflowRunTerminalStatus.Stopped => ChatTurnTerminalStatus.Stopped,
+            _ => ChatTurnTerminalStatus.Unspecified,
+        };
+
+    private static string ResolveTerminalText(WorkflowRunTerminalNotification notification) =>
+        notification.Status switch
+        {
+            WorkflowRunTerminalStatus.Completed => notification.Output?.Trim() ?? string.Empty,
+            WorkflowRunTerminalStatus.Failed => string.IsNullOrWhiteSpace(notification.Error)
+                ? "Workflow failed."
+                : notification.Error.Trim(),
+            WorkflowRunTerminalStatus.Stopped => string.Empty,
+            _ => string.Empty,
+        };
+
+    private static string ResolveTerminalErrorCode(WorkflowRunTerminalNotification notification) =>
+        notification.Status switch
+        {
+            WorkflowRunTerminalStatus.Failed => "workflow_run_error",
+            WorkflowRunTerminalStatus.Stopped => string.IsNullOrWhiteSpace(notification.Error)
+                ? "workflow_run_stopped"
+                : notification.Error.Trim(),
+            _ => string.Empty,
+        };
+
+    private static bool HasSameTerminalFrame(
+        ChatTurnHistoryDeliveryState state,
+        ChatTurnHistoryDeliveryTerminalFrameObserved terminal) =>
+        state.TerminalStatus == terminal.Status &&
+        string.Equals(state.TerminalText, terminal.Text, StringComparison.Ordinal) &&
+        string.Equals(state.TerminalErrorCode, terminal.ErrorCode, StringComparison.Ordinal) &&
+        state.TerminalObservedAtUnixMs == terminal.ObservedAtUnixMs;
 
     private static (string Code, string Summary)? ValidateReserve(ChatTurnHistoryDeliveryReserveRequested command)
     {
@@ -417,6 +431,20 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         next.Status = ChatTurnHistoryDeliveryStatus.Bound;
         next.BoundAtUnixMs = evt.BoundAtUnixMs;
         next.WorkflowCorrelationId = evt.WorkflowCorrelationId;
+        return next;
+    }
+
+    private static ChatTurnHistoryDeliveryState ApplyTerminalFrameObserved(
+        ChatTurnHistoryDeliveryState current,
+        ChatTurnHistoryDeliveryTerminalFrameObserved evt)
+    {
+        var next = current.Clone();
+        next.TerminalStatus = evt.Status;
+        next.TerminalText = evt.Text;
+        next.TerminalErrorCode = evt.ErrorCode;
+        next.TerminalObservedAtUnixMs = evt.ObservedAtUnixMs;
+        next.ErrorCode = string.Empty;
+        next.ErrorSummary = string.Empty;
         return next;
     }
 

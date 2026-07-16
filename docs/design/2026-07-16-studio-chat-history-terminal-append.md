@@ -52,7 +52,7 @@ Quota rejection is an archive boundary: an already accepted/completed workflow r
 
 `ChatTurnHistoryDeliveryGAgent` keeps workflow actor, workflow command, delivery, and retry facts only in its operational state. Those IDs are not copied into `ChatTurn`, `ChatTurnAppendedEvent`, or `ChatConversationCurrentStateDocument`.
 
-The delivery actor attaches to the existing workflow execution projection, maps terminal workflow frames into executor-neutral `ChatTurnTerminalResult`, and dispatches a single `AppendChatTurnCommand` to `ChatConversationGAgent`. `COMPLETED`, `FAILED`, and `STOPPED` remain distinct terminal statuses; stopped runs are not archived as failed runs.
+The delivery actor receives the producer-owned `WorkflowRunTerminalNotification`, validates the delivery, workflow actor, and workflow command identities, and dispatches a single `AppendChatTurnCommand` to `ChatConversationGAgent`. It does not attach a live workflow projection sink for terminal discovery. `COMPLETED`, `FAILED`, and `STOPPED` remain distinct terminal statuses; stopped runs are not archived as failed runs.
 
 ## Read Models
 
