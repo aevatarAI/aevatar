@@ -289,6 +289,64 @@ describe("NyxIDAuthClient", () => {
     expect(loadStoredAuthSession()?.tokens.accessToken).toBe("review-access-token");
   });
 
+  it("preserves service access review retry state when backend finalization fails", async () => {
+    const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
+    window.localStorage.setItem(
+      pendingKey,
+      JSON.stringify({
+        clientId: "broker-client-1",
+        codeVerifier: "pkce-verifier",
+        redirectUri: "http://localhost:8000/auth/callback",
+        returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+        scope: "openid urn:nyxid:scope:broker_binding proxy",
+        state: "state-1",
+        flow: "serviceAccessReview",
+      }),
+    );
+    window.localStorage.setItem(
+      "aevatar-console:nyxid:session",
+      JSON.stringify({
+        tokens: {
+          accessToken: "existing-access-token",
+          tokenType: "Bearer",
+          expiresIn: 3600,
+          expiresAt: Date.now() + 3_600_000,
+        },
+        user: {
+          sub: "owner-user-1",
+        },
+      }),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+      text: async () =>
+        JSON.stringify({
+          code: "binding_probe_failed",
+          message: "backend raw message",
+        }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      new NyxIDAuthClient(runtimeConfig).handleRedirectCallback(
+        "http://localhost:8000/auth/callback?code=auth-code&state=state-1",
+      ),
+    ).rejects.toMatchObject({
+      name: "NyxIDAuthCallbackError",
+      flow: "serviceAccessReview",
+      returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+      message:
+        "NyxID service binding verification failed. The service may be temporarily unavailable; try Manage service access again.",
+    } satisfies Partial<NyxIDAuthCallbackError>);
+
+    expect(window.localStorage.getItem(pendingKey)).toBeNull();
+    expect(loadStoredAuthSession()?.tokens.accessToken).toBe(
+      "existing-access-token",
+    );
+  });
+
   it("preserves the existing Studio session when service access review is denied", async () => {
     const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
     window.localStorage.setItem(

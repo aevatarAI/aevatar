@@ -249,8 +249,10 @@ export class NyxIDAuthClient {
       throw new Error('State mismatch');
     }
 
+    const flow = readAuthFlow(pending.flow);
+    const returnTo = resolveReturnToForFlow(flow, pending.returnTo);
+
     try {
-      const flow = readAuthFlow(pending.flow);
       const result = await finalizeBackendNyxIDLogin({
         code,
         codeVerifier: pending.codeVerifier,
@@ -266,12 +268,24 @@ export class NyxIDAuthClient {
 
       return {
         session,
-        returnTo: resolveReturnToForFlow(flow, pending.returnTo),
+        returnTo,
         flow,
       };
     } catch (error) {
       this.storage.removeItem(pendingKey);
-      throw error;
+      if (error instanceof NyxIDAuthCallbackError) {
+        throw error;
+      }
+
+      throw new NyxIDAuthCallbackError(
+        error instanceof Error
+          ? error.message
+          : String(error ?? "NyxID callback failed"),
+        {
+          flow,
+          returnTo,
+        },
+      );
     }
   }
 }
