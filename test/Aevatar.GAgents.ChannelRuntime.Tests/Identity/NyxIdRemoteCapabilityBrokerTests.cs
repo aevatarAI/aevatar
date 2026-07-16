@@ -101,7 +101,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
-    public async Task ExchangeAuthorizationCodeAsync_MapsRefreshTokenFromNyxIdTokenResponse()
+    public async Task ExchangeAuthorizationCodeAsync_PreservesFinalizedConsentWhenMappingTokenResponse()
     {
         var handler = StubHandler.Text(HttpStatusCode.OK,
             """
@@ -129,8 +129,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         result.ExpiresIn.Should().Be(1800);
         result.Scope.Should().Be("openid profile proxy");
         handler.LastRequestUri.Should().Be($"{OAuthAuthority}/oauth/token");
-        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")["resource"]
-            .Should().Equal(RequiredResources);
+        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")
+            .ContainsKey("resource").Should().BeFalse();
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
-    public async Task BindingFlow_UsesTheSameRequiredResourcesFromAuthorizeThroughBindingExchange()
+    public async Task BindingFlow_PreservesConsentAndScopesBrokerTokenExchange()
     {
         const string bindingId = "bnd-e2e-user";
         var accessToken = CreateAccessToken(RequiredResources);
@@ -246,7 +246,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         var authorizationCodeForm = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
         authorizationCodeForm["grant_type"].Should().ContainSingle().Which.Should().Be("authorization_code");
-        authorizationCodeForm["resource"].Should().Equal(RequiredResources);
+        authorizationCodeForm.ContainsKey("resource").Should().BeFalse();
 
         var bindingExchangeForm = QueryHelpers.ParseQuery($"?{handler.Requests[1].Body}");
         bindingExchangeForm["grant_type"].Should().ContainSingle().Which.Should()
@@ -354,19 +354,6 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
         var exception = await act.Should().ThrowAsync<BindingServiceAccessMismatchException>();
-        exception.Which.RequiredResources.Should().Equal(RequiredResources);
-    }
-
-    [Fact]
-    public async Task ExchangeAuthorizationCodeAsync_MapsInvalidTargetToRequiredServiceAccess()
-    {
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            httpHandler: StubHandler.Text(HttpStatusCode.BadRequest, """{"error":"invalid_target"}"""));
-
-        var act = () => broker.ExchangeAuthorizationCodeAsync("auth-code", "verifier");
-
-        var exception = await act.Should().ThrowAsync<NyxIdRequiredServiceAccessException>();
         exception.Which.RequiredResources.Should().Equal(RequiredResources);
     }
 
