@@ -189,6 +189,25 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void ToPayloadAndFromPayload_ShouldPreserveTypedNyxIdAuthority()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                "tenant-alpha",
+                "user-alpha"),
+        };
+
+        var payload = AgentToolExecutionContextMapper.ToPayload(context);
+        var restored = AgentToolExecutionContextMapper.FromPayload(payload);
+
+        payload.NyxIdAuthority.Platform.Should().Be("nyxid");
+        payload.NyxIdAuthority.ExternalUserId.Should().Be("user-alpha");
+        restored.NyxIdAuthority.Should().BeEquivalentTo(context.NyxIdAuthority);
+    }
+
+    [Fact]
     public void ToPayload_WhenToolVisibilityUnrestricted_ShouldOmitVisibilityPayload()
     {
         var payload = AgentToolExecutionContextMapper.ToPayload(AgentToolExecutionContext.Empty);

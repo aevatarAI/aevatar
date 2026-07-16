@@ -21,6 +21,12 @@ internal static class WorkflowCallerCredentialToolContextMapper
         var context = AgentToolExecutionContext.Empty with
         {
             WorkflowRuntime = workflowRuntimeContext,
+            NyxIdAuthority = credential?.NyxIdAuthority == null
+                ? AgentToolNyxIdAuthorityContext.Empty
+                : new AgentToolNyxIdAuthorityContext(
+                    Normalize(credential.NyxIdAuthority.Platform),
+                    Normalize(credential.NyxIdAuthority.Tenant),
+                    Normalize(credential.NyxIdAuthority.ExternalUserId)),
         };
 
         if (token.IsMissing)
@@ -35,4 +41,7 @@ internal static class WorkflowCallerCredentialToolContextMapper
             },
         };
     }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

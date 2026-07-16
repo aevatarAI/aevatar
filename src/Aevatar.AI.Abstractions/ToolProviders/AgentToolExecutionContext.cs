@@ -74,6 +74,9 @@ public sealed record AgentToolExecutionContext(
 
     public AgentToolVisibilityScope ToolVisibility { get; init; } = AgentToolVisibilityScope.Unrestricted;
 
+    public AgentToolNyxIdAuthorityContext NyxIdAuthority { get; init; } =
+        AgentToolNyxIdAuthorityContext.Empty;
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -158,6 +161,18 @@ public enum AgentToolCredentialSource
 public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubject, string? ResponseId)
 {
     public static AgentToolCallerContext Empty { get; } = new(null, null, null);
+}
+
+public sealed record AgentToolNyxIdAuthorityContext(
+    string? Platform,
+    string? Tenant,
+    string? ExternalUserId)
+{
+    public static AgentToolNyxIdAuthorityContext Empty { get; } = new(null, null, null);
+
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(Platform) &&
+        !string.IsNullOrWhiteSpace(ExternalUserId);
 }
 
 public sealed record AgentToolChannelContext(

@@ -149,6 +149,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var scope = query["scope"].Should().ContainSingle().Which;
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
+        scope.Should().Contain(AevatarOAuthClientScopes.LlmProxy);
         query["resource"].Should().Equal(RequiredResources);
         query["prompt"].Should().ContainSingle().Which.Should().Be("consent");
         query.ContainsKey("binding_grant_id").Should().BeFalse();

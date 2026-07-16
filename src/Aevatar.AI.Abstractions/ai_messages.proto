@@ -131,6 +131,7 @@ message AgentToolExecutionContextPayload {
   AgentToolVisibilityScopePayload tool_visibility = 11;
   AgentToolCredentialSourcePayload credential_source = 12;
   AgentToolScheduleContextPayload schedule = 13;
+  AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 14;
 }
 
 enum AgentToolCredentialSourcePayload {
@@ -174,6 +175,12 @@ message AgentToolCallerContextPayload {
   string scope_id = 1;
   string owner_subject = 2;
   string response_id = 3;
+}
+
+message AgentToolNyxIdAuthorityContextPayload {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
 }
 
 message AgentToolChannelContextPayload {

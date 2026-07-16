@@ -11,7 +11,9 @@ public static class AevatarOAuthClientScopes
     public const string OfflineAccess = "offline_access";
     public const string BrokerBinding = "urn:nyxid:scope:broker_binding";
     public const string Proxy = "proxy";
-    public const string AuthorizationScope = $"{OpenId} {Profile} {Email} {OfflineAccess} {BrokerBinding} {Proxy}";
+    public const string LlmProxy = "llm:proxy";
+    public const string AuthorizationScope =
+        $"{OpenId} {Profile} {Email} {OfflineAccess} {BrokerBinding} {Proxy} {LlmProxy}";
 
     public static bool ContainsRequiredScopes(string? scope)
     {
@@ -20,7 +22,8 @@ public static class AevatarOAuthClientScopes
                && ContainsScope(scope, Email)
                && ContainsScope(scope, OfflineAccess)
                && ContainsScope(scope, BrokerBinding)
-               && ContainsScope(scope, Proxy);
+               && ContainsScope(scope, Proxy)
+               && ContainsScope(scope, LlmProxy);
     }
 
     private static bool ContainsScope(string? scope, string expected)

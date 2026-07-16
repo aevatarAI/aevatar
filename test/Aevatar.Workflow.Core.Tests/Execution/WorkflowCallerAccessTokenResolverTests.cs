@@ -52,7 +52,7 @@ public sealed class WorkflowCallerAccessTokenResolverTests
             CancellationToken.None);
 
         resolved.BearerToken.Should().Be("issued-token");
-        resolved.NyxIdAuthority.Should().BeNull();
+        resolved.NyxIdAuthority.Should().BeEquivalentTo(authority);
         provider.IssueCount.Should().Be(1);
         provider.LastAuthority.Should().BeSameAs(authority);
     }

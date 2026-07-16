@@ -36,6 +36,13 @@ public sealed class NyxIdToolOptions
     public bool EnableSshExecTool { get; set; }
 
     /// <summary>
+    /// When <c>true</c>, expose the managed-sandbox target of <c>codex_exec</c>.
+    /// A matching <c>ICodexExecutionPort</c> must be registered by the host; endpoint,
+    /// image, credential, and admission policy remain operator-owned configuration.
+    /// </summary>
+    public bool EnableManagedCodexExecTool { get; set; }
+
+    /// <summary>
     /// When <c>true</c>, <c>ssh_exec</c> returns <c>RequiresApproval=false</c> so the
     /// local tool approval middleware executes it immediately. Defaults to false; enable
     /// only in a host-owned, internal-only deployment where the surrounding channel and

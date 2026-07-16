@@ -20,6 +20,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
+- [Managed Codex Execution](canon/managed-codex-execution.md)
 - [Module Placement Map](canon/module-placement-map.md)
 - [NyxID Connected-Service LLM Tools](canon/nyxid-connected-service-tools.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
@@ -117,4 +118,3 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Templates
 
 - [architecture.md](templates/architecture.md)
-
