@@ -28,7 +28,10 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// 2-min handler rotation: stale DNS, expired sockets, and TLS-cert refreshes
 /// would never be picked up on long-running silos.
 /// </remarks>
-public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxIdBrokerCallbackClient
+public sealed class NyxIdRemoteCapabilityBroker :
+    INyxIdCapabilityBroker,
+    INyxIdBrokerCallbackClient,
+    INyxIdBindingRetirementPort
 {
     public const string AuthorizeEndpoint = "/oauth/authorize";
     public const string TokenEndpoint = "/oauth/token";
@@ -165,6 +168,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         response.EnsureSuccessStatusCode();
     }
 
+    public Task RetireAsync(string bindingId, CancellationToken ct = default) =>
+        RevokeBindingByIdAsync(bindingId, ct);
+
     public async Task<CapabilityHandle> IssueShortLivedAsync(
         ExternalSubjectRef externalSubject,
         CapabilityScope scope,
@@ -202,8 +208,11 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         };
         if (!string.IsNullOrWhiteSpace(scope.Value))
             form.Add(new KeyValuePair<string, string>("scope", scope.Value));
-        foreach (var resource in requiredResources)
-            form.Add(new KeyValuePair<string, string>("resource", resource));
+        // The binding already owns the user's finalized Consent service set.
+        // Sending resource here would narrow every short-lived token back to
+        // Aevatar's configured minimum and make optional services selected in
+        // the consent UI unusable. Inherit the full grant, then validate that
+        // the configured runtime minimum is still present in the issued token.
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,

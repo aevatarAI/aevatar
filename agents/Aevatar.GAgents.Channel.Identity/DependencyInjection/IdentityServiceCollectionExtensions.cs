@@ -97,6 +97,8 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IAuditCommittedEventTranslator, ExternalIdentityBoundAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAuditCommittedEventTranslator, ExternalIdentityBindingReplacedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IAuditCommittedEventTranslator, ExternalIdentityBindingRevokedAuditTranslator>());
         services.AddAuditCommittedFactMaterializer<ExternalIdentityBindingMaterializationContext>();
 
@@ -162,10 +164,10 @@ public static class IdentityServiceCollectionExtensions
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
                 "channel-identity.broker-revocation"));
-        services.AddIdentityOAuthCommandDispatch<RefreshBindingCommand, ExternalIdentityBindingGAgent>(
+        services.AddIdentityOAuthCommandDispatch<ReplaceBindingCommand, ExternalIdentityBindingGAgent>(
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
-                "channel-identity.oauth-refresh"));
+                "channel-identity.oauth-replace"));
         services.AddIdentityOAuthCommandDispatch<RebuildBindingProjectionCommand, ExternalIdentityBindingGAgent>(
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
@@ -209,6 +211,7 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<INyxIdBindingRetirementPort>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
 
         // ─── Binding revocation reconciler (observed-invalid_grant self-heal) ───
         // Event-sources a local revoke when a turn observes BindingRevokedException

@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,6 +24,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     //   Old pattern: emit no-op ProjectionRebuildRequested event in command handler to trigger projection materialization
     //   New principle: Identity actor only persists real identity facts; projection materialization owned by projection lifecycle/materializer/bootstrap
     private ExternalIdentityBindingGAgent _agent = null!;
+    private RecordingBindingRetirementPort _retirementPort = null!;
     private ServiceProvider _serviceProvider = null!;
 
     public async Task InitializeAsync()
@@ -37,6 +39,8 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         // continuation timers; tests register a no-op so the dispatch path
         // is exercised without bringing up a real Orleans cluster.
         services.AddSingleton<Aevatar.Foundation.Abstractions.Runtime.Callbacks.IActorRuntimeCallbackScheduler, NoopCallbackScheduler>();
+        _retirementPort = new RecordingBindingRetirementPort();
+        services.AddSingleton<INyxIdBindingRetirementPort>(_retirementPort);
 
         _serviceProvider = services.BuildServiceProvider();
 
@@ -135,7 +139,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRefreshBinding_ReplacesActiveBinding()
+    public async Task HandleReplaceBinding_ReplacesExpectedBindingThenRetiresIt()
     {
         var subject = SampleSubject();
         await _agent.HandleCommitBinding(new CommitBindingCommand
@@ -144,20 +148,23 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             BindingId = "bnd_first",
         });
 
-        await _agent.HandleRefreshBinding(new RefreshBindingCommand
+        await _agent.HandleReplaceBinding(new ReplaceBindingCommand
         {
             ExternalSubject = subject,
             BindingId = "bnd_second",
-            Reason = "nyxid_login_refresh",
+            ExpectedPreviousBindingId = "bnd_first",
+            Reason = "studio_service_access_review",
         });
 
         _agent.State.BindingId.Should().Be("bnd_second");
         _agent.State.BoundAt.Should().NotBeNull();
         _agent.State.RevokedAt.Should().BeNull();
+        _agent.State.PendingRetirementBindingIds.Should().BeEmpty();
+        _retirementPort.RetiredBindingIds.Should().Equal("bnd_first");
     }
 
     [Fact]
-    public async Task HandleRefreshBinding_IsNoOpWhenBindingIdIsUnchanged()
+    public async Task HandleReplaceBinding_IsNoOpWhenBindingIdIsAlreadyCurrent()
     {
         var subject = SampleSubject();
         await _agent.HandleCommitBinding(new CommitBindingCommand
@@ -167,15 +174,77 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         });
         var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
 
-        await _agent.HandleRefreshBinding(new RefreshBindingCommand
+        await _agent.HandleReplaceBinding(new ReplaceBindingCommand
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
-            Reason = "nyxid_login_refresh",
+            ExpectedPreviousBindingId = "bnd_first",
+            Reason = "studio_service_access_review",
         });
 
         _agent.State.BindingId.Should().Be("bnd_first");
         _agent.EventSourcing!.CurrentVersion.Should().Be(afterFirstVersion);
+        _retirementPort.RetiredBindingIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleReplaceBinding_RejectsStaleExpectedBindingAndRetiresIncomingBinding()
+    {
+        var subject = SampleSubject();
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_current",
+        });
+
+        await _agent.HandleReplaceBinding(new ReplaceBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_unadopted",
+            ExpectedPreviousBindingId = "bnd_stale",
+            Reason = "studio_service_access_review",
+        });
+
+        _agent.State.BindingId.Should().Be("bnd_current");
+        _agent.State.PendingRetirementBindingIds.Should().BeEmpty();
+        _retirementPort.RetiredBindingIds.Should().Equal("bnd_unadopted");
+    }
+
+    [Fact]
+    public async Task HandleReplaceBinding_PersistsFailedRetirementAndRetriesOnActivation()
+    {
+        var subject = SampleSubject();
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_first",
+        });
+        _retirementPort.Failure = new HttpRequestException("NyxID unavailable");
+
+        await _agent.HandleReplaceBinding(new ReplaceBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_second",
+            ExpectedPreviousBindingId = "bnd_first",
+            Reason = "studio_service_access_review",
+        });
+
+        _agent.State.BindingId.Should().Be("bnd_second");
+        _agent.State.PendingRetirementBindingIds.Should().Equal("bnd_first");
+
+        _retirementPort.Failure = null;
+        var reactivated = new ExternalIdentityBindingGAgent
+        {
+            Services = _serviceProvider,
+            EventSourcingBehaviorFactory =
+                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<ExternalIdentityBindingState>>(),
+        };
+
+        await reactivated.ActivateAsync();
+
+        reactivated.State.BindingId.Should().Be("bnd_second");
+        reactivated.State.PendingRetirementBindingIds.Should().BeEmpty();
+        _retirementPort.RetiredBindingIds.Should().Contain("bnd_first");
     }
 
     [Fact]
@@ -321,6 +390,21 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             string actorId,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class RecordingBindingRetirementPort : INyxIdBindingRetirementPort
+    {
+        public Exception? Failure { get; set; }
+        public List<string> RetiredBindingIds { get; } = [];
+
+        public Task RetireAsync(string bindingId, CancellationToken ct = default)
+        {
+            if (Failure is not null)
+                return Task.FromException(Failure);
+
+            RetiredBindingIds.Add(bindingId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class InMemoryEventStore : IEventStore
