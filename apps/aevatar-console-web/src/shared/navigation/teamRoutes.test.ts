@@ -9,11 +9,28 @@ import {
   buildTeamsHref,
   readTeamDetailRouteState,
 } from "./teamRoutes";
+import {
+  builtInTeamDetailTabIds,
+  defineTeamDetailTabId,
+  type TeamDetailTabLookup,
+} from "@/shared/teams/teamDetailTabs";
 
-const teamDetailTabs = {
-  defaultTabId: "overview",
-  has: (tabId: string) => ["activity", "automations", "members", "overview"].includes(tabId),
-} as const;
+const activityTabId = defineTeamDetailTabId("activity");
+const registeredTeamDetailTabIds = Object.freeze([
+  activityTabId,
+  ...Object.values(builtInTeamDetailTabIds),
+]);
+const findTeamDetailTabId = (tabId: string) => {
+  const normalizedTabId = tabId.trim().toLowerCase();
+  return registeredTeamDetailTabIds.find(
+    (registeredTabId) => registeredTabId === normalizedTabId,
+  );
+};
+const teamDetailTabs: TeamDetailTabLookup = {
+  defaultTabId: builtInTeamDetailTabIds.overview,
+  findId: findTeamDetailTabId,
+  has: (tabId) => Boolean(findTeamDetailTabId(tabId)),
+};
 
 describe("teamRoutes", () => {
   it("builds a canonical team detail href and trims empty values", () => {
@@ -26,7 +43,7 @@ describe("teamRoutes", () => {
         serviceId: "service-1",
         runId: "run-1",
         testTeam: true,
-        tab: "members",
+        tab: builtInTeamDetailTabIds.members,
       }),
     ).toBe(
       "/scopes/scope-alpha/teams/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1&testTeam=1",
@@ -37,7 +54,7 @@ describe("teamRoutes", () => {
     expect(
       buildTeamDetailHref({
         scopeId: "scope-alpha",
-        tab: "activity",
+        tab: activityTabId,
         teamId: "t-alpha",
       }),
     ).toBe("/scopes/scope-alpha/teams/t-alpha?tab=activity");
@@ -250,6 +267,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "member-alpha",
+      routeMemberId: "",
       runId: "run-1",
       scopeId: "scope-alpha",
       serviceId: "service-1",
@@ -270,9 +288,24 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "member-alpha",
+      routeMemberId: "member-alpha",
       scopeId: "scope-alpha",
       teamId: "t-alpha",
       workflowId: "wf-alpha",
+    });
+  });
+
+  it("does not treat a query-only member as a canonical automation route", () => {
+    expect(
+      readTeamDetailRouteState(
+        teamDetailTabs,
+        "?memberId=member-alpha&tab=automations",
+        "/scopes/scope-alpha/teams/t-alpha",
+      ),
+    ).toMatchObject({
+      memberId: "member-alpha",
+      routeMemberId: "",
+      tab: "automations",
     });
   });
 
@@ -285,6 +318,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "member-alpha",
+      routeMemberId: "member-alpha",
       scopeId: "scope-alpha",
       tab: "automations",
       teamId: "t-alpha",
@@ -300,6 +334,7 @@ describe("teamRoutes", () => {
       ),
     ).toMatchObject({
       memberId: "",
+      routeMemberId: "",
       scopeId: "",
       teamId: "",
       workflowId: "wf-alpha",
@@ -340,6 +375,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "",
+      routeMemberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",
@@ -360,6 +396,7 @@ describe("teamRoutes", () => {
       ),
     ).toEqual({
       memberId: "",
+      routeMemberId: "",
       runId: "",
       scopeId: "scope-query",
       serviceId: "",

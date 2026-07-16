@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using NSubstitute;
@@ -145,7 +146,7 @@ public sealed class AgentBuilderToolTests
     }
 
     [Fact]
-    public void AgentBuilderToolSource_ShouldDiscoverManagementAndCreatorTools()
+    public async Task AgentBuilderToolSource_ShouldDiscoverManagementAndCreatorTools()
     {
         var source = new AgentBuilderToolSource(
             Substitute.For<IUserAgentCatalogQueryPort>(),
@@ -154,9 +155,11 @@ public sealed class AgentBuilderToolTests
             Substitute.For<IUserAgentCatalogCommandPort>(),
             Substitute.For<ICallerScopeResolver>(),
             new ScheduledAgentCreateRequestMapper(),
-            Substitute.For<IScheduledAgentCredentialLifecycle>());
+            Substitute.For<IScheduledAgentCredentialLifecycle>(),
+            Substitute.For<IScheduledInvocationAuthorizationPlanner>(),
+            Substitute.For<IScheduledInvocationAuthorizationRevalidator>());
 
-        var tools = source.DiscoverToolsAsync().Result;
+        var tools = await source.DiscoverToolsAsync();
 
         tools.Select(static tool => tool.Name).Should().BeEquivalentTo("agent_builder", "scheduled_agent_creator");
     }

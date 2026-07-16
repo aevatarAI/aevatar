@@ -1,7 +1,8 @@
 import { buildStudioRoute } from '@/shared/studio/navigation';
-import type {
-  TeamDetailTabId,
-  TeamDetailTabLookup,
+import {
+  builtInTeamDetailTabIds,
+  type TeamDetailTabId,
+  type TeamDetailTabLookup,
 } from '@/shared/teams/teamDetailTabs';
 
 type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
@@ -9,6 +10,7 @@ type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
 type QueryValue = string | undefined;
 type TeamDetailRouteState = {
   readonly memberId: string;
+  readonly routeMemberId: string;
   readonly runId: string;
   readonly scopeId: string;
   readonly serviceId: string;
@@ -45,8 +47,9 @@ function parseTeamTab(
     return { tab: tabs.defaultTabId, wasUnknown: false };
   }
 
-  return tabs.has(requestedTabId)
-    ? { tab: requestedTabId, wasUnknown: false }
+  const registeredTabId = tabs.findId(requestedTabId);
+  return registeredTabId
+    ? { tab: registeredTabId, wasUnknown: false }
     : { tab: tabs.defaultTabId, wasUnknown: true };
 }
 
@@ -140,7 +143,7 @@ export function buildTeamStudioHref(options: {
     buildTeamDetailHref({
       memberId: memberId || undefined,
       scopeId,
-      tab: 'members',
+      tab: builtInTeamDetailTabIds.members,
       teamId,
     });
 
@@ -157,7 +160,7 @@ export function buildTeamStudioHref(options: {
   if (!memberId) {
     return buildTeamDetailHref({
       scopeId,
-      tab: 'members',
+      tab: builtInTeamDetailTabIds.members,
       teamId,
     });
   }
@@ -194,7 +197,7 @@ export function buildTeamMemberWorkflowStudioHref(options: {
   if (!memberId) {
     return buildTeamDetailHref({
       scopeId,
-      tab: 'members',
+      tab: builtInTeamDetailTabIds.members,
       teamId,
     });
   }
@@ -223,7 +226,7 @@ export function buildTeamMemberInvokeHref(options: {
   if (!memberId) {
     return buildTeamDetailHref({
       scopeId,
-      tab: 'members',
+      tab: builtInTeamDetailTabIds.members,
       teamId,
     });
   }
@@ -249,7 +252,7 @@ export function buildTeamMemberPublishedRunsHref(options: {
   if (!memberId) {
     return buildTeamDetailHref({
       scopeId,
-      tab: 'members',
+      tab: builtInTeamDetailTabIds.members,
       teamId,
     });
   }
@@ -279,7 +282,7 @@ export function buildTeamMemberAutomationsHref(options: {
   if (!memberId) {
     return buildTeamDetailHref({
       scopeId,
-      tab: 'automations',
+      tab: builtInTeamDetailTabIds.automations,
       teamId,
     });
   }
@@ -330,6 +333,7 @@ export function readTeamDetailRouteState(
 
   return {
     memberId,
+    routeMemberId: memberIdFromPath === 'new' ? '' : memberIdFromPath,
     runId: trimOptional(params.get('runId')),
     scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),

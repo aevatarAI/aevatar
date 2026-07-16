@@ -27,6 +27,7 @@ import React, {
 import { history } from '@/shared/navigation/history';
 import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
 import { buildTeamDetailHref } from '@/shared/navigation/teamRoutes';
+import { builtInTeamDetailTabIds } from '@/shared/teams/teamDetailTabs';
 import {
   AevatarBackButton,
   AevatarPageShell,
@@ -369,7 +370,7 @@ function MissionHeaderBar({
                   history.push(
                     buildTeamDetailHref({
                       scopeId: routeContext.scopeId ?? '',
-                      tab: 'overview',
+                      tab: builtInTeamDetailTabIds.overview,
                     }),
                   )
                 }

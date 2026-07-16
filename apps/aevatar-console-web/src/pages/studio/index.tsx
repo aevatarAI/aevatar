@@ -12,6 +12,7 @@ import {
   buildTeamDetailHref,
   buildTeamsHref,
 } from '@/shared/navigation/teamRoutes';
+import { builtInTeamDetailTabIds } from '@/shared/teams/teamDetailTabs';
 import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
@@ -8157,7 +8158,7 @@ const StudioPage: React.FC = () => {
             buildTeamDetailHref({
               memberId: candidate.memberId,
               scopeId: candidate.scopeId,
-              tab: 'overview',
+              tab: builtInTeamDetailTabIds.overview,
               testTeam: true,
               teamId: candidate.teamId,
             }),
@@ -8193,7 +8194,7 @@ const StudioPage: React.FC = () => {
         const targetHref = buildTeamDetailHref({
           memberId: candidate.memberId,
           scopeId: candidate.scopeId,
-          tab: 'overview',
+          tab: builtInTeamDetailTabIds.overview,
           testTeam: options?.test && entryVisible,
           teamId: candidate.teamId,
         });
@@ -10658,7 +10659,7 @@ const StudioPage: React.FC = () => {
         ? buildTeamDetailHref({
             scopeId: resolvedStudioScopeId,
             teamId: routeState.teamId,
-            tab: 'overview',
+            tab: builtInTeamDetailTabIds.overview,
             memberId:
               currentCanonicalMemberId ||
               trimOptional(routeSelectedBackendMemberId) ||
@@ -10668,7 +10669,7 @@ const StudioPage: React.FC = () => {
           })
         : buildTeamDetailHref({
             scopeId: resolvedStudioScopeId,
-            tab: 'overview',
+            tab: builtInTeamDetailTabIds.overview,
             serviceId:
               trimOptional(workbenchPublishedService?.serviceId) ||
               trimOptional(routeState.legacyServiceId) ||

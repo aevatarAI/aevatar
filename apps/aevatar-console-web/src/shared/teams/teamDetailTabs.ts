@@ -1,7 +1,11 @@
 import type React from 'react';
 import type { StudioTeamSummary } from '@/shared/studio/models';
 
-export type TeamDetailTabId = string;
+declare const teamDetailTabIdBrand: unique symbol;
+
+export type TeamDetailTabId = string & {
+  readonly [teamDetailTabIdBrand]: true;
+};
 
 export type TeamDetailTabLabel = {
   readonly defaultMessage: string;
@@ -30,7 +34,7 @@ export type TeamDetailTabDefinitionInput<
   THostModel,
   TViewProps extends object,
 > = {
-  readonly id: TeamDetailTabId;
+  readonly id: string;
   readonly isAvailable?: (context: TeamDetailContext) => boolean;
   readonly label: TeamDetailTabLabel;
   readonly load: () => Promise<TeamDetailTabModule<TViewProps>>;
@@ -49,6 +53,7 @@ export type TeamDetailTabDefinition<THostModel> = {
 
 export type TeamDetailTabLookup = {
   readonly defaultTabId: TeamDetailTabId;
+  readonly findId: (tabId: string) => TeamDetailTabId | undefined;
   readonly has: (tabId: string) => boolean;
 };
 
@@ -73,18 +78,31 @@ function normalizeTabId(tabId: string): string {
   return tabId.trim().toLowerCase();
 }
 
+export function defineTeamDetailTabId(tabId: string): TeamDetailTabId {
+  const normalizedTabId = normalizeTabId(tabId);
+  if (
+    tabId !== normalizedTabId ||
+    tabId.length > maximumTeamDetailTabIdLength ||
+    !teamDetailTabIdPattern.test(tabId)
+  ) {
+    throw new Error(
+      `Invalid Team detail tab id "${tabId}". Use 1-64 lowercase letters, numbers, or hyphen-separated segments.`,
+    );
+  }
+
+  return tabId as TeamDetailTabId;
+}
+
+export const builtInTeamDetailTabIds = Object.freeze({
+  automations: defineTeamDetailTabId('automations'),
+  members: defineTeamDetailTabId('members'),
+  overview: defineTeamDetailTabId('overview'),
+});
+
 function validateDefinition<THostModel>(
   definition: TeamDetailTabDefinition<THostModel>,
 ): void {
-  if (
-    definition.id !== normalizeTabId(definition.id) ||
-    definition.id.length > maximumTeamDetailTabIdLength ||
-    !teamDetailTabIdPattern.test(definition.id)
-  ) {
-    throw new Error(
-      `Invalid Team detail tab id "${definition.id}". Use 1-64 lowercase letters, numbers, or hyphen-separated segments.`,
-    );
-  }
+  defineTeamDetailTabId(definition.id);
 
   if (!definition.label.id.trim() || !definition.label.defaultMessage.trim()) {
     throw new Error(
@@ -99,7 +117,10 @@ export function defineTeamDetailTab<
 >(
   definition: TeamDetailTabDefinitionInput<THostModel, TViewProps>,
 ): TeamDetailTabDefinition<THostModel> {
-  return definition as unknown as TeamDetailTabDefinition<THostModel>;
+  return {
+    ...definition,
+    id: defineTeamDetailTabId(definition.id),
+  } as unknown as TeamDetailTabDefinition<THostModel>;
 }
 
 export function createTeamDetailTabRegistry<THostModel>(options: {
@@ -131,7 +152,7 @@ export function createTeamDetailTabRegistry<THostModel>(options: {
     definitionsById.set(definition.id, definition);
   });
 
-  const defaultTabId = normalizeTabId(options.defaultTabId);
+  const defaultTabId = defineTeamDetailTabId(options.defaultTabId);
   const defaultDefinition = definitionsById.get(defaultTabId);
   if (!defaultDefinition) {
     throw new Error(
@@ -146,6 +167,7 @@ export function createTeamDetailTabRegistry<THostModel>(options: {
 
   const frozenDefinitions = Object.freeze(definitions);
   const find = (tabId: string) => definitionsById.get(normalizeTabId(tabId));
+  const findId = (tabId: string) => find(tabId)?.id;
   const listAvailable = (context: TeamDetailContext) =>
     frozenDefinitions.filter(
       (definition) =>
@@ -156,7 +178,8 @@ export function createTeamDetailTabRegistry<THostModel>(options: {
     defaultTabId,
     definitions: frozenDefinitions,
     find,
-    has: (tabId: string) => Boolean(find(tabId)),
+    findId,
+    has: (tabId: string) => Boolean(findId(tabId)),
     listAvailable,
     resolve: (tabId: string, context: TeamDetailContext) => {
       const definition = find(tabId);

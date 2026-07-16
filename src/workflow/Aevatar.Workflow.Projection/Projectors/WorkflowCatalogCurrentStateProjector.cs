@@ -149,6 +149,7 @@ public sealed class WorkflowCatalogCurrentStateProjector
             RequiredConnectors = requiredConnectors
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                 .ToList(),
+            AuthorizationDependencies = state.AuthorizationDependencies?.Clone(),
             WorkflowCalls = workflowCalls
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                 .ToList(),

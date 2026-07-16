@@ -114,8 +114,7 @@ internal sealed class CachedNyxIdLlmCatalogPort : IUserLlmCatalogPort, IDisposab
     {
         try
         {
-            var result = await _inner.GetServicesAsync(bearerToken, CancellationToken.None)
-                .ConfigureAwait(false);
+            var result = await _inner.GetServicesAsync(bearerToken, CancellationToken.None).ConfigureAwait(false);
             Store(key, result, options);
         }
         catch (OperationCanceledException ex)

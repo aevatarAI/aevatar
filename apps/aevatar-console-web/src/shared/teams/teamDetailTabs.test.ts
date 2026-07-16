@@ -1,4 +1,5 @@
 import {
+  builtInTeamDetailTabIds,
   createTeamDetailTabRegistry,
   defineTeamDetailTab,
   type TeamDetailContext,
@@ -47,7 +48,7 @@ function createDefinition(
 describe('Team detail tab registry', () => {
   it('preserves declaration order and resolves only available definitions', () => {
     const registry = createTeamDetailTabRegistry<TestHostModel>({
-      defaultTabId: 'overview',
+      defaultTabId: builtInTeamDetailTabIds.overview,
       definitions: [
         createDefinition('overview'),
         createDefinition('activity'),
@@ -67,6 +68,7 @@ describe('Team detail tab registry', () => {
       registry.listAvailable(context).map((definition) => definition.id),
     ).toEqual(['overview', 'activity']);
     expect(registry.resolve('ACTIVITY', context).id).toBe('activity');
+    expect(registry.findId('ACTIVITY')).toBe('activity');
     expect(registry.resolve('archived-log', context).id).toBe('overview');
     expect(registry.resolve('unknown', context).id).toBe('overview');
     expect(Object.isFrozen(registry)).toBe(true);
@@ -77,13 +79,13 @@ describe('Team detail tab registry', () => {
   it('rejects invalid, duplicate, missing, and conditional default tabs', () => {
     expect(() =>
       createTeamDetailTabRegistry<TestHostModel>({
-        defaultTabId: 'overview',
+        defaultTabId: builtInTeamDetailTabIds.overview,
         definitions: [createDefinition('Invalid tab')],
       }),
     ).toThrow('Invalid Team detail tab id');
     expect(() =>
       createTeamDetailTabRegistry<TestHostModel>({
-        defaultTabId: 'overview',
+        defaultTabId: builtInTeamDetailTabIds.overview,
         definitions: [
           createDefinition('overview'),
           createDefinition('overview'),
@@ -92,13 +94,13 @@ describe('Team detail tab registry', () => {
     ).toThrow('Duplicate Team detail tab id "overview".');
     expect(() =>
       createTeamDetailTabRegistry<TestHostModel>({
-        defaultTabId: 'overview',
+        defaultTabId: builtInTeamDetailTabIds.overview,
         definitions: [createDefinition('activity')],
       }),
     ).toThrow('Default Team detail tab "overview" is not registered.');
     expect(() =>
       createTeamDetailTabRegistry<TestHostModel>({
-        defaultTabId: 'overview',
+        defaultTabId: builtInTeamDetailTabIds.overview,
         definitions: [createDefinition('overview', () => true)],
       }),
     ).toThrow('Default Team detail tab "overview" must always be available.');

@@ -18,4 +18,6 @@ internal static class ServiceProjectionKinds
     public const string ResponseSessions = "response-sessions";
     public const string ResponsesAgentTools = "responses-agent-tools";
     public const string ScheduledDispatches = "scheduled-dispatches";
+    public const string TeamAutomationOperationObservation = "team-automation-operation-observation";
+    public const string NyxIdAuthorizationCatalog = "nyxid-authorization-catalog";
 }

@@ -22,6 +22,7 @@ import {
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
+import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import {
   applyStepInspectorDraft,
   connectStepToTarget,
@@ -1291,7 +1292,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const teamMembersReturnHref = buildTeamDetailHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
-    tab: "members",
+    tab: builtInTeamDetailTabIds.members,
     teamId: route.teamId,
     workflowId: activeDraftWorkflowId || undefined,
   });

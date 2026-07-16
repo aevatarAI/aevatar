@@ -77,6 +77,7 @@ message WorkflowState
   string source_kind = 15;
   int32 max_sub_workflow_depth = 16;
   int32 max_active_sub_workflows = 17;
+  WorkflowAuthorizationDependencies authorization_dependencies = 18;
 }
 
 message WorkflowRunState

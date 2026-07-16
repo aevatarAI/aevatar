@@ -891,7 +891,8 @@ public sealed class WorkflowScheduleApplicationServiceTests
             25,
             "cursor",
             true,
-            ScheduleKind: ScheduledDispatchScheduleKind.Workflow));
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+            ExcludeTeamOwned: true));
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -18,6 +19,7 @@ using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Bootstrap.Extensions.AI;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Configuration;
@@ -31,6 +33,7 @@ using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -41,8 +44,12 @@ using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Scripting.Projection.ReadModels;
+using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Runs;
 using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -58,12 +65,47 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Aevatar.Capabilities.Tests;
 
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    [Fact]
+    public void GAgentServiceAndStudioCapabilities_ShouldOwnTheirCompositionDependencies()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var customTimeProvider = new FixedTimeProvider(DateTimeOffset.UnixEpoch.AddDays(20_000));
+        var builder = CreateBuilder();
+        builder.Services.AddSingleton<TimeProvider>(customTimeProvider);
+
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.ServiceName = "Aevatar.Mainnet.Host.Api";
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        builder.AddMainnetDistributedOrleansHost();
+        builder.AddAevatarPlatform(options => options.EnableMakerExtensions = true);
+        builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
+        builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
+        builder.Services.AddSingleton(Substitute.For<INyxIdApiClientFactory>());
+        builder.Services.AddScheduledAgents(builder.Configuration);
+        builder.AddStudioCapability();
+        builder.Services.AddSingleton(Substitute.For<ISecretVault>());
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>().Should().NotBeNull();
+        app.Services.GetRequiredService<IStudioScheduledCredentialMaterializer>()
+            .Should()
+            .BeOfType<StudioScheduledCredentialMaterializer>();
+        app.Services.GetRequiredService<INyxIdAuthorizationCatalogRefreshPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<TimeProvider>().Should().BeSameAs(customTimeProvider);
+    }
+
     [Fact]
     public async Task AddAevatarMainnetHost_WithInMemoryDependencies_ShouldBuildAndStartFullComposition()
     {
@@ -1086,6 +1128,11 @@ public sealed class MainnetHostCompositionTests
     }
 
     private sealed class MissingMainnetDependency;
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
 
     private sealed class TemporaryAevatarHomeScope : IDisposable
     {

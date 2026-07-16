@@ -1,12 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { setLocale } from '@umijs/max';
 import React from 'react';
+import { builtInTeamDetailTabIds } from '@/shared/teams/teamDetailTabs';
 import { TeamTabBar } from './TeamDetailChrome';
 
 const tabOptions = [
-  { label: 'Overview', value: 'overview' },
-  { label: 'Automations', value: 'automations' },
-  { label: 'Team members', value: 'members' },
+  { label: 'Overview', value: builtInTeamDetailTabIds.overview },
+  { label: 'Automations', value: builtInTeamDetailTabIds.automations },
+  { label: 'Team members', value: builtInTeamDetailTabIds.members },
 ] as const;
 
 describe('TeamTabBar', () => {
@@ -18,7 +19,7 @@ describe('TeamTabBar', () => {
     const onSelectTab = jest.fn();
     render(
       <TeamTabBar
-        activeTab="overview"
+        activeTab={builtInTeamDetailTabIds.overview}
         onSelectTab={onSelectTab}
         tabOptions={tabOptions}
       />,
@@ -50,7 +51,7 @@ describe('TeamTabBar', () => {
   it('keeps long tab lists in a stable horizontal overflow surface', () => {
     render(
       <TeamTabBar
-        activeTab="overview"
+        activeTab={builtInTeamDetailTabIds.overview}
         onSelectTab={() => undefined}
         tabOptions={tabOptions}
       />,

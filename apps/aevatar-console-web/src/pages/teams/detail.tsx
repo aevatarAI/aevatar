@@ -327,8 +327,6 @@ function resolveCompositionKindPillStyle(
         background: "rgba(250, 173, 20, 0.12)",
         color: token.colorWarning,
       };
-    case "actor":
-    case "runtime":
     default:
       return {
         background: token.colorFillQuaternary,
@@ -615,15 +613,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     preferredServiceId,
     teamMemberServiceIds: teamRuntimeServiceIds,
   });
-  const automationsServicesQuery = useQuery({
-    enabled: hasTeamIdentity && activeTab === teamDetailTabIds.automations,
-    queryFn: () =>
-      scopeRuntimeApi.listServices(scopeId, {
-        appId: "default",
-      }),
-    queryKey: ["teams", "services", scopeId],
-    retry: false,
-  });
   const hasBoundWorkflowMembersForStudioLinks = React.useMemo(
     () =>
       (teamMembersQuery.data?.members ?? []).some(isBoundWorkflowRosterMember),
@@ -665,9 +654,7 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
         (workflowsQuery.isLoading || servicesQuery.isLoading)));
   const automationServiceRuntimeByServiceId = React.useMemo(() => {
     const services =
-      activeTab === teamDetailTabIds.automations
-        ? automationsServicesQuery.data ?? servicesQuery.data ?? []
-        : activeTab === teamDetailTabIds.members
+      activeTab === teamDetailTabIds.members
           ? memberStudioLinkServicesQuery.data ?? servicesQuery.data ?? []
         : servicesQuery.data ?? [];
     return new Map(
@@ -690,7 +677,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     );
   }, [
     activeTab,
-    automationsServicesQuery.data,
     memberStudioLinkServicesQuery.data,
     servicesQuery.data,
   ]);
@@ -805,7 +791,8 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
   const currentMemberId =
     trimText(preferredMemberSummary?.memberId) ||
     trimText(preferredMemberId);
-  const selectedRosterMemberId = currentMemberId;
+  const selectedRosterMemberId =
+    activeTab === "automations" ? trimText(routeState.routeMemberId) : currentMemberId;
   React.useEffect(() => {
     const canonicalMemberId = trimText(currentMemberId);
     if (
@@ -874,16 +861,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
-  const buildTeamReturnHref = React.useCallback(
-    (memberId?: string) =>
-      buildTeamDetailHref({
-        memberId: trimText(memberId) || undefined,
-        scopeId,
-        tab: "members",
-        teamId: selectedTeamId,
-      }),
-    [scopeId, selectedTeamId],
-  );
   const entryMemberId = trimText(teamSummaryQuery.data?.entryMemberId);
   const entryMemberSummary = React.useMemo(
     () =>
@@ -976,10 +953,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
           publishedRunsHref: memberPublishedRunsHref,
           publishedServiceId,
           serviceId: publishedServiceId || "--",
-          serviceIdentity: automationServiceRuntime?.identity,
-          serviceRevisionId:
-            trimText(automationServiceRuntime?.activeServingRevisionId) ||
-            trimText(automationServiceRuntime?.defaultServingRevisionId),
           studioHref: canOpenWorkflowStudio ? workflowStudioHref : "",
           studioHrefDisabledReason:
             isWorkflowMember && isBoundMember && !memberDraftWorkflowId
@@ -1086,11 +1059,6 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
     : hasRunnableTeamEntry
       ? "waiting"
       : currentDeploymentStatus;
-  const currentHeaderStatusFriendly = hasVisibleRun
-    ? formatFriendlyStatus(currentRunStatus, intl)
-    : hasRunnableTeamEntry
-      ? t("pages.teams.detail.copy.20", "Waiting for first test")
-      : formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
@@ -1449,9 +1417,19 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
   const pushTeamTab = React.useCallback(
     (tab: TeamDetailTabId) => {
       const includeRuntimeContext = tab === teamDetailTabIds.overview;
+      if (tab === teamDetailTabIds.automations && currentMemberId) {
+        history.push(
+          buildTeamMemberAutomationsHref({
+            memberId: currentMemberId,
+            scopeId,
+            teamId: selectedTeamId,
+          }),
+        );
+        return;
+      }
       history.push(
         buildTeamDetailHref({
-          memberId: currentMemberId || undefined,
+          memberId: includeRuntimeContext ? currentMemberId || undefined : undefined,
           scopeId,
           teamId: selectedTeamId || undefined,
           workflowId: includeRuntimeContext ? activeWorkflowId || undefined : undefined,
@@ -1924,7 +1902,7 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
                 buildTeamDetailHref({
                   scopeId,
                   teamId: selectedTeamId,
-                  tab: "members",
+                  tab: teamDetailTabIds.members,
                 }),
               );
             }
@@ -1997,12 +1975,9 @@ const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
         memberId: row.memberId,
         name: row.name,
         serviceId: row.serviceId,
-        serviceIdentity: row.serviceIdentity,
-        serviceRevisionId: row.serviceRevisionId,
         workflowSupported: row.workflowSupported,
       })),
       scopeId,
-      serviceIdentitiesLoading: automationsServicesQuery.isLoading,
       teamId: selectedTeamId,
     },
     members: {

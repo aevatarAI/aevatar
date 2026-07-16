@@ -150,9 +150,12 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         lock (_gate)
             snapshot = _itemsByKey.Values.ToList();
 
-        var filtered = query.Filters.Count == 0
+        var filtered = query.Filters.Count == 0 && query.AnyOfFilters.Count == 0
             ? snapshot
-            : snapshot.Where(item => MatchesAllFilters(item, query.Filters)).ToList();
+            : snapshot.Where(item =>
+                MatchesAllFilters(item, query.Filters) &&
+                (query.AnyOfFilters.Count == 0 || query.AnyOfFilters.Any(filter => MatchesFilter(item, filter))))
+                .ToList();
         filtered.Sort((left, right) => CompareReadModels(left, right, query.Sorts));
 
         var totalCount = query.IncludeTotalCount ? filtered.Count : (long?)null;

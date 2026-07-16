@@ -1,16 +1,21 @@
+using Aevatar.Workflow.Abstractions;
+
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public sealed record WorkflowYamlParseResult(
     string WorkflowName,
-    string Error)
+    string Error,
+    WorkflowAuthorizationDependencies? AuthorizationDependencies = null)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
-    public static WorkflowYamlParseResult Success(string workflowName) =>
-        new(workflowName ?? string.Empty, string.Empty);
+    public static WorkflowYamlParseResult Success(
+        string workflowName,
+        WorkflowAuthorizationDependencies? authorizationDependencies = null) =>
+        new(workflowName ?? string.Empty, string.Empty, authorizationDependencies?.Clone());
 
     public static WorkflowYamlParseResult Invalid(string error) =>
-        new(string.Empty, error ?? "Workflow YAML is invalid.");
+        new(string.Empty, error ?? "Workflow YAML is invalid.", null);
 }
 
 public enum WorkflowActorKind

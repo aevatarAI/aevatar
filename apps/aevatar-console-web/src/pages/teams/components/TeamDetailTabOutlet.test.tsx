@@ -56,7 +56,7 @@ describe('TeamDetailTabOutlet', () => {
       selectHostProps: (hostModel) => ({ message: hostModel.message }),
     });
     const registry = createTeamDetailTabRegistry({
-      defaultTabId: 'activity',
+      defaultTabId: definition.id,
       definitions: [definition],
     });
 
@@ -100,7 +100,7 @@ describe('TeamDetailTabOutlet', () => {
       },
     });
     const registry = createTeamDetailTabRegistry({
-      defaultTabId: 'topology',
+      defaultTabId: definition.id,
       definitions: [definition],
     });
 

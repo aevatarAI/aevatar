@@ -1,4 +1,5 @@
 import {
+  builtInTeamDetailTabIds,
   createTeamDetailTabRegistry,
   defineTeamDetailTab,
   type TeamDetailTabDefinition,
@@ -14,11 +15,7 @@ export type TeamDetailTabHostModel = {
   readonly overview: TeamOverviewTabProps;
 };
 
-export const teamDetailTabIds = Object.freeze({
-  automations: 'automations',
-  members: 'members',
-  overview: 'overview',
-});
+export const teamDetailTabIds = builtInTeamDetailTabIds;
 
 export function defineTeamDetailFeatureTab<
   TViewProps extends object = Record<never, never>,

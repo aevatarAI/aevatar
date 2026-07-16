@@ -1,6 +1,7 @@
 ---
 title: "Team Detail Tab Registry"
 status: DECIDED
+owner: aevatar-console-web
 date: 2026-07-16
 related:
   - "./2026-05-20-studio-member-builder-entry-decision.md"

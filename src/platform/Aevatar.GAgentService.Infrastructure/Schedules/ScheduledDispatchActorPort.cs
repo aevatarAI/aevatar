@@ -121,8 +121,208 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt.ToUniversalTime()),
             Manual = true,
+            IdempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(actorId, scheduledFireAt),
         }, ct);
     }
+
+    public Task<DispatchAdmission> DispatchBeginTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamAutomationCredentialOperation operation,
+        string observationRequestId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentNullException.ThrowIfNull(operation);
+        return DispatchAsync(actorId, new BeginTeamAutomationCredentialOperationCommand
+        {
+            ScheduleId = operation.ScheduleId,
+            Owner = CreateTeamOwnerState(operation.Owner),
+            OperationId = operation.OperationId,
+            IdempotencyKey = operation.IdempotencyKey,
+            PermissionDigest = operation.PermissionDigest,
+            PolicyVersion = operation.PolicyVersion,
+            OperationKind = ToStateOperationKind(operation.Kind),
+            CredentialEffectLocator = new ScheduledCredentialEffectLocatorState
+            {
+                CredentialName = operation.CredentialEffectLocator.CredentialName,
+                RequestedSecretReference = operation.CredentialEffectLocator.RequestedSecretReference,
+                SecretPurpose = operation.CredentialEffectLocator.SecretPurpose,
+                SecretOwnerScopeKey = operation.CredentialEffectLocator.SecretOwnerScopeKey,
+                CredentialOwner = CreateAuthorizationOwnerState(
+                    operation.CredentialEffectLocator.CredentialOwner),
+            },
+            MutationDigest = operation.MutationDigest,
+            ObservationRequestId = observationRequestId,
+        }, ct);
+    }
+
+    public Task<DispatchAdmission> DispatchRecordTeamAutomationCredentialCandidateAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        ScheduledInvocationAgentKeyCredentialReference credential,
+        ScheduledInvocationAuthorizationOwner credentialOwner,
+        string observationRequestId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentNullException.ThrowIfNull(credential);
+        ArgumentNullException.ThrowIfNull(credentialOwner);
+        return DispatchAsync(actorId, new RecordTeamAutomationCredentialCandidateCommand
+        {
+            Owner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
+            Credential = CreateScheduledInvocationAgentKeyState(credential),
+            CredentialOwner = CreateAuthorizationOwnerState(credentialOwner),
+            ObservationRequestId = observationRequestId,
+        }, ct);
+    }
+
+    public Task<DispatchAdmission> DispatchCompleteTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        ScheduledInvocationAgentKeyCredentialReference credential,
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch,
+        string observationRequestId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentNullException.ThrowIfNull(credential);
+        return DispatchAsync(actorId, new CompleteTeamAutomationCredentialOperationCommand
+        {
+            Owner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
+            Credential = CreateScheduledInvocationAgentKeyState(credential),
+            Configuration = CreateConfiguredEvent(configuration, dispatch),
+            ObservationRequestId = observationRequestId,
+        }, ct);
+    }
+
+    public Task<DispatchAdmission> DispatchFailTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        string errorCode,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new FailTeamAutomationCredentialOperationCommand
+        {
+            Owner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
+            ErrorCode = errorCode,
+            ObservationRequestId = observationRequestId,
+        }, ct);
+
+    public Task<DispatchAdmission> DispatchEnableTeamAutomationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new ScheduledDispatchEnableCommand
+        {
+            Reason = reason ?? string.Empty,
+            TeamAutomationOwner = CreateTeamOwnerState(owner),
+        }, ct);
+
+    public Task<DispatchAdmission> DispatchDisableTeamAutomationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new ScheduledDispatchDisableCommand
+        {
+            Reason = reason ?? string.Empty,
+            TeamAutomationOwner = CreateTeamOwnerState(owner),
+        }, ct);
+
+    public Task<DispatchAdmission> DispatchDeleteTeamAutomationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string reason,
+        ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new ScheduledDispatchDeleteCommand
+        {
+            Reason = reason ?? string.Empty,
+            TeamAutomationOwner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            AuthenticatedCredentialOwner = CreateAuthorizationOwnerState(authenticatedCredentialOwner),
+            ObservationRequestId = observationRequestId,
+        }, ct);
+
+    public Task<DispatchAdmission> DispatchRetryTeamAutomationRevocationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new RetryTeamAutomationRevocationCommand
+        {
+            Owner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            AuthenticatedCredentialOwner = CreateAuthorizationOwnerState(authenticatedCredentialOwner),
+            ObservationRequestId = observationRequestId,
+        }, ct);
+
+    public Task<DispatchAdmission> DispatchCompleteTeamAutomationRevocationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
+        string effectAttemptId,
+        bool nyxIdRevoked,
+        bool vaultRevoked,
+        string errorCode,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new CompleteTeamAutomationRevocationCommand
+        {
+            Owner = CreateTeamOwnerState(owner),
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            EffectAttemptId = effectAttemptId,
+            NyxidRevoked = nyxIdRevoked,
+            VaultRevoked = vaultRevoked,
+            ErrorCode = errorCode?.Trim() ?? string.Empty,
+            ObservationRequestId = observationRequestId,
+        }, ct);
+
+    public Task<DispatchAdmission> DispatchRunTeamAutomationNowAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        DateTimeOffset scheduledFireAt,
+        string operationId,
+        string idempotencyKey,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new ScheduledDispatchFireCommand
+        {
+            ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt.ToUniversalTime()),
+            Manual = true,
+            TeamAutomationOwner = CreateTeamOwnerState(owner),
+            OperationId = operationId?.Trim() ?? string.Empty,
+            IdempotencyKey = idempotencyKey?.Trim() ?? string.Empty,
+        }, ct);
 
     private Task<DispatchAdmission> DispatchAsync<TCommand>(
         string actorId,
@@ -192,6 +392,35 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         return command;
     }
 
+    private static ScheduledDispatchConfiguredEvent CreateConfiguredEvent(
+        ScheduledDispatchConfiguration configuration,
+        PreparedScheduledDispatchTarget dispatch)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(dispatch);
+        var configured = new ScheduledDispatchConfiguredEvent
+        {
+            ScheduleId = configuration.ScheduleId,
+            DisplayName = configuration.DisplayName,
+            TargetActorId = dispatch.TargetActorId ?? string.Empty,
+            TriggerEnvelope = dispatch.TriggerEnvelope.Clone(),
+            CronExpression = configuration.CronExpression,
+            Timezone = configuration.Timezone,
+            Enabled = configuration.Enabled,
+            PayloadTypeUrl = dispatch.PayloadTypeUrl,
+            Target = CreateTargetState(dispatch.Descriptor, configuration.CredentialRequirementTargetKind),
+            ScheduleKind = ToStateScheduleKind(configuration.ScheduleKind),
+            ScheduleMode = ToStateScheduleMode(configuration.ScheduleMode),
+            OneShotFireAt = configuration.OneShotFireAt.HasValue
+                ? Timestamp.FromDateTimeOffset(configuration.OneShotFireAt.Value.ToUniversalTime())
+                : null,
+            TeamAutomationOwner = CreateTeamOwnerState(configuration.TeamAutomationOwner),
+        };
+        foreach (var (key, value) in configuration.Headers)
+            configured.Headers[key] = value;
+        return configured;
+    }
+
     private static void PopulateConfigureCommand(
         ScheduledDispatchCreateCommand command,
         ScheduledDispatchConfiguration configuration,
@@ -211,6 +440,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.OneShotFireAt = configuration.OneShotFireAt.HasValue
             ? Timestamp.FromDateTimeOffset(configuration.OneShotFireAt.Value.ToUniversalTime())
             : null;
+        command.TeamAutomationOwner = CreateTeamOwnerState(configuration.TeamAutomationOwner);
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
     }
@@ -234,6 +464,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.OneShotFireAt = configuration.OneShotFireAt.HasValue
             ? Timestamp.FromDateTimeOffset(configuration.OneShotFireAt.Value.ToUniversalTime())
             : null;
+        command.TeamAutomationOwner = CreateTeamOwnerState(configuration.TeamAutomationOwner);
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
     }
@@ -257,6 +488,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         command.OneShotFireAt = configuration.OneShotFireAt.HasValue
             ? Timestamp.FromDateTimeOffset(configuration.OneShotFireAt.Value.ToUniversalTime())
             : null;
+        command.TeamAutomationOwner = CreateTeamOwnerState(configuration.TeamAutomationOwner);
         foreach (var (key, value) in configuration.Headers)
             command.Headers[key] = value;
     }
@@ -317,6 +549,83 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             RevisionId = descriptor.RevisionId ?? string.Empty,
             Caller = descriptor.Caller?.Clone(),
             Auth = CreateAuthState(descriptor.Auth),
+            AuthorizationFact = CreateAuthorizationFactState(descriptor.AuthorizationFact),
+        };
+    }
+
+    private static ScheduledInvocationAuthorizationFactState? CreateAuthorizationFactState(
+        ScheduledInvocationAuthorizationFact? fact)
+    {
+        if (fact == null)
+            return null;
+
+        var state = new ScheduledInvocationAuthorizationFactState
+        {
+            PermissionDigest = fact.PermissionDigest,
+            PolicyVersion = fact.PolicyVersion,
+            Owner = new ScheduledInvocationAuthorizationOwnerState
+            {
+                Authority = fact.Owner.Authority,
+                OwnerKind = fact.Owner.OwnerKind,
+                OwnerSubject = fact.Owner.OwnerSubject,
+            },
+            Scopes = fact.Scopes,
+            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.ExpiresAt),
+            ServiceGrantsNotRequired = fact.ServiceGrantsNotRequired,
+            Disclosure = new ScheduledInvocationAuthorizationDisclosureState
+            {
+                DedicatedToSchedule = fact.Disclosure.DedicatedToSchedule,
+                SecretManagedByAevatar = fact.Disclosure.SecretManagedByAevatar,
+                BrowserReceivesRawKey = fact.Disclosure.BrowserReceivesRawKey,
+                DeleteRevokesCredential = fact.Disclosure.DeleteRevokesCredential,
+                PauseResumeRevokesCredential = fact.Disclosure.PauseResumeRevokesCredential,
+            },
+            Authority = new ScheduledInvocationAuthorizationAuthorityState
+            {
+                MemberStateVersion = fact.Authority.MemberStateVersion,
+                WorkflowStateVersion = fact.Authority.WorkflowStateVersion,
+                ConnectorStateVersion = fact.Authority.ConnectorStateVersion,
+                OwnerLlmStateVersion = fact.Authority.OwnerLlmStateVersion,
+                CatalogStateVersion = fact.Authority.CatalogStateVersion,
+                CatalogObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogObservedAt),
+                CatalogFreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogFreshUntil),
+                CatalogExternalRevision = fact.Authority.CatalogExternalRevision,
+                CatalogContentDigest = fact.Authority.CatalogContentDigest,
+            },
+        };
+        state.ServiceGrants.Add(fact.ServiceGrants.Select(static grant =>
+        {
+            var item = new ScheduledInvocationAuthorizationServiceGrantState
+            {
+                ServiceId = grant.ServiceId,
+                NodeGrantsNotRequired = grant.NodeGrantsNotRequired,
+            };
+            item.NodeIds.Add(grant.NodeIds);
+            return item;
+        }));
+        state.NodeGrants.Add(fact.NodeGrants.Select(static grant =>
+            new ScheduledInvocationAuthorizationNodeGrantState
+            {
+                UserServiceId = grant.UserServiceId,
+                NodeId = grant.NodeId,
+                DisplayName = grant.DisplayName,
+                Role = grant.Role,
+                EdgeKind = grant.EdgeKind,
+                BindingId = grant.BindingId,
+                RoutePriority = grant.RoutePriority,
+            }));
+        return state;
+    }
+
+    private static ScheduledInvocationAuthorizationOwnerState CreateAuthorizationOwnerState(
+        ScheduledInvocationAuthorizationOwner owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        return new ScheduledInvocationAuthorizationOwnerState
+        {
+            Authority = owner.Authority,
+            OwnerKind = owner.OwnerKind,
+            OwnerSubject = owner.OwnerSubject,
         };
     }
 
@@ -372,6 +681,24 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             SecretReference = source.SecretReference.Clone(),
             ApiKeyId = source.ApiKeyId,
             KeyExpiresAtUnixMs = source.KeyExpiresAtUnixMs,
+        };
+
+    private static TeamMemberAutomationOwnerState? CreateTeamOwnerState(TeamMemberAutomationOwner? owner) =>
+        owner == null
+            ? null
+            : new TeamMemberAutomationOwnerState
+            {
+                ScopeId = owner.ScopeId,
+                MemberId = owner.MemberId,
+            };
+
+    private static TeamAutomationOperationKindState ToStateOperationKind(TeamAutomationOperationKind kind) =>
+        kind switch
+        {
+            TeamAutomationOperationKind.Create => TeamAutomationOperationKindState.Create,
+            TeamAutomationOperationKind.Reauthorize => TeamAutomationOperationKindState.Reauthorize,
+            TeamAutomationOperationKind.Delete => TeamAutomationOperationKindState.Delete,
+            _ => TeamAutomationOperationKindState.Unspecified,
         };
 
     private static ScheduledServiceInvocationNyxIdSubjectRefState? CreateSubjectState(
