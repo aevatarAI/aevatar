@@ -425,6 +425,9 @@ const enUSMessages = {
   'teams.detail.status.unknown': 'Unknown status',
   'teams.detail.tabList.label': 'Team detail tabs',
   'teams.detail.tabs.automations': 'Automations',
+  'teams.detail.tabs.loadFailure.description':
+    'The Team shell is still available. Choose another tab or refresh the page to try again.',
+  'teams.detail.tabs.loadFailure.title': '{tabLabel} could not load',
   'teams.detail.tabs.members': 'Team members',
   'teams.detail.tabs.overview': 'Overview',
   'teams.detail.test.actions.retry': 'Retry',

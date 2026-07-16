@@ -54,7 +54,7 @@ export type TeamMembersDeleteTarget = Pick<
   "isEntryMember" | "memberId" | "name"
 >;
 
-type TeamMembersTabProps = {
+export type TeamMembersTabProps = {
   readonly rosterError?: boolean;
   readonly rosterLoading?: boolean;
   readonly rosterRows?: readonly TeamRosterMemberRow[];

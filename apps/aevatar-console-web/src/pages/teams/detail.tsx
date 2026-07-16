@@ -24,8 +24,12 @@ import {
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
   readTeamDetailRouteState,
-  type TeamDetailTab,
 } from "@/shared/navigation/teamRoutes";
+import type {
+  TeamDetailContext,
+  TeamDetailTabId,
+  TeamDetailTabRegistry,
+} from "@/shared/teams/teamDetailTabs";
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
 import {
   formatStudioMemberLifecycleStage,
@@ -39,6 +43,7 @@ import {
   TeamDetailShell,
   type TeamTabOption,
 } from "./components/TeamDetailChrome";
+import { TeamDetailTabOutlet } from "./components/TeamDetailTabOutlet";
 import TeamTestPanel, {
   type TeamTestLastResult,
   type TeamTestStatus,
@@ -49,9 +54,12 @@ import {
   isAbortLikeError,
   type TeamTestErrorDescription,
 } from "./components/teamTestErrors";
-import TeamMembersTab, { type TeamMembersDeleteTarget } from "./tabs/TeamMembersTab";
-import TeamAutomationsTab from "./tabs/TeamAutomationsTab";
-import TeamOverviewTab from "./tabs/TeamOverviewTab";
+import type { TeamMembersDeleteTarget } from "./tabs/TeamMembersTab";
+import {
+  teamDetailTabIds,
+  teamDetailTabRegistry,
+  type TeamDetailTabHostModel,
+} from "./teamDetailTabRegistry";
 import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 import { t } from "@/shared/i18n/messages";
@@ -213,23 +221,6 @@ function resolveTeamHeading(input: {
   };
 }
 
-function formatTeamTabLabel(
-  tab: TeamDetailTab,
-  intl: ReturnType<typeof useIntl>,
-): string {
-  switch (tab) {
-    case "automations":
-      return intl.formatMessage({
-        defaultMessage: "Automations",
-        id: "teams.detail.tabs.automations",
-      });
-    case "members":
-      return intl.formatMessage({ id: "teams.detail.tabs.members" });
-    default:
-      return intl.formatMessage({ id: "teams.detail.tabs.overview" });
-  }
-}
-
 function normalizeStatus(value: string | null | undefined): string {
   return trimText(value).toLowerCase();
 }
@@ -336,8 +327,6 @@ function resolveCompositionKindPillStyle(
         background: "rgba(250, 173, 20, 0.12)",
         color: token.colorWarning,
       };
-    case "actor":
-    case "runtime":
     default:
       return {
         background: token.colorFillQuaternary,
@@ -436,7 +425,13 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-const TeamDetailPage: React.FC = () => {
+type TeamDetailPageProps = {
+  readonly tabRegistry?: TeamDetailTabRegistry<TeamDetailTabHostModel>;
+};
+
+const TeamDetailPage: React.FC<TeamDetailPageProps> = ({
+  tabRegistry = teamDetailTabRegistry,
+}) => {
   const intl = useIntl();
   const queryClient = useQueryClient();
   const locationSnapshot = React.useSyncExternalStore(
@@ -446,11 +441,15 @@ const TeamDetailPage: React.FC = () => {
   );
   const routeState = React.useMemo(() => {
     if (typeof window === "undefined") {
-      return readTeamDetailRouteState("", "");
+      return readTeamDetailRouteState(tabRegistry, "", "");
     }
 
-    return readTeamDetailRouteState(window.location.search, window.location.pathname);
-  }, [locationSnapshot]);
+    return readTeamDetailRouteState(
+      tabRegistry,
+      window.location.search,
+      window.location.pathname,
+    );
+  }, [locationSnapshot, tabRegistry]);
   const scopeId = routeState.scopeId.trim();
   const selectedTeamId = trimText(routeState.teamId);
   const hasTeamIdentity = scopeId.length > 0 && selectedTeamId.length > 0;
@@ -477,7 +476,7 @@ const TeamDetailPage: React.FC = () => {
     routeState.serviceId,
   );
   const [preferredRunId, setPreferredRunId] = React.useState(routeState.runId);
-  const [activeTab, setActiveTab] = React.useState<TeamDetailTab>(routeState.tab);
+  const activeTab = routeState.tab;
   const [teamEditorOpen, setTeamEditorOpen] = React.useState(false);
   const [teamArchiveOpen, setTeamArchiveOpen] = React.useState(false);
   const [teamEditorName, setTeamEditorName] = React.useState("");
@@ -510,9 +509,6 @@ const TeamDetailPage: React.FC = () => {
     );
     setPreferredRunId((currentRunId) =>
       trimText(currentRunId) === nextRunId ? currentRunId : nextRunId,
-    );
-    setActiveTab((currentTab) =>
-      currentTab === routeState.tab ? currentTab : routeState.tab,
     );
     if (routeState.testTeam) {
       setTeamTestModalOpen(true);
@@ -570,7 +566,7 @@ const TeamDetailPage: React.FC = () => {
       isProjectionSyncing404(teamMembersQuery.failureReason)) ||
       (teamMembersQuery.isError && isProjectionSyncing404(teamMembersQuery.error)));
   const teamRuntimeServiceIds = React.useMemo(() => {
-    if (activeTab !== "overview") {
+    if (activeTab !== teamDetailTabIds.overview) {
       return [];
     }
 
@@ -600,7 +596,8 @@ const TeamDetailPage: React.FC = () => {
   const hasExplicitRuntimeFocus = Boolean(
     trimText(preferredMemberId) || trimText(preferredServiceId) || trimText(preferredRunId),
   );
-  const shouldLoadTeamRuntimeLens = hasTeamIdentity && activeTab === "overview";
+  const shouldLoadTeamRuntimeLens =
+    hasTeamIdentity && activeTab === teamDetailTabIds.overview;
   const {
     lens,
     runsQuery,
@@ -623,7 +620,7 @@ const TeamDetailPage: React.FC = () => {
   );
   const shouldLoadMemberStudioLinkCatalog =
     hasTeamIdentity &&
-    activeTab === "members" &&
+    activeTab === teamDetailTabIds.members &&
     hasBoundWorkflowMembersForStudioLinks;
   const memberStudioLinkWorkflowsQuery = useQuery({
     enabled: shouldLoadMemberStudioLinkCatalog,
@@ -641,23 +638,23 @@ const TeamDetailPage: React.FC = () => {
     retry: false,
   });
   const workflowSummariesForMemberLinks =
-    activeTab === "members"
+    activeTab === teamDetailTabIds.members
       ? memberStudioLinkWorkflowsQuery.data ??
         workflowsQuery.data ??
         emptyWorkflowSummaries
       : workflowsQuery.data ?? emptyWorkflowSummaries;
   const isResolvingMemberStudioLinks =
     hasBoundWorkflowMembersForStudioLinks &&
-    ((activeTab === "members" &&
+    ((activeTab === teamDetailTabIds.members &&
       shouldLoadMemberStudioLinkCatalog &&
       (memberStudioLinkWorkflowsQuery.isLoading ||
         memberStudioLinkServicesQuery.isLoading)) ||
-      (activeTab === "overview" &&
+      (activeTab === teamDetailTabIds.overview &&
         shouldLoadTeamRuntimeLens &&
         (workflowsQuery.isLoading || servicesQuery.isLoading)));
   const automationServiceRuntimeByServiceId = React.useMemo(() => {
     const services =
-      activeTab === "members"
+      activeTab === teamDetailTabIds.members
           ? memberStudioLinkServicesQuery.data ?? servicesQuery.data ?? []
         : servicesQuery.data ?? [];
     return new Map(
@@ -815,7 +812,10 @@ const TeamDetailPage: React.FC = () => {
         workflowId: trimText(routeState.workflowId) || undefined,
         serviceId: trimText(routeState.serviceId) || undefined,
         runId: trimText(routeState.runId) || undefined,
-        tab: routeState.tab === "overview" ? undefined : routeState.tab,
+        tab:
+          routeState.tab === teamDetailTabIds.overview
+            ? undefined
+            : routeState.tab,
       }),
     );
   }, [
@@ -861,16 +861,6 @@ const TeamDetailPage: React.FC = () => {
     ) : null;
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
-  const buildTeamReturnHref = React.useCallback(
-    (memberId?: string) =>
-      buildTeamDetailHref({
-        memberId: trimText(memberId) || undefined,
-        scopeId,
-        tab: "members",
-        teamId: selectedTeamId,
-      }),
-    [scopeId, selectedTeamId],
-  );
   const entryMemberId = trimText(teamSummaryQuery.data?.entryMemberId);
   const entryMemberSummary = React.useMemo(
     () =>
@@ -1069,11 +1059,6 @@ const TeamDetailPage: React.FC = () => {
     : hasRunnableTeamEntry
       ? "waiting"
       : currentDeploymentStatus;
-  const currentHeaderStatusFriendly = hasVisibleRun
-    ? formatFriendlyStatus(currentRunStatus, intl)
-    : hasRunnableTeamEntry
-      ? t("pages.teams.detail.copy.20", "Waiting for first test")
-      : formatFriendlyStatus(currentDeploymentStatus, intl);
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
@@ -1335,11 +1320,94 @@ const TeamDetailPage: React.FC = () => {
       token,
     ],
   );
-  const tabOptions: TeamTabOption[] = [
-    { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
-    { label: t("teams.detail.tabs.automations", "Automations"), value: "automations" },
-    { label: t("pages.teams.detail.copy.46", "Team members"), value: "members" },
-  ];
+  const buildRegisteredTeamTabHref = React.useCallback(
+    (tabId: TeamDetailTabId) =>
+      buildTeamDetailHref({
+        scopeId,
+        tab: tabId,
+        teamId: selectedTeamId,
+      }),
+    [scopeId, selectedTeamId],
+  );
+  const teamDetailContext = React.useMemo<TeamDetailContext>(
+    () => ({
+      navigation: {
+        buildTabHref: buildRegisteredTeamTabHref,
+      },
+      refresh: refreshTeamAuthority,
+      scopeId,
+      teamId: selectedTeamId,
+      teamSummary: teamSummaryQuery.data ?? null,
+    }),
+    [
+      buildRegisteredTeamTabHref,
+      refreshTeamAuthority,
+      scopeId,
+      selectedTeamId,
+      teamSummaryQuery.data,
+    ],
+  );
+  const requestedTabDefinition = tabRegistry.find(activeTab);
+  const activeTabAvailabilityPending = Boolean(
+    requestedTabDefinition?.isAvailable && teamSummaryQuery.isLoading,
+  );
+  const defaultTabDefinition = tabRegistry.resolve(
+    tabRegistry.defaultTabId,
+    teamDetailContext,
+  );
+  const activeTabDefinition = activeTabAvailabilityPending
+    ? defaultTabDefinition
+    : tabRegistry.resolve(activeTab, teamDetailContext);
+  const activeTabLabel = intl.formatMessage(activeTabDefinition.label);
+  const visibleTabDefinitions = teamSummaryQuery.isLoading
+    ? tabRegistry.definitions.filter((definition) => !definition.isAvailable)
+    : tabRegistry.listAvailable(teamDetailContext);
+  const tabOptions: TeamTabOption[] = visibleTabDefinitions
+    .map((definition) => ({
+      label: intl.formatMessage(definition.label),
+      value: definition.id,
+    }));
+
+  React.useEffect(() => {
+    const activeTabIsUnavailable = activeTabDefinition.id !== activeTab;
+    if (
+      !hasTeamIdentity ||
+      activeTabAvailabilityPending ||
+      (!routeState.tabWasUnknown && !activeTabIsUnavailable)
+    ) {
+      return;
+    }
+
+    history.replace(
+      buildTeamDetailHref({
+        memberId: routeState.memberId || undefined,
+        runId: routeState.runId || undefined,
+        scopeId,
+        serviceId: routeState.serviceId || undefined,
+        tab:
+          activeTabDefinition.id === tabRegistry.defaultTabId
+            ? undefined
+            : activeTabDefinition.id,
+        teamId: selectedTeamId,
+        testTeam: routeState.testTeam,
+        workflowId: routeState.workflowId || undefined,
+      }),
+    );
+  }, [
+    activeTab,
+    activeTabAvailabilityPending,
+    activeTabDefinition.id,
+    hasTeamIdentity,
+    routeState.memberId,
+    routeState.runId,
+    routeState.serviceId,
+    routeState.tabWasUnknown,
+    routeState.testTeam,
+    routeState.workflowId,
+    scopeId,
+    selectedTeamId,
+    tabRegistry,
+  ]);
 
   const initialLoading =
     serviceRevisionsQuery.isLoading ||
@@ -1347,10 +1415,9 @@ const TeamDetailPage: React.FC = () => {
     workflowsQuery.isLoading;
 
   const pushTeamTab = React.useCallback(
-    (tab: TeamDetailTab) => {
-      const includeRuntimeContext = tab === "overview";
-      setActiveTab(tab);
-      if (tab === "automations" && currentMemberId) {
+    (tab: TeamDetailTabId) => {
+      const includeRuntimeContext = tab === teamDetailTabIds.overview;
+      if (tab === teamDetailTabIds.automations && currentMemberId) {
         history.push(
           buildTeamMemberAutomationsHref({
             memberId: currentMemberId,
@@ -1835,7 +1902,7 @@ const TeamDetailPage: React.FC = () => {
                 buildTeamDetailHref({
                   scopeId,
                   teamId: selectedTeamId,
-                  tab: "members",
+                  tab: teamDetailTabIds.members,
                 }),
               );
             }
@@ -1894,116 +1961,90 @@ const TeamDetailPage: React.FC = () => {
     />
   );
 
-  const renderOverviewTab = () => {
-    return (
-      <TeamOverviewTab
-        configurationDetailRows={configurationDetailRows}
-        compositionRows={overviewCompositionRows}
-        currentDeploymentPillStyle={resolveStatusPillStyle(token, currentDeploymentStatus)}
-        currentDeploymentPillText={currentDeploymentPillText}
-        currentHeaderStatusFriendly={currentReadModelFreshnessLabel}
-        currentHeaderStatusStyle={{
+  const teamDetailTabHostModel: TeamDetailTabHostModel = {
+    automations: {
+      members: teamRosterRows.map((row) => ({
+        automationsHref: row.automationsHref,
+        canAutomateMember: row.canAutomateMember,
+        disabledReason: row.automationDisabledReason,
+        implementationKind: row.implementationKind,
+        isSelectedMember: row.isSelectedMember,
+        key: row.key,
+        lifecycleLabel: row.lifecycleLabel,
+        lifecycleStyle: row.lifecycleStyle,
+        memberId: row.memberId,
+        name: row.name,
+        serviceId: row.serviceId,
+        workflowSupported: row.workflowSupported,
+      })),
+      scopeId,
+      teamId: selectedTeamId,
+    },
+    members: {
+      createMemberHref,
+      deletingMemberId,
+      entryActionBusyMemberId,
+      onClearEntry:
+        teamSummaryQuery.data && !isTeamArchived && entryMemberId
+          ? () => void handleClearEntry()
+          : undefined,
+      onDeleteMember:
+        teamSummaryQuery.data && !isTeamArchived
+          ? (target) => handleDeleteMember(target)
+          : undefined,
+      onNavigate: (href) => history.push(href),
+      onSetEntry:
+        teamSummaryQuery.data && !isTeamArchived
+          ? (memberId) => void handleSetEntry(memberId)
+          : undefined,
+      rosterError: teamMembersQuery.isError && !isTeamMembersProjectionSyncing,
+      rosterLoading: teamMembersQuery.isLoading || isResolvingMemberStudioLinks,
+      rosterRows: teamRosterRows,
+      rosterSyncing: isTeamMembersProjectionSyncing,
+    },
+    overview: {
+      configurationDetailRows,
+      compositionRows: overviewCompositionRows,
+      currentDeploymentPillStyle: resolveStatusPillStyle(
+        token,
+        currentDeploymentStatus,
+      ),
+      currentDeploymentPillText,
+      currentHeaderStatusFriendly: currentReadModelFreshnessLabel,
+      currentHeaderStatusStyle: {
           background: token.colorFillQuaternary,
           color: token.colorTextSecondary,
-        }}
-        currentMemberCardTooltip={currentMemberCardTooltip}
-        currentMemberLabel={currentMemberLabel}
-        currentRunCardTooltip={currentRunCardTooltip}
-        currentRunFriendly={currentRunFriendly}
-        currentRunPillStyle={resolveStatusPillStyle(token, currentHeaderStatus)}
-        currentRunPillText={currentRunPillText}
-        currentServiceCardTooltip={currentServiceCardTooltip}
-        currentServiceFriendly={currentServiceFriendly}
-        currentServicePillStyle={{
+      },
+      currentMemberCardTooltip,
+      currentMemberLabel,
+      currentRunCardTooltip,
+      currentRunFriendly,
+      currentRunPillStyle: resolveStatusPillStyle(token, currentHeaderStatus),
+      currentRunPillText,
+      currentServiceCardTooltip,
+      currentServiceFriendly,
+      currentServicePillStyle: {
           background: token.colorInfoBg,
           border: `1px solid ${token.colorInfoBorder}`,
           color: token.colorInfo,
-        }}
-        currentServicePillText={currentServicePillText}
-        entryMemberId={entryMemberId || null}
-        entryMemberLabel={entryMemberLabel}
-        entryMemberUpdating={entryActionBusyMemberId === entryMemberClearingId}
-        latestRuns={overviewLatestRuns}
-        latestVisibleUpdateLabel={formatCompactTimestamp(latestVisibleUpdate)}
-        latestVisibleUpdateNote={latestVisibleUpdateNote}
-        onClearEntryMember={
+      },
+      currentServicePillText,
+      entryMemberId: entryMemberId || null,
+      entryMemberLabel,
+      entryMemberUpdating: entryActionBusyMemberId === entryMemberClearingId,
+      latestRuns: overviewLatestRuns,
+      latestVisibleUpdateLabel: formatCompactTimestamp(latestVisibleUpdate),
+      latestVisibleUpdateNote,
+      onClearEntryMember:
           teamSummaryQuery.data && !isTeamArchived && entryMemberId
             ? () => void handleClearEntry()
-            : undefined
-        }
-        onNavigate={(href) => history.push(href)}
-        onOpenTeamTest={openTeamTestModal}
-        teamRunDisabled={!canRunTeamFromOverview}
-        teamRunDisabledReason={teamRunDisabledReason}
-      />
-    );
+            : undefined,
+      onNavigate: (href) => history.push(href),
+      onOpenTeamTest: openTeamTestModal,
+      teamRunDisabled: !canRunTeamFromOverview,
+      teamRunDisabledReason,
+    },
   };
-
-  const renderMembersTab = () => {
-    return (
-      <TeamMembersTab
-        createMemberHref={createMemberHref}
-        deletingMemberId={deletingMemberId}
-        entryActionBusyMemberId={entryActionBusyMemberId}
-        onClearEntry={
-          teamSummaryQuery.data && !isTeamArchived && entryMemberId
-            ? () => void handleClearEntry()
-            : undefined
-        }
-        onDeleteMember={
-          teamSummaryQuery.data && !isTeamArchived
-            ? (memberId) => handleDeleteMember(memberId)
-            : undefined
-        }
-        onNavigate={(href) => history.push(href)}
-        onSetEntry={
-          teamSummaryQuery.data && !isTeamArchived
-            ? (memberId) => void handleSetEntry(memberId)
-            : undefined
-        }
-        rosterError={teamMembersQuery.isError && !isTeamMembersProjectionSyncing}
-        rosterLoading={teamMembersQuery.isLoading || isResolvingMemberStudioLinks}
-        rosterSyncing={isTeamMembersProjectionSyncing}
-        rosterRows={teamRosterRows}
-      />
-    );
-  };
-
-  const renderAutomationsTab = () => {
-    return (
-      <TeamAutomationsTab
-        members={teamRosterRows.map((row) => ({
-          automationsHref: row.automationsHref,
-          canAutomateMember: row.canAutomateMember,
-          disabledReason: row.automationDisabledReason,
-          implementationKind: row.implementationKind,
-          isSelectedMember: row.isSelectedMember,
-          key: row.key,
-          lifecycleLabel: row.lifecycleLabel,
-          lifecycleStyle: row.lifecycleStyle,
-          memberId: row.memberId,
-          name: row.name,
-          serviceId: row.serviceId,
-          workflowSupported: row.workflowSupported,
-        }))}
-        scopeId={scopeId}
-        teamId={selectedTeamId}
-      />
-    );
-  };
-
-  let tabContent: React.ReactNode;
-  switch (activeTab) {
-    case "automations":
-      tabContent = renderAutomationsTab();
-      break;
-    case "members":
-      tabContent = renderMembersTab();
-      break;
-    default:
-      tabContent = renderOverviewTab();
-      break;
-  }
 
   if (!hasTeamIdentity) {
     return <TeamDetailEmptyState />;
@@ -2027,8 +2068,8 @@ const TeamDetailPage: React.FC = () => {
         testTeamLabel={intl.formatMessage({ id: "teams.detail.actions.test" })}
       />
       }
-      activeTab={activeTab}
-      activeTabLabel={formatTeamTabLabel(activeTab, intl)}
+      activeTab={activeTabDefinition.id}
+      activeTabLabel={activeTabLabel}
       breadcrumbTeamTitle={teamTitle}
       initialLoading={initialLoading}
       onOpenTeamsList={handleOpenTeamsList}
@@ -2051,7 +2092,13 @@ const TeamDetailPage: React.FC = () => {
       teamTitle={teamTitle}
       teamsListHref={teamsListHref}
     >
-      {tabContent}
+      <TeamDetailTabOutlet
+        context={teamDetailContext}
+        definition={activeTabDefinition}
+        hostModel={teamDetailTabHostModel}
+        label={activeTabLabel}
+        pending={activeTabAvailabilityPending}
+      />
       <Modal
         footer={null}
         onCancel={closeTeamTestModal}

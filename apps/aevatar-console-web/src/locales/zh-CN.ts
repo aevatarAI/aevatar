@@ -404,6 +404,9 @@ const zhCNMessages = {
   'teams.detail.status.unknown': '状态未知',
   'teams.detail.tabList.label': '团队详情标签',
   'teams.detail.tabs.automations': '自动化',
+  'teams.detail.tabs.loadFailure.description':
+    '团队详情框架仍可使用。请选择其他标签，或刷新页面后重试。',
+  'teams.detail.tabs.loadFailure.title': '{tabLabel} 加载失败',
   'teams.detail.tabs.members': '团队成员',
   'teams.detail.tabs.overview': '概览',
   'teams.detail.test.actions.retry': '重试',

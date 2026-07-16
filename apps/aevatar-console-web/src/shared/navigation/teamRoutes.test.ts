@@ -9,6 +9,28 @@ import {
   buildTeamsHref,
   readTeamDetailRouteState,
 } from "./teamRoutes";
+import {
+  builtInTeamDetailTabIds,
+  defineTeamDetailTabId,
+  type TeamDetailTabLookup,
+} from "@/shared/teams/teamDetailTabs";
+
+const activityTabId = defineTeamDetailTabId("activity");
+const registeredTeamDetailTabIds = Object.freeze([
+  activityTabId,
+  ...Object.values(builtInTeamDetailTabIds),
+]);
+const findTeamDetailTabId = (tabId: string) => {
+  const normalizedTabId = tabId.trim().toLowerCase();
+  return registeredTeamDetailTabIds.find(
+    (registeredTabId) => registeredTabId === normalizedTabId,
+  );
+};
+const teamDetailTabs: TeamDetailTabLookup = {
+  defaultTabId: builtInTeamDetailTabIds.overview,
+  findId: findTeamDetailTabId,
+  has: (tabId) => Boolean(findTeamDetailTabId(tabId)),
+};
 
 describe("teamRoutes", () => {
   it("builds a canonical team detail href and trims empty values", () => {
@@ -21,11 +43,25 @@ describe("teamRoutes", () => {
         serviceId: "service-1",
         runId: "run-1",
         testTeam: true,
-        tab: "members",
+        tab: builtInTeamDetailTabIds.members,
       }),
     ).toBe(
       "/scopes/scope-alpha/teams/t-alpha?memberId=member-alpha&workflowId=workflow-1&tab=members&serviceId=service-1&runId=run-1&testTeam=1",
     );
+  });
+
+  it("builds and reads a registered Team detail tab", () => {
+    expect(
+      buildTeamDetailHref({
+        scopeId: "scope-alpha",
+        tab: activityTabId,
+        teamId: "t-alpha",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/t-alpha?tab=activity");
+    expect(
+      readTeamDetailRouteState(teamDetailTabs, "?tab=activity", "/scopes/scope-alpha/teams/t-alpha")
+        .tab,
+    ).toBe("activity");
   });
 
   it("falls back to the scope resolver when the scope is empty", () => {
@@ -153,9 +189,7 @@ describe("teamRoutes", () => {
         scopeId: "scope-alpha",
         teamId: "t-alpha",
       }),
-    ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?scheduleId=schedule-alpha",
-    );
+    ).toBe("/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?scheduleId=schedule-alpha");
 
     expect(
       buildTeamMemberPublishedRunsHref({
@@ -227,6 +261,7 @@ describe("teamRoutes", () => {
   it("reads the canonical team detail route state from path and query", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?memberId=member-alpha&teamId=stale-team&workflowId=wf-1&serviceId=service-1&runId=run-1&tab=members",
         "/scopes/scope-alpha/teams/t-alpha",
       ),
@@ -237,6 +272,7 @@ describe("teamRoutes", () => {
       scopeId: "scope-alpha",
       serviceId: "service-1",
       tab: "members",
+      tabWasUnknown: false,
       teamId: "t-alpha",
       testTeam: false,
       workflowId: "wf-1",
@@ -246,6 +282,7 @@ describe("teamRoutes", () => {
   it("reads scope, team, member, and draft workflow identities from scoped member workflow routes", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?workflowId=wf-alpha",
         "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/workflow",
       ),
@@ -261,6 +298,7 @@ describe("teamRoutes", () => {
   it("does not treat a query-only member as a canonical automation route", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?memberId=member-alpha&tab=automations",
         "/scopes/scope-alpha/teams/t-alpha",
       ),
@@ -274,6 +312,7 @@ describe("teamRoutes", () => {
   it("reads member-owned automation routes from the canonical member path", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?tab=members",
         "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/automations",
       ),
@@ -289,6 +328,7 @@ describe("teamRoutes", () => {
   it("does not read removed legacy Team member workflow routes", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?workflowId=wf-alpha",
         "/teams/scope-alpha/t-alpha/members/member-alpha/workflow",
       ),
@@ -304,6 +344,7 @@ describe("teamRoutes", () => {
   it("reads Team Test auto-open intent from the team detail query", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?memberId=member-alpha&testTeam=1",
         "/scopes/scope-alpha/teams/t-alpha",
       ),
@@ -317,10 +358,7 @@ describe("teamRoutes", () => {
 
   it("does not read removed legacy query team links", () => {
     expect(
-      readTeamDetailRouteState(
-        "?teamId=t-alpha&tab=members",
-        "/teams/scope-alpha",
-      ),
+      readTeamDetailRouteState(teamDetailTabs, "?teamId=t-alpha&tab=members", "/teams/scope-alpha"),
     ).toMatchObject({
       scopeId: "",
       tab: "members",
@@ -331,6 +369,7 @@ describe("teamRoutes", () => {
   it("defaults canonical team routes to the overview tab", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?workflowId=wf-2&tab=not-real",
         "/scopes/scope-query/teams",
       ),
@@ -341,6 +380,7 @@ describe("teamRoutes", () => {
       scopeId: "scope-query",
       serviceId: "",
       tab: "overview",
+      tabWasUnknown: true,
       teamId: "",
       testTeam: false,
       workflowId: "wf-2",
@@ -350,6 +390,7 @@ describe("teamRoutes", () => {
   it("falls back to the query scope and overview tab when the path is malformed", () => {
     expect(
       readTeamDetailRouteState(
+        teamDetailTabs,
         "?scopeId=scope-query&workflowId=wf-2&tab=not-real",
         "/runtime/runs",
       ),
@@ -360,6 +401,7 @@ describe("teamRoutes", () => {
       scopeId: "scope-query",
       serviceId: "",
       tab: "overview",
+      tabWasUnknown: true,
       teamId: "",
       testTeam: false,
       workflowId: "wf-2",
