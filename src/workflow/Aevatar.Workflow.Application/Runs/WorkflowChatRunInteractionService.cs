@@ -124,6 +124,12 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
         CancellationToken ct)
     {
         var chatHistoryDelivery = await ReserveChatHistoryDeliveryAsync(attempt.Request, ct).ConfigureAwait(false);
+        if (attempt.Request.ChatHistory is not null && chatHistoryDelivery is null)
+        {
+            await CleanupAttemptAsync(attempt, CancellationToken.None).ConfigureAwait(false);
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Failure(WorkflowChatRunStartError.ProjectionUnavailable);
+        }
 
         async ValueTask OnAcceptedAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
         {

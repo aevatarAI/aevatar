@@ -204,7 +204,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldContinueWithoutNotificationTarget_WhenChatHistoryReservationIsUnavailable()
+    public async Task ExecuteAsync_ShouldFailBeforeDispatch_WhenChatHistoryReservationIsUnavailable()
     {
         var actorResolver = new RecordingActorResolver
         {
@@ -221,10 +221,11 @@ public sealed class WorkflowChatRunInteractionServiceTests
             ReturnNullReservation = true,
         };
         var inner = new RecordingInteractionService();
+        var runProvisioningPort = new RecordingRunProvisioningPort();
         var service = CreateService(
             actorResolver,
             new RecordingProjectionPort(),
-            new RecordingRunProvisioningPort(),
+            runProvisioningPort,
             inner,
             chatHistoryTerminalDeliveryPort: deliveryPort);
 
@@ -239,12 +240,13 @@ public sealed class WorkflowChatRunInteractionServiceTests
                     "original user text")),
             static (_, _) => ValueTask.CompletedTask);
 
-        result.Succeeded.Should().BeTrue();
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ProjectionUnavailable);
         deliveryPort.Reservations.Should().ContainSingle();
-        inner.Requests.Should().ContainSingle();
-        inner.Requests[0].CompletionNotificationTarget.Should().BeNull();
+        inner.Requests.Should().BeEmpty();
         deliveryPort.Bindings.Should().BeEmpty();
         deliveryPort.Abandons.Should().BeEmpty();
+        runProvisioningPort.DestroyCalls.Should().Equal("run-1", "definition-1");
     }
 
     [Fact]

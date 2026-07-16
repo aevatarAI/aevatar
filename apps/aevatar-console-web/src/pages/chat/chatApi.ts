@@ -7,6 +7,11 @@ import type { ChatStudioTarget, ChatUsageSummary } from "./chatTypes";
 type JsonRecord = Record<string, unknown>;
 
 export type ChatStreamRequest = {
+  chatHistory: {
+    conversationId: string;
+    turnId: string;
+    userText: string;
+  };
   prompt: string;
   scopeId?: string;
   sessionId: string;
@@ -231,6 +236,7 @@ export async function startChatStream(
   const response = await authFetch("/api/chat", {
     body: JSON.stringify(
       compactObject({
+        chatHistory: request.chatHistory,
         prompt: request.prompt.trim(),
         scopeId: request.scopeId?.trim() || undefined,
         sessionId: request.sessionId.trim(),
