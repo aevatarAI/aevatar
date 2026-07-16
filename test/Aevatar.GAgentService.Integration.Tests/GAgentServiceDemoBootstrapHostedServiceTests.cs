@@ -17,7 +17,10 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
     public async Task StartAsync_WhenEnabled_ShouldBootstrapAllDemoWorkflowServices()
     {
         var commandPort = new RecordingServiceCommandPort();
-        var queryPort = new RecordingServiceQueryPort();
+        var queryPort = new RecordingServiceQueryPort
+        {
+            ReturnActiveTrafficAfterFirstTrafficQuery = true,
+        };
         var hostedService = CreateHostedService(
             commandPort,
             queryPort,
@@ -55,6 +58,80 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             x.Targets[0].ServingState == ServiceServingState.Active &&
             x.Targets[0].EnabledEndpointIds.Count == 1 &&
             x.Targets[0].EnabledEndpointIds[0] == "chat");
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenTrafficViewAlreadyActive_ShouldNotRepairServingTargets()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var queryPort = new RecordingServiceQueryPort
+        {
+            ReturnActiveTrafficImmediately = true,
+        };
+        queryPort.SeedPublishedDefaultDemoServices();
+        var hostedService = CreateHostedService(
+            commandPort,
+            queryPort,
+            new GAgentServiceDemoOptions
+            {
+                Enabled = true,
+            },
+            Environments.Development);
+
+        await hostedService.StartAsync(CancellationToken.None);
+
+        commandPort.ActivateServiceRevisionCommands.Should().BeEmpty();
+        commandPort.ReplaceServingTargetsCommands.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenDefaultServingHasNoActiveTrafficView_ShouldRepairThenFailClearly()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var queryPort = new RecordingServiceQueryPort();
+        queryPort.SeedPublishedDefaultDemoServices();
+        var hostedService = CreateHostedService(
+            commandPort,
+            queryPort,
+            new GAgentServiceDemoOptions
+            {
+                Enabled = true,
+                ReadinessObservationTimeout = TimeSpan.Zero,
+                ReadinessObservationPollInterval = TimeSpan.Zero,
+            },
+            Environments.Development);
+
+        var act = () => hostedService.StartAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("Demo service 'demo:gagent-service:samples:demo-uppercase' has no active serving traffic view.");
+        commandPort.ActivateServiceRevisionCommands.Should().ContainSingle();
+        commandPort.ReplaceServingTargetsCommands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenDefaultServingTrafficViewConvergesAfterRepair_ShouldPassReadiness()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var queryPort = new RecordingServiceQueryPort
+        {
+            ReturnActiveTrafficAfterFirstTrafficQuery = true,
+        };
+        queryPort.SeedPublishedDefaultDemoServices();
+        var hostedService = CreateHostedService(
+            commandPort,
+            queryPort,
+            new GAgentServiceDemoOptions
+            {
+                Enabled = true,
+            },
+            Environments.Development);
+
+        await hostedService.StartAsync(CancellationToken.None);
+
+        commandPort.ActivateServiceRevisionCommands.Should().HaveCount(3);
+        commandPort.ReplaceServingTargetsCommands.Should().HaveCount(3);
     }
 
     [Fact]
@@ -236,8 +313,63 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
 
     private sealed class RecordingServiceQueryPort : IServiceLifecycleQueryPort, IServiceServingQueryPort
     {
+        private static readonly string[] DemoServiceIds =
+        [
+            "demo-uppercase",
+            "demo-count-lines",
+            "demo-take-first-three",
+        ];
+
+        private readonly Dictionary<string, int> _trafficViewQueryCounts = [];
+        private readonly Dictionary<string, ServiceCatalogSnapshot> _services = [];
+        private readonly Dictionary<string, ServiceRevisionCatalogSnapshot> _revisions = [];
+        private readonly Dictionary<string, ServiceDeploymentCatalogSnapshot> _deployments = [];
+        private readonly Dictionary<string, ServiceServingSetSnapshot> _servingSets = [];
+
+        public bool ReturnActiveTrafficImmediately { get; init; }
+
+        public bool ReturnActiveTrafficAfterFirstTrafficQuery { get; init; }
+
+        public void SeedPublishedDefaultDemoServices()
+        {
+            foreach (var serviceId in DemoServiceIds)
+            {
+                var identity = CreateDemoIdentity(serviceId);
+                var serviceKey = ServiceKeys.Build(identity);
+                _services[serviceKey] = new ServiceCatalogSnapshot(
+                    serviceKey,
+                    identity.TenantId,
+                    identity.AppId,
+                    identity.Namespace,
+                    identity.ServiceId,
+                    serviceId,
+                    "builtin-v1",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    [],
+                    [],
+                    DateTimeOffset.UnixEpoch);
+                _revisions[serviceKey] = new ServiceRevisionCatalogSnapshot(
+                    serviceKey,
+                    [new ServiceRevisionSnapshot(
+                        "builtin-v1",
+                        ServiceImplementationKind.Workflow.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        null,
+                        null,
+                        DateTimeOffset.UnixEpoch,
+                        null)],
+                    DateTimeOffset.UnixEpoch);
+            }
+        }
+
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceCatalogSnapshot?>(null);
+            Task.FromResult(_services.GetValueOrDefault(ServiceKeys.Build(identity)));
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
             string tenantId,
@@ -248,13 +380,13 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
+            Task.FromResult(_revisions.GetValueOrDefault(ServiceKeys.Build(identity)));
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+            Task.FromResult(_deployments.GetValueOrDefault(ServiceKeys.Build(identity)));
 
         public Task<ServiceServingSetSnapshot?> GetServiceServingSetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceServingSetSnapshot?>(null);
+            Task.FromResult(_servingSets.GetValueOrDefault(ServiceKeys.Build(identity)));
 
         public Task<ServiceRolloutSnapshot?> GetServiceRolloutAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceRolloutSnapshot?>(null);
@@ -265,8 +397,45 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
             CancellationToken ct = default) =>
             Task.FromResult<ServiceRolloutCommandObservationSnapshot?>(null);
 
-        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+        public Task<ServiceTrafficViewSnapshot?> GetServiceTrafficViewAsync(ServiceIdentity identity, CancellationToken ct = default)
+        {
+            var serviceKey = ServiceKeys.Build(identity);
+            _trafficViewQueryCounts[serviceKey] = _trafficViewQueryCounts.GetValueOrDefault(serviceKey) + 1;
+            if (ReturnActiveTrafficImmediately ||
+                ReturnActiveTrafficAfterFirstTrafficQuery && _trafficViewQueryCounts[serviceKey] > 1)
+            {
+                return Task.FromResult<ServiceTrafficViewSnapshot?>(CreateActiveTrafficView(identity));
+            }
+
+            return Task.FromResult<ServiceTrafficViewSnapshot?>(null);
+        }
+
+        private static ServiceIdentity CreateDemoIdentity(string serviceId) =>
+            new()
+            {
+                TenantId = "demo",
+                AppId = "gagent-service",
+                Namespace = "samples",
+                ServiceId = serviceId,
+            };
+
+        private static ServiceTrafficViewSnapshot CreateActiveTrafficView(ServiceIdentity identity)
+        {
+            var deploymentId = $"{ServiceActorIds.Deployment(identity)}:builtin-v1";
+            return new ServiceTrafficViewSnapshot(
+                ServiceKeys.Build(identity),
+                1,
+                string.Empty,
+                [new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [new ServiceTrafficTargetSnapshot(
+                        deploymentId,
+                        "builtin-v1",
+                        $"gagent-service:workflow-definition:{deploymentId}",
+                        100,
+                        ServiceServingState.Active.ToString())])],
+                DateTimeOffset.UnixEpoch);
+        }
     }
 
     private sealed class RecordingHostEnvironment : IHostEnvironment
