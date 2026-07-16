@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
 using Aevatar.GAgentService.Projection.Contexts;
@@ -7,6 +8,7 @@ using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.GAgentService.Tests.Projection;
+using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -16,6 +18,116 @@ namespace Aevatar.GAgentService.Tests.Authorization;
 public sealed class NyxIdAuthorizationCatalogLifecycleTests
 {
     private static readonly DateTimeOffset ObservedAt = DateTimeOffset.Parse("2026-07-16T00:00:00Z");
+
+    [Fact]
+    public async Task CommandHandlers_ShouldPersistLifecycleAndIgnoreDuplicateOrStaleFacts()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        var activatedAt = Timestamp.FromDateTimeOffset(ObservedAt);
+
+        await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = activatedAt,
+        });
+        await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = activatedAt.Clone(),
+        });
+
+        var observation = ObservationCommand(owner, ObservedAt.AddMinutes(1));
+        await agent.HandleObserveAsync(observation);
+        await agent.HandleObserveAsync(observation.Clone());
+        var staleObservation = ObservationCommand(owner, ObservedAt);
+        await agent.HandleObserveAsync(staleObservation);
+
+        var conflictingObservation = observation.Clone();
+        conflictingObservation.ExternalRevision = "revision-conflict";
+        var conflict = () => agent.HandleObserveAsync(conflictingObservation);
+        await conflict.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot identify conflicting content*");
+
+        var refreshFailure = new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+        {
+            Owner = owner.Clone(),
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)),
+            FailureCode = "provider_unavailable",
+        };
+        await agent.HandleRefreshFailureAsync(refreshFailure);
+        await agent.HandleRefreshFailureAsync(refreshFailure.Clone());
+        agent.State.LastRefreshFailureCode.Should().Be("provider_unavailable");
+
+        var invalidation = new InvalidateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(3)),
+            Reason = "credential_revoked",
+        };
+        await agent.HandleInvalidateAsync(invalidation);
+        await agent.HandleInvalidateAsync(invalidation.Clone());
+        agent.State.LifecycleFence.Should().Be(1);
+
+        var cleanup = new CleanupNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(4)),
+            Reason = "owner_unbound",
+        };
+        await agent.HandleCleanupAsync(cleanup);
+        await agent.HandleCleanupAsync(cleanup.Clone());
+
+        agent.State.Cleaned.Should().BeTrue();
+        agent.State.CleanupReason.Should().Be("owner_unbound");
+        agent.State.Activated.Should().BeFalse();
+        agent.State.LifecycleFence.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData("duplicate_service", "*service identities must be unique*")]
+    [InlineData("binding_without_id", "*node authorization evidence is invalid*")]
+    [InlineData("required_without_primary", "*require exactly one primary node*")]
+    [InlineData("direct_with_nodes", "*cannot carry node authorization evidence*")]
+    public async Task ObserveHandler_ShouldRejectInvalidTypedTopology(
+        string scenario,
+        string expectedMessage)
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        });
+        var command = ObservationCommand(owner, ObservedAt.AddMinutes(1));
+
+        switch (scenario)
+        {
+            case "duplicate_service":
+                command.Services.Add(command.Services[0].Clone());
+                break;
+            case "binding_without_id":
+                command.Services[0].Nodes[1].BindingId = string.Empty;
+                break;
+            case "required_without_primary":
+                command.Services[0].Nodes.RemoveAt(0);
+                break;
+            case "direct_with_nodes":
+                command.Services[0].NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+        command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            command.Owner,
+            command.Services);
+
+        var act = () => agent.HandleObserveAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(expectedMessage);
+    }
 
     [Fact]
     public void StateTransition_ShouldPreserveCatalogFactsAndClearInvalidationOnNewObservation()
@@ -209,6 +321,33 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         OwnerSubject = "owner-alpha",
     };
 
+    private static NyxIdAuthorizationCatalogGAgent CreateAgent(AuthorizationOwnerIdentity owner) =>
+        GAgentServiceTestKit.CreateStatefulAgent<
+            NyxIdAuthorizationCatalogGAgent,
+            NyxIdAuthorizationCatalogState>(
+            new InMemoryEventStore(),
+            NyxIdAuthorizationCatalogActorIds.Build(owner),
+            static () => new NyxIdAuthorizationCatalogGAgent());
+
+    private static ObserveNyxIdAuthorizationCatalogCommand ObservationCommand(
+        AuthorizationOwnerIdentity owner,
+        DateTimeOffset observedAt)
+    {
+        var command = new ObserveNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
+            FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(15)),
+            ExternalRevision = "revision-1",
+            ExpectedLifecycleFence = 0,
+        };
+        command.Services.Add(ServiceEvidence());
+        command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+            command.Owner,
+            command.Services);
+        return command;
+    }
+
     private static NyxIdAuthorizationCatalogObservedEvent Observed(
         AuthorizationOwnerIdentity owner,
         string digest)
@@ -221,6 +360,12 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             ExternalRevision = "revision-1",
             ContentDigest = digest,
         };
+        observed.Services.Add(ServiceEvidence());
+        return observed;
+    }
+
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence()
+    {
         var service = new NyxIdAuthorizationServiceEvidence
         {
             UserServiceId = "svc-alpha",
@@ -254,8 +399,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             BindingId = "binding-b",
             RoutePriority = 7,
         });
-        observed.Services.Add(service);
-        return observed;
+        return service;
     }
 
     private static NyxIdAuthorizationCatalogState Transition(
