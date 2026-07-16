@@ -138,11 +138,23 @@ describe("teamRoutes", () => {
         actorId: " actor://scope-alpha/run-1 ",
         memberId: " member-alpha ",
         runId: " run-1 ",
+        scheduleId: " sch-alpha ",
         scopeId: " scope-alpha ",
         teamId: " t-alpha ",
       }),
     ).toBe(
-      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?runId=run-1&actorId=actor%3A%2F%2Fscope-alpha%2Frun-1",
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?runId=run-1&actorId=actor%3A%2F%2Fscope-alpha%2Frun-1&scheduleId=sch-alpha",
+    );
+
+    expect(
+      buildTeamMemberPublishedRunsHref({
+        memberId: "member-alpha",
+        scheduleId: "schedule-alpha",
+        scopeId: "scope-alpha",
+        teamId: "t-alpha",
+      }),
+    ).toBe(
+      "/scopes/scope-alpha/teams/t-alpha/members/member-alpha/runs?scheduleId=schedule-alpha",
     );
 
     expect(

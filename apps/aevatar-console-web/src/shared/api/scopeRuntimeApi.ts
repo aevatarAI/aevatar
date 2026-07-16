@@ -1457,14 +1457,22 @@ export const scopeRuntimeApi = {
     scopeId: string,
     memberId: string,
     options?: {
+      scheduleId?: string;
+      status?: string;
       take?: number;
+      updatedFrom?: string;
+      updatedTo?: string;
     },
   ): Promise<ScopeMemberRunCatalogSnapshot> {
     return requestJson(
       withQuery(
         `/api/scopes/${encodeURIComponent(scopeId)}/members/${encodeURIComponent(memberId)}/runs`,
         {
+          scheduleId: options?.scheduleId?.trim(),
+          status: options?.status?.trim(),
           take: options?.take,
+          updatedFrom: options?.updatedFrom?.trim(),
+          updatedTo: options?.updatedTo?.trim(),
         },
       ),
       decodeScopeMemberRunCatalogSnapshot,
