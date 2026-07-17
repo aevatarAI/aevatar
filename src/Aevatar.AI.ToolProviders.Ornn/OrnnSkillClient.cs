@@ -659,7 +659,7 @@ public sealed class OrnnSkillClient
         Aevatar.AI.Abstractions.ExactRemoteSkillRef reference,
         OrnnSkillJson package,
         OrnnExactSkillDetail detail,
-        IReadOnlyList<OrnnExactSkillVersionRow> versionRows)
+        IReadOnlyList<OrnnExactSkillVersionRow?>? versionRows)
     {
         RequireGuidMatch(detail.Guid, reference.Guid, ExactRemoteResourceKind.Skill, reference.LiteralVersion);
         RequireText(package.Name, "package name", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
@@ -706,7 +706,7 @@ public sealed class OrnnSkillClient
         Aevatar.AI.Abstractions.ExactRemoteSkillsetRef reference,
         OrnnSkillSet detail,
         OrnnExactSkillsetClosure closure,
-        IReadOnlyList<OrnnExactSkillsetVersionRow> versionRows)
+        IReadOnlyList<OrnnExactSkillsetVersionRow?>? versionRows)
     {
         RequireGuidMatch(detail.Guid, reference.Guid, ExactRemoteResourceKind.Skillset, reference.LiteralVersion);
         RequireText(detail.Name, "detail name", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
@@ -715,6 +715,14 @@ public sealed class OrnnSkillClient
         RequireText(closure.Instructions, "closure instructions", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
         RequireEqual(detail.Instructions!, closure.Instructions!, "detail/closure instructions", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
 
+        if (detail.Members is null)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                "direct members were missing or empty");
+        }
         if (detail.Members.Count > MaximumDirectMembers)
         {
             throw ExactRemoteFetchException.InvalidResponse(
@@ -730,6 +738,14 @@ public sealed class OrnnSkillClient
                 reference.Guid,
                 reference.LiteralVersion,
                 "direct members were missing or empty");
+        }
+        if (detail.Members.Any(static member => member is null))
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                "direct members contained null");
         }
         if (closure.Items is null)
         {
@@ -881,7 +897,7 @@ public sealed class OrnnSkillClient
             $"package path '{path}' is not a normalized relative path");
 
     private static IReadOnlyList<ExactRemoteToolDeclaration> NormalizeTools(
-        IReadOnlyList<OrnnSkillToolDeclaration>? tools,
+        IReadOnlyList<OrnnSkillToolDeclaration?>? tools,
         string guid,
         string literalVersion)
     {
@@ -900,7 +916,7 @@ public sealed class OrnnSkillClient
         var normalized = new List<ExactRemoteToolDeclaration>(tools.Count);
         foreach (var tool in tools)
         {
-            if (string.IsNullOrWhiteSpace(tool.Tool) || string.IsNullOrWhiteSpace(tool.Type) ||
+            if (tool is null || string.IsNullOrWhiteSpace(tool.Tool) || string.IsNullOrWhiteSpace(tool.Type) ||
                 !names.Add(tool.Tool))
             {
                 throw ExactRemoteFetchException.InvalidResponse(
@@ -914,7 +930,7 @@ public sealed class OrnnSkillClient
             var mcpIdentities = new HashSet<(string Mcp, string Version)>();
             foreach (var server in tool.McpServers ?? [])
             {
-                if (string.IsNullOrWhiteSpace(server.Mcp) || string.IsNullOrWhiteSpace(server.Version) ||
+                if (server is null || string.IsNullOrWhiteSpace(server.Mcp) || string.IsNullOrWhiteSpace(server.Version) ||
                     !mcpIdentities.Add((server.Mcp, server.Version)))
                 {
                     throw ExactRemoteFetchException.InvalidResponse(
@@ -1035,13 +1051,26 @@ public sealed class OrnnSkillClient
     }
 
     private static T SelectExactVersionRow<T>(
-        IReadOnlyList<T> rows,
+        IReadOnlyList<T?>? rows,
         string literalVersion,
         Func<T, string?> versionSelector,
         ExactRemoteResourceKind resourceKind,
         string guid)
+        where T : class
     {
-        var matches = rows.Where(row => string.Equals(versionSelector(row), literalVersion, StringComparison.Ordinal)).ToArray();
+        if (rows is null || rows.Any(static row => row is null))
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                resourceKind,
+                guid,
+                literalVersion,
+                "versions response items were missing or contained null");
+        }
+
+        var matches = rows
+            .Select(static row => row!)
+            .Where(row => string.Equals(versionSelector(row), literalVersion, StringComparison.Ordinal))
+            .ToArray();
         if (matches.Length != 1)
         {
             throw ExactRemoteFetchException.InvalidResponse(
@@ -1054,7 +1083,7 @@ public sealed class OrnnSkillClient
     }
 
     private static IReadOnlyList<ValidatedClosureItem> ValidateClosureItems(
-        IReadOnlyList<OrnnExactSkillsetClosureItem> items,
+        IReadOnlyList<OrnnExactSkillsetClosureItem?> items,
         string guid,
         string literalVersion)
     {
@@ -1062,6 +1091,14 @@ public sealed class OrnnSkillClient
         var validated = new List<ValidatedClosureItem>(items.Count);
         foreach (var item in items)
         {
+            if (item is null)
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skillset,
+                    guid,
+                    literalVersion,
+                    "closure items contained null");
+            }
             RequireText(item.Ref, "closure ref", ExactRemoteResourceKind.Skillset, guid, literalVersion);
             RequireText(item.Name, "closure name", ExactRemoteResourceKind.Skillset, guid, literalVersion);
             ValidateExactReference(item.Guid, item.Version, ExactRemoteResourceKind.Skillset);
@@ -1103,6 +1140,15 @@ public sealed class OrnnSkillClient
         string guid,
         string literalVersion)
     {
+        if (members.Any(static member => member is null))
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                guid,
+                literalVersion,
+                "direct members contained null");
+        }
+
         var roots = closureItems.Where(static item => item.Depth == 0).ToArray();
         if (roots.Length != members.Count)
         {
@@ -1267,7 +1313,7 @@ public sealed class OrnnSkillMetadata
     public string? Category { get; set; }
     [JsonPropertyName("tag")]
     public List<string>? Tags { get; set; }
-    public List<OrnnSkillToolDeclaration>? Tools { get; set; }
+    public List<OrnnSkillToolDeclaration?>? Tools { get; set; }
 }
 
 public sealed class OrnnSkillToolDeclaration
@@ -1275,7 +1321,7 @@ public sealed class OrnnSkillToolDeclaration
     public string? Tool { get; set; }
     public string? Type { get; set; }
     [JsonPropertyName("mcp-servers")]
-    public List<OrnnMcpServerDeclaration>? McpServers { get; set; }
+    public List<OrnnMcpServerDeclaration?>? McpServers { get; set; }
 }
 
 public sealed class OrnnMcpServerDeclaration
@@ -1329,9 +1375,9 @@ internal sealed class OrnnExactSkillDetail
     public OrnnSkillMetadata? Metadata { get; set; }
 }
 
-internal sealed class OrnnExactVersionItems<T>
+internal sealed class OrnnExactVersionItems<T> where T : class
 {
-    public List<T> Items { get; set; } = [];
+    public List<T?>? Items { get; set; } = [];
 }
 
 internal interface IOrnnExactVersionRow
@@ -1366,7 +1412,7 @@ internal sealed class OrnnExactSkillsetVersionRow : IOrnnExactVersionRow
 internal sealed class OrnnExactSkillsetClosure
 {
     public string? Instructions { get; set; }
-    public List<OrnnExactSkillsetClosureItem>? Items { get; set; }
+    public List<OrnnExactSkillsetClosureItem?>? Items { get; set; }
 }
 
 internal sealed class OrnnExactSkillsetClosureItem

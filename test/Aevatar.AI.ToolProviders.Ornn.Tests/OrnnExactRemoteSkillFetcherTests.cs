@@ -514,6 +514,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     [InlineData("blank-mcp-name")]
     [InlineData("blank-mcp-version")]
     [InlineData("duplicate-mcp")]
+    [InlineData("null-tool")]
+    [InlineData("null-mcp-server")]
     public async Task FetchExactSkillAsync_WhenDeclaredToolsAreInvalid_FailsClosed(string invalidTools)
     {
         var handler = ExactSkillHandler(
@@ -523,7 +525,11 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         var act = async () => await fetcher.FetchExactSkillAsync("token", SkillReference());
 
         var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
-        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        var exception = assertion.Which;
+        exception.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        exception.ResourceKind.Should().Be(ExactRemoteResourceKind.Skill);
+        exception.Guid.Should().Be(SkillGuid);
+        exception.LiteralVersion.Should().Be("1.2");
         AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
     }
 
@@ -657,8 +663,11 @@ public sealed class OrnnExactRemoteSkillFetcherTests
 
     [Theory]
     [InlineData("empty-members", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("null-members", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("null-member", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("too-many-members", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("missing-closure", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("null-closure-item", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("too-many-closure-nodes", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("missing-member-count", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("mismatched-member-count", ExactRemoteFetchFailureKind.IntegrityMismatch)]
@@ -682,8 +691,53 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         var act = async () => await fetcher.FetchExactSkillsetAsync("token", SkillsetReference());
 
         var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
-        assertion.Which.FailureKind.Should().Be(expectedFailureKind);
+        var exception = assertion.Which;
+        exception.FailureKind.Should().Be(expectedFailureKind);
+        exception.ResourceKind.Should().Be(ExactRemoteResourceKind.Skillset);
+        var expectedGuid = invalidEvidence == "invalid-closure-guid" ? "not-a-guid" :
+            invalidEvidence == "invalid-closure-version" ? DependencyGuid : SkillsetGuid;
+        var expectedVersion = invalidEvidence switch
+        {
+            "invalid-closure-guid" => "3.0",
+            "invalid-closure-version" => "latest",
+            _ => "2.0",
+        };
+        exception.Guid.Should().Be(expectedGuid);
+        exception.LiteralVersion.Should().Be(expectedVersion);
         AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task FetchExactAsync_WhenVersionsItemsAreNullOrContainNull_FailsClosedWithoutFallback(
+        bool isSkillset,
+        bool containsNullElement)
+    {
+        var itemsJson = containsNullElement ? "[null]" : "null";
+        var handler = isSkillset
+            ? ExactSkillsetHandler(versionsJson: SkillsetVersionsWithItems(itemsJson))
+            : ExactSkillHandler(versionsJson: SkillVersionsWithItems(itemsJson));
+        var fetcher = CreateFetcher(handler);
+
+        Func<Task> act = isSkillset
+            ? async () => await fetcher.FetchExactSkillsetAsync("token", SkillsetReference())
+            : async () => await fetcher.FetchExactSkillAsync("token", SkillReference());
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        var exception = assertion.Which;
+        exception.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        exception.ResourceKind.Should().Be(
+            isSkillset ? ExactRemoteResourceKind.Skillset : ExactRemoteResourceKind.Skill);
+        exception.Guid.Should().Be(isSkillset ? SkillsetGuid : SkillGuid);
+        exception.LiteralVersion.Should().Be(isSkillset ? "2.0" : "1.2");
+        AssertOnlyExactRequests(
+            handler,
+            isSkillset ? SkillsetGuid : SkillGuid,
+            isSkillset ? "2.0" : "1.2",
+            isSkillset);
     }
 
     private static OrnnRemoteSkillFetcher CreateFetcher(
@@ -826,6 +880,14 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         }
         """;
 
+    private static string SkillVersionsWithItems(string itemsJson) => $$"""
+        {
+          "data": {
+            "items": {{itemsJson}}
+          }
+        }
+        """;
+
     private static string SkillVersionRow(
         string version = "1.2",
         string? skillHash = null,
@@ -875,6 +937,14 @@ public sealed class OrnnExactRemoteSkillFetcherTests
             "items": [
               {{itemsJson ?? SkillsetVersionRow()}}
             ]
+          }
+        }
+        """;
+
+    private static string SkillsetVersionsWithItems(string itemsJson) => $$"""
+        {
+          "data": {
+            "items": {{itemsJson}}
           }
         }
         """;
@@ -938,6 +1008,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         "blank-mcp-name" => $"[{ToolJson("workspace.read", mcpServersJson: "[{\"mcp\":\" \",\"version\":\"2.0\"}]")}]",
         "blank-mcp-version" => $"[{ToolJson("workspace.read", mcpServersJson: "[{\"mcp\":\"workspace-mcp\",\"version\":\" \"}]")}]",
         "duplicate-mcp" => $"[{ToolJson("workspace.read", mcpServersJson: "[{\"mcp\":\"workspace-mcp\",\"version\":\"2.0\"},{\"mcp\":\"workspace-mcp\",\"version\":\"2.0\"}]")}]",
+        "null-tool" => "[null]",
+        "null-mcp-server" => $"[{ToolJson("workspace.read", mcpServersJson: "[null]")}]",
         _ => throw new ArgumentOutOfRangeException(nameof(invalidTools)),
     };
 
@@ -970,8 +1042,11 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         return invalidEvidence switch
         {
             "empty-members" => (SkillsetDetail(membersJson: "[]"), null, null),
+            "null-members" => (SkillsetDetail(membersJson: "null"), null, null),
+            "null-member" => (SkillsetDetail(membersJson: "[null]"), null, null),
             "too-many-members" => (SkillsetDetail(membersJson: MemberReferencesJson(101)), null, null),
             "missing-closure" => (null, SkillsetClosure("null"), null),
+            "null-closure-item" => (null, SkillsetClosure("[null]"), null),
             "too-many-closure-nodes" => (null, SkillsetClosure(ClosureItemsJson(501)), null),
             "missing-member-count" => (null, null, SkillsetVersions(SkillsetVersionRow(memberCountJson: null))),
             "mismatched-member-count" => (null, null, SkillsetVersions(SkillsetVersionRow(memberCountJson: "3"))),
