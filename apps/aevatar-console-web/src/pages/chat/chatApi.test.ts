@@ -18,11 +18,6 @@ describe("chatApi", () => {
     const controller = new AbortController();
     await startChatStream(
       {
-        chatHistory: {
-          conversationId: "conversation-a",
-          turnId: "turn-a",
-          userText: "Create a workflow",
-        },
         prompt: " Create a workflow ",
         scopeId: " scope-a ",
         sessionId: "session-a",
@@ -34,11 +29,6 @@ describe("chatApi", () => {
       "/api/chat",
       expect.objectContaining({
         body: JSON.stringify({
-          chatHistory: {
-            conversationId: "conversation-a",
-            turnId: "turn-a",
-            userText: "Create a workflow",
-          },
           prompt: "Create a workflow",
           scopeId: "scope-a",
           sessionId: "session-a",
