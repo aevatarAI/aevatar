@@ -10,20 +10,27 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
     private readonly Func<HttpRequestMessage, HttpResponseMessage>? _responseRouter;
     private readonly bool _hangUntilCanceled;
     private readonly ConcurrentQueue<CapturedHttpRequest> _requests = new();
+    private readonly int _expectedRequestCount;
+    private readonly TaskCompletionSource _expectedRequestsStarted = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _requestCount;
 
     public IReadOnlyList<CapturedHttpRequest> Requests => _requests.ToArray();
+    public Task ExpectedRequestsStarted => _expectedRequestsStarted.Task;
 
     public OrnnTestHttpMessageHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] responses)
-        : this(hangUntilCanceled: false, responseRouter: null, responses)
+        : this(hangUntilCanceled: false, expectedRequestCount: 1, responseRouter: null, responses)
     {
     }
 
     private OrnnTestHttpMessageHandler(
         bool hangUntilCanceled,
+        int expectedRequestCount,
         Func<HttpRequestMessage, HttpResponseMessage>? responseRouter,
         params Func<HttpRequestMessage, HttpResponseMessage>[] responses)
     {
         _hangUntilCanceled = hangUntilCanceled;
+        _expectedRequestCount = expectedRequestCount;
         _responseRouter = responseRouter;
         foreach (var response in responses)
             _responses.Enqueue(response);
@@ -40,19 +47,27 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
     /// the only thing that ends the wait, so the timeout assertion is deterministic regardless
     /// of the host machine's scheduler.
     /// </summary>
-    public static OrnnTestHttpMessageHandler HangingUntilCanceled()
+    public static OrnnTestHttpMessageHandler HangingUntilCanceled(int expectedRequestCount = 1)
     {
-        return new OrnnTestHttpMessageHandler(hangUntilCanceled: true, responseRouter: null);
+        return new OrnnTestHttpMessageHandler(
+            hangUntilCanceled: true,
+            expectedRequestCount,
+            responseRouter: null);
     }
 
     public static OrnnTestHttpMessageHandler Routing(Func<HttpRequestMessage, HttpResponseMessage> responseRouter)
     {
-        return new OrnnTestHttpMessageHandler(hangUntilCanceled: false, responseRouter);
+        return new OrnnTestHttpMessageHandler(
+            hangUntilCanceled: false,
+            expectedRequestCount: 1,
+            responseRouter);
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         _requests.Enqueue(CapturedHttpRequest.From(request));
+        if (Interlocked.Increment(ref _requestCount) >= _expectedRequestCount)
+            _expectedRequestsStarted.TrySetResult();
 
         if (_hangUntilCanceled)
         {

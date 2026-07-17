@@ -27,6 +27,7 @@ public sealed class OrnnSkillClient
     private readonly NyxIdApiClient _nyxApi;
     private readonly OrnnOptions _options;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -64,12 +65,23 @@ public sealed class OrnnSkillClient
         NyxIdApiClient nyxApi,
         TimeSpan perCallTimeout,
         ILogger<OrnnSkillClient>? logger = null)
+        : this(options, nyxApi, perCallTimeout, TimeProvider.System, logger)
+    {
+    }
+
+    public OrnnSkillClient(
+        OrnnOptions options,
+        NyxIdApiClient nyxApi,
+        TimeSpan perCallTimeout,
+        TimeProvider timeProvider,
+        ILogger<OrnnSkillClient>? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _nyxApi = nyxApi ?? throw new ArgumentNullException(nameof(nyxApi));
         if (perCallTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(perCallTimeout), "Per-call timeout must be positive.");
         _perCallTimeout = perCallTimeout;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? NullLogger<OrnnSkillClient>.Instance;
     }
 
@@ -102,7 +114,7 @@ public sealed class OrnnSkillClient
 
         var path = $"/api/v1/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
 
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try
@@ -157,7 +169,7 @@ public sealed class OrnnSkillClient
     {
         var path = $"/api/v1/skills/{Uri.EscapeDataString(idOrName)}/json";
 
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try
@@ -223,7 +235,7 @@ public sealed class OrnnSkillClient
     {
         var path = $"/api/v1/skillsets/{Uri.EscapeDataString(idOrName)}";
 
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try
@@ -284,7 +296,7 @@ public sealed class OrnnSkillClient
         var encodedVersion = Uri.EscapeDataString(reference.LiteralVersion);
         var resourceKind = ExactRemoteResourceKind.Skill;
 
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         try
         {
@@ -343,7 +355,7 @@ public sealed class OrnnSkillClient
         var encodedVersion = Uri.EscapeDataString(reference.LiteralVersion);
         var resourceKind = ExactRemoteResourceKind.Skillset;
 
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         try
         {
@@ -394,7 +406,7 @@ public sealed class OrnnSkillClient
         byte[] zipBytes,
         CancellationToken ct = default)
     {
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try
@@ -442,7 +454,7 @@ public sealed class OrnnSkillClient
         CancellationToken ct = default)
     {
         var path = $"/api/v1/skills/{Uri.EscapeDataString(skillId)}";
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try
@@ -899,12 +911,11 @@ public sealed class OrnnSkillClient
             }
 
             var mcpServers = new List<ExactRemoteMcpServerDeclaration>();
-            var mcpKeys = new HashSet<string>(StringComparer.Ordinal);
+            var mcpIdentities = new HashSet<(string Mcp, string Version)>();
             foreach (var server in tool.McpServers ?? [])
             {
-                var key = $"{server.Mcp}\u001f{server.Version}";
                 if (string.IsNullOrWhiteSpace(server.Mcp) || string.IsNullOrWhiteSpace(server.Version) ||
-                    !mcpKeys.Add(key))
+                    !mcpIdentities.Add((server.Mcp, server.Version)))
                 {
                     throw ExactRemoteFetchException.InvalidResponse(
                         ExactRemoteResourceKind.Skill,
@@ -932,9 +943,11 @@ public sealed class OrnnSkillClient
         string guid,
         string literalVersion)
     {
-        var packageKeys = packageTools.Select(ToolKey).ToHashSet(StringComparer.Ordinal);
-        var detailKeys = detailTools.Select(ToolKey).ToHashSet(StringComparer.Ordinal);
-        if (!packageKeys.SetEquals(detailKeys))
+        var packageDeclarations = packageTools.ToHashSet(ExactRemoteToolDeclarationComparer.Instance);
+        var detailDeclarations = detailTools.ToHashSet(ExactRemoteToolDeclarationComparer.Instance);
+        if (packageDeclarations.Count != packageTools.Count ||
+            detailDeclarations.Count != detailTools.Count ||
+            !packageDeclarations.SetEquals(detailDeclarations))
         {
             throw ExactRemoteFetchException.IntegrityMismatch(
                 ExactRemoteResourceKind.Skill,
@@ -943,9 +956,6 @@ public sealed class OrnnSkillClient
                 "package/detail declared tools differ");
         }
     }
-
-    private static string ToolKey(ExactRemoteToolDeclaration tool) =>
-        $"{tool.Tool}\u001f{tool.Type}\u001f{string.Join('\u001e', tool.McpServers.Select(static server => $"{server.Mcp}\u001d{server.Version}"))}";
 
     private static void VerifyIntegrity(string skillHash, string? integrity, string guid, string literalVersion)
     {
@@ -1107,9 +1117,16 @@ public sealed class OrnnSkillClient
         var resolved = new List<Aevatar.AI.Abstractions.ExactRemoteSkillRef>(members.Count);
         foreach (var member in members)
         {
-            RequireText(member.Name, "direct member name", ExactRemoteResourceKind.Skillset, guid, literalVersion);
+            if (string.IsNullOrWhiteSpace(member.Guid) && string.IsNullOrWhiteSpace(member.Name))
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skillset,
+                    guid,
+                    literalVersion,
+                    "direct member identifier was missing");
+            }
             RequireText(member.Version, "direct member version", ExactRemoteResourceKind.Skillset, guid, literalVersion);
-            if (member.Guid is not null && !System.Guid.TryParse(member.Guid, out _))
+            if (member.Guid is not null && !System.Guid.TryParseExact(member.Guid, "D", out _))
             {
                 throw ExactRemoteFetchException.InvalidResponse(
                     ExactRemoteResourceKind.Skillset,
@@ -1133,15 +1150,16 @@ public sealed class OrnnSkillClient
 
     private static bool MemberMatches(OrnnSkillSetMember member, ValidatedClosureItem root)
     {
-        if (!string.IsNullOrWhiteSpace(member.Guid) &&
-            System.Guid.TryParse(member.Guid, out var memberGuid) &&
-            System.Guid.TryParse(root.Reference.Guid, out var rootGuid))
-        {
-            return memberGuid == rootGuid;
-        }
-
-        if (!string.Equals(member.Name, root.Name, StringComparison.Ordinal))
+        var identityMatches = !string.IsNullOrWhiteSpace(member.Guid)
+            ? System.Guid.TryParse(member.Guid, out var memberGuid) &&
+              System.Guid.TryParse(root.Reference.Guid, out var rootGuid) &&
+              memberGuid == rootGuid &&
+              (string.IsNullOrWhiteSpace(member.Name) ||
+               string.Equals(member.Name, root.Name, StringComparison.Ordinal))
+            : string.Equals(member.Name, root.Name, StringComparison.Ordinal);
+        if (!identityMatches)
             return false;
+
         return !IsLiteralVersion(member.Version) ||
                string.Equals(member.Version, root.Reference.LiteralVersion, StringComparison.Ordinal);
     }
@@ -1422,14 +1440,24 @@ internal sealed class OrnnSkillSetMemberJsonConverter : JsonConverter<OrnnSkillS
 
         var trimmed = raw.Trim();
         var at = trimmed.LastIndexOf('@');
-        return at > 0
+        if (at <= 0)
+            return new OrnnSkillSetMember { Name = trimmed, RawReference = trimmed };
+
+        var identifier = trimmed[..at];
+        var version = trimmed[(at + 1)..];
+        return System.Guid.TryParseExact(identifier, "D", out var parsedGuid)
             ? new OrnnSkillSetMember
             {
-                Name = trimmed[..at],
-                Version = trimmed[(at + 1)..],
+                Guid = parsedGuid.ToString("D"),
+                Version = version,
                 RawReference = trimmed,
             }
-            : new OrnnSkillSetMember { Name = trimmed, RawReference = trimmed };
+            : new OrnnSkillSetMember
+            {
+                Name = identifier,
+                Version = version,
+                RawReference = trimmed,
+            };
     }
 
     private static string? ReadString(JsonElement root, string propertyName)

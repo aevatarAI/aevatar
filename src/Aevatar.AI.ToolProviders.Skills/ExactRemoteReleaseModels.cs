@@ -15,6 +15,49 @@ public sealed record ExactRemoteToolDeclaration(
     string Type,
     IReadOnlyList<ExactRemoteMcpServerDeclaration> McpServers);
 
+public sealed class ExactRemoteToolDeclarationComparer : IEqualityComparer<ExactRemoteToolDeclaration>
+{
+    public static ExactRemoteToolDeclarationComparer Instance { get; } = new();
+
+    private ExactRemoteToolDeclarationComparer()
+    {
+    }
+
+    public bool Equals(ExactRemoteToolDeclaration? x, ExactRemoteToolDeclaration? y)
+    {
+        if (ReferenceEquals(x, y))
+            return true;
+        if (x is null || y is null ||
+            !string.Equals(x.Tool, y.Tool, StringComparison.Ordinal) ||
+            !string.Equals(x.Type, y.Type, StringComparison.Ordinal) ||
+            x.McpServers.Count != y.McpServers.Count)
+        {
+            return false;
+        }
+
+        return OrderedServers(x).SequenceEqual(OrderedServers(y));
+    }
+
+    public int GetHashCode(ExactRemoteToolDeclaration declaration)
+    {
+        var hashCode = new HashCode();
+        hashCode.Add(declaration.Tool, StringComparer.Ordinal);
+        hashCode.Add(declaration.Type, StringComparer.Ordinal);
+        foreach (var server in OrderedServers(declaration))
+        {
+            hashCode.Add(server.Mcp, StringComparer.Ordinal);
+            hashCode.Add(server.Version, StringComparer.Ordinal);
+        }
+        return hashCode.ToHashCode();
+    }
+
+    private static IOrderedEnumerable<ExactRemoteMcpServerDeclaration> OrderedServers(
+        ExactRemoteToolDeclaration declaration) =>
+        declaration.McpServers
+            .OrderBy(static server => server.Mcp, StringComparer.Ordinal)
+            .ThenBy(static server => server.Version, StringComparer.Ordinal);
+}
+
 public sealed record ExactRemotePackageShape(
     int FileCount,
     int MaximumPathUtf8Bytes,
