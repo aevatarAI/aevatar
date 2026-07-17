@@ -122,10 +122,14 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             },
             "required_service_slugs": {
               "type": "array",
-              "description": "Optional NyxID service slugs the scheduled skill body will call through nyxid_proxy, such as tavily-search or api-github. The creator resolves these to service IDs for the scoped key; callers must not provide service IDs.",
+              "description": "Optional extra NyxID service slugs the scheduled skill body will call through nyxid_proxy, such as tavily-search or api-github. This does not select the one-shot reminder delivery provider; use nyx_provider_slug for that. The creator resolves these to service IDs for the scoped key; callers must not provide service IDs.",
               "items": {
                 "type": "string"
               }
+            },
+            "nyx_provider_slug": {
+              "type": "string",
+              "description": "Optional one-shot reminder outbound delivery provider slug, such as api-lark-bot-2. Use only when the user explicitly selects a connected outbound channel; otherwise omit it so the current channel context is used."
             },
             "output_format": {
               "type": "string",

@@ -37,7 +37,8 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("scope_id", out _).Should().BeFalse();
         properties.TryGetProperty("owner_scope", out _).Should().BeFalse();
         properties.TryGetProperty("nyx_api_key", out _).Should().BeFalse();
-        properties.TryGetProperty("nyx_provider_slug", out _).Should().BeFalse();
+        properties.TryGetProperty("nyx_provider_slug", out var nyxProviderSlug).Should().BeTrue();
+        nyxProviderSlug.GetProperty("description").GetString().Should().Contain("one-shot reminder outbound delivery provider");
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
         properties.TryGetProperty("skill_content", out _).Should().BeFalse();
         properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
@@ -89,6 +90,7 @@ public sealed class ScheduledAgentCreatorToolTests
     [InlineData("""{"skill_ref":"daily","schedule_cron":"","schedule_timezone":"UTC"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":""}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","nyx_api_key":"bad"}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","nyx_provider_slug":"api-lark-bot-2"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":"tavily-search"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":["tavily-search",123]}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","external_trigger_sources":[{"source_id":"webhook-main","kind":"webhook"}]}""")]
@@ -941,6 +943,90 @@ public sealed class ScheduledAgentCreatorToolTests
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OneShotReminderWithExplicitNyxProviderSlug_ShouldUseItAsOutboundDeliveryProvider()
+    {
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(
+            handler: handler,
+            authorizationSnapshot: CreateSnapshot(
+                ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
+                ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
+                ServiceEvidence("svc-llm", "chrono-llm-public")));
+        ScheduledWorkflowAgentCreateRequest? captured = null;
+        harness.CreationPort.CreateAsync(
+                Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
+                Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                var request = callInfo.Arg<ScheduledWorkflowAgentCreateRequest>();
+                return Task.FromResult(new ScheduledWorkflowAgentCreationReceipt(
+                    request.Schedule.ScheduleId,
+                    $"actor:{request.Schedule.ScheduleId}",
+                    true,
+                    "command-1",
+                    "correlation-1",
+                    DateTimeOffset.UtcNow,
+                    "accepted"));
+            });
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 600,
+                  "one_shot_message": "Send the reminder",
+                  "nyx_provider_slug": "api-lark-bot-2",
+                  "required_service_slugs": ["api-lark-bot-2"]
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+
+            captured.Should().NotBeNull();
+            captured!.Schedule.Headers["scheduled_agent.nyx_provider_slug"].Should().Be("api-lark-bot-2");
+            captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot-2");
+            captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-2");
+
+            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            using var createBody = JsonDocument.Parse(createRequest.Body!);
+            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
+                .Should().BeEquivalentTo("svc-lark-2", "svc-lark-failure", "svc-lark-2", "svc-llm");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RequiredServiceSlugsAlone_ShouldNotOverrideOneShotOutboundDeliveryProvider()
+    {
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(
+            handler: handler,
+            authorizationSnapshot: CreateSnapshot(
+                ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
+                ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
+                ServiceEvidence("svc-llm", "chrono-llm-public")));
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 600,
+                  "one_shot_message": "Send the reminder",
+                  "required_service_slugs": ["api-lark-bot-2"]
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("nyxid_service_slug_not_found:api-lark-bot");
+            handler.Requests.Should().BeEmpty();
         });
     }
 

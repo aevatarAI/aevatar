@@ -34,6 +34,7 @@ internal sealed class ScheduledAgentCreateRequestMapper
         "max_history_messages",
         "requires_nyxid_proxy_success",
         "required_service_slugs",
+        "nyx_provider_slug",
         "output_format",
         "external_trigger_sources",
         "run_immediately",
@@ -117,12 +118,17 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (!args.TryStringArray("required_service_slugs", out var requiredServiceSlugs, out var requiredServiceSlugsError))
             return ScheduledAgentCreatePlanResult.Failed(requiredServiceSlugsError);
 
+        var requestedOutboundSlug = Normalize(args.Str("nyx_provider_slug"));
+        if (requestedOutboundSlug is not null && scheduleMode != ScheduledAgentScheduleMode.OneShot)
+            return ScheduledAgentCreatePlanResult.Failed("nyx_provider_slug is only supported for one_shot schedules");
+
         var conversationId = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.ConversationId));
         if (conversationId is null)
             return ScheduledAgentCreatePlanResult.Failed("conversation_id_unavailable");
 
         var contextOutboundSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.OutboundProviderSlug));
-        var primarySlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ScheduledAgentNyxProviderSlugHeader))
+        var primarySlug = requestedOutboundSlug
+            ?? Normalize(AgentToolRequestContext.TryGetExternalMetadata(ScheduledAgentNyxProviderSlugHeader))
             ?? contextOutboundSlug;
         if (primarySlug is null)
             return ScheduledAgentCreatePlanResult.Failed("channel_outbound_provider_slug_unavailable");
