@@ -67,26 +67,66 @@ public sealed class ExactRemoteReleaseVerifierTests
             .Which.Message.Should().Contain("provenance");
     }
 
-    [Fact]
-    public void VerifySkill_WhenPackageExceedsReviewedBoundsOrBoundsExpandAdapterCeiling_RejectsRelease()
+    [Theory]
+    [InlineData("file-count")]
+    [InlineData("path-bytes")]
+    [InlineData("file-bytes")]
+    [InlineData("total-bytes")]
+    public void VerifySkill_WhenAnyPackageShapeDimensionExceedsReviewedBound_RejectsRelease(
+        string dimension)
     {
-        var tooTight = SkillExpectation() with
+        var shape = SkillRelease().Package.Shape;
+        shape = dimension switch
         {
-            PackageBounds = new ExactRemotePackageBounds(1, 10, 3, 3),
+            "file-count" => shape with { FileCount = 11 },
+            "path-bytes" => shape with { MaximumPathUtf8Bytes = 65 },
+            "file-bytes" => shape with { MaximumFileUtf8Bytes = 1025 },
+            "total-bytes" => shape with { TotalFileUtf8Bytes = 2049 },
+            _ => throw new ArgumentOutOfRangeException(nameof(dimension)),
         };
-        var expanded = SkillExpectation() with
+        var release = SkillRelease();
+        release = release with { Package = release.Package with { Shape = shape } };
+
+        Action act = () => _verifier.VerifySkill(release, SkillExpectation());
+
+        act.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+    }
+
+    [Theory]
+    [InlineData("file-count", false)]
+    [InlineData("path-bytes", false)]
+    [InlineData("file-bytes", false)]
+    [InlineData("total-bytes", false)]
+    [InlineData("file-count", true)]
+    [InlineData("path-bytes", true)]
+    [InlineData("file-bytes", true)]
+    [InlineData("total-bytes", true)]
+    public void VerifySkill_WhenAnyReviewedBoundIsNonPositiveOrExpandsAdapterCeiling_RejectsRelease(
+        string dimension,
+        bool expandsCeiling)
+    {
+        var bounds = expandsCeiling
+            ? ExactRemotePackageBounds.AdapterMaximum
+            : SkillExpectation().PackageBounds;
+        bounds = (dimension, expandsCeiling) switch
         {
-            PackageBounds = ExactRemotePackageBounds.AdapterMaximum with
-            {
-                MaximumFileCount = ExactRemotePackageBounds.AdapterMaximum.MaximumFileCount + 1,
-            },
+            ("file-count", false) => bounds with { MaximumFileCount = 0 },
+            ("path-bytes", false) => bounds with { MaximumPathUtf8Bytes = 0 },
+            ("file-bytes", false) => bounds with { MaximumFileUtf8Bytes = 0 },
+            ("total-bytes", false) => bounds with { MaximumTotalFileUtf8Bytes = 0 },
+            ("file-count", true) => bounds with { MaximumFileCount = bounds.MaximumFileCount + 1 },
+            ("path-bytes", true) => bounds with { MaximumPathUtf8Bytes = bounds.MaximumPathUtf8Bytes + 1 },
+            ("file-bytes", true) => bounds with { MaximumFileUtf8Bytes = bounds.MaximumFileUtf8Bytes + 1 },
+            ("total-bytes", true) => bounds with { MaximumTotalFileUtf8Bytes = bounds.MaximumTotalFileUtf8Bytes + 1 },
+            _ => throw new ArgumentOutOfRangeException(nameof(dimension)),
         };
+        var expectation = SkillExpectation() with { PackageBounds = bounds };
 
-        Action tightAct = () => _verifier.VerifySkill(SkillRelease(), tooTight);
-        Action expandedAct = () => _verifier.VerifySkill(SkillRelease(), expanded);
+        Action act = () => _verifier.VerifySkill(SkillRelease(), expectation);
 
-        tightAct.Should().Throw<ExactRemoteFetchException>();
-        expandedAct.Should().Throw<ExactRemoteFetchException>();
+        act.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
     }
 
     [Fact]
@@ -104,6 +144,26 @@ public sealed class ExactRemoteReleaseVerifierTests
 
         differentAct.Should().Throw<ExactRemoteFetchException>();
         duplicatesAct.Should().Throw<ExactRemoteFetchException>();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VerifySkill_WhenActualOrExpectedToolsContainDuplicates_RejectsRelease(
+        bool duplicateActual)
+    {
+        var duplicateTool = Tool();
+        var release = duplicateActual
+            ? SkillRelease() with { DeclaredTools = [duplicateTool, duplicateTool] }
+            : SkillRelease();
+        var expectation = duplicateActual
+            ? SkillExpectation()
+            : SkillExpectation() with { DeclaredTools = [duplicateTool, duplicateTool] };
+
+        Action act = () => _verifier.VerifySkill(release, expectation);
+
+        act.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
     }
 
     [Fact]
@@ -169,6 +229,50 @@ public sealed class ExactRemoteReleaseVerifierTests
 
         directAct.Should().Throw<ExactRemoteFetchException>();
         closureAct.Should().Throw<ExactRemoteFetchException>();
+    }
+
+    [Theory]
+    [InlineData("direct-members", false)]
+    [InlineData("direct-members", true)]
+    [InlineData("full-closure", false)]
+    [InlineData("full-closure", true)]
+    public void VerifySkillset_WhenActualOrExpectedReferenceSetContainsDuplicates_RejectsRelease(
+        string field,
+        bool duplicateActual)
+    {
+        var duplicateMembers = new[] { Member("1.0"), Member("1.0") };
+        var release = (field, duplicateActual) switch
+        {
+            ("direct-members", true) => SkillsetRelease() with { DirectMembers = duplicateMembers },
+            ("full-closure", true) => SkillsetRelease() with { FullClosure = duplicateMembers },
+            _ => SkillsetRelease(),
+        };
+        var expectation = (field, duplicateActual) switch
+        {
+            ("direct-members", false) => SkillsetExpectation() with { DirectMembers = duplicateMembers },
+            ("full-closure", false) => SkillsetExpectation() with { FullClosure = duplicateMembers },
+            ("direct-members", true) or ("full-closure", true) => SkillsetExpectation(),
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+
+        Action act = () => _verifier.VerifySkillset(release, expectation);
+
+        act.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+    }
+
+    [Fact]
+    public void VerifyMethods_WhenTopLevelArgumentIsNull_ThrowArgumentNullException()
+    {
+        Action nullSkillRelease = () => _verifier.VerifySkill(null!, SkillExpectation());
+        Action nullSkillExpectation = () => _verifier.VerifySkill(SkillRelease(), null!);
+        Action nullSkillsetRelease = () => _verifier.VerifySkillset(null!, SkillsetExpectation());
+        Action nullSkillsetExpectation = () => _verifier.VerifySkillset(SkillsetRelease(), null!);
+
+        nullSkillRelease.Should().Throw<ArgumentNullException>().WithParameterName("release");
+        nullSkillExpectation.Should().Throw<ArgumentNullException>().WithParameterName("expectation");
+        nullSkillsetRelease.Should().Throw<ArgumentNullException>().WithParameterName("release");
+        nullSkillsetExpectation.Should().Throw<ArgumentNullException>().WithParameterName("expectation");
     }
 
     [Fact]
