@@ -392,6 +392,69 @@ message SystemSkillOverlay {
   int64 materialized_at = 3;
 }
 
+message ExactRemoteSkillRef {
+  string guid = 1;
+  string literal_version = 2;
+}
+
+message ExactRemoteSkillsetRef {
+  string guid = 1;
+  string literal_version = 2;
+}
+
+message AgentProfileToolPolicy {
+  repeated string tool_names = 1;
+  repeated string tool_set_refs = 2;
+}
+
+enum AgentProfileSideEffectClass {
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_UNSPECIFIED = 0;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_READ_ONLY = 1;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_EXTERNAL_HANDOFF = 2;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_SERVICE_CALL = 3;
+  AGENT_PROFILE_SIDE_EFFECT_CLASS_MAINTENANCE = 4;
+}
+
+enum AgentProfileActivationMode {
+  AGENT_PROFILE_ACTIVATION_MODE_UNSPECIFIED = 0;
+  AGENT_PROFILE_ACTIVATION_MODE_SHADOW = 1;
+  AGENT_PROFILE_ACTIVATION_MODE_ENFORCED = 2;
+}
+
+message AgentProfileSkillMember {
+  string intent_id = 1;
+  string routing_description = 2;
+  ExactRemoteSkillRef skill_ref = 3;
+  repeated string explicit_trigger_aliases = 4;
+  AgentProfileToolPolicy task_tool_policy = 5;
+  AgentProfileSideEffectClass side_effect_class = 6;
+  string expected_skill_name = 7;
+  string reviewed_publisher_id = 8;
+}
+
+message AgentProfileSnapshot {
+  string profile_id = 1;
+  string profile_version = 2;
+  string agent_kind = 3;
+  string policy_revision = 4;
+  bytes deterministic_policy_sha256 = 5;
+  ExactRemoteSkillsetRef skillset_provenance = 6;
+  string route_tool_set_ref = 7;
+  AgentProfileToolPolicy maximum_tool_policy = 8;
+  AgentProfileToolPolicy recovery_tool_policy = 9;
+  repeated AgentProfileSkillMember members = 10;
+  int32 max_plan_steps = 11;
+  int32 handoff_ttl_seconds = 12;
+  int32 classifier_timeout_ms = 13;
+  int32 exact_skill_fetch_timeout_ms = 14;
+  int32 max_selected_skill_bytes = 15;
+  AgentProfileActivationMode activation_mode = 16;
+}
+
+message AgentProfileBoundEvent {
+  AgentProfileSnapshot profile = 1;
+}
+
 // Retired (issue #2498): no longer emitted — the overlay is sourced by the host-level provider, not
 // materialized per-actor. Kept defined so historical journals / queued durable timeouts still
 // deserialize and replay through their no-op handlers. Remove in a later release once no grain journal
@@ -454,6 +517,7 @@ message RoleGAgentState {
   // materialized into actor state. Reserved so the tag is never reused and old snapshots parse cleanly.
   reserved 11;
   reserved "system_skill_overlay";
+  AgentProfileSnapshot agent_profile = 12;
 }
 
 // ─── Multi-turn tool approval continuation ───

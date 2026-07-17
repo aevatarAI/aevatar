@@ -29,6 +29,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
@@ -2907,7 +2908,7 @@ public class NyxIdChatEndpointsCoverageTests
         var facade = new NyxIdChatLifecycleFacade(
             new DefaultCommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
                 new DefaultCommandDispatchPipeline<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
-                    new NyxIdChatConversationCreateCommandTargetResolver(runtime, routeQueryPort, resolver),
+                    new NyxIdChatConversationCreateCommandTargetResolver(runtime, routeQueryPort, resolver, new DisabledNyxIdChatAgentProfileSnapshotSource()),
                     new DefaultCommandContextPolicy(),
                     new NyxIdChatLifecycleCommandEnvelopeFactory(),
                     new ActorCommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>(dispatchPort),
@@ -2919,7 +2920,6 @@ public class NyxIdChatEndpointsCoverageTests
                     new NyxIdChatLifecycleCommandEnvelopeFactory(),
                     new ActorCommandTargetDispatcher<NyxIdChatConversationDeleteCommandTarget>(dispatchPort),
                     new NyxIdChatDeleteLifecycleCommandReceiptFactory())));
-
         return RebuildArgs(parameters, args, facade);
     }
 

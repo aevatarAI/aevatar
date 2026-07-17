@@ -7,12 +7,14 @@ using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Prompting;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Google.Protobuf;
@@ -130,6 +132,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId ?? commandId;
         var registryCommandPort = Services.GetRequiredService<IGAgentActorRegistryCommandPort>();
         var createdLocally = command.CreatedLocally;
+
+        await BindAgentProfileAsync(command.AgentProfile);
 
         await PersistDomainEventAsync(new NyxIdChatConversationCreationStartedEvent
         {
@@ -398,6 +402,29 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         return initializeEvent;
     }
 
+    private async Task BindAgentProfileAsync(AgentProfileSnapshot? profile)
+    {
+        var boundProfile = State.AgentProfile;
+        if (profile is null)
+        {
+            if (boundProfile is not null)
+                throw new InvalidOperationException("A bound agent profile cannot be removed from a conversation.");
+            return;
+        }
+
+        if (!AgentProfileSnapshotCodec.Verify(profile))
+            throw new InvalidOperationException("The agent profile snapshot digest is invalid.");
+
+        if (boundProfile is null)
+        {
+            await PersistDomainEventAsync(new AgentProfileBoundEvent { Profile = profile.Clone() });
+            return;
+        }
+
+        if (!AgentProfileSnapshotCodec.ByteEquivalent(boundProfile, profile))
+            throw new InvalidOperationException("A conversation cannot replace its bound agent profile.");
+    }
+
     private async Task PersistRegistrationUnavailableAndCompensateAsync(
         string scopeId,
         string actorId,
@@ -483,5 +510,28 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         return source.Length <= maxTitleLength
             ? source
             : source[..maxTitleLength].TrimEnd();
+    }
+
+    protected override RoleGAgentState TransitionState(RoleGAgentState current, IMessage evt)
+    {
+        if (!StateTransitionMatcher.TryExtract<AgentProfileBoundEvent>(evt, out var profileBound))
+            return base.TransitionState(current, evt);
+
+        if (profileBound.Profile is null)
+            throw new InvalidOperationException("Agent profile binding events require a complete snapshot.");
+
+        if (!AgentProfileSnapshotCodec.Verify(profileBound.Profile))
+            throw new InvalidOperationException("Agent profile binding events require a valid digest.");
+
+        if (current.AgentProfile is not null)
+        {
+            if (!AgentProfileSnapshotCodec.ByteEquivalent(current.AgentProfile, profileBound.Profile))
+                throw new InvalidOperationException("Committed agent profile bindings cannot be replaced.");
+            return current;
+        }
+
+        var next = current.Clone();
+        next.AgentProfile = profileBound.Profile.Clone();
+        return next;
     }
 }

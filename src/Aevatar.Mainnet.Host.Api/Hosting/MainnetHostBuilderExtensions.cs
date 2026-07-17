@@ -37,6 +37,7 @@ using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.ChatbotClassifier;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
@@ -50,6 +51,7 @@ using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
+using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -66,6 +68,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -151,6 +154,7 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
         builder.Services.AddNyxIdChat(builder.Configuration);
+        AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
@@ -364,6 +368,22 @@ public static class MainnetHostBuilderExtensions
         });
 
         return builder;
+    }
+
+    private static void AddNyxIdChatAgentProfile(WebApplicationBuilder builder)
+    {
+        builder.Services.TryAddSingleton(
+            new NyxIdChatAgentProfileValidationBaseline([], []));
+        builder.Services
+            .AddOptions<NyxIdChatAgentProfileOptions>()
+            .Bind(builder.Configuration.GetSection(NyxIdChatAgentProfileOptions.SectionName))
+            .ValidateOnStart();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NyxIdChatAgentProfileOptions>,
+                NyxIdChatAgentProfileOptionsValidator>());
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<INyxIdChatAgentProfileSnapshotSource,
+                MainnetNyxIdChatAgentProfileSnapshotSource>());
     }
 
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
