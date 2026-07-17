@@ -49,17 +49,7 @@ public sealed class ExactRemoteReleaseVerifierTests
     [InlineData("published-at")]
     public void VerifySkill_WhenAnyPublisherSnapshotFieldDiffers_RejectsRelease(string mismatch)
     {
-        var provenance = mismatch switch
-        {
-            "subject" => Provenance() with { PublisherSubjectId = "other-subject" },
-            "email-absence" => Provenance() with { PublisherEmailSnapshot = null },
-            "email-value" => Provenance() with { PublisherEmailSnapshot = "other@example.test" },
-            "display-absence" => Provenance() with { PublisherDisplayNameSnapshot = null },
-            "display-value" => Provenance() with { PublisherDisplayNameSnapshot = "Other Publisher" },
-            "published-at" => Provenance() with { PublishedAt = PublishedAt.AddSeconds(1) },
-            _ => throw new ArgumentOutOfRangeException(nameof(mismatch)),
-        };
-        var expectation = SkillExpectation() with { Provenance = provenance };
+        var expectation = SkillExpectation() with { Provenance = ProvenanceWithMismatch(mismatch) };
 
         Action act = () => _verifier.VerifySkill(SkillRelease(), expectation);
 
@@ -212,6 +202,23 @@ public sealed class ExactRemoteReleaseVerifierTests
             .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
     }
 
+    [Theory]
+    [InlineData("subject")]
+    [InlineData("email-absence")]
+    [InlineData("email-value")]
+    [InlineData("display-absence")]
+    [InlineData("display-value")]
+    [InlineData("published-at")]
+    public void VerifySkillset_WhenAnyPublisherSnapshotFieldDiffers_RejectsRelease(string mismatch)
+    {
+        var expectation = SkillsetExpectation() with { Provenance = ProvenanceWithMismatch(mismatch) };
+
+        Action act = () => _verifier.VerifySkillset(SkillsetRelease(), expectation);
+
+        act.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+    }
+
     [Fact]
     public void VerifySkillset_WhenDirectMembersOrClosureDiffer_RejectsRelease()
     {
@@ -337,6 +344,17 @@ public sealed class ExactRemoteReleaseVerifierTests
         "publisher@example.test",
         "Publisher Name",
         PublishedAt);
+
+    private static ExactRemoteVersionProvenance ProvenanceWithMismatch(string mismatch) => mismatch switch
+    {
+        "subject" => Provenance() with { PublisherSubjectId = "other-subject" },
+        "email-absence" => Provenance() with { PublisherEmailSnapshot = null },
+        "email-value" => Provenance() with { PublisherEmailSnapshot = "other@example.test" },
+        "display-absence" => Provenance() with { PublisherDisplayNameSnapshot = null },
+        "display-value" => Provenance() with { PublisherDisplayNameSnapshot = "Other Publisher" },
+        "published-at" => Provenance() with { PublishedAt = PublishedAt.AddSeconds(1) },
+        _ => throw new ArgumentOutOfRangeException(nameof(mismatch)),
+    };
 
     private static ExactRemoteToolDeclaration Tool() => new(
         "workspace.read",

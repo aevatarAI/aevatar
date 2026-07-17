@@ -332,6 +332,43 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task FetchExactSkillAsync_WhenPackageAndDetailToolListsAreMissingOrEmpty_ReturnsNoDeclarations(
+        bool includeEmptyToolList)
+    {
+        var toolsJson = includeEmptyToolList ? "[]" : null;
+        var handler = ExactSkillHandler(
+            packageJson: SkillPackage(toolsJson: toolsJson, includeTools: includeEmptyToolList),
+            detailJson: SkillDetail(toolsJson: toolsJson, includeTools: includeEmptyToolList));
+        var fetcher = CreateFetcher(handler);
+
+        var release = await fetcher.FetchExactSkillAsync("token", SkillReference());
+
+        release.DeclaredTools.Should().BeEmpty();
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FetchExactSkillAsync_WhenToolMcpServersAreMissingOrEmpty_ReturnsToolWithoutServers(
+        bool includeEmptyMcpServers)
+    {
+        var toolsJson = ToolWithoutMcpServersJson(includeEmptyMcpServers);
+        var handler = ExactSkillHandler(
+            packageJson: SkillPackage(toolsJson: toolsJson),
+            detailJson: SkillDetail(toolsJson: toolsJson));
+        var fetcher = CreateFetcher(handler);
+
+        var release = await fetcher.FetchExactSkillAsync("token", SkillReference());
+
+        release.DeclaredTools.Should().ContainSingle()
+            .Which.McpServers.Should().BeEmpty();
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task FetchExactAsync_WhenReturnedGuidDiffers_FailsClosedWithoutFallback(bool isSkillset)
     {
         var handler = isSkillset
@@ -671,6 +708,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     [InlineData("too-many-closure-nodes", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("missing-member-count", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("mismatched-member-count", ExactRemoteFetchFailureKind.IntegrityMismatch)]
+    [InlineData("missing-depth", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("negative-depth", ExactRemoteFetchFailureKind.InvalidResponse)]
     [InlineData("root-count-mismatch", ExactRemoteFetchFailureKind.IntegrityMismatch)]
     [InlineData("missing-member-identity", ExactRemoteFetchFailureKind.InvalidResponse)]
@@ -832,13 +870,14 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         string tool = "workspace.read",
         string type = "mcp",
         string? toolsJson = null,
-        bool includeMetadata = true) => $$"""
+        bool includeMetadata = true,
+        bool includeTools = true) => $$"""
         {
           "data": {
             "name": "{{name}}",
             "description": "A reviewed skill",
             "version": "{{version}}",
-            "metadata": {{(includeMetadata ? SkillMetadataJson(tool, type, toolsJson) : "null")}},
+            "metadata": {{(includeMetadata ? SkillMetadataJson(tool, type, toolsJson, includeTools) : "null")}},
             "files": {{filesJson ?? "{\"SKILL.md\":\"---\\nname: curated-skill\\ndescription: Reviewed\\n---\\nRun it.\",\"docs/readme.md\":\"Reference\"}"}}
           }
         }
@@ -852,21 +891,26 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         string tool = "workspace.read",
         string type = "mcp",
         string? toolsJson = null,
-        bool includeMetadata = true) => $$"""
+        bool includeMetadata = true,
+        bool includeTools = true) => $$"""
         {
           "data": {
             "guid": "{{guid}}",
             "name": "{{name}}",
             "version": "{{version}}",
             "skillHash": "{{skillHash ?? SkillHash}}",
-            "metadata": {{(includeMetadata ? SkillMetadataJson(tool, type, toolsJson) : "null")}}
+            "metadata": {{(includeMetadata ? SkillMetadataJson(tool, type, toolsJson, includeTools) : "null")}}
           }
         }
         """;
 
-    private static string SkillMetadataJson(string tool, string type, string? toolsJson) => $$"""
+    private static string SkillMetadataJson(
+        string tool,
+        string type,
+        string? toolsJson,
+        bool includeTools) => $$"""
         {
-          "tools": {{toolsJson ?? SingleToolJson(tool, type)}}
+          {{(includeTools ? $"\"tools\": {toolsJson ?? SingleToolJson(tool, type)}" : string.Empty)}}
         }
         """;
 
@@ -1015,6 +1059,10 @@ public sealed class OrnnExactRemoteSkillFetcherTests
 
     private static string SingleToolJson(string tool, string type) => $"[{ToolJson(tool, type)}]";
 
+    private static string ToolWithoutMcpServersJson(bool includeEmptyMcpServers) => includeEmptyMcpServers
+        ? $"[{ToolJson("workspace.read", mcpServersJson: "[]")}]"
+        : """[{"tool":"workspace.read","type":"mcp"}]""";
+
     private static string ToolJson(
         string tool,
         string type = "mcp",
@@ -1031,6 +1079,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     {
         var invalidClosureItem = invalidEvidence switch
         {
+            "missing-depth" => $$"""{ "ref": "dependency@3.0", "guid": "{{DependencyGuid}}", "name": "dependency", "version": "3.0" }""",
             "negative-depth" => $$"""{ "ref": "dependency@3.0", "guid": "{{DependencyGuid}}", "name": "dependency", "version": "3.0", "depth": -1 }""",
             "missing-closure-ref" => $$"""{ "guid": "{{DependencyGuid}}", "name": "dependency", "version": "3.0", "depth": 1 }""",
             "missing-closure-name" => $$"""{ "ref": "dependency@3.0", "guid": "{{DependencyGuid}}", "version": "3.0", "depth": 1 }""",

@@ -1122,7 +1122,6 @@ public sealed class OrnnSkillClient
             }
 
             validated.Add(new ValidatedClosureItem(
-                item.Ref!,
                 item.Name!,
                 item.Depth.Value,
                 new Aevatar.AI.Abstractions.ExactRemoteSkillRef
@@ -1272,7 +1271,6 @@ public sealed class OrnnSkillClient
     private sealed record NyxIdProxyError(int Status, string Detail);
 
     private sealed record ValidatedClosureItem(
-        string Ref,
         string Name,
         int Depth,
         Aevatar.AI.Abstractions.ExactRemoteSkillRef Reference);
@@ -1436,7 +1434,6 @@ public sealed class OrnnSkillSetMember
     public string? Guid { get; init; }
     public string? Name { get; init; }
     public string? Version { get; init; }
-    internal string? RawReference { get; init; }
 
     /// <summary>The id or name to fetch this member's full skill JSON with (guid preferred).</summary>
     public string? Reference =>
@@ -1487,7 +1484,7 @@ internal sealed class OrnnSkillSetMemberJsonConverter : JsonConverter<OrnnSkillS
         var trimmed = raw.Trim();
         var at = trimmed.LastIndexOf('@');
         if (at <= 0)
-            return new OrnnSkillSetMember { Name = trimmed, RawReference = trimmed };
+            return new OrnnSkillSetMember { Name = trimmed };
 
         var identifier = trimmed[..at];
         var version = trimmed[(at + 1)..];
@@ -1496,13 +1493,11 @@ internal sealed class OrnnSkillSetMemberJsonConverter : JsonConverter<OrnnSkillS
             {
                 Guid = parsedGuid.ToString("D"),
                 Version = version,
-                RawReference = trimmed,
             }
             : new OrnnSkillSetMember
             {
                 Name = identifier,
                 Version = version,
-                RawReference = trimmed,
             };
     }
 
