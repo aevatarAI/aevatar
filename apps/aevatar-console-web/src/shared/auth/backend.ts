@@ -2,13 +2,7 @@ import {
   readResponseErrorDetails,
   type ResponseErrorDetails,
 } from "@/shared/api/http/error";
-import type { NyxIDRuntimeConfig } from "./config";
 import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
-
-export type NyxIDBackendLoginConfig = Pick<
-  NyxIDRuntimeConfig,
-  "baseUrl" | "scope"
->;
 
 export type NyxIDLoginFinalizationRequest = {
   readonly code: string;
@@ -39,13 +33,6 @@ export class NyxIDLoginFinalizationError extends Error {
     this.status = details.status;
   }
 }
-
-type BackendLoginConfigResponse = {
-  readonly baseUrl?: unknown;
-  readonly BaseUrl?: unknown;
-  readonly scope?: unknown;
-  readonly Scope?: unknown;
-};
 
 type BackendFinalizationResponse = {
   readonly bindingDispatchAccepted?: unknown;
@@ -149,21 +136,6 @@ function readOptionalStringArray(value: unknown): string[] | undefined {
     .filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim())
     .filter(Boolean);
-}
-
-function decodeBackendLoginConfig(
-  value: unknown,
-): NyxIDBackendLoginConfig {
-  const record = expectRecord(value, "NyxID backend login config") as
-    BackendLoginConfigResponse;
-
-  return {
-    baseUrl: readString(record.baseUrl ?? record.BaseUrl, "baseUrl").replace(
-      /\/+$/,
-      "",
-    ),
-    scope: readString(record.scope ?? record.Scope, "scope"),
-  };
 }
 
 function decodeTokenSet(value: unknown): NyxIDTokenSet {
@@ -279,18 +251,6 @@ async function requestBackendJson<T>(
   }
 
   return decoder(await response.json());
-}
-
-export function loadBackendNyxIDLoginConfig(): Promise<NyxIDBackendLoginConfig> {
-  return requestBackendJson(
-    "/api/auth/nyxid/config",
-    decodeBackendLoginConfig,
-    {
-      headers: {
-        Accept: "application/json",
-      },
-    },
-  );
 }
 
 export function finalizeBackendNyxIDLogin(

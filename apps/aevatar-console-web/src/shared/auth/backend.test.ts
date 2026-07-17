@@ -1,6 +1,5 @@
 import {
   finalizeBackendNyxIDLogin,
-  loadBackendNyxIDLoginConfig,
   refreshNyxIDTokenSet,
 } from "./backend";
 
@@ -14,49 +13,6 @@ describe("NyxID backend auth API", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
-  });
-
-  it("loads the broker URL and scope while ignoring its OAuth client id", async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        baseUrl: "https://nyx.example/",
-        clientId: "broker-client-1",
-        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-      }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
-      baseUrl: "https://nyx.example",
-      scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith("/api/auth/nyxid/config", {
-      headers: {
-        Accept: "application/json",
-      },
-    });
-  });
-
-  it("ignores redirect URI fields on the backend login config boundary", async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        baseUrl: "https://nyx.example/",
-        scope: "openid urn:nyxid:scope:broker_binding proxy",
-        redirectUri: "https://backend.example/auth/callback",
-        RedirectUri: "https://backend.example/AuthCallback",
-      }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
-      baseUrl: "https://nyx.example",
-      scope: "openid urn:nyxid:scope:broker_binding proxy",
-    });
   });
 
   it("finalizes an authorization code through the backend and preserves accepted-dispatch semantics", async () => {

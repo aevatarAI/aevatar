@@ -12,10 +12,10 @@ import { loadStoredAuthSession } from "./session";
 
 const runtimeConfig: NyxIDRuntimeConfig = {
   enabled: true,
-  baseUrl: "https://legacy-console-client.example",
+  baseUrl: "https://nyx.example",
   clientId: "console-client-1",
   redirectUri: "http://localhost:8000/auth/callback",
-  scope: "openid profile email",
+  scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
 };
 
 function installLocationAssignSpy() {
@@ -67,29 +67,16 @@ describe("NyxIDAuthClient", () => {
     window.localStorage.clear();
   });
 
-  it("starts authorize with the frontend client id and backend URL and scope", async () => {
+  it("starts authorize entirely from frontend runtime config", async () => {
     const assign = installLocationAssignSpy();
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        baseUrl: "https://nyx.example",
-        clientId: "broker-client-1",
-        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-        redirectUri: "https://backend.example/auth/callback",
-      }),
-    } as Response);
+    const fetchMock = jest.fn();
     global.fetch = fetchMock as typeof global.fetch;
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
       returnTo: "/scopes/scope-1/teams",
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/auth/nyxid/config", {
-      headers: {
-        Accept: "application/json",
-      },
-    });
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(assign).toHaveBeenCalledTimes(1);
     const authorizeUrl = new URL(assign.mock.calls[0][0]);
     expect(authorizeUrl.origin + authorizeUrl.pathname).toBe(
@@ -124,15 +111,7 @@ describe("NyxIDAuthClient", () => {
 
   it("starts service access review with consent prompt and account return state", async () => {
     const assign = installLocationAssignSpy();
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        baseUrl: "https://nyx.example",
-        clientId: "broker-client-1",
-        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-      }),
-    } as Response);
+    const fetchMock = jest.fn();
     global.fetch = fetchMock as typeof global.fetch;
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
@@ -143,6 +122,7 @@ describe("NyxIDAuthClient", () => {
     const authorizeUrl = new URL(assign.mock.calls[0][0]);
     expect(authorizeUrl.searchParams.get("prompt")).toBe("consent");
     expect(authorizeUrl.searchParams.getAll("resource")).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
 
     const pending = JSON.parse(
       window.localStorage.getItem(
@@ -447,15 +427,6 @@ describe("NyxIDAuthClient", () => {
         ok: true,
         status: 200,
         json: async () => ({
-          baseUrl: "https://nyx.example/",
-          clientId: "broker-client-1",
-          scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-        }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
           access_token: "access-token-2",
           refresh_token: "refresh-token-2",
           token_type: "Bearer",
@@ -484,10 +455,9 @@ describe("NyxIDAuthClient", () => {
 
     expect(hasRestorableAuthSession()).toBe(true);
     expect(loadStoredAuthSession()?.tokens.accessToken).toBe("access-token-2");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/nyxid/config");
-    expect(fetchMock.mock.calls[1][0]).toBe("https://nyx.example/oauth/token");
-    expect(String(fetchMock.mock.calls[1][1]?.body)).toBe(
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://nyx.example/oauth/token");
+    expect(String(fetchMock.mock.calls[0][1]?.body)).toBe(
       "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=console-client-1",
     );
   });
@@ -535,15 +505,6 @@ describe("NyxIDAuthClient", () => {
     );
     const fetchMock = jest
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          baseUrl: "https://nyx.example/",
-          clientId: "broker-client-1",
-          scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-        }),
-      } as Response)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
