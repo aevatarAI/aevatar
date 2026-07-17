@@ -5,6 +5,7 @@ import {
   NyxIDAuthClient,
   SERVICE_ACCESS_REVIEW_RETURN_TO,
   type NyxIDAuthCallbackError,
+  type NyxIDAuthCallbackErrorReason,
 } from "./client";
 import type { NyxIDRuntimeConfig } from "./config";
 import { loadStoredAuthSession } from "./session";
@@ -33,7 +34,7 @@ function installLocationAssignSpy() {
 
 describe("NyxIDAuthClient", () => {
   const originalFetch = global.fetch;
-  const originalLocation = window.location;
+  const originalLocationDescriptor = Object.getOwnPropertyDescriptor(window, "location");
 
   beforeEach(() => {
     window.localStorage.clear();
@@ -59,10 +60,9 @@ describe("NyxIDAuthClient", () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
-    Object.defineProperty(window, "location", {
-      configurable: true,
-      value: originalLocation,
-    });
+    if (originalLocationDescriptor) {
+      Object.defineProperty(window, "location", originalLocationDescriptor);
+    }
     jest.restoreAllMocks();
     window.localStorage.clear();
   });
@@ -289,7 +289,12 @@ describe("NyxIDAuthClient", () => {
     expect(loadStoredAuthSession()?.tokens.accessToken).toBe("review-access-token");
   });
 
-  it("preserves service access review retry state when backend finalization fails", async () => {
+  it.each<[number, string, NyxIDAuthCallbackErrorReason]>([
+    [409, "required_service_access_missing", "requiredServiceAccessMissing"],
+    [502, "issued_binding_invalid", "issuedBindingInvalid"],
+    [503, "issued_binding_probe_failed", "issuedBindingProbeFailed"],
+    [503, "binding_probe_failed", "bindingProbeFailed"],
+  ])("preserves review retry state for backend error %s %s", async (status, code, reason) => {
     const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
     window.localStorage.setItem(
       pendingKey,
@@ -319,12 +324,12 @@ describe("NyxIDAuthClient", () => {
     );
     const fetchMock = jest.fn().mockResolvedValue({
       ok: false,
-      status: 503,
+      status,
       statusText: "Service Unavailable",
       text: async () =>
         JSON.stringify({
-          code: "binding_probe_failed",
-          message: "backend raw message",
+          error: code,
+          detail: "NyxID binding could not be verified.",
         }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
@@ -336,15 +341,35 @@ describe("NyxIDAuthClient", () => {
     ).rejects.toMatchObject({
       name: "NyxIDAuthCallbackError",
       flow: "serviceAccessReview",
+      reason,
       returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
-      message:
-        "NyxID service binding verification failed. The service may be temporarily unavailable; try Manage service access again.",
+      message: code,
     } satisfies Partial<NyxIDAuthCallbackError>);
 
     expect(window.localStorage.getItem(pendingKey)).toBeNull();
     expect(loadStoredAuthSession()?.tokens.accessToken).toBe(
       "existing-access-token",
     );
+  });
+
+  it("keeps ordinary sign-in failures out of service access review semantics", async () => {
+    const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
+    window.localStorage.setItem(pendingKey, JSON.stringify({
+      clientId: "broker-client-1", codeVerifier: "pkce-verifier",
+      redirectUri: "http://localhost:8000/auth/callback", returnTo: "/runtime/runs",
+      scope: "openid proxy", state: "state-1", flow: "signIn",
+    }));
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false, status: 502, statusText: "Bad Gateway",
+      text: async () => JSON.stringify({ error: "token_exchange_failed", detail: "Login failed." }),
+    } as Response) as typeof global.fetch;
+
+    await expect(new NyxIDAuthClient(runtimeConfig).handleRedirectCallback(
+      "http://localhost:8000/auth/callback?code=auth-code&state=state-1",
+    )).rejects.toMatchObject({
+      flow: "signIn", message: "token_exchange_failed",
+      name: "NyxIDAuthCallbackError", reason: "signInFailed", returnTo: "/runtime/runs",
+    } satisfies Partial<NyxIDAuthCallbackError>);
   });
 
   it("preserves the existing Studio session when service access review is denied", async () => {
@@ -385,9 +410,9 @@ describe("NyxIDAuthClient", () => {
     ).rejects.toMatchObject({
       name: "NyxIDAuthCallbackError",
       flow: "serviceAccessReview",
+      reason: "oauthDenied",
       returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
-      message:
-        "NyxID service access review was cancelled or denied. Your current Studio session is still active; choose Manage service access to try again.",
+      message: "OAuth error: access_denied",
     } satisfies Partial<NyxIDAuthCallbackError>);
 
     expect(fetchMock).not.toHaveBeenCalled();

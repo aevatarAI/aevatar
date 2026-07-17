@@ -5,6 +5,7 @@ import {
 import {
   finalizeBackendNyxIDLogin,
   loadBackendNyxIDLoginConfig,
+  NyxIDLoginFinalizationError,
   refreshNyxIDTokenSet,
   type NyxIDBackendLoginConfig,
 } from './backend';
@@ -30,6 +31,17 @@ interface PendingAuthState {
 
 export type AuthFlow = "signIn" | "serviceAccessReview";
 
+export type NyxIDAuthCallbackErrorReason =
+  | "oauthDenied"
+  | "requiredServiceAccessMissing"
+  | "issuedBindingInvalid"
+  | "issuedBindingProbeFailed"
+  | "bindingProbeFailed"
+  | "serviceAccessReviewRequired"
+  | "serviceAccessReviewUnavailable"
+  | "serviceAccessReviewFailed"
+  | "signInFailed";
+
 export interface LoginRedirectOptions {
   readonly returnTo?: string;
   readonly flow?: AuthFlow;
@@ -47,18 +59,21 @@ let pendingRefreshPromise: Promise<NyxIDAuthSession | null> | null = null;
 
 export class NyxIDAuthCallbackError extends Error {
   readonly flow: AuthFlow;
+  readonly reason: NyxIDAuthCallbackErrorReason;
   readonly returnTo: string;
 
   constructor(
     message: string,
     options: {
       readonly flow: AuthFlow;
+      readonly reason: NyxIDAuthCallbackErrorReason;
       readonly returnTo: string;
     },
   ) {
     super(message);
     this.name = "NyxIDAuthCallbackError";
     this.flow = options.flow;
+    this.reason = options.reason;
     this.returnTo = options.returnTo;
   }
 }
@@ -101,13 +116,37 @@ function resolveReturnToForFlow(flow: AuthFlow, returnTo?: string | null): strin
 function describeOAuthCallbackError(
   oauthError: string,
   description: string | null,
-  flow: AuthFlow,
 ): string {
-  if (flow === "serviceAccessReview") {
-    return "NyxID service access review was cancelled or denied. Your current Studio session is still active; choose Manage service access to try again.";
+  return description?.trim() || `OAuth error: ${oauthError}`;
+}
+
+function resolveFinalizationErrorReason(
+  flow: AuthFlow,
+  error: unknown,
+): NyxIDAuthCallbackErrorReason {
+  if (flow !== "serviceAccessReview") return "signInFailed";
+  if (!(error instanceof NyxIDLoginFinalizationError)) {
+    return "serviceAccessReviewFailed";
   }
 
-  return description?.trim() || `OAuth error: ${oauthError}`;
+  switch (error.code) {
+    case "required_service_access_missing":
+      return "requiredServiceAccessMissing";
+    case "issued_binding_invalid":
+      return "issuedBindingInvalid";
+    case "issued_binding_probe_failed":
+      return "issuedBindingProbeFailed";
+    case "binding_probe_failed":
+      return "bindingProbeFailed";
+    default:
+      break;
+  }
+
+  if (error.status === 409) return "serviceAccessReviewRequired";
+  if (error.status === 502 || error.status === 503) {
+    return "serviceAccessReviewUnavailable";
+  }
+  return "serviceAccessReviewFailed";
 }
 
 export class NyxIDAuthClient {
@@ -226,10 +265,10 @@ export class NyxIDAuthClient {
         describeOAuthCallbackError(
           oauthError,
           callback.searchParams.get('error_description'),
-          pendingFlow,
         ),
         {
           flow: pendingFlow,
+          reason: pendingFlow === "serviceAccessReview" ? "oauthDenied" : "signInFailed",
           returnTo: pendingReturnTo,
         },
       );
@@ -273,16 +312,13 @@ export class NyxIDAuthClient {
       };
     } catch (error) {
       this.storage.removeItem(pendingKey);
-      if (error instanceof NyxIDAuthCallbackError) {
-        throw error;
-      }
-
       throw new NyxIDAuthCallbackError(
         error instanceof Error
           ? error.message
           : String(error ?? "NyxID callback failed"),
         {
           flow,
+          reason: resolveFinalizationErrorReason(flow, error),
           returnTo,
         },
       );

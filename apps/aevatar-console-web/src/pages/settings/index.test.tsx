@@ -304,6 +304,44 @@ describe("SettingsPage", () => {
     );
   });
 
+  it("keeps service access review retryable when redirect setup fails", async () => {
+    persistAuthSession({
+      tokens: { accessToken: "token", tokenType: "Bearer", expiresIn: 3600, expiresAt: Date.now() + 60_000 },
+      user: { sub: "user-123", name: "Ada Lovelace" },
+    });
+    installDeterministicCrypto();
+    window.history.replaceState({}, "", "/settings?section=account");
+    const assign = installLocationAssignSpy();
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({
+        ok: false, status: 503, statusText: "Service Unavailable",
+        text: async () => JSON.stringify({ error: "oauth_client_not_provisioned", detail: "Unavailable." }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true, status: 200,
+        json: async () => ({ baseUrl: "https://nyx.example", clientId: "broker-client-1", scope: "openid proxy" }),
+      } as Response) as typeof global.fetch;
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+    const manageButton = await screen.findByRole("button", { name: "Manage service access" });
+    fireEvent.click(manageButton);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not start service access review. Try again.");
+    await waitFor(() => expect(manageButton).not.toHaveClass("ant-btn-loading"));
+    fireEvent.click(manageButton);
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("hides service access review when the user is signed out", async () => {
+    mockStudioApi.getAuthSession.mockResolvedValueOnce({
+      enabled: true, authenticated: false, providerDisplayName: "NyxID", profile: null, session: null,
+    });
+    window.history.replaceState({}, "", "/settings?section=account");
+    renderWithQueryClient(React.createElement(SettingsPage));
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Manage service access" })).toBeNull();
+  });
+
   it("shows gateway models from backend model groups", async () => {
     renderWithQueryClient(React.createElement(SettingsPage));
 
