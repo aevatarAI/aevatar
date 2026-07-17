@@ -63,16 +63,25 @@ public class NyxIdCodeExecuteToolTests
     [Fact]
     public async Task ExecuteAsync_NoSandboxInContext_UsesDefaultConfiguredRoute()
     {
-        var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
-        // Token present but no connected-services context. The tool should use
-        // the provider default instead of depending on catalog discovery.
+        var handler = new CaptureHandler();
+        using var httpClient = new HttpClient(handler);
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        var tool = new NyxIdCodeExecuteTool(client);
         SetMetadata("test-token", null);
 
-        var result = await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
+        try
+        {
+            await tool.ExecuteAsync("""{"language":"python","code":"print(1)"}""");
 
-        // The dummy server is unreachable, but route resolution must not crash.
-        result.Should().NotBeNull();
-        ClearMetadata();
+            handler.LastRequestUri.Should().Be(
+                "https://nyx.example/api/v1/proxy/s/chrono-sandbox/execute");
+        }
+        finally
+        {
+            ClearMetadata();
+        }
     }
 
     [Fact]
@@ -81,7 +90,7 @@ public class NyxIdCodeExecuteToolTests
         var tool = new NyxIdCodeExecuteTool(CreateDummyClient());
         var servicesContext = """
             <connected-services>
-            - **Chrono Sandbox** (slug: `chrono-sandbox-service`) — base: https://sandbox.example.com
+            - **Chrono Sandbox** (slug: `chrono-sandbox`) — base: https://sandbox.example.com
             </connected-services>
             """;
         SetMetadata("test-token", servicesContext);

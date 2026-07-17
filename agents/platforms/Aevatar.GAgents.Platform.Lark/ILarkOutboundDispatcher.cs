@@ -5,7 +5,7 @@ namespace Aevatar.GAgents.Platform.Lark;
 /// </summary>
 /// <remarks>
 /// Refactor (iter166/cluster-415-lark-outbound-dispatcher):
-///   Old pattern: SkillRunnerGAgent, SkillRunnerStreamingReplySink, and Lark card senders each owned their own Lark POST parser/fallback branch.
+///   Old pattern: scheduled automation and Lark card senders each owned their own Lark POST parser/fallback branch.
 ///   New principle: one dispatcher owns new-message POST, primary/fallback retry, and response parsing while callers keep only target/content mapping.
 ///
 /// This interface is intentionally narrow even with one production implementation: actor and

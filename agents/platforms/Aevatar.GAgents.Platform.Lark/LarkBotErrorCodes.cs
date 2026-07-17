@@ -41,7 +41,7 @@ public static class LarkBotErrorCodes
     /// user, so a chat_id captured by the relay-side ingress app is rejected by a different
     /// outbound app even within the same tenant. Triggers the runtime fallback to the
     /// secondary delivery target (typically union_id) in
-    /// <c>SkillRunnerGAgent.SendOutputAsync</c> and outbound Lark card senders.
+    /// legacy scheduled automation and outbound Lark card senders.
     /// </summary>
     public const int BotNotInChat = 230002;
 }

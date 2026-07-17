@@ -96,6 +96,7 @@ internal sealed class NyxIdIdentityAssertionValidator
         {
             MapInboundClaims = false,
         };
+        var clockSkew = TimeSpan.FromSeconds(Math.Max(0, _options.ClockSkewSeconds));
         var parameters = new TokenValidationParameters
         {
             RequireSignedTokens = true,
@@ -107,7 +108,7 @@ internal sealed class NyxIdIdentityAssertionValidator
             ValidateAudience = keys.Audience is not null,
             ValidAudience = keys.Audience,
             ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromSeconds(Math.Max(0, _options.ClockSkewSeconds)),
+            ClockSkew = clockSkew,
         };
 
         try
@@ -136,13 +137,13 @@ internal sealed class NyxIdIdentityAssertionValidator
                 }
             }
 
-            // Replay guard runs last: only a signature-valid, claims-valid, in-lifetime assertion
-            // is consumed, and each jti is single-use within its lifetime. A duplicate jti means
-            // the same proxy-minted assertion is being presented twice and is rejected.
-            // JWT ValidTo is UTC; force the kind so DateTimeOffset never throws on Unspecified.
+            // Replay retention must cover the same clock-skew window accepted by lifetime
+            // validation. Otherwise a token first presented just after raw exp can be replayed
+            // until exp + ClockSkew because its jti entry has already expired.
             var expiresUtc = new DateTimeOffset(
                 DateTime.SpecifyKind(validatedToken.ValidTo, DateTimeKind.Utc));
-            if (!await _replayGuard.TryConsumeAsync(jti, expiresUtc, cancellationToken))
+            var acceptedUntilUtc = AddClamped(expiresUtc, clockSkew);
+            if (!await _replayGuard.TryConsumeAsync(jti, acceptedUntilUtc, cancellationToken))
             {
                 return Fail(
                     "identity_assertion_replayed",
@@ -201,6 +202,16 @@ internal sealed class NyxIdIdentityAssertionValidator
             _logger.LogWarning(ex, "NyxID identity assertion validation failed");
             return Fail("identity_assertion_invalid", ex.Message);
         }
+    }
+
+    private static DateTimeOffset AddClamped(DateTimeOffset value, TimeSpan extension)
+    {
+        if (extension <= TimeSpan.Zero)
+            return value;
+
+        return value > DateTimeOffset.MaxValue - extension
+            ? DateTimeOffset.MaxValue
+            : value + extension;
     }
 
     private async Task<NyxIdJwksCacheEntry> GetKeysAsync(bool forceRefresh, CancellationToken ct)

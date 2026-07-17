@@ -285,8 +285,8 @@ public sealed class NyxIdProxyTool : IAgentTool
 
         // PR #471 reviewer concern: when both tokens fail discovery, both responses are
         // NyxID error envelopes, neither has a `services` array, the merge below quietly
-        // synthesizes `[]`, and the SkillRunner safety net classifies an empty array as a
-        // successful call. Surface the user-token error verbatim instead so the middleware
+        // synthesizes `[]`, and downstream tool-result classification treats an empty array as
+        // a successful call. Surface the user-token error verbatim instead so the middleware
         // can classify it. A single-token failure stays masked: the healthy token's slugs
         // still merge in and the call counts as a successful discovery.
         if (LooksLikeErrorEnvelope(userServicesJson) && LooksLikeErrorEnvelope(orgServicesJson))

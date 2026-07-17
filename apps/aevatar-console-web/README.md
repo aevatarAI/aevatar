@@ -56,11 +56,18 @@ AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
 The browser must not configure its own NyxID OAuth client id or service access.
-Authorization starts from the backend-provided `baseUrl`, `clientId`, `scope`,
-and RFC 8707 `resources`, so the client id and required Aevatar service match
-backend token finalization.
+Authorization starts from the backend-provided `baseUrl`, `clientId`, and
+`scope`. The login config endpoint intentionally does not expose RFC 8707
+`resources`: the user's service grant is owned by NyxID Consent and must not be
+replaced by a deployment-owned list.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
+Default service preselection is owned by the NyxID OAuth Client
+`default_service_catalog_slugs`; the browser does not send OAuth `resource` parameters.
+Mainnet's minimum resource set for short-lived broker tokens remains server-side
+and is composed from `Aevatar:NyxId:DefaultRoute`, `Aevatar:Ornn:NyxIdSlug`,
+`Aevatar:NyxId:SandboxServiceSlug`, and
+`Aevatar:NyxId:AdditionalRequiredServiceSlugs`.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 

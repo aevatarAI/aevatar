@@ -7,8 +7,8 @@ workspace = "workspace"
 
 [[external_sources]]
 id = "fkst-packages"
-git = "https://github.com/ChronoAIProject/fkst-packages.git"
-rev = "7b0bbca4501ec47a25d2a43600708fbc0ae66f71"
+git = "https://github.com/eanz17/fkst-packages.git"
+rev = "16c14ae0d84fd0b0bbc0e93cdd75320a36c3ba42"
 libraries = ["contract", "forge", "testkit", "workflow", "devloop"]
 packages = [
   "github-proxy",

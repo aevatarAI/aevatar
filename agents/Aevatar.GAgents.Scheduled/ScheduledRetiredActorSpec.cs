@@ -11,8 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
-/// Retired-actor declaration for the user-agent catalog and generated
-/// skill-runner / workflow-agent actors.
+/// Retired-actor declaration for the user-agent catalog and generated workflow-agent actors.
 ///
 /// Dynamic discovery is gated on the catalog itself matching a retired
 /// runtime-type token. On a fully-migrated cluster this gate keeps the catalog
@@ -24,7 +23,8 @@ namespace Aevatar.GAgents.Scheduled;
 /// </summary>
 public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
 {
-    private const string RetiredSkillRunnerKind = "channel-runtime.skill-runner";
+    private const string RetiredScheduledSkillRunnerKind = "channel-runtime.skill-runner";
+    private const string RetiredScheduledSkillRunnerType = "skill_runner";
     private const string RetiredWorkflowAgentKind = "channel-runtime.workflow-agent";
     private const string RetiredWorkflowAgentType = "workflow_agent";
     private const int ReadModelPageSize = 500;
@@ -67,7 +67,7 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         {
             yield return new RetiredActorTarget(
                 actorId,
-                [RetiredSkillRunnerKind, RetiredWorkflowAgentKind],
+                [RetiredScheduledSkillRunnerKind, RetiredWorkflowAgentKind],
                 ResetWhenRuntimeKindUnavailable: true);
         }
     }
@@ -79,9 +79,6 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
     {
         await RetiredActorReadModelHelpers
             .DeleteByActorAsync<UserAgentCatalogDocument>(services, actorId, ct)
-            .ConfigureAwait(false);
-        await RetiredActorReadModelHelpers
-            .DeleteByActorAsync<SkillRunnerExecutionDocument>(services, actorId, ct)
             .ConfigureAwait(false);
         await RetiredActorReadModelHelpers
             .DeleteByActorAsync<UserAgentCatalogNyxCredentialDocument>(services, actorId, ct)
@@ -177,7 +174,7 @@ public sealed class ScheduledRetiredActorSpec : RetiredActorSpec
         if (string.IsNullOrWhiteSpace(normalizedId))
             return false;
 
-        if (string.Equals(agentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal) ||
+        if (string.Equals(agentType, RetiredScheduledSkillRunnerType, StringComparison.Ordinal) ||
             string.Equals(agentType, RetiredWorkflowAgentType, StringComparison.Ordinal))
         {
             return true;

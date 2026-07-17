@@ -46,7 +46,7 @@ a new domain event.**
    nothing to the event store. Because a current-state materializer rebuilds a row from the
    `state_root` snapshot alone and projection writes are monotonic covering writes, one
    re-emission rebuilds a wiped row and is an idempotent no-op on a healthy one.
-2. `ExternalIdentityBindingGAgent` self-heals on the idempotent `CommitBinding`/`RefreshBinding`
+2. `ExternalIdentityBindingGAgent` self-heals on the idempotent `CommitBinding`/`ReplaceBinding`
    discard branches (so a re-auth via `/init` or Studio login rebuilds a wiped row), and
    handles a new maintenance command `RebuildBindingProjectionCommand`.
 3. An operator-gated endpoint `POST /api/oauth/nyxid-binding/rebuild` (Mainnet host, same

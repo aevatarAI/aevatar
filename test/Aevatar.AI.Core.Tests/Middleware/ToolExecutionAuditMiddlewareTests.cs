@@ -55,6 +55,8 @@ public sealed class ToolExecutionAuditMiddlewareTests
         record.OperationKind.Should().Be(AuditOperationKind.Tool);
         record.OperationName.Should().Be("delete_record");
         record.Outcome.Should().Be(AuditOutcome.Success);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Succeeded);
         record.CapturePlane.Should().Be(AuditCapturePlane.ToolExecution);
         record.Target.Kind.Should().Be("record");
         record.Target.Id.Should().Be("record-1");
@@ -198,6 +200,8 @@ public sealed class ToolExecutionAuditMiddlewareTests
 
         var record = appender.Records.Should().ContainSingle().Subject;
         record.Outcome.Should().Be(AuditOutcome.Accepted);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.WaitingApproval);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Unspecified);
         record.Correlation.ApprovalId.Should().Be("approval-1");
         record.Annotations.Should().Contain("tool_receipt_status", AgentToolReceiptStatus.ApprovalRequired.ToString());
     }
@@ -220,7 +224,7 @@ public sealed class ToolExecutionAuditMiddlewareTests
             context.CredentialSource = AgentToolCredentialSource.ChannelRegistration;
             context.Terminate = true;
             context.TerminationKind = ToolCallTerminationKind.MiddlewareTerminated;
-            context.TerminationReason = "sender is not bound";
+            context.TerminationReason = "sender is not bound: Bearer secret-token";
             context.Result = """{"error":"credential_denied","code":"credential_denied","token":"secret-token"}""";
             return Task.CompletedTask;
         });
@@ -228,9 +232,120 @@ public sealed class ToolExecutionAuditMiddlewareTests
         var record = appender.Records.Should().ContainSingle().Subject;
         record.Outcome.Should().Be(AuditOutcome.Denied);
         record.ErrorCode.Should().Be("credential_denied");
-        record.ErrorSummary.Should().Be("sender is not bound");
+        record.ErrorSummary.Should().Be("credential_denied");
+        record.Failure.SanitizedMessage.Should().Be("credential_denied");
         record.Annotations.Should().Contain("receipt_synthetic", "true");
         AuditText(record).Should().NotContain("secret-token");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenApprovalIsDenied_ShouldRecordWaitingApprovalAsFailedPhase()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new FakeAgentTool("danger", ToolApprovalMode.AlwaysRequire, isDestructive: true),
+            AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-approval", "owner-approval", null),
+            });
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Receipt = new AgentToolReceipt
+            {
+                CallId = "call-approval",
+                ToolName = "danger",
+                Status = AgentToolReceiptStatus.Denied,
+                ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
+                ApprovalRequestId = "approval-denied-1",
+                ErrorCode = "approval_denied",
+                ErrorMessage = "approval_denied",
+                IsDestructive = true,
+            };
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.Outcome.Should().Be(AuditOutcome.Denied);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.Failure.FailedPhase.Should().Be(AuditLifecyclePhase.WaitingApproval);
+        record.Correlation.ApprovalId.Should().Be("approval-denied-1");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenApprovalTimesOut_ShouldRecordTimedOutTerminalOutcome()
+    {
+        const string secret = "must-not-be-recorded";
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new FakeAgentTool("danger", ToolApprovalMode.AlwaysRequire, isDestructive: true),
+            AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-timeout", "owner-timeout", null),
+            });
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Terminate = true;
+            context.TerminationKind = ToolCallTerminationKind.ApprovalTimedOut;
+            context.TerminationReason = $"Approval timed out: {secret}";
+            context.PendingApproval = new ToolApprovalPendingContext(
+                "approval-timeout-1",
+                "danger",
+                "call-timeout",
+                "{}",
+                ToolApprovalMode.AlwaysRequire,
+                IsReadOnly: false,
+                IsDestructive: true);
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.TimedOut);
+        record.Failure.Code.Should().Be("approval_timeout");
+        record.Failure.Category.Should().Be(AuditFailureCategory.Timeout);
+        record.Failure.FailedPhase.Should().Be(AuditLifecyclePhase.WaitingApproval);
+        record.Correlation.ApprovalId.Should().Be("approval-timeout-1");
+        AuditText(record).Should().NotContain(secret);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenReceiptErrorFieldsContainCompactSecrets_ShouldUseOwnedFailureCode()
+    {
+        const string compactSecret = "compactSecretToken123";
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new FakeAgentTool("failing_tool"),
+            AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-error", "owner-error", null),
+            });
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Receipt = new AgentToolReceipt
+            {
+                CallId = "call-error",
+                ToolName = "failing_tool",
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = compactSecret,
+                ErrorMessage = compactSecret,
+            };
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.ErrorCode.Should().Be("tool_error");
+        record.ErrorSummary.Should().Be("tool_error");
+        record.Failure.Code.Should().Be("tool_error");
+        record.Failure.SanitizedMessage.Should().Be("tool_error");
+        AuditText(record).Should().NotContain(compactSecret);
     }
 
     [Fact]
@@ -322,8 +437,11 @@ public sealed class ToolExecutionAuditMiddlewareTests
         thrown.Which.Should().BeSameAs(exception);
         var record = appender.Records.Should().ContainSingle().Subject;
         record.Outcome.Should().Be(AuditOutcome.Error);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.Failure.Category.Should().Be(AuditFailureCategory.Execution);
         record.ErrorCode.Should().Be("tool_execution_exception");
-        record.ErrorSummary.Should().Be(nameof(InvalidOperationException));
+        record.ErrorSummary.Should().Be("tool_execution_exception");
         AuditText(record).Should().NotContain(secret);
         record.CredentialSource.Should().Be(AuditCredentialSource.BearerToken);
         record.Target.Kind.Should().Be("tool");

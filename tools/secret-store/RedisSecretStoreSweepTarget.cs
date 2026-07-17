@@ -19,9 +19,6 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         var options = ConfigurationOptions.Parse(connectionString);
         options.AbortOnConnectFail = false;
-        // Pin default database so raw server commands and EVAL share the same logical DB
-        // as StringGet/StringSet against the configured index.
-        options.DefaultDatabase = database;
         var connection = await ConnectionMultiplexer.ConnectAsync(options);
         return new RedisSecretStoreSweepTarget(connection, database);
     }

@@ -342,8 +342,15 @@ public sealed class DPoPProofValidator
                 break;
         }
 
-        iat = DateTimeOffset.FromUnixTimeSeconds(seconds);
-        return true;
+        try
+        {
+            iat = DateTimeOffset.FromUnixTimeSeconds(seconds);
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     private static DPoPValidationResult ValidateAccessTokenBinding(
@@ -367,6 +374,9 @@ public sealed class DPoPProofValidator
     {
         var leftBytes = Encoding.UTF8.GetBytes(left);
         var rightBytes = Encoding.UTF8.GetBytes(right);
+        if (leftBytes.Length != rightBytes.Length)
+            return false;
+
         return CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 

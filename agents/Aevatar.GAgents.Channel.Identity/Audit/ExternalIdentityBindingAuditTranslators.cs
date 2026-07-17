@@ -43,6 +43,34 @@ public sealed class ExternalIdentityBoundAuditTranslator
             });
 }
 
+public sealed class ExternalIdentityBindingReplacedAuditTranslator
+    : SubjectBearingCommittedAuditTranslatorBase<ExternalIdentityBindingReplacedEvent>
+{
+    public ExternalIdentityBindingReplacedAuditTranslator(IAuditActorIdentityHasher? actorIdentityHasher = null)
+        : base(actorIdentityHasher)
+    {
+    }
+
+    public override string EventTypeUrl =>
+        AuditCommittedEventTypeUrl.FromDescriptor(ExternalIdentityBindingReplacedEvent.Descriptor);
+
+    protected override CommittedAuditSeed BuildSeed(
+        CommittedAuditTranslationContext context,
+        ExternalIdentityBindingReplacedEvent evt) =>
+        new(
+            "identity.external-binding.replaced",
+            "external_identity_binding",
+            evt.ExternalSubject?.Platform ?? string.Empty,
+            ScopeId: string.Empty,
+            SensitivityLevel: AuditSensitivityLevel.Restricted,
+            ResultSummary: "External identity binding replaced.",
+            Annotations: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["platform"] = evt.ExternalSubject?.Platform ?? string.Empty,
+                ["reason"] = evt.Reason ?? string.Empty,
+            });
+}
+
 public sealed class ExternalIdentityBindingRevokedAuditTranslator
     : SubjectBearingCommittedAuditTranslatorBase<ExternalIdentityBindingRevokedEvent>
 {

@@ -33,7 +33,7 @@ public sealed record UserAgentDeliveryTarget(
     string NyxProviderSlug,
     string NyxApiKey,
     ChannelAddressModel ChannelAddress,
-    SkillRunnerOutputFormat OutputFormat,
+    ScheduledAgentOutputFormat OutputFormat,
     string TemplateName,
     string AgentType)
     : ChannelNativeDeliveryTarget(

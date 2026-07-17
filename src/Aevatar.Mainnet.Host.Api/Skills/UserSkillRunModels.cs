@@ -1,6 +1,6 @@
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
-// Invoke request body (read manually via ReadFromJsonAsync, mirroring SkillRunnerExternalTriggerEndpoints).
+// Invoke request body read manually via ReadFromJsonAsync.
 internal sealed record SkillInvokeRequest(string? Prompt = null);
 
 // Returned to the page after a one-shot invoke. ObservatoryUrl deep-links to the created run's detail.

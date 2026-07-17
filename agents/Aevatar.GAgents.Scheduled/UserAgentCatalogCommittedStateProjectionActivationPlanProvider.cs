@@ -1,6 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
-using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -25,11 +24,6 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
             [
                 DurablePlan(UserAgentCatalogGAgent.WellKnownId),
             ],
-            var type when type == typeof(SkillRunnerGAgent) &&
-                          IsSkillRunnerEvent(payload) =>
-            [
-                DurablePlan(context.ActorId),
-            ],
             _ => [],
         };
     }
@@ -38,17 +32,6 @@ public sealed class UserAgentCatalogCommittedStateProjectionActivationPlanProvid
         payload.Is(UserAgentCatalogUpsertedEvent.Descriptor) ||
         payload.Is(UserAgentCatalogTombstonedEvent.Descriptor) ||
         payload.Is(UserAgentCatalogTombstonesCompactedEvent.Descriptor);
-
-    private static bool IsSkillRunnerEvent(Any payload) =>
-        payload.Is(SkillRunnerInitializedEvent.Descriptor) ||
-        payload.Is(SkillRunnerNextRunScheduledEvent.Descriptor) ||
-        payload.Is(SkillRunnerExecutionCompletedEvent.Descriptor) ||
-        payload.Is(SkillRunnerExecutionFailedEvent.Descriptor) ||
-        payload.Is(SkillRunnerExecutionRejectedEvent.Descriptor) ||
-        payload.Is(SkillRunnerOneShotRetiredEvent.Descriptor) ||
-        payload.Is(SkillRunnerDisabledEvent.Descriptor) ||
-        payload.Is(SkillRunnerEnabledEvent.Descriptor) ||
-        payload.Is(DeliveryProducedEvent.Descriptor);
 
     private static ProjectionActivationPlan DurablePlan(string rootActorId) =>
         new()

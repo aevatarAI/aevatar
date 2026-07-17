@@ -12,21 +12,34 @@ jest.mock('@/shared/auth/client', () => ({
   NyxIDAuthClient: jest.fn(),
 }));
 
-function mockLocationReplace(search = window.location.search) {
+function mockLocationReplace(path = '/auth/callback?code=auth-code&state=state-1') {
+  const url = new URL(path, 'http://localhost:8000');
+
   Object.defineProperty(window, 'location', {
     configurable: true,
+    writable: true,
     value: {
       ...window.location,
-      href: window.location.href,
-      origin: window.location.origin,
+      hash: url.hash,
+      host: url.host,
+      hostname: url.hostname,
+      href: url.href,
+      origin: url.origin,
+      pathname: url.pathname,
+      port: url.port,
+      protocol: url.protocol,
       replace: replaceLocation,
-      search,
+      search: url.search,
+      toString: () => url.href,
     },
   });
 }
 
 describe('NyxID callback page', () => {
-  const originalLocation = window.location;
+  const originalLocationDescriptor = Object.getOwnPropertyDescriptor(
+    window,
+    'location',
+  );
 
   beforeEach(() => {
     window.localStorage.clear();
@@ -44,10 +57,9 @@ describe('NyxID callback page', () => {
   });
 
   afterEach(() => {
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: originalLocation,
-    });
+    if (originalLocationDescriptor) {
+      Object.defineProperty(window, 'location', originalLocationDescriptor);
+    }
     jest.restoreAllMocks();
     window.localStorage.clear();
   });
@@ -88,8 +100,7 @@ describe('NyxID callback page', () => {
   });
 
   it('skips callback finalization when no callback payload is present and a session exists', async () => {
-    window.history.replaceState({}, '', '/auth/callback');
-    mockLocationReplace('');
+    mockLocationReplace('/auth/callback');
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',

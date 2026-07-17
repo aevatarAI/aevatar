@@ -4,7 +4,6 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Capabilities;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -39,6 +38,12 @@ public static class AuditTrailEndpoints
             .RequireAuthorization()
             .WithMetadata(new AuditTrailEndpointAuditMetadata("audit-trail", "query-cross-scope", AdminAccessLevel));
 
+        data.MapGet("/trail/cloudevents", ExportAuditTrailCloudEvents)
+            .WithName("ExportAuditTrailCloudEvents")
+            .WithSummary("Export audit trail records as a CloudEvents 1.0 JSON batch.")
+            .RequireAuthorization()
+            .WithMetadata(new AuditTrailEndpointAuditMetadata("audit-trail", "export-cross-scope", AdminAccessLevel));
+
         data.MapPost("/actor-resolutions", ResolveAuditActor)
             .WithName("ResolveAuditActor")
             .WithSummary("Admin-only: resolve an external actor identity to its server-side audit actor id.")
@@ -59,7 +64,89 @@ public static class AuditTrailEndpoints
         DateTimeOffset? from = null,
         DateTimeOffset? to = null,
         int take = DefaultTake,
+        string? commandId = null,
+        string? workflowRunId = null,
+        AuditLifecyclePhase? lifecyclePhase = null,
+        AuditTerminalOutcome? terminalOutcome = null,
+        string? correlationId = null,
         CancellationToken ct = default)
+    {
+        return await QueryAuditTrailCore(
+            http,
+            dependencies,
+            loggerFactory,
+            scope,
+            auditActorId,
+            identityKeyId,
+            cursor,
+            from,
+            to,
+            take,
+            commandId,
+            workflowRunId,
+            lifecyclePhase,
+            terminalOutcome,
+            correlationId,
+            exportCloudEvents: false,
+            ct: ct);
+    }
+
+    internal static async Task<IResult> ExportAuditTrailCloudEvents(
+        HttpContext http,
+        [FromServices] AuditTrailEndpointDependencies dependencies,
+        [FromServices] ILoggerFactory loggerFactory,
+        string? scope = null,
+        string? auditActorId = null,
+        string? identityKeyId = null,
+        string? cursor = null,
+        DateTimeOffset? from = null,
+        DateTimeOffset? to = null,
+        int take = DefaultTake,
+        string? commandId = null,
+        string? workflowRunId = null,
+        AuditLifecyclePhase? lifecyclePhase = null,
+        AuditTerminalOutcome? terminalOutcome = null,
+        string? correlationId = null,
+        CancellationToken ct = default)
+    {
+        return await QueryAuditTrailCore(
+            http,
+            dependencies,
+            loggerFactory,
+            scope,
+            auditActorId,
+            identityKeyId,
+            cursor,
+            from,
+            to,
+            take,
+            commandId,
+            workflowRunId,
+            lifecyclePhase,
+            terminalOutcome,
+            correlationId,
+            exportCloudEvents: true,
+            ct: ct);
+    }
+
+    private static async Task<IResult> QueryAuditTrailCore(
+        HttpContext http,
+        AuditTrailEndpointDependencies dependencies,
+        ILoggerFactory loggerFactory,
+        string? scope,
+        string? auditActorId,
+        string? identityKeyId,
+        string? cursor,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        int take,
+        string? commandId,
+        string? workflowRunId,
+        AuditLifecyclePhase? lifecyclePhase,
+        AuditTerminalOutcome? terminalOutcome,
+        string? correlationId,
+        bool exportCloudEvents,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(http);
 
@@ -85,7 +172,7 @@ public static class AuditTrailEndpoints
                 logger,
                 callerScopeId,
                 targetScope,
-                "query-cross-scope",
+                exportCloudEvents ? "export-cross-scope" : "query-cross-scope",
                 ct);
             if (denied is not null)
                 return denied;
@@ -103,10 +190,21 @@ public static class AuditTrailEndpoints
             Cursor = NormalizeOptional(cursor),
             OccurredFrom = from,
             OccurredTo = to,
+            CommandId = NormalizeOptional(commandId),
+            WorkflowRunId = NormalizeOptional(workflowRunId),
+            LifecyclePhase = lifecyclePhase,
+            TerminalOutcome = terminalOutcome,
+            CorrelationId = NormalizeOptional(correlationId),
             Take = NormalizeTake(take),
         };
         var result = await queryPort.QueryAsync(query, ct);
-        return Results.Json(ToResponse(result));
+        if (!exportCloudEvents)
+            return Results.Json(AuditTrailResponseMapper.ToResponse(result));
+
+        SetExportCoverageHeaders(http, result);
+        return Results.Json(
+            AuditTrailResponseMapper.ToCloudEvents(result),
+            contentType: AuditTrailResponseMapper.CloudEventsBatchContentType);
     }
 
     internal static async Task<IResult> ResolveAuditActor(
@@ -190,25 +288,6 @@ public static class AuditTrailEndpoints
         return null;
     }
 
-    private static AuditTrailReadResponse ToResponse(AuditTrailPage result) =>
-        new(
-            result.Records.Select(static record => new AuditTrailRecordResponse(
-                    record.AuditId,
-                    record.ScopeId,
-                    record.AuditActorId,
-                    record.IdentityKeyId,
-                    record.OperationName,
-                    record.Outcome.ToString(),
-                    ToDateTimeOffset(record.OccurredAt),
-                    NormalizeOptional(record.Target?.Kind),
-                    NormalizeOptional(record.Target?.Id),
-                    NormalizeOptional(record.Correlation?.RequestId) ??
-                    NormalizeOptional(record.Correlation?.TraceId)))
-                .ToArray(),
-            result.ReadAt,
-            result.Watermark,
-            result.NextCursor);
-
     private static IResult QueryUnavailable() =>
         Results.Json(
             new { code = "AUDIT_QUERY_UNAVAILABLE", message = "Audit trail query port is not configured." },
@@ -238,8 +317,19 @@ public static class AuditTrailEndpoints
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private static DateTimeOffset ToDateTimeOffset(Timestamp? timestamp) =>
-        timestamp is null ? DateTimeOffset.UnixEpoch : timestamp.ToDateTimeOffset();
+    private static void SetExportCoverageHeaders(HttpContext http, AuditTrailPage page)
+    {
+        var coverage = AuditTrailResponseMapper.ToCoverageResponse(page);
+        http.Response.Headers["Aevatar-Audit-Truncated"] = coverage.Truncated ? "true" : "false";
+        http.Response.Headers["Aevatar-Audit-Window-Completeness"] = coverage.WindowCompleteness;
+        http.Response.Headers["Aevatar-Audit-Schema-Compatibility"] = coverage.SchemaCompatibility;
+        if (!string.IsNullOrWhiteSpace(page.NextCursor))
+            http.Response.Headers["Aevatar-Audit-Continuation-Cursor"] = page.NextCursor;
+        if (page.Coverage.IngestionWatermark.HasValue)
+            http.Response.Headers["Aevatar-Audit-Ingestion-Watermark"] = page.Coverage.IngestionWatermark.Value.ToString("O");
+        if (page.Coverage.CompleteThrough.HasValue)
+            http.Response.Headers["Aevatar-Audit-Complete-Through"] = page.Coverage.CompleteThrough.Value.ToString("O");
+    }
 
     private static bool TryBuildCanonicalActorKey(
         string provider,
@@ -292,12 +382,11 @@ public static class AuditTrailEndpoints
         PlatformCaller admin,
         string? reason) =>
         logger.LogInformation(
-            "audit_trail_admin_read outcome={Outcome} action={Action} adminUserId={AdminUserId} adminEmail={AdminEmail} " +
+            "audit_trail_admin_read outcome={Outcome} action={Action} adminUserId={AdminUserId} " +
             "role={Role} grantSource={GrantSource} callerScope={CallerScope} targetScope={TargetScope} reason={Reason} correlationId={CorrelationId}",
             outcome,
             action,
             admin.UserId,
-            admin.Email,
             admin.Role,
             admin.GrantSource,
             callerScope,

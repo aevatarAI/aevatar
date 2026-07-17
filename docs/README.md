@@ -7,10 +7,13 @@
 Authoritative architecture and developer guides. Each covers one topic.
 
 - [Actor Evolution Canon Matrix](canon/actor-evolution.md)
+- [Aevatar Admin Authorization](canon/admin-authorization.md)
 - [[RFC] Aevatar Chat — Multi-Channel Adapter Architecture](canon/aevatar-channel-architecture.md)
 - [Approval Quota Ledger](canon/approval-quota-ledger.md)
 - [Architecture Vocabulary](canon/architecture-vocabulary.md)
 - [Aevatar Foundation](canon/architecture.md)
+- [Platform Audit Trail](canon/audit-trail.md)
+- [Backend Console Static Assets](canon/backend-console.md)
 - [Workflow Chat API 能力说明（框架层）](canon/chat-api.md)
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
@@ -20,6 +23,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [GAgent Registry Ownership](canon/gagent-registry-ownership.md)
 - [Lark Reply Chain Completion Semantics](canon/lark-reply-completion-semantics.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
+- [Managed Codex Execution](canon/managed-codex-execution.md)
 - [Module Placement Map](canon/module-placement-map.md)
 - [NyxID Connected-Service LLM Tools](canon/nyxid-connected-service-tools.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
@@ -27,9 +31,10 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar Observability — OTel Semantic Conventions](canon/observability.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
 - [Role 与工作流、Connector 配置指南](canon/role-model.md)
-- [Scheduled Skill Runners](canon/scheduled-skill-runners.md)
+- [Scheduled Workflow Dispatch](canon/scheduled-skill-runners.md)
 - [Aevatar.Scripting 架构文档](canon/scripting.md)
 - [.NET Workflow SDK Quick Start](canon/sdk-dotnet.md)
+- [Secret Vault](canon/secret-vault.md)
 - [Aevatar /status 状态面板架构](canon/status-dashboard.md)
 - [System Skill Overlay Authoring Contract](canon/system-skill-overlay-authoring-contract.md)
 - [Voice Presence Integration — aevatar as the /ws/voice Brain](canon/voice-presence-integration.md)
@@ -76,6 +81,11 @@ Immutable records of architectural choices and their rationale.
 - [Scope Workflow as the Authoritative Runnable Workflow Model](adr/0036-scope-workflow-authoritative-runnable-model.md)
 - [定时任务调用凭证的权威来源模型](adr/0037-scheduled-invocation-credential-source-model.md)
 - [Scripting Capability Is Opt-In and Disabled on Mainnet](adr/0038-scripting-capability-opt-in-disabled-on-mainnet.md)
+- [Platform Audit Trail](adr/0039-platform-audit-trail.md)
+- [Current-State Readmodel Disaster-Recovery Rebuild via Committed-State Re-Publication](adr/0040-current-state-readmodel-dr-rebuild.md)
+- [定时任务 Agent Key 凭证引用补充决策](adr/0041-scheduled-invocation-agent-key-credential-reference.md)
+- [Scheduled Invocation Durable Credential Uses SecretReference](adr/0042-scheduled-invocation-durable-secret-reference.md)
+- [Scheduled Credential Lifecycle Compensation](adr/0043-scheduled-credential-lifecycle-compensation.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History
@@ -117,4 +127,3 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Templates
 
 - [architecture.md](templates/architecture.md)
-

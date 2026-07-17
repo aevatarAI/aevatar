@@ -62,7 +62,8 @@ public sealed class ChannelRegistrationAuditTranslatorTests
         record.SensitivityLevel.Should().Be(expected.SensitivityLevel);
         record.Correlation.CommandId.Should().Be("cmd-1");
         record.Correlation.RequestId.Should().Be("req-1");
-        record.Correlation.TraceId.Should().Be("corr-1");
+        record.Correlation.TraceId.Should().BeEmpty();
+        record.Correlation.CorrelationId.Should().Be("corr-1");
         record.CommittedFactRef.StateVersion.Should().Be(5);
         AssertDestructiveAnnotation(record, expected.IsDestructive);
         foreach (var annotation in expected.Annotations)

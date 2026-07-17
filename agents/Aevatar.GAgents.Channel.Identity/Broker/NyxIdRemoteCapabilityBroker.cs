@@ -28,7 +28,10 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// 2-min handler rotation: stale DNS, expired sockets, and TLS-cert refreshes
 /// would never be picked up on long-running silos.
 /// </remarks>
-public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxIdBrokerCallbackClient
+public sealed class NyxIdRemoteCapabilityBroker :
+    INyxIdCapabilityBroker,
+    INyxIdBrokerCallbackClient,
+    INyxIdBindingRetirementPort
 {
     public const string AuthorizeEndpoint = "/oauth/authorize";
     public const string TokenEndpoint = "/oauth/token";
@@ -78,9 +81,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
 
     private string ResolveRedirectUri() => NyxIdRedirectUriResolver.Resolve(_logger);
 
-    private string[] RequiredResourceUris(AevatarOAuthClientSnapshot snapshot) =>
+    private string[] RequiredResourceUris() =>
         AevatarOAuthClientResources.RequiredResourceUris(
-            snapshot.NyxIdAuthority,
+            _options.ResourceServerBaseUrl,
             _options.RequiredLlmServiceSlug,
             _options.AdditionalRequiredServiceSlugs);
 
@@ -165,6 +168,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         response.EnsureSuccessStatusCode();
     }
 
+    public Task RetireAsync(string bindingId, CancellationToken ct = default) =>
+        RevokeBindingByIdAsync(bindingId, ct);
+
     public async Task<CapabilityHandle> IssueShortLivedAsync(
         ExternalSubjectRef externalSubject,
         CapabilityScope scope,
@@ -191,7 +197,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         ArgumentNullException.ThrowIfNull(scope);
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
-        var requiredResources = RequiredResourceUris(snapshot);
+        var requiredResources = RequiredResourceUris();
 
         var form = new List<KeyValuePair<string, string>>
         {
@@ -202,8 +208,11 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         };
         if (!string.IsNullOrWhiteSpace(scope.Value))
             form.Add(new KeyValuePair<string, string>("scope", scope.Value));
-        foreach (var resource in requiredResources)
-            form.Add(new KeyValuePair<string, string>("resource", resource));
+        // The binding already owns the user's finalized Consent service set.
+        // Sending resource here would narrow every short-lived token back to
+        // Aevatar's configured minimum and make optional services selected in
+        // the consent UI unusable. Inherit the full grant, then validate that
+        // the configured runtime minimum is still present in the issued token.
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -320,8 +329,9 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         if (requireProvisionedRedirectUri)
             EnsureClientCurrent(snapshot, redirectUri);
-        var requiredResources = RequiredResourceUris(snapshot);
 
+        // The authorization code already carries the user's finalized Consent selection.
+        // Repeating resource here would narrow that grant to Aevatar's minimum runtime set.
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", "authorization_code"),
@@ -330,8 +340,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             new("redirect_uri", redirectUri),
             new("client_id", snapshot.ClientId),
         };
-        foreach (var resource in requiredResources)
-            form.Add(new KeyValuePair<string, string>("resource", resource));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -345,11 +353,6 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            if ((int)response.StatusCode == 400 && IsInvalidTarget(body))
-            {
-                throw new NyxIdRequiredServiceAccessException(
-                    requiredResources);
-            }
             _logger.LogError(
                 "NyxID authorization-code exchange failed: status={StatusCode}, body={Body}",
                 (int)response.StatusCode,
@@ -391,7 +394,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
             $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
             "prompt=consent",
         };
-        queryParts.AddRange(RequiredResourceUris(snapshot)
+        queryParts.AddRange(RequiredResourceUris()
             .Select(static resource => $"resource={Uri.EscapeDataString(resource)}"));
         queryParts.AddRange(
         [

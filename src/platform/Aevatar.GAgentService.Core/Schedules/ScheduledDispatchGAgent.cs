@@ -17,6 +17,7 @@ namespace Aevatar.GAgentService.Core.Schedules;
 public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 {
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
+    private const string TeamCredentialExpiryCallbackId = "scheduled-dispatch-team-credential-expiry";
     private const int MaxFireRecordCount = 128;
     // How overdue an armed occurrence must be, when the actor reactivates, before it counts as
     // a detected miss. Wide enough that routine reactivation catch-up (pod churn at the boundary
@@ -26,26 +27,31 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     private const string LegacyDurableSenderBearerBlockedError =
         "Scheduled service invocation contains legacy durable bearer auth; reconfigure the schedule with senderNyxId or scopeOwnerNyxId.";
     private static readonly TimeSpan MaxNextFireCallbackHop = TimeSpan.FromDays(7);
+    internal static readonly TimeSpan TeamAutomationEffectAttemptLeaseDuration = TimeSpan.FromMinutes(5);
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IScheduledServiceInvocationDispatchPort _serviceInvocationDispatchPort;
     private readonly IScheduledDispatchCredentialRequirementPolicy _credentialRequirementPolicy;
+    private readonly TimeProvider _timeProvider;
 
     public ScheduledDispatchGAgent(
         IActorDispatchPort dispatchPort,
         IScheduledServiceInvocationDispatchPort serviceInvocationDispatchPort,
-        IScheduledDispatchCredentialRequirementPolicy credentialRequirementPolicy)
+        IScheduledDispatchCredentialRequirementPolicy credentialRequirementPolicy,
+        TimeProvider? timeProvider = null)
     {
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _serviceInvocationDispatchPort = serviceInvocationDispatchPort
             ?? throw new ArgumentNullException(nameof(serviceInvocationDispatchPort));
         _credentialRequirementPolicy = credentialRequirementPolicy
             ?? throw new ArgumentNullException(nameof(credentialRequirementPolicy));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        if (State.Enabled && !State.Completed && IsConfigured())
+        await RecoverTeamCredentialExpiryAsync(ct);
+        if (CanScheduleAutomaticFire())
         {
             await DetectOverdueArmedFireAsync(DateTimeOffset.UtcNow, ct);
             if (State.PendingNextFireAt != null)
@@ -93,6 +99,16 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             .On<ScheduledDispatchFireDispatchedEvent>(ApplyFireDispatched)
             .On<ScheduledDispatchFireFailedEvent>(ApplyFireFailed)
             .On<ScheduledDispatchFireOverdueDetectedEvent>(ApplyFireOverdueDetected)
+            .On<TeamAutomationCredentialOperationBeganEvent>(ApplyTeamAutomationCredentialOperationBegan)
+            .On<TeamAutomationCredentialCandidateRecordedEvent>(ApplyTeamAutomationCredentialCandidateRecorded)
+            .On<TeamAutomationCredentialActivatedEvent>(ApplyTeamAutomationCredentialActivated)
+            .On<TeamAutomationCredentialOperationFailedEvent>(ApplyTeamAutomationCredentialOperationFailed)
+            .On<TeamAutomationDeletionRequestedEvent>(ApplyTeamAutomationDeletionRequested)
+            .On<TeamAutomationRevocationCompletedEvent>(ApplyTeamAutomationRevocationCompleted)
+            .On<TeamAutomationAuthorizationRequiredEvent>(ApplyTeamAutomationAuthorizationRequired)
+            .On<TeamAutomationCredentialExpiryIntentRecordedEvent>(ApplyTeamAutomationCredentialExpiryIntentRecorded)
+            .On<TeamAutomationCredentialExpiryScheduledEvent>(ApplyTeamAutomationCredentialExpiryScheduled)
+            .On<TeamAutomationOperationObservedEvent>(ApplyTeamAutomationOperationObserved)
             .OrCurrent();
 
     [EventHandler]
@@ -111,6 +127,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleKind,
             command.ScheduleMode,
             command.OneShotFireAt,
+            command.TeamAutomationOwner,
             isCreate: true);
 
     [EventHandler]
@@ -129,11 +146,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleKind,
             command.ScheduleMode,
             command.OneShotFireAt,
+            command.TeamAutomationOwner,
             isCreate: false);
 
     [EventHandler]
     public async Task HandleEnsureAsync(ScheduledDispatchEnsureCommand command)
     {
+        EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "ensure");
         if (!IsConfigured())
         {
             await HandleConfigureAsync(
@@ -150,6 +169,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 command.ScheduleKind,
                 command.ScheduleMode,
                 command.OneShotFireAt,
+                command.TeamAutomationOwner,
                 isCreate: true);
             return;
         }
@@ -180,6 +200,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleKind,
             command.ScheduleMode,
             command.OneShotFireAt,
+            command.TeamAutomationOwner,
             isCreate: false);
     }
 
@@ -197,6 +218,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         ScheduledDispatchScheduleKindState scheduleKind,
         ScheduledDispatchScheduleModeState scheduleMode,
         Timestamp? oneShotFireAt,
+        TeamMemberAutomationOwnerState? teamAutomationOwner,
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -206,6 +228,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
+        EnsureTeamAutomationOwnerAccess(teamAutomationOwner, "configure");
         EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone, scheduleKind, scheduleMode, oneShotFireAt);
 
         var now = DateTimeOffset.UtcNow;
@@ -250,6 +273,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             OneShotFireAt = normalizedOneShotFireAt.HasValue
                 ? Timestamp.FromDateTimeOffset(normalizedOneShotFireAt.Value)
                 : null,
+            TeamAutomationOwner = teamAutomationOwner?.Clone(),
         };
         foreach (var (key, value) in NormalizeHeaders(headers))
             configured.Headers[key] = value;
@@ -267,6 +291,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     public async Task HandleEnableAsync(ScheduledDispatchEnableCommand command)
     {
         EnsureConfiguredForWrite("enable");
+        EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "enable");
+        if (State.TeamAutomationOwner != null &&
+            State.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatusState.Active)
+        {
+            throw new InvalidOperationException("team_automation_credential_not_active");
+        }
 
         await PersistDomainEventAsync(new ScheduledDispatchEnabledEvent
         {
@@ -280,6 +310,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     public async Task HandleDisableAsync(ScheduledDispatchDisableCommand command)
     {
         EnsureConfiguredForWrite("disable");
+        EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "disable");
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
         {
@@ -290,16 +321,538 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     }
 
     [EventHandler]
-    public async Task HandleDeleteAsync(ScheduledDispatchDeleteCommand command)
+    public Task HandleDeleteAsync(ScheduledDispatchDeleteCommand command)
     {
-        EnsureConfiguredForWrite("delete");
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Delete,
+            command.ObservationRequestId,
+            () => HandleDeleteCoreAsync(command));
+    }
+
+    private async Task HandleDeleteCoreAsync(ScheduledDispatchDeleteCommand command)
+    {
+        if (State.Deleted && IsSameCompletedDeleteOperation(command))
+        {
+            EnsureObservedCredentialAuthorizationOwnerAccess(
+                command.AuthenticatedCredentialOwner,
+                State.TeamCredentialEffectLocator?.CredentialOwner);
+            await PersistTeamAutomationObservationAsync(
+                TeamAutomationOperationObservationStages.Delete,
+                State.PendingRevocationTeamCredential != null &&
+                CanClaimTeamAutomationEffectAttempt(_timeProvider.GetUtcNow()),
+                CancellationToken.None,
+                observationRequestId: command.ObservationRequestId);
+            return;
+        }
+
+        if (State.TeamAutomationLifecycleStatus is
+                TeamAutomationLifecycleStatusState.ProvisioningPending or
+                TeamAutomationLifecycleStatusState.ReplacementPending ||
+            State.CandidateTeamCredential != null)
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_operation_in_progress");
+        }
+        if (State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.RevocationPending ||
+            State.PendingRevocationTeamCredential != null)
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_revocation_in_progress");
+        }
+
+        if (State.TeamAutomationOwner == null)
+            EnsureConfiguredForWrite("delete");
+        EnsureObservedTeamAutomationOwnerAccess(command.TeamAutomationOwner);
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        var previousCredentialExpiryLease =
+            ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.TeamCredentialExpiryLease);
+        if (State.TeamAutomationOwner != null)
+        {
+            var credentialOwner = State.ActiveTeamCredentialOwner ??
+                State.TeamCredentialEffectLocator?.CredentialOwner;
+            EnsureObservedCredentialAuthorizationOwnerAccess(
+                command.AuthenticatedCredentialOwner,
+                credentialOwner);
+            await PersistDomainEventAsync(new TeamAutomationDeletionRequestedEvent
+            {
+                Owner = State.TeamAutomationOwner.Clone(),
+                OperationId = NormalizeRequired(command.OperationId, nameof(command.OperationId)),
+                IdempotencyKey = NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey)),
+                PendingRevocationCredential = State.ActiveTeamCredential?.Clone(),
+                PendingRevocationCredentialOwner = State.ActiveTeamCredentialOwner?.Clone(),
+                OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            });
+        }
         await PersistDomainEventAsync(new ScheduledDispatchDeletedEvent
         {
             Reason = NormalizeOptional(command.Reason),
             DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Delete,
+            State.PendingRevocationTeamCredential != null,
+            CancellationToken.None,
+            observationRequestId: command.ObservationRequestId);
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
+        await CancelTeamCredentialExpiryLeaseAsync(
+            previousCredentialExpiryLease,
+            CancellationToken.None);
+    }
+
+    [EventHandler]
+    public Task HandleBeginTeamAutomationCredentialOperationAsync(
+        BeginTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            command.ScheduleId,
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Begin,
+            command.ObservationRequestId,
+            () => HandleBeginTeamAutomationCredentialOperationCoreAsync(command));
+    }
+
+    private async Task HandleBeginTeamAutomationCredentialOperationCoreAsync(
+        BeginTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var scheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        var operationId = NormalizeRequired(command.OperationId, nameof(command.OperationId));
+        var idempotencyKey = NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey));
+        var permissionDigest = NormalizeRequired(command.PermissionDigest, nameof(command.PermissionDigest));
+        var policyVersion = NormalizeRequired(command.PolicyVersion, nameof(command.PolicyVersion));
+        var credentialEffectLocator = NormalizeCredentialEffectLocator(command.CredentialEffectLocator);
+        var mutationDigest = NormalizeRequired(command.MutationDigest, nameof(command.MutationDigest));
+        if (command.OperationKind is not (TeamAutomationOperationKindState.Create or
+            TeamAutomationOperationKindState.Reauthorize))
+        {
+            throw new ArgumentException("Team automation credential operation kind is invalid.", nameof(command));
+        }
+
+        if (State.Deleted)
+            throw TeamAutomationCommandRejectedException.NotFound("team_automation_schedule_deleted");
+        if (IsConfigured() && State.TeamAutomationOwner == null)
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_owner_conflict");
+        if (!string.IsNullOrWhiteSpace(State.ScheduleId) &&
+            !string.Equals(State.ScheduleId, scheduleId, StringComparison.Ordinal))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_schedule_id_conflict");
+        }
+
+        EnsureStableTeamAutomationOwner(owner);
+        if (IsExactTeamAutomationOperation(
+                owner,
+                operationId,
+                idempotencyKey,
+                permissionDigest,
+                policyVersion,
+                command.OperationKind,
+                credentialEffectLocator,
+                mutationDigest))
+        {
+            var ownsEffectAttempt = (State.TeamAutomationLifecycleStatus is
+                    TeamAutomationLifecycleStatusState.ProvisioningPending or
+                    TeamAutomationLifecycleStatusState.ReplacementPending) &&
+                CanClaimTeamAutomationEffectAttempt(_timeProvider.GetUtcNow());
+            await PersistTeamAutomationObservationAsync(
+                TeamAutomationOperationObservationStages.Begin,
+                ownsEffectAttempt,
+                CancellationToken.None,
+                observationRequestId: command.ObservationRequestId);
+            return;
+        }
+
+        if (string.Equals(State.TeamAutomationOperationId, operationId, StringComparison.Ordinal) ||
+            string.Equals(State.TeamAutomationIdempotencyKey, idempotencyKey, StringComparison.Ordinal))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_operation_conflict");
+        }
+
+        if (State.TeamAutomationLifecycleStatus is TeamAutomationLifecycleStatusState.ProvisioningPending or
+            TeamAutomationLifecycleStatusState.ReplacementPending or
+            TeamAutomationLifecycleStatusState.Deleting or
+            TeamAutomationLifecycleStatusState.RevocationPending)
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_operation_in_progress");
+        }
+        if (State.PendingRevocationTeamCredential != null)
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_revocation_in_progress");
+
+        if (command.OperationKind == TeamAutomationOperationKindState.Create && State.ActiveTeamCredential != null)
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_credential_already_active");
+        if (command.OperationKind == TeamAutomationOperationKindState.Reauthorize && State.ActiveTeamCredential == null)
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_credential_not_active");
+        if (command.OperationKind == TeamAutomationOperationKindState.Reauthorize &&
+            !CredentialAuthorizationOwnerEquals(
+                State.ActiveTeamCredentialOwner,
+                credentialEffectLocator.CredentialOwner))
+        {
+            throw TeamAutomationCommandRejectedException.Unauthorized(
+                "team_automation_credential_owner_mismatch");
+        }
+
+        await PersistDomainEventAsync(new TeamAutomationCredentialOperationBeganEvent
+        {
+            ScheduleId = scheduleId,
+            Owner = owner,
+            OperationId = operationId,
+            IdempotencyKey = idempotencyKey,
+            PermissionDigest = permissionDigest,
+            PolicyVersion = policyVersion,
+            OperationKind = command.OperationKind,
+            CredentialEffectLocator = credentialEffectLocator,
+            MutationDigest = mutationDigest,
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Begin,
+            ownsEffectAttempt: true,
+            CancellationToken.None,
+            observationRequestId: command.ObservationRequestId);
+    }
+
+    [EventHandler]
+    public Task HandleRecordTeamAutomationCredentialCandidateAsync(
+        RecordTeamAutomationCredentialCandidateCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Candidate,
+            command.ObservationRequestId,
+            () => HandleRecordTeamAutomationCredentialCandidateCoreAsync(command));
+    }
+
+    private async Task HandleRecordTeamAutomationCredentialCandidateCoreAsync(
+        RecordTeamAutomationCredentialCandidateCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        EnsureObservedTeamAutomationOwnerAccess(owner);
+        EnsureCurrentTeamAutomationOperation(command.OperationId, command.IdempotencyKey);
+        EnsureCurrentTeamAutomationEffectAttempt(command.EffectAttemptId);
+        if (State.TeamAutomationLifecycleStatus is not (
+                TeamAutomationLifecycleStatusState.ProvisioningPending or
+                TeamAutomationLifecycleStatusState.ReplacementPending))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_operation_not_pending");
+        }
+
+        var credential = NormalizeTeamCredential(command.Credential);
+        var credentialOwner = NormalizeCredentialAuthorizationOwner(command.CredentialOwner);
+        if (!CredentialAuthorizationOwnerEquals(
+                State.TeamCredentialEffectLocator?.CredentialOwner,
+                credentialOwner))
+        {
+            throw TeamAutomationCommandRejectedException.Unauthorized(
+                "team_automation_candidate_credential_owner_mismatch");
+        }
+        if (CredentialEquals(State.CandidateTeamCredential, credential) &&
+            CredentialAuthorizationOwnerEquals(State.CandidateTeamCredentialOwner, credentialOwner))
+        {
+            await PersistTeamAutomationObservationAsync(
+                TeamAutomationOperationObservationStages.Candidate,
+                ownsEffectAttempt: false,
+                CancellationToken.None,
+                observationRequestId: command.ObservationRequestId);
+            return;
+        }
+        if (State.CandidateTeamCredential != null)
+            throw TeamAutomationCommandRejectedException.Conflict(
+                "team_automation_candidate_credential_conflict");
+
+        await PersistDomainEventAsync(new TeamAutomationCredentialCandidateRecordedEvent
+        {
+            Owner = owner,
+            OperationId = State.TeamAutomationOperationId,
+            IdempotencyKey = State.TeamAutomationIdempotencyKey,
+            EffectAttemptId = State.TeamAutomationEffectAttemptId,
+            Credential = credential,
+            CredentialOwner = credentialOwner,
+            OccurredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        });
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Candidate,
+            ownsEffectAttempt: false,
+            CancellationToken.None,
+            observationRequestId: command.ObservationRequestId);
+    }
+
+    [EventHandler]
+    public Task HandleCompleteTeamAutomationCredentialOperationAsync(
+        CompleteTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Complete,
+            command.ObservationRequestId,
+            () => HandleCompleteTeamAutomationCredentialOperationCoreAsync(command));
+    }
+
+    private async Task HandleCompleteTeamAutomationCredentialOperationCoreAsync(
+        CompleteTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        EnsureObservedTeamAutomationOwnerAccess(owner);
+        EnsureCurrentTeamAutomationOperation(command.OperationId, command.IdempotencyKey);
+        if (State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.Active &&
+            CredentialEquals(State.ActiveTeamCredential, command.Credential))
+        {
+            await PersistTeamAutomationObservationAsync(
+                TeamAutomationOperationObservationStages.Complete,
+                ownsEffectAttempt: false,
+                CancellationToken.None,
+                observationRequestId: command.ObservationRequestId);
+            return;
+        }
+        EnsureCurrentTeamAutomationEffectAttempt(command.EffectAttemptId);
+        if (State.TeamAutomationLifecycleStatus is not (TeamAutomationLifecycleStatusState.ProvisioningPending or
+            TeamAutomationLifecycleStatusState.ReplacementPending))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_operation_not_pending");
+        }
+
+        var credential = NormalizeTeamCredential(command.Credential);
+        if (!CredentialEquals(State.CandidateTeamCredential, credential) ||
+            State.CandidateTeamCredentialOwner == null)
+        {
+            throw TeamAutomationCommandRejectedException.Conflict(
+                "team_automation_candidate_credential_not_committed");
+        }
+        var configuration = NormalizeTeamAutomationActivationConfiguration(command.Configuration, owner, credential);
+        var configurationOwner = NormalizeCredentialAuthorizationOwner(
+            configuration.Target?.ServiceInvocation?.AuthorizationFact?.Owner);
+        if (!CredentialAuthorizationOwnerEquals(State.CandidateTeamCredentialOwner, configurationOwner))
+            throw TeamAutomationCommandRejectedException.Unauthorized(
+                "team_automation_candidate_credential_owner_mismatch");
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        var previousCredentialExpiryLease =
+            ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.TeamCredentialExpiryLease);
+        await PersistDomainEventAsync(new TeamAutomationCredentialActivatedEvent
+        {
+            Owner = owner,
+            OperationId = State.TeamAutomationOperationId,
+            IdempotencyKey = State.TeamAutomationIdempotencyKey,
+            Credential = credential,
+            ReplacedCredential = State.ActiveTeamCredential?.Clone(),
+            CredentialOwner = State.CandidateTeamCredentialOwner.Clone(),
+            ReplacedCredentialOwner = State.ActiveTeamCredentialOwner?.Clone(),
+            Generation = checked(State.TeamCredentialGeneration + 1),
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Configuration = configuration,
+        });
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Complete,
+            State.PendingRevocationTeamCredential != null,
+            CancellationToken.None,
+            observationRequestId: command.ObservationRequestId);
+        await EnsureTeamCredentialExpiryScheduledAsync(
+            previousCredentialExpiryLease,
+            CancellationToken.None);
+        if (CanScheduleAutomaticFire())
+            await EnsureNextFireScheduledAsync(DateTimeOffset.UtcNow, CancellationToken.None);
+        else
+            await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
+    }
+
+    [EventHandler]
+    public Task HandleFailTeamAutomationCredentialOperationAsync(
+        FailTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Fail,
+            command.ObservationRequestId,
+            () => HandleFailTeamAutomationCredentialOperationCoreAsync(command));
+    }
+
+    private async Task HandleFailTeamAutomationCredentialOperationCoreAsync(
+        FailTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        EnsureObservedTeamAutomationOwnerAccess(owner);
+        EnsureCurrentTeamAutomationOperation(command.OperationId, command.IdempotencyKey);
+        var errorCode = NormalizeStableErrorCode(command.ErrorCode);
+        if (State.TeamAutomationLifecycleStatus is
+                TeamAutomationLifecycleStatusState.Failed or
+                TeamAutomationLifecycleStatusState.Active or
+                TeamAutomationLifecycleStatusState.RevocationPending &&
+            string.Equals(State.LastAuthorizationErrorCode, errorCode, StringComparison.Ordinal))
+        {
+            await PersistTeamAutomationObservationAsync(
+                TeamAutomationOperationObservationStages.Fail,
+                ownsEffectAttempt: State.PendingRevocationTeamCredential != null &&
+                                   CanClaimTeamAutomationEffectAttempt(_timeProvider.GetUtcNow()),
+                CancellationToken.None,
+                errorCode,
+                observationRequestId: command.ObservationRequestId);
+            return;
+        }
+        EnsureCurrentTeamAutomationEffectAttempt(command.EffectAttemptId);
+
+        await PersistDomainEventAsync(new TeamAutomationCredentialOperationFailedEvent
+        {
+            Owner = owner,
+            OperationId = State.TeamAutomationOperationId,
+            IdempotencyKey = State.TeamAutomationIdempotencyKey,
+            ErrorCode = errorCode,
+            ActiveCredentialPreserved = State.ActiveTeamCredential != null,
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Fail,
+            ownsEffectAttempt: State.PendingRevocationTeamCredential != null,
+            CancellationToken.None,
+            errorCode,
+            observationRequestId: command.ObservationRequestId);
+    }
+
+    [EventHandler]
+    public Task HandleCompleteTeamAutomationRevocationAsync(
+        CompleteTeamAutomationRevocationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Revocation,
+            command.ObservationRequestId,
+            () => HandleCompleteTeamAutomationRevocationCoreAsync(command));
+    }
+
+    private async Task HandleCompleteTeamAutomationRevocationCoreAsync(
+        CompleteTeamAutomationRevocationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        EnsureObservedTeamAutomationOwnerAccess(owner);
+        EnsureCurrentTeamAutomationOperation(command.OperationId, command.IdempotencyKey);
+        EnsureCurrentTeamAutomationEffectAttempt(command.EffectAttemptId);
+
+        await PersistDomainEventAsync(new TeamAutomationRevocationCompletedEvent
+        {
+            Owner = owner,
+            OperationId = State.TeamAutomationOperationId,
+            NyxidRevoked = command.NyxidRevoked,
+            VaultRevoked = command.VaultRevoked,
+            ErrorCode = string.IsNullOrWhiteSpace(command.ErrorCode)
+                ? string.Empty
+                : NormalizeStableErrorCode(command.ErrorCode),
+            OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Revocation,
+            ownsEffectAttempt: false,
+            CancellationToken.None,
+            State.LastAuthorizationErrorCode,
+            observationRequestId: command.ObservationRequestId);
+    }
+
+    [EventHandler]
+    public Task HandleRetryTeamAutomationRevocationAsync(
+        RetryTeamAutomationRevocationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Delete,
+            command.ObservationRequestId,
+            () => HandleRetryTeamAutomationRevocationCoreAsync(command));
+    }
+
+    private async Task HandleRetryTeamAutomationRevocationCoreAsync(
+        RetryTeamAutomationRevocationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        EnsureObservedTeamAutomationOwnerAccess(owner);
+        EnsureCurrentTeamAutomationOperation(command.OperationId, command.IdempotencyKey);
+        EnsureObservedCredentialAuthorizationOwnerAccess(
+            command.AuthenticatedCredentialOwner,
+            State.PendingRevocationTeamCredentialOwner);
+        if (State.PendingRevocationTeamCredential == null)
+            throw TeamAutomationCommandRejectedException.Conflict(
+                "team_automation_revocation_not_pending");
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Delete,
+            ownsEffectAttempt: CanClaimTeamAutomationEffectAttempt(_timeProvider.GetUtcNow()),
+            CancellationToken.None,
+            observationRequestId: command.ObservationRequestId);
+    }
+
+    [EventHandler(AllowSelfHandling = true)]
+    public Task HandleTeamAutomationCredentialExpiryAsync(
+        TeamAutomationCredentialExpiryCommand command) =>
+        HandleTeamAutomationCredentialExpiryAsync(
+            command,
+            ActiveInboundEnvelope,
+            CancellationToken.None);
+
+    internal async Task HandleTeamAutomationCredentialExpiryAsync(
+        TeamAutomationCredentialExpiryCommand command,
+        EventEnvelope? inboundEnvelope,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (State.Deleted ||
+            State.TeamAutomationOwner == null ||
+            State.ActiveTeamCredential == null ||
+            State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.NeedsAuthorization)
+        {
+            return;
+        }
+
+        if (!string.Equals(command.ScheduleId, ResolveScheduleId(), StringComparison.Ordinal) ||
+            command.CredentialGeneration != State.TeamCredentialGeneration ||
+            command.ExpiresAt == null ||
+            State.TeamCredentialExpiresAt == null ||
+            command.ExpiresAt.ToDateTimeOffset() != State.TeamCredentialExpiresAt.ToDateTimeOffset() ||
+            !MatchesTeamCredentialExpiryLease(inboundEnvelope))
+        {
+            Logger.LogInformation(
+                "Scheduled dispatch {ActorId} ignored stale Team credential expiry callback scheduleId={ScheduleId} credentialGeneration={CredentialGeneration}.",
+                Id,
+                ResolveScheduleId(),
+                command.CredentialGeneration);
+            return;
+        }
+
+        var expiresAt = State.TeamCredentialExpiresAt.ToDateTimeOffset();
+        var now = _timeProvider.GetUtcNow();
+        if (now < expiresAt)
+        {
+            var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
+                State.TeamCredentialExpiryLease);
+            await RecordTeamCredentialExpiryIntentAsync(
+                State.TeamCredentialGeneration,
+                expiresAt,
+                ct);
+            await ActivateTeamCredentialExpiryIntentAsync(
+                State.TeamCredentialGeneration,
+                expiresAt,
+                previousLease,
+                ct);
+            return;
+        }
+
+        await TransitionTeamAutomationToCredentialExpiredAsync(now, ct);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -325,11 +878,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
-        if (!command.Manual && !State.Enabled)
-        {
-            Logger.LogInformation("Scheduled dispatch {ActorId} ignored fire because it is disabled.", Id);
-            return;
-        }
+        if (command.Manual)
+            EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "manual fire");
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
         var callbackFiredAt = command.Manual ? (DateTimeOffset?)null : ResolveCallbackFiredAt(inboundEnvelope);
@@ -359,7 +909,34 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return;
         }
 
-        var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
+        if (!command.Manual && !State.Enabled)
+        {
+            Logger.LogInformation("Scheduled dispatch {ActorId} ignored fire because it is disabled.", Id);
+            return;
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        if (State.TeamAutomationOwner != null && !HasUsableActiveTeamCredential(now))
+        {
+            if (State.ActiveTeamCredential != null &&
+                State.TeamCredentialExpiresAt?.ToDateTimeOffset() <= now &&
+                State.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatusState.NeedsAuthorization)
+            {
+                await TransitionTeamAutomationToCredentialExpiredAsync(now, ct);
+            }
+            if (command.Manual)
+                throw new InvalidOperationException("team_automation_credential_not_active");
+
+            Logger.LogWarning(
+                "Scheduled dispatch {ActorId} skipped automatic fire because Team credential status is {LifecycleStatus}.",
+                Id,
+                State.TeamAutomationLifecycleStatus);
+            return;
+        }
+
+        var idempotencyKey = command.Manual
+            ? NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey))
+            : ScheduledDispatchCalculator.BuildIdempotencyKey(ResolveScheduleId(), scheduledFireAt);
         if (HasTerminalFireRecord(idempotencyKey))
         {
             State.FireRecords.TryGetValue(idempotencyKey, out var priorRecord);
@@ -438,6 +1015,30 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Logger.LogInformation("Scheduled dispatch {ActorId} fire was canceled.", Id);
             throw;
         }
+        catch (ScheduledServiceInvocationAuthorizationException ex) when (State.TeamAutomationOwner != null)
+        {
+            Logger.LogWarning(
+                ex,
+                "Scheduled dispatch {ActorId} requires Team automation reauthorization. errorCode={ErrorCode}",
+                Id,
+                ex.StableCode);
+            var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+            var previousCredentialExpiryLease =
+                ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.TeamCredentialExpiryLease);
+            await PersistDomainEventAsync(new TeamAutomationAuthorizationRequiredEvent
+            {
+                Owner = State.TeamAutomationOwner.Clone(),
+                ErrorCode = ex.StableCode,
+                OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ScheduledFireAt = Timestamp.FromDateTimeOffset(scheduledFireAt),
+                IdempotencyKey = idempotencyKey,
+                Manual = command.Manual,
+            }, CancellationToken.None);
+            await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
+            await CancelTeamCredentialExpiryLeaseAsync(
+                previousCredentialExpiryLease,
+                CancellationToken.None);
+        }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Scheduled dispatch {ActorId} dispatch failed.", Id);
@@ -446,6 +1047,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         if (!command.Manual)
         {
+            if (State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.NeedsAuthorization)
+                return;
             if (IsOneShot())
                 await CompleteOneShotAsync(CancellationToken.None);
             else
@@ -494,14 +1097,26 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 NormalizeTarget(stateTarget, State.ScheduleKind),
                 prepared.Headers ?? EmptyHeaders);
 
+            var replacementPending = State.TeamAutomationLifecycleStatus ==
+                TeamAutomationLifecycleStatusState.ReplacementPending;
+            var effectiveAuth = replacementPending && State.ActiveTeamCredential != null
+                ? new ScheduledServiceInvocationAuthState
+                {
+                    ScheduledInvocationAgentKey = State.ActiveTeamCredential.Clone(),
+                }
+                : State.Target?.ServiceInvocation?.Auth;
+            var effectiveAuthorizationFact = replacementPending
+                ? State.ActiveTeamAuthorizationFact
+                : State.Target?.ServiceInvocation?.AuthorizationFact;
             var receipt = await _serviceInvocationDispatchPort.DispatchAsync(
                 new ScheduledServiceInvocationDispatchRequest(
                     request,
-                    ToRuntimeAuth(State.Target?.ServiceInvocation?.Auth),
+                    ToRuntimeAuth(effectiveAuth),
                     ReadOnlyCopy(prepared.Headers ?? EmptyHeaders),
                     ProjectNyxIdAccessTokenToWorkflowCallerCredential:
                         State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
-                    ScheduleId: ResolveScheduleId()),
+                    ScheduleId: ResolveScheduleId(),
+                    AuthorizationFact: ToRuntimeAuthorizationFact(effectiveAuthorizationFact)),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
@@ -737,7 +1352,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         scheduleKind switch
         {
             ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
-            ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
 
@@ -863,7 +1477,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task EnsureNextFireScheduledAsync(DateTimeOffset fromUtc, CancellationToken ct)
     {
-        if (!State.Enabled || State.Completed)
+        if (!CanScheduleAutomaticFire())
             return;
 
         if (!TryResolveNextFireAt(fromUtc, out var nextFireAtUtc, out var error))
@@ -879,6 +1493,162 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             await RecordNextFireIntentAsync(nextFireAtUtc, ct);
 
         await ActivateNextFireIntentAsync(nextFireAtUtc, previousLease, ct);
+    }
+
+    private bool CanScheduleAutomaticFire() =>
+        State.Enabled &&
+        !State.Completed &&
+        !State.Deleted &&
+        IsConfigured() &&
+        (State.TeamAutomationOwner == null ||
+         HasUsableActiveTeamCredential(_timeProvider.GetUtcNow()));
+
+    private async Task RecoverTeamCredentialExpiryAsync(CancellationToken ct)
+    {
+        if (State.Deleted ||
+            State.TeamAutomationOwner == null ||
+            State.ActiveTeamCredential == null ||
+            State.TeamCredentialExpiresAt == null ||
+            State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.NeedsAuthorization)
+        {
+            return;
+        }
+
+        var expiresAt = State.TeamCredentialExpiresAt.ToDateTimeOffset();
+        var now = _timeProvider.GetUtcNow();
+        if (expiresAt <= now)
+        {
+            await TransitionTeamAutomationToCredentialExpiredAsync(now, ct);
+            return;
+        }
+
+        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
+            State.TeamCredentialExpiryLease);
+        if (State.PendingTeamCredentialExpiryAt == null ||
+            State.PendingTeamCredentialExpiryAt.ToDateTimeOffset() != expiresAt ||
+            State.PendingTeamCredentialExpiryGeneration != State.TeamCredentialGeneration)
+        {
+            await RecordTeamCredentialExpiryIntentAsync(
+                State.TeamCredentialGeneration,
+                expiresAt,
+                ct);
+        }
+
+        await ActivateTeamCredentialExpiryIntentAsync(
+            State.TeamCredentialGeneration,
+            expiresAt,
+            previousLease,
+            ct);
+    }
+
+    private async Task EnsureTeamCredentialExpiryScheduledAsync(
+        RuntimeCallbackLease? previousLease,
+        CancellationToken ct)
+    {
+        if (State.TeamAutomationOwner == null ||
+            State.ActiveTeamCredential == null ||
+            State.TeamCredentialExpiresAt == null ||
+            State.Deleted)
+        {
+            await CancelTeamCredentialExpiryLeaseAsync(previousLease, CancellationToken.None);
+            return;
+        }
+
+        var expiresAt = State.TeamCredentialExpiresAt.ToDateTimeOffset();
+        var now = _timeProvider.GetUtcNow();
+        if (expiresAt <= now)
+        {
+            await TransitionTeamAutomationToCredentialExpiredAsync(now, ct);
+            return;
+        }
+
+        if (State.PendingTeamCredentialExpiryAt == null ||
+            State.PendingTeamCredentialExpiryAt.ToDateTimeOffset() != expiresAt ||
+            State.PendingTeamCredentialExpiryGeneration != State.TeamCredentialGeneration)
+        {
+            await RecordTeamCredentialExpiryIntentAsync(
+                State.TeamCredentialGeneration,
+                expiresAt,
+                ct);
+        }
+
+        await ActivateTeamCredentialExpiryIntentAsync(
+            State.TeamCredentialGeneration,
+            expiresAt,
+            previousLease,
+            ct);
+    }
+
+    private Task RecordTeamCredentialExpiryIntentAsync(
+        long credentialGeneration,
+        DateTimeOffset expiresAt,
+        CancellationToken ct) =>
+        PersistDomainEventAsync(new TeamAutomationCredentialExpiryIntentRecordedEvent
+        {
+            CredentialGeneration = credentialGeneration,
+            ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt.ToUniversalTime()),
+            RequestedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        }, ct);
+
+    private async Task ActivateTeamCredentialExpiryIntentAsync(
+        long credentialGeneration,
+        DateTimeOffset expiresAt,
+        RuntimeCallbackLease? previousLease,
+        CancellationToken ct)
+    {
+        var dueTime = ComputeNextFireCallbackDueTime(expiresAt, _timeProvider.GetUtcNow());
+        var lease = await ScheduleSelfDurableTimeoutAsync(
+            TeamCredentialExpiryCallbackId,
+            dueTime,
+            new TeamAutomationCredentialExpiryCommand
+            {
+                ScheduleId = ResolveScheduleId(),
+                CredentialGeneration = credentialGeneration,
+                ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt.ToUniversalTime()),
+            },
+            ct: ct);
+
+        try
+        {
+            await PersistDomainEventAsync(new TeamAutomationCredentialExpiryScheduledEvent
+            {
+                CredentialGeneration = credentialGeneration,
+                ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt.ToUniversalTime()),
+                Lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToState(lease),
+                ScheduledAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            }, ct);
+        }
+        catch
+        {
+            await CancelTeamCredentialExpiryLeaseAsync(lease, CancellationToken.None);
+            throw;
+        }
+
+        await CancelTeamCredentialExpiryLeaseAsync(previousLease, CancellationToken.None);
+    }
+
+    private async Task TransitionTeamAutomationToCredentialExpiredAsync(
+        DateTimeOffset occurredAt,
+        CancellationToken ct)
+    {
+        if (State.TeamAutomationOwner == null ||
+            State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.NeedsAuthorization)
+        {
+            return;
+        }
+
+        var previousNextFireLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
+            State.NextFireLease);
+        var previousExpiryLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
+            State.TeamCredentialExpiryLease);
+        await PersistDomainEventAsync(new TeamAutomationAuthorizationRequiredEvent
+        {
+            Owner = State.TeamAutomationOwner.Clone(),
+            ErrorCode = "credential_expired",
+            OccurredAt = Timestamp.FromDateTimeOffset(occurredAt.ToUniversalTime()),
+        }, ct);
+        await CancelNextFireLeaseAsync(previousNextFireLease, CancellationToken.None);
+        await CancelTeamCredentialExpiryLeaseAsync(previousExpiryLease, CancellationToken.None);
     }
 
     private async Task RecordNextFireIntentAsync(DateTimeOffset nextFireAtUtc, CancellationToken ct)
@@ -984,12 +1754,32 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         await CancelDurableCallbackAsync(lease, ct);
     }
 
+    private async Task CancelTeamCredentialExpiryLeaseAsync(
+        RuntimeCallbackLease? lease,
+        CancellationToken ct)
+    {
+        if (lease == null)
+            return;
+
+        await CancelDurableCallbackAsync(lease, ct);
+    }
+
     private bool MatchesNextFireLease(EventEnvelope? envelope)
     {
         if (envelope == null)
             return false;
 
         var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
+        return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
+    }
+
+    private bool MatchesTeamCredentialExpiryLease(EventEnvelope? envelope)
+    {
+        if (envelope == null)
+            return false;
+
+        var lease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
+            State.TeamCredentialExpiryLease);
         return lease != null && RuntimeCallbackEnvelopeStateReader.MatchesLease(envelope, lease);
     }
 
@@ -1113,6 +1903,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                State.ScheduleKind == command.ScheduleKind &&
                State.ScheduleMode == normalizedMode &&
                State.OneShotFireAt == normalizedOneShotFireAt &&
+               TeamAutomationOwnerEquals(State.TeamAutomationOwner, command.TeamAutomationOwner) &&
                DictionaryEquals(State.Headers, normalizedHeaders) &&
                EnvelopePayloadEquals(State.TriggerEnvelope, normalizedTriggerEnvelope) &&
                TargetEquals(NormalizeTarget(State.Target, State.ScheduleKind), normalizedTarget);
@@ -1123,6 +1914,461 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (!IsConfigured())
             throw new InvalidOperationException(
                 $"Scheduled dispatch '{ResolveScheduleId()}' cannot {operation} because it is not configured.");
+    }
+
+    private void EnsureTeamAutomationOwnerAccess(TeamMemberAutomationOwnerState? supplied, string operation)
+    {
+        if (State.TeamAutomationOwner == null)
+        {
+            if (supplied != null)
+                throw new InvalidOperationException("team_automation_begin_required");
+            return;
+        }
+
+        var normalized = NormalizeTeamAutomationOwner(supplied);
+        if (!TeamAutomationOwnerEquals(State.TeamAutomationOwner, normalized))
+            throw new InvalidOperationException($"Team automation owner cannot {operation} this schedule.");
+    }
+
+    private void EnsureStableTeamAutomationOwner(TeamMemberAutomationOwnerState owner)
+    {
+        if (State.TeamAutomationOwner != null &&
+            !TeamAutomationOwnerEquals(State.TeamAutomationOwner, owner))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_owner_conflict");
+        }
+    }
+
+    private bool IsExactTeamAutomationOperation(
+        TeamMemberAutomationOwnerState owner,
+        string operationId,
+        string idempotencyKey,
+        string permissionDigest,
+        string policyVersion,
+        TeamAutomationOperationKindState operationKind,
+        ScheduledCredentialEffectLocatorState credentialEffectLocator,
+        string mutationDigest) =>
+        TeamAutomationOwnerEquals(State.TeamAutomationOwner, owner) &&
+        string.Equals(State.TeamAutomationOperationId, operationId, StringComparison.Ordinal) &&
+        string.Equals(State.TeamAutomationIdempotencyKey, idempotencyKey, StringComparison.Ordinal) &&
+        string.Equals(State.TeamAutomationPermissionDigest, permissionDigest, StringComparison.Ordinal) &&
+        string.Equals(State.TeamAutomationPolicyVersion, policyVersion, StringComparison.Ordinal) &&
+        State.TeamAutomationOperationKind == operationKind &&
+        CredentialEffectLocatorEquals(State.TeamCredentialEffectLocator, credentialEffectLocator) &&
+        string.Equals(State.TeamAutomationMutationDigest, mutationDigest, StringComparison.Ordinal);
+
+    private static ScheduledCredentialEffectLocatorState NormalizeCredentialEffectLocator(
+        ScheduledCredentialEffectLocatorState? locator)
+    {
+        if (locator == null)
+            throw new InvalidOperationException("team_automation_credential_effect_locator_required");
+
+        return new ScheduledCredentialEffectLocatorState
+        {
+            CredentialName = NormalizeRequired(locator.CredentialName, nameof(locator.CredentialName)),
+            RequestedSecretReference = NormalizeRequired(
+                locator.RequestedSecretReference,
+                nameof(locator.RequestedSecretReference)),
+            SecretPurpose = NormalizeRequired(locator.SecretPurpose, nameof(locator.SecretPurpose)),
+            SecretOwnerScopeKey = NormalizeRequired(locator.SecretOwnerScopeKey, nameof(locator.SecretOwnerScopeKey)),
+            CredentialOwner = NormalizeCredentialAuthorizationOwner(locator.CredentialOwner),
+        };
+    }
+
+    private static bool CredentialEffectLocatorEquals(
+        ScheduledCredentialEffectLocatorState? left,
+        ScheduledCredentialEffectLocatorState? right) =>
+        left != null && right != null &&
+        string.Equals(left.CredentialName, right.CredentialName, StringComparison.Ordinal) &&
+        string.Equals(left.RequestedSecretReference, right.RequestedSecretReference, StringComparison.Ordinal) &&
+        string.Equals(left.SecretPurpose, right.SecretPurpose, StringComparison.Ordinal) &&
+        string.Equals(left.SecretOwnerScopeKey, right.SecretOwnerScopeKey, StringComparison.Ordinal) &&
+        CredentialAuthorizationOwnerEquals(left.CredentialOwner, right.CredentialOwner);
+
+    private void EnsureCurrentTeamAutomationOperation(string? operationId, string? idempotencyKey)
+    {
+        if (!string.Equals(State.TeamAutomationOperationId,
+                NormalizeRequired(operationId, nameof(operationId)), StringComparison.Ordinal) ||
+            !string.Equals(State.TeamAutomationIdempotencyKey,
+                NormalizeRequired(idempotencyKey, nameof(idempotencyKey)), StringComparison.Ordinal))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_operation_conflict");
+        }
+    }
+
+    private bool CanClaimTeamAutomationEffectAttempt(DateTimeOffset now) =>
+        !State.TeamAutomationEffectAttemptClaimed ||
+        string.IsNullOrWhiteSpace(State.TeamAutomationEffectAttemptId) ||
+        State.TeamAutomationEffectAttemptExpiresAt == null ||
+        State.TeamAutomationEffectAttemptExpiresAt.ToDateTimeOffset() <= now;
+
+    private void EnsureCurrentTeamAutomationEffectAttempt(string? effectAttemptId)
+    {
+        var normalized = NormalizeRequired(effectAttemptId, nameof(effectAttemptId));
+        if (!State.TeamAutomationEffectAttemptClaimed ||
+            State.TeamAutomationEffectAttemptExpiresAt == null ||
+            State.TeamAutomationEffectAttemptExpiresAt.ToDateTimeOffset() <= _timeProvider.GetUtcNow() ||
+            !string.Equals(State.TeamAutomationEffectAttemptId, normalized, StringComparison.Ordinal))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_effect_attempt_stale");
+        }
+    }
+
+    private void EnsureObservedTeamAutomationOwnerAccess(TeamMemberAutomationOwnerState? supplied)
+    {
+        if (State.TeamAutomationOwner == null)
+        {
+            if (supplied != null)
+                throw TeamAutomationCommandRejectedException.Conflict("team_automation_begin_required");
+            return;
+        }
+
+        TeamMemberAutomationOwnerState normalized;
+        try
+        {
+            normalized = NormalizeTeamAutomationOwner(supplied);
+        }
+        catch (InvalidOperationException)
+        {
+            throw TeamAutomationCommandRejectedException.InvalidRequest("team_automation_owner_required");
+        }
+
+        if (!TeamAutomationOwnerEquals(State.TeamAutomationOwner, normalized))
+            throw TeamAutomationCommandRejectedException.Unauthorized("team_automation_owner_mismatch");
+    }
+
+    private static void EnsureObservedCredentialAuthorizationOwnerAccess(
+        ScheduledInvocationAuthorizationOwnerState? supplied,
+        ScheduledInvocationAuthorizationOwnerState? expected)
+    {
+        if (expected == null)
+            throw TeamAutomationCommandRejectedException.Conflict("team_automation_credential_owner_missing");
+        if (supplied == null ||
+            !string.Equals(supplied.Authority?.Trim(), expected.Authority, StringComparison.Ordinal) ||
+            !string.Equals(supplied.OwnerKind?.Trim(), expected.OwnerKind, StringComparison.Ordinal) ||
+            !string.Equals(supplied.OwnerSubject?.Trim(), expected.OwnerSubject, StringComparison.Ordinal))
+        {
+            throw TeamAutomationCommandRejectedException.Unauthorized(
+                "team_automation_credential_owner_mismatch");
+        }
+    }
+
+    private bool IsSameCompletedDeleteOperation(ScheduledDispatchDeleteCommand command) =>
+        State.TeamAutomationOwner != null &&
+        command.TeamAutomationOwner != null &&
+        TeamAutomationOwnerEquals(State.TeamAutomationOwner, command.TeamAutomationOwner) &&
+        string.Equals(State.TeamAutomationOperationId, command.OperationId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(State.TeamAutomationIdempotencyKey, command.IdempotencyKey?.Trim(), StringComparison.Ordinal);
+
+    private static TeamMemberAutomationOwnerState NormalizeTeamAutomationOwner(TeamMemberAutomationOwnerState? owner)
+    {
+        if (owner == null)
+            throw new InvalidOperationException("team_automation_owner_required");
+
+        return new TeamMemberAutomationOwnerState
+        {
+            ScopeId = NormalizeRequired(owner.ScopeId, nameof(owner.ScopeId)),
+            MemberId = NormalizeRequired(owner.MemberId, nameof(owner.MemberId)),
+        };
+    }
+
+    private static bool TeamAutomationOwnerEquals(
+        TeamMemberAutomationOwnerState? left,
+        TeamMemberAutomationOwnerState? right)
+    {
+        if (left == null || right == null)
+            return left == null && right == null;
+
+        return string.Equals(left.ScopeId, right.ScopeId, StringComparison.Ordinal) &&
+               string.Equals(left.MemberId, right.MemberId, StringComparison.Ordinal);
+    }
+
+    private static void EnsureCredentialAuthorizationOwnerAccess(
+        ScheduledInvocationAuthorizationOwnerState? supplied,
+        ScheduledInvocationAuthorizationOwnerState? expected)
+    {
+        if (expected == null)
+            throw new InvalidOperationException("team_automation_credential_owner_missing");
+        if (supplied == null ||
+            !string.Equals(supplied.Authority?.Trim(), expected.Authority, StringComparison.Ordinal) ||
+            !string.Equals(supplied.OwnerKind?.Trim(), expected.OwnerKind, StringComparison.Ordinal) ||
+            !string.Equals(supplied.OwnerSubject?.Trim(), expected.OwnerSubject, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("team_automation_credential_owner_mismatch");
+        }
+    }
+
+    private static ScheduledInvocationAuthorizationOwnerState NormalizeCredentialAuthorizationOwner(
+        ScheduledInvocationAuthorizationOwnerState? owner)
+    {
+        if (owner == null ||
+            string.IsNullOrWhiteSpace(owner.Authority) ||
+            string.IsNullOrWhiteSpace(owner.OwnerKind) ||
+            string.IsNullOrWhiteSpace(owner.OwnerSubject))
+        {
+            throw new InvalidOperationException("team_automation_credential_owner_missing");
+        }
+
+        return new ScheduledInvocationAuthorizationOwnerState
+        {
+            Authority = owner.Authority.Trim(),
+            OwnerKind = owner.OwnerKind.Trim(),
+            OwnerSubject = owner.OwnerSubject.Trim(),
+        };
+    }
+
+    private static bool CredentialAuthorizationOwnerEquals(
+        ScheduledInvocationAuthorizationOwnerState? left,
+        ScheduledInvocationAuthorizationOwnerState? right) =>
+        left != null && right != null &&
+        string.Equals(left.Authority, right.Authority, StringComparison.Ordinal) &&
+        string.Equals(left.OwnerKind, right.OwnerKind, StringComparison.Ordinal) &&
+        string.Equals(left.OwnerSubject, right.OwnerSubject, StringComparison.Ordinal);
+
+    private ScheduledInvocationAgentKeyCredentialReferenceState NormalizeTeamCredential(
+        ScheduledInvocationAgentKeyCredentialReferenceState? credential)
+    {
+        if (credential?.SecretReference == null ||
+            string.IsNullOrWhiteSpace(credential.SecretReference.Ref) ||
+            string.IsNullOrWhiteSpace(credential.SecretReference.OwnerScopeKey) ||
+            string.IsNullOrWhiteSpace(credential.ApiKeyId) ||
+            credential.KeyExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds())
+        {
+            throw new InvalidOperationException("team_automation_credential_invalid_or_expired");
+        }
+
+        return NormalizeScheduledInvocationAgentKey(credential);
+    }
+
+    private static bool CredentialEquals(
+        ScheduledInvocationAgentKeyCredentialReferenceState? left,
+        ScheduledInvocationAgentKeyCredentialReferenceState? right) =>
+        left != null && right != null &&
+        string.Equals(left.ApiKeyId, right.ApiKeyId, StringComparison.Ordinal) &&
+        string.Equals(left.SecretReference?.Ref, right.SecretReference?.Ref, StringComparison.Ordinal) &&
+        left.KeyExpiresAtUnixMs == right.KeyExpiresAtUnixMs;
+
+    private bool HasUsableActiveTeamCredential(DateTimeOffset now) =>
+        State.ActiveTeamCredential != null &&
+        State.TeamCredentialExpiresAt?.ToDateTimeOffset() > now &&
+        State.TeamAutomationLifecycleStatus is TeamAutomationLifecycleStatusState.Active or
+            TeamAutomationLifecycleStatusState.ReplacementPending;
+
+    private ScheduledDispatchConfiguredEvent NormalizeTeamAutomationActivationConfiguration(
+        ScheduledDispatchConfiguredEvent? source,
+        TeamMemberAutomationOwnerState owner,
+        ScheduledInvocationAgentKeyCredentialReferenceState credential)
+    {
+        if (source == null)
+            throw new InvalidOperationException("team_automation_configuration_required");
+        var configuredOwner = NormalizeTeamAutomationOwner(source.TeamAutomationOwner);
+        if (!TeamAutomationOwnerEquals(owner, configuredOwner))
+            throw new InvalidOperationException("team_automation_owner_conflict");
+        EnsureValidDefinition(
+            source.TargetActorId,
+            source.Target,
+            source.TriggerEnvelope,
+            source.CronExpression,
+            source.Timezone,
+            source.ScheduleKind,
+            source.ScheduleMode,
+            source.OneShotFireAt);
+
+        var normalizedMode = NormalizeScheduleMode(source.ScheduleMode);
+        var normalizedTarget = NormalizeTarget(source.Target, source.ScheduleKind);
+        var authorizationFact = normalizedTarget.ServiceInvocation?.AuthorizationFact;
+        if (!CredentialEquals(normalizedTarget.ServiceInvocation?.Auth?.ScheduledInvocationAgentKey, credential) ||
+            authorizationFact?.Owner == null ||
+            string.IsNullOrWhiteSpace(authorizationFact.Owner.Authority) ||
+            string.IsNullOrWhiteSpace(authorizationFact.Owner.OwnerKind) ||
+            string.IsNullOrWhiteSpace(authorizationFact.Owner.OwnerSubject) ||
+            !string.Equals(
+                authorizationFact.PermissionDigest,
+                State.TeamAutomationPermissionDigest,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                authorizationFact.PolicyVersion,
+                State.TeamAutomationPolicyVersion,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("team_automation_configuration_not_applied");
+        }
+
+        EnsureCredentialRequirementAllowed(
+            IsConfigured()
+                ? ScheduledDispatchCredentialRequirementOperation.Update
+                : ScheduledDispatchCredentialRequirementOperation.Create,
+            NormalizeRequired(source.ScheduleId, nameof(source.ScheduleId)),
+            source.ScheduleKind,
+            normalizedTarget,
+            source.Headers);
+
+        var configured = new ScheduledDispatchConfiguredEvent
+        {
+            ScheduleId = NormalizeRequired(source.ScheduleId, nameof(source.ScheduleId)),
+            DisplayName = NormalizeOptional(source.DisplayName),
+            TargetActorId = NormalizeOptional(source.TargetActorId),
+            TriggerEnvelope = NormalizeTriggerEnvelope(source.TriggerEnvelope),
+            CronExpression = NormalizeCronExpression(normalizedMode, source.CronExpression),
+            Timezone = ScheduledDispatchCalculator.NormalizeTimezone(source.Timezone),
+            Enabled = source.Enabled,
+            ConfiguredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            PayloadTypeUrl = ResolvePayloadTypeUrl(source.TriggerEnvelope),
+            Target = normalizedTarget,
+            ScheduleKind = source.ScheduleKind,
+            ScheduleMode = normalizedMode,
+            OneShotFireAt = NormalizeOneShotFireAt(normalizedMode, source.OneShotFireAt) is { } oneShot
+                ? Timestamp.FromDateTimeOffset(oneShot)
+                : null,
+            TeamAutomationOwner = configuredOwner,
+        };
+        foreach (var (key, value) in NormalizeHeaders(source.Headers))
+            configured.Headers[key] = value;
+        return configured;
+    }
+
+    private async Task PersistTeamAutomationObservationAsync(
+        string stage,
+        bool ownsEffectAttempt,
+        CancellationToken ct,
+        string? errorCode = null,
+        string? errorMessage = null,
+        string? observationRequestId = null)
+    {
+        var observedAt = _timeProvider.GetUtcNow();
+        var effectAttemptId = ownsEffectAttempt ? Guid.NewGuid().ToString("N") : string.Empty;
+        var effectAttemptGeneration = ownsEffectAttempt
+            ? checked(State.TeamAutomationEffectAttemptGeneration + 1)
+            : 0;
+        var observed = new TeamAutomationOperationObservedEvent
+        {
+            ScheduleId = ResolveScheduleId(),
+            OperationId = State.TeamAutomationOperationId,
+            IdempotencyKey = State.TeamAutomationIdempotencyKey,
+            Stage = NormalizeRequired(stage, nameof(stage)),
+            OwnsEffectAttempt = ownsEffectAttempt,
+            StateVersion = (EventSourcing ?? throw new InvalidOperationException(
+                "Event sourcing must be configured before observing a Team automation operation."))
+                .CurrentVersion,
+            ErrorCode = NormalizeOptional(errorCode),
+            ErrorMessage = NormalizeOptional(errorMessage),
+            ObservedAtUtc = Timestamp.FromDateTimeOffset(observedAt),
+            PendingRevocationCredential = State.PendingRevocationTeamCredential?.Clone(),
+            PendingRevocationOwner = State.PendingRevocationTeamCredentialOwner?.Clone(),
+            NyxidRevocationPending = State.PendingRevocationTeamCredential != null &&
+                                     State.NyxidRevocationStatus != TeamAutomationEffectTrackStatusState.Completed,
+            VaultRevocationPending = State.PendingRevocationTeamCredential != null &&
+                                     State.VaultRevocationStatus != TeamAutomationEffectTrackStatusState.Completed,
+            EffectAttemptId = effectAttemptId,
+            EffectAttemptGeneration = effectAttemptGeneration,
+            EffectAttemptExpiresAt = ownsEffectAttempt
+                ? Timestamp.FromDateTimeOffset(observedAt + TeamAutomationEffectAttemptLeaseDuration)
+                : null,
+            CandidateCredential = State.CandidateTeamCredential?.Clone(),
+            CandidateOwner = State.CandidateTeamCredentialOwner?.Clone(),
+            CredentialEffectLocator = State.TeamCredentialEffectLocator?.Clone(),
+            MutationDigest = State.TeamAutomationMutationDigest,
+            ObservationRequestId = NormalizeOptional(observationRequestId),
+            ObservationStatus = TeamAutomationOperationObservationStatusState.Committed,
+        };
+        await PersistDomainEventAsync(observed, ct);
+    }
+
+    private async Task ExecuteObservedTeamAutomationCommandAsync(
+        string? scheduleId,
+        string? operationId,
+        string? idempotencyKey,
+        string stage,
+        string? observationRequestId,
+        Func<Task> executeAsync)
+    {
+        try
+        {
+            await executeAsync();
+        }
+        catch (TeamAutomationCommandRejectedException ex) when (
+            !string.IsNullOrWhiteSpace(observationRequestId))
+        {
+            await PersistTeamAutomationRejectionAsync(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                stage,
+                observationRequestId,
+                ex.Status,
+                ex.StableCode,
+                CancellationToken.None);
+        }
+    }
+
+    private async Task PersistTeamAutomationRejectionAsync(
+        string? scheduleId,
+        string? operationId,
+        string? idempotencyKey,
+        string stage,
+        string? observationRequestId,
+        TeamAutomationOperationObservationStatusState status,
+        string stableCode,
+        CancellationToken ct)
+    {
+        var observed = new TeamAutomationOperationObservedEvent
+        {
+            ScheduleId = NormalizeOptional(scheduleId),
+            OperationId = NormalizeOptional(operationId),
+            IdempotencyKey = NormalizeOptional(idempotencyKey),
+            Stage = NormalizeRequired(stage, nameof(stage)),
+            OwnsEffectAttempt = false,
+            StateVersion = (EventSourcing ?? throw new InvalidOperationException(
+                "Event sourcing must be configured before observing a Team automation operation."))
+                .CurrentVersion,
+            ErrorCode = NormalizeStableErrorCode(stableCode),
+            ObservedAtUtc = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            ObservationRequestId = NormalizeRequired(
+                observationRequestId,
+                nameof(observationRequestId)),
+            ObservationStatus = status,
+        };
+        await PersistDomainEventAsync(observed, ct);
+    }
+
+    private sealed class TeamAutomationCommandRejectedException : InvalidOperationException
+    {
+        private TeamAutomationCommandRejectedException(
+            TeamAutomationOperationObservationStatusState status,
+            string stableCode)
+            : base(stableCode)
+        {
+            Status = status;
+            StableCode = stableCode;
+        }
+
+        public TeamAutomationOperationObservationStatusState Status { get; }
+
+        public string StableCode { get; }
+
+        public static TeamAutomationCommandRejectedException InvalidRequest(string stableCode) =>
+            new(TeamAutomationOperationObservationStatusState.RejectedInvalidRequest, stableCode);
+
+        public static TeamAutomationCommandRejectedException Conflict(string stableCode) =>
+            new(TeamAutomationOperationObservationStatusState.RejectedConflict, stableCode);
+
+        public static TeamAutomationCommandRejectedException Unauthorized(string stableCode) =>
+            new(TeamAutomationOperationObservationStatusState.RejectedUnauthorized, stableCode);
+
+        public static TeamAutomationCommandRejectedException NotFound(string stableCode) =>
+            new(TeamAutomationOperationObservationStatusState.RejectedNotFound, stableCode);
+    }
+
+    private static string NormalizeStableErrorCode(string? value)
+    {
+        var normalized = NormalizeRequired(value, nameof(value));
+        if (normalized.Length > 128 || normalized.Any(static c =>
+                !(char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.')))
+        {
+            throw new ArgumentException("Team automation error code must be a stable identifier.", nameof(value));
+        }
+
+        return normalized;
     }
 
     private static void EnsureValidDefinition(
@@ -1238,6 +2484,56 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             RevisionId = NormalizeOptional(serviceInvocation.RevisionId),
             Caller = serviceInvocation.Caller?.Clone(),
             Auth = NormalizeServiceInvocationAuth(serviceInvocation.Auth),
+            AuthorizationFact = serviceInvocation.AuthorizationFact?.Clone(),
+        };
+    }
+
+    private static ScheduledInvocationAuthorizationFact? ToRuntimeAuthorizationFact(
+        ScheduledInvocationAuthorizationFactState? fact)
+    {
+        if (fact == null)
+            return null;
+
+        return new ScheduledInvocationAuthorizationFact(
+            fact.PermissionDigest,
+            fact.PolicyVersion,
+            new ScheduledInvocationAuthorizationOwner(
+                fact.Owner?.Authority ?? string.Empty,
+                fact.Owner?.OwnerKind ?? string.Empty,
+                fact.Owner?.OwnerSubject ?? string.Empty),
+            fact.ServiceGrants.Select(static grant => new ScheduledInvocationAuthorizationServiceGrant(
+                grant.ServiceId,
+                grant.NodeIds.ToArray(),
+                grant.NodeGrantsNotRequired)).ToArray(),
+            fact.Scopes,
+            fact.ExpiresAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+            fact.ServiceGrantsNotRequired,
+            new ScheduledInvocationAuthorizationDisclosure(
+                fact.Disclosure?.DedicatedToSchedule ?? false,
+                fact.Disclosure?.SecretManagedByAevatar ?? false,
+                fact.Disclosure?.BrowserReceivesRawKey ?? false,
+                fact.Disclosure?.DeleteRevokesCredential ?? false,
+                fact.Disclosure?.PauseResumeRevokesCredential ?? false),
+            new ScheduledInvocationAuthorizationAuthority(
+                fact.Authority?.MemberStateVersion ?? 0,
+                fact.Authority?.WorkflowStateVersion ?? 0,
+                fact.Authority?.ConnectorStateVersion ?? 0,
+                fact.Authority?.OwnerLlmStateVersion ?? 0,
+                fact.Authority?.CatalogStateVersion ?? 0,
+                fact.Authority?.CatalogObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+                fact.Authority?.CatalogFreshUntil?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
+                fact.Authority?.CatalogExternalRevision ?? string.Empty,
+                fact.Authority?.CatalogContentDigest ?? string.Empty))
+        {
+            NodeGrants = fact.NodeGrants.Select(static grant =>
+                new ScheduledInvocationAuthorizationNodeGrant(
+                    grant.UserServiceId,
+                    grant.NodeId,
+                    grant.DisplayName,
+                    grant.Role,
+                    grant.EdgeKind,
+                    grant.BindingId,
+                    grant.RoutePriority)).ToArray(),
         };
     }
 
@@ -1256,16 +2552,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         if (isCreate || normalizedTarget.Kind != ScheduledDispatchTargetKindState.ServiceInvocation)
             return normalizedTarget;
-        if (normalizedTarget.ServiceInvocation?.Auth != null)
+        if (normalizedTarget.ServiceInvocation?.Auth != null &&
+            normalizedTarget.ServiceInvocation.AuthorizationFact != null)
             return normalizedTarget;
 
         var existingAuth = NormalizeServiceInvocationAuth(State.Target?.ServiceInvocation?.Auth);
-        if (existingAuth == null)
+        var existingAuthorizationFact = State.Target?.ServiceInvocation?.AuthorizationFact?.Clone();
+        if (existingAuth == null && existingAuthorizationFact == null)
             return normalizedTarget;
 
         var preserved = normalizedTarget.Clone();
         preserved.ServiceInvocation ??= new ScheduledServiceInvocationTargetState();
-        preserved.ServiceInvocation.Auth = existingAuth;
+        preserved.ServiceInvocation.Auth ??= existingAuth;
+        preserved.ServiceInvocation.AuthorizationFact ??= existingAuthorizationFact;
         return preserved;
     }
 
@@ -1434,6 +2733,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.ScheduleKind = evt.ScheduleKind;
         next.ScheduleMode = NormalizeScheduleMode(evt.ScheduleMode);
         next.OneShotFireAt = NormalizeOneShotFireAt(next.ScheduleMode, evt.OneShotFireAt);
+        if (evt.TeamAutomationOwner != null)
+            next.TeamAutomationOwner = NormalizeTeamAutomationOwner(evt.TeamAutomationOwner);
         next.Completed = false;
         next.CompletedAt = null;
         if (!next.Enabled)
@@ -1477,7 +2778,265 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var deletedAt = evt.DeletedAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         next.Deleted = true;
         next.DeletedAt = deletedAt;
+        next.TeamCredentialExpiryLease = null;
+        next.PendingTeamCredentialExpiryAt = null;
+        next.PendingTeamCredentialExpiryGeneration = 0;
         next.UpdatedAt = deletedAt;
+        if (next.PendingRevocationTeamCredential != null)
+            next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationCredentialOperationBegan(
+        ScheduledDispatchState current,
+        TeamAutomationCredentialOperationBeganEvent evt)
+    {
+        var next = current.Clone();
+        next.ScheduleId = evt.ScheduleId ?? string.Empty;
+        next.TeamAutomationOwner = evt.Owner?.Clone();
+        next.TeamAutomationOperationId = evt.OperationId ?? string.Empty;
+        next.TeamAutomationIdempotencyKey = evt.IdempotencyKey ?? string.Empty;
+        next.TeamAutomationPermissionDigest = evt.PermissionDigest ?? string.Empty;
+        next.TeamAutomationPolicyVersion = evt.PolicyVersion ?? string.Empty;
+        next.TeamAutomationOperationKind = evt.OperationKind;
+        next.TeamCredentialEffectLocator = evt.CredentialEffectLocator?.Clone();
+        next.TeamAutomationMutationDigest = evt.MutationDigest ?? string.Empty;
+        next.TeamAutomationLifecycleStatus = evt.OperationKind == TeamAutomationOperationKindState.Reauthorize
+            ? TeamAutomationLifecycleStatusState.ReplacementPending
+            : TeamAutomationLifecycleStatusState.ProvisioningPending;
+        next.CandidateTeamCredential = null;
+        next.CandidateTeamCredentialOwner = null;
+        ClearTeamAutomationEffectAttempt(next);
+        next.LastAuthorizationErrorCode = string.Empty;
+        next.UpdatedAt = evt.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationCredentialCandidateRecorded(
+        ScheduledDispatchState current,
+        TeamAutomationCredentialCandidateRecordedEvent evt)
+    {
+        var next = current.Clone();
+        next.CandidateTeamCredential = evt.Credential?.Clone();
+        next.CandidateTeamCredentialOwner = evt.CredentialOwner?.Clone();
+        next.UpdatedAt = evt.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private ScheduledDispatchState ApplyTeamAutomationCredentialActivated(
+        ScheduledDispatchState current,
+        TeamAutomationCredentialActivatedEvent evt)
+    {
+        var next = evt.Configuration == null
+            ? current.Clone()
+            : ApplyConfigured(current, evt.Configuration);
+        next.TeamAutomationOwner = evt.Owner?.Clone();
+        next.ActiveTeamCredential = evt.Credential?.Clone();
+        next.ActiveTeamCredentialOwner = evt.CredentialOwner?.Clone();
+        next.ActiveTeamAuthorizationFact = next.Target?.ServiceInvocation?.AuthorizationFact?.Clone();
+        next.CandidateTeamCredential = null;
+        next.CandidateTeamCredentialOwner = null;
+        next.PendingRevocationTeamCredential = evt.ReplacedCredential?.Clone();
+        next.PendingRevocationTeamCredentialOwner = evt.ReplacedCredentialOwner?.Clone();
+        next.TeamCredentialGeneration = evt.Generation;
+        next.TeamCredentialExpiresAt = evt.Credential?.KeyExpiresAtUnixMs > 0
+            ? Timestamp.FromDateTimeOffset(
+                DateTimeOffset.FromUnixTimeMilliseconds(evt.Credential.KeyExpiresAtUnixMs))
+            : null;
+        next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.Active;
+        next.NyxidRevocationStatus = evt.ReplacedCredential == null
+            ? TeamAutomationEffectTrackStatusState.NotRequired
+            : TeamAutomationEffectTrackStatusState.Pending;
+        next.VaultRevocationStatus = evt.ReplacedCredential == null
+            ? TeamAutomationEffectTrackStatusState.NotRequired
+            : TeamAutomationEffectTrackStatusState.Pending;
+        next.LastAuthorizationErrorCode = string.Empty;
+        ClearTeamAutomationEffectAttempt(next);
+        next.UpdatedAt = evt.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationCredentialOperationFailed(
+        ScheduledDispatchState current,
+        TeamAutomationCredentialOperationFailedEvent evt)
+    {
+        var next = current.Clone();
+        next.TeamAutomationOwner = evt.Owner?.Clone();
+        var candidate = next.CandidateTeamCredential?.Clone();
+        var candidateOwner = next.CandidateTeamCredentialOwner?.Clone();
+        next.CandidateTeamCredential = null;
+        next.CandidateTeamCredentialOwner = null;
+        if (candidate != null)
+        {
+            next.PendingRevocationTeamCredential = candidate;
+            next.PendingRevocationTeamCredentialOwner = candidateOwner;
+            next.NyxidRevocationStatus = TeamAutomationEffectTrackStatusState.Pending;
+            next.VaultRevocationStatus = TeamAutomationEffectTrackStatusState.Pending;
+        }
+        ClearTeamAutomationEffectAttempt(next);
+        next.TeamAutomationLifecycleStatus = candidate != null
+            ? TeamAutomationLifecycleStatusState.RevocationPending
+            : evt.ActiveCredentialPreserved
+                ? TeamAutomationLifecycleStatusState.Active
+                : TeamAutomationLifecycleStatusState.Failed;
+        next.LastAuthorizationErrorCode = evt.ErrorCode ?? string.Empty;
+        next.UpdatedAt = evt.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationDeletionRequested(
+        ScheduledDispatchState current,
+        TeamAutomationDeletionRequestedEvent evt)
+    {
+        var next = current.Clone();
+        next.TeamAutomationOwner = evt.Owner?.Clone();
+        next.TeamAutomationOperationKind = TeamAutomationOperationKindState.Delete;
+        next.TeamAutomationOperationId = evt.OperationId ?? string.Empty;
+        next.TeamAutomationIdempotencyKey = evt.IdempotencyKey ?? string.Empty;
+        next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.Deleting;
+        next.CandidateTeamCredential = null;
+        next.CandidateTeamCredentialOwner = null;
+        next.PendingRevocationTeamCredential = evt.PendingRevocationCredential?.Clone();
+        next.PendingRevocationTeamCredentialOwner = evt.PendingRevocationCredentialOwner?.Clone();
+        ClearTeamAutomationEffectAttempt(next);
+        next.NyxidRevocationStatus = evt.PendingRevocationCredential == null
+            ? TeamAutomationEffectTrackStatusState.NotRequired
+            : TeamAutomationEffectTrackStatusState.Pending;
+        next.VaultRevocationStatus = evt.PendingRevocationCredential == null
+            ? TeamAutomationEffectTrackStatusState.NotRequired
+            : TeamAutomationEffectTrackStatusState.Pending;
+        next.LastAuthorizationErrorCode = string.Empty;
+        next.UpdatedAt = evt.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationRevocationCompleted(
+        ScheduledDispatchState current,
+        TeamAutomationRevocationCompletedEvent evt)
+    {
+        var next = current.Clone();
+        next.NyxidRevocationStatus = evt.NyxidRevoked
+            ? TeamAutomationEffectTrackStatusState.Completed
+            : TeamAutomationEffectTrackStatusState.Failed;
+        next.VaultRevocationStatus = evt.VaultRevoked
+            ? TeamAutomationEffectTrackStatusState.Completed
+            : TeamAutomationEffectTrackStatusState.Failed;
+        next.LastAuthorizationErrorCode = evt.ErrorCode ?? string.Empty;
+        if (evt.NyxidRevoked && evt.VaultRevoked)
+        {
+            next.PendingRevocationTeamCredential = null;
+            next.PendingRevocationTeamCredentialOwner = null;
+            if (next.TeamAutomationOperationKind == TeamAutomationOperationKindState.Delete)
+            {
+                next.ActiveTeamCredential = null;
+                next.ActiveTeamCredentialOwner = null;
+                next.ActiveTeamAuthorizationFact = null;
+                next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.Deleting;
+            }
+            else
+            {
+                next.TeamAutomationLifecycleStatus = next.ActiveTeamCredential != null
+                    ? TeamAutomationLifecycleStatusState.Active
+                    : TeamAutomationLifecycleStatusState.Failed;
+            }
+        }
+        else
+        {
+            next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
+        }
+        ClearTeamAutomationEffectAttempt(next);
+        next.UpdatedAt = evt.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationOperationObserved(
+        ScheduledDispatchState current,
+        TeamAutomationOperationObservedEvent evt)
+    {
+        var next = current.Clone();
+        if (evt.OwnsEffectAttempt &&
+            evt.ObservationStatus is TeamAutomationOperationObservationStatusState.Unspecified or
+                TeamAutomationOperationObservationStatusState.Committed)
+        {
+            next.TeamAutomationEffectAttemptClaimed = true;
+            next.TeamAutomationEffectAttemptId = evt.EffectAttemptId ?? string.Empty;
+            next.TeamAutomationEffectAttemptGeneration = evt.EffectAttemptGeneration;
+            next.TeamAutomationEffectAttemptClaimedAt = evt.ObservedAtUtc?.Clone();
+            next.TeamAutomationEffectAttemptExpiresAt = evt.EffectAttemptExpiresAt?.Clone();
+        }
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationCredentialExpiryIntentRecorded(
+        ScheduledDispatchState current,
+        TeamAutomationCredentialExpiryIntentRecordedEvent evt)
+    {
+        var next = current.Clone();
+        if (evt.CredentialGeneration != next.TeamCredentialGeneration ||
+            evt.ExpiresAt == null ||
+            next.TeamCredentialExpiresAt == null ||
+            evt.ExpiresAt.ToDateTimeOffset() != next.TeamCredentialExpiresAt.ToDateTimeOffset())
+        {
+            return next;
+        }
+
+        next.PendingTeamCredentialExpiryGeneration = evt.CredentialGeneration;
+        next.PendingTeamCredentialExpiryAt = evt.ExpiresAt.Clone();
+        return next;
+    }
+
+    private static ScheduledDispatchState ApplyTeamAutomationCredentialExpiryScheduled(
+        ScheduledDispatchState current,
+        TeamAutomationCredentialExpiryScheduledEvent evt)
+    {
+        var next = current.Clone();
+        if (evt.CredentialGeneration != next.TeamCredentialGeneration ||
+            evt.ExpiresAt == null ||
+            next.TeamCredentialExpiresAt == null ||
+            evt.ExpiresAt.ToDateTimeOffset() != next.TeamCredentialExpiresAt.ToDateTimeOffset())
+        {
+            return next;
+        }
+
+        next.TeamCredentialExpiryLease = evt.Lease?.Clone();
+        next.PendingTeamCredentialExpiryAt = null;
+        next.PendingTeamCredentialExpiryGeneration = 0;
+        return next;
+    }
+
+    private static void ClearTeamAutomationEffectAttempt(ScheduledDispatchState state)
+    {
+        state.TeamAutomationEffectAttemptClaimed = false;
+        state.TeamAutomationEffectAttemptId = string.Empty;
+        state.TeamAutomationEffectAttemptClaimedAt = null;
+        state.TeamAutomationEffectAttemptExpiresAt = null;
+    }
+
+    private ScheduledDispatchState ApplyTeamAutomationAuthorizationRequired(
+        ScheduledDispatchState current,
+        TeamAutomationAuthorizationRequiredEvent evt)
+    {
+        var next = current.Clone();
+        next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.NeedsAuthorization;
+        next.LastAuthorizationErrorCode = evt.ErrorCode ?? string.Empty;
+        next.NextFireAt = null;
+        next.PendingNextFireAt = null;
+        next.NextFireLease = null;
+        next.TeamCredentialExpiryLease = null;
+        next.PendingTeamCredentialExpiryAt = null;
+        next.PendingTeamCredentialExpiryGeneration = 0;
+        next.UpdatedAt = evt.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        if (evt.ScheduledFireAt != null && !string.IsNullOrWhiteSpace(evt.IdempotencyKey))
+        {
+            next = ApplyFireFailed(next, new ScheduledDispatchFireFailedEvent
+            {
+                ScheduledFireAt = evt.ScheduledFireAt.Clone(),
+                FailedAt = evt.OccurredAt?.Clone(),
+                IdempotencyKey = evt.IdempotencyKey,
+                Error = evt.ErrorCode ?? string.Empty,
+                Manual = evt.Manual,
+            });
+        }
         return next;
     }
 

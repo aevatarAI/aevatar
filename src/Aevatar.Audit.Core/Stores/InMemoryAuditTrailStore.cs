@@ -3,7 +3,6 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Sanitization;
-using Google.Protobuf;
 
 namespace Aevatar.Audit.Core.Stores;
 
@@ -16,6 +15,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
     private readonly TimeProvider _timeProvider;
     private readonly List<AuditRecord> _records = [];
     private readonly List<AuditTrailDocument> _documents = [];
+    private DateTimeOffset? _ingestionWatermark;
 
     public InMemoryAuditTrailStore(
         AuditRecordSanitizer? sanitizer = null,
@@ -84,19 +84,28 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         ArgumentNullException.ThrowIfNull(document.Record);
         ct.ThrowIfCancellationRequested();
 
+        var sanitizedRecord = _sanitizer.Sanitize(document.Record);
+        var sanitizedDocument = ToDocument(sanitizedRecord);
+
         lock (_records)
         {
             var existing = _documents.FirstOrDefault(candidate =>
-                string.Equals(candidate.AuditId, document.AuditId, StringComparison.Ordinal));
+                string.Equals(candidate.AuditId, sanitizedDocument.AuditId, StringComparison.Ordinal));
             if (existing is not null)
             {
-                return Task.FromResult(string.Equals(existing.ContentHash, document.ContentHash, StringComparison.Ordinal)
+                return Task.FromResult(string.Equals(
+                    existing.ContentHash,
+                    sanitizedDocument.ContentHash,
+                    StringComparison.Ordinal)
                     ? AuditTrailArtifactWriteResult.Duplicate()
                     : AuditTrailArtifactWriteResult.Conflict());
             }
 
-            _records.Add(document.Record.Clone());
-            _documents.Add(document.Clone());
+            _records.Add(sanitizedRecord.Clone());
+            _documents.Add(sanitizedDocument);
+            var recordedAt = sanitizedRecord.RecordedAt.ToDateTimeOffset();
+            if (!_ingestionWatermark.HasValue || recordedAt > _ingestionWatermark.Value)
+                _ingestionWatermark = recordedAt;
         }
 
         return Task.FromResult(AuditTrailArtifactWriteResult.Applied());
@@ -110,9 +119,11 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         cancellationToken.ThrowIfCancellationRequested();
 
         List<AuditRecord> snapshot;
+        DateTimeOffset? ingestionWatermark;
         lock (_records)
         {
             snapshot = _records.Select(static record => record.Clone()).ToList();
+            ingestionWatermark = _ingestionWatermark;
         }
 
         var take = ClampTake(query.Take);
@@ -131,15 +142,18 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
 
         var nextOffset = offset + pageRecords.Count;
         var nextCursor = nextOffset < filtered.Count ? EncodeCursor(nextOffset) : null;
-        var watermark = filtered.Count == 0
-            ? (DateTimeOffset?)null
-            : filtered.Max(static record => record.OccurredAt.ToDateTimeOffset());
+        var coverage = AuditQueryCoverage.Create(
+            query,
+            nextCursor is not null,
+            ingestionWatermark,
+            completeThrough: null,
+            schemaCompatibility: ResolveSchemaCompatibility(filtered));
 
         return Task.FromResult(new AuditTrailPage(
             pageRecords,
             nextCursor,
             _timeProvider.GetUtcNow(),
-            watermark));
+            coverage));
     }
 
     private static bool Matches(AuditRecord record, AuditTrailQuery query)
@@ -172,6 +186,10 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         return Matches(record.OperationName, query.OperationName) &&
                (!query.OperationKind.HasValue || record.OperationKind == query.OperationKind.Value) &&
                (!query.Outcome.HasValue || record.Outcome == query.Outcome.Value) &&
+               (!query.LifecyclePhase.HasValue ||
+                AuditContractSemantics.ResolveLifecyclePhase(record) == query.LifecyclePhase.Value) &&
+               (!query.TerminalOutcome.HasValue ||
+                AuditContractSemantics.ResolveTerminalOutcome(record) == query.TerminalOutcome.Value) &&
                (!query.SensitivityLevel.HasValue || record.SensitivityLevel == query.SensitivityLevel.Value) &&
                (!query.CapturePlane.HasValue || record.CapturePlane == query.CapturePlane.Value);
     }
@@ -185,6 +203,8 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
     private static bool MatchesCorrelation(AuditRecord record, AuditTrailQuery query)
     {
         return Matches(record.Correlation?.TraceId, query.TraceId) &&
+               Matches(record.Correlation?.CorrelationId, query.CorrelationId) &&
+               Matches(record.Correlation?.CausationId, query.CausationId) &&
                Matches(record.Correlation?.RequestId, query.RequestId) &&
                Matches(record.Correlation?.CommandId, query.CommandId) &&
                Matches(record.Correlation?.CallId, query.CallId) &&
@@ -213,6 +233,24 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
         return take <= 0 ? DefaultTake : Math.Min(take, MaxTake);
     }
 
+    private static AuditSchemaCompatibility ResolveSchemaCompatibility(IEnumerable<AuditRecord> records)
+    {
+        var compatibility = AuditSchemaCompatibility.Current;
+        foreach (var record in records)
+        {
+            switch (AuditContractSemantics.GetSchemaCompatibility(record))
+            {
+                case AuditRecordSchemaCompatibility.Incompatible:
+                    return AuditSchemaCompatibility.Incompatible;
+                case AuditRecordSchemaCompatibility.LegacyMapped:
+                    compatibility = AuditSchemaCompatibility.ContainsLegacyRecords;
+                    break;
+            }
+        }
+
+        return compatibility;
+    }
+
     private static string EncodeCursor(int offset)
     {
         return Convert.ToBase64String(BitConverter.GetBytes(offset));
@@ -238,8 +276,7 @@ public sealed class InMemoryAuditTrailStore : IAuditTrailAppender, IAuditTrailQu
 
     private static AuditTrailDocument ToDocument(AuditRecord record)
     {
-        var contentHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(record.ToByteArray()))
-            .ToLowerInvariant();
+        var contentHash = AuditRecordContentHasher.Compute(record);
         var observedAt = record.OccurredAt?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
         return AuditTrailDocumentFactory.Create(record, record.AuditId, contentHash, observedAt);
     }

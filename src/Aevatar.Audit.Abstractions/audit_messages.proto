@@ -59,6 +59,40 @@ enum AuditCapturePlane {
   AUDIT_CAPTURE_PLANE_PROJECTION_ARTIFACT = 3;
 }
 
+enum AuditLifecyclePhase {
+  AUDIT_LIFECYCLE_PHASE_UNSPECIFIED = 0;
+  AUDIT_LIFECYCLE_PHASE_ACCEPTED = 1;
+  AUDIT_LIFECYCLE_PHASE_RUNNING = 2;
+  AUDIT_LIFECYCLE_PHASE_WAITING_APPROVAL = 3;
+  AUDIT_LIFECYCLE_PHASE_TERMINAL = 4;
+}
+
+enum AuditTerminalOutcome {
+  AUDIT_TERMINAL_OUTCOME_UNSPECIFIED = 0;
+  AUDIT_TERMINAL_OUTCOME_SUCCEEDED = 1;
+  AUDIT_TERMINAL_OUTCOME_FAILED = 2;
+  AUDIT_TERMINAL_OUTCOME_CANCELLED = 3;
+  AUDIT_TERMINAL_OUTCOME_TIMED_OUT = 4;
+}
+
+enum AuditFailureCategory {
+  AUDIT_FAILURE_CATEGORY_UNSPECIFIED = 0;
+  AUDIT_FAILURE_CATEGORY_AUTHORIZATION = 1;
+  AUDIT_FAILURE_CATEGORY_VALIDATION = 2;
+  AUDIT_FAILURE_CATEGORY_EXECUTION = 3;
+  AUDIT_FAILURE_CATEGORY_DEPENDENCY = 4;
+  AUDIT_FAILURE_CATEGORY_TIMEOUT = 5;
+  AUDIT_FAILURE_CATEGORY_CONFLICT = 6;
+  AUDIT_FAILURE_CATEGORY_INTERNAL = 7;
+}
+
+enum AuditRetryability {
+  AUDIT_RETRYABILITY_UNSPECIFIED = 0;
+  AUDIT_RETRYABILITY_UNKNOWN = 1;
+  AUDIT_RETRYABILITY_RETRYABLE = 2;
+  AUDIT_RETRYABILITY_NOT_RETRYABLE = 3;
+}
+
 message AuditTarget {
   string kind = 1;
   string id = 2;
@@ -73,6 +107,11 @@ message AuditCorrelation {
   string session_id = 5;
   string workflow_run_id = 6;
   string approval_id = 7;
+  string span_id = 8;
+  string traceparent = 9;
+  string tracestate = 10;
+  string correlation_id = 11;
+  string causation_id = 12;
 }
 
 message AuditCommittedFactReference {
@@ -81,6 +120,34 @@ message AuditCommittedFactReference {
   string actor_type = 3;
   string event_type_url = 4;
   int64 state_version = 5;
+}
+
+message AuditFailure {
+  string code = 1;
+  AuditFailureCategory category = 2;
+  AuditRetryability retryability = 3;
+  AuditLifecyclePhase failed_phase = 4;
+  string sanitized_message = 5;
+}
+
+message AuditExecutionProvenance {
+  string scope_id = 1;
+  string team_id = 2;
+  string member_id = 3;
+  string workflow_id = 4;
+  string published_service_id = 5;
+  string run_id = 6;
+  string causation_id = 7;
+  string correlation_id = 8;
+  string actor_id = 9;
+  int64 actor_state_version = 10;
+  string actor_event_id = 11;
+}
+
+message AuditRedaction {
+  string policy = 1;
+  repeated string omitted_fields = 2;
+  bool values_sanitized = 3;
 }
 
 message AuditRecord {
@@ -104,6 +171,16 @@ message AuditRecord {
   map<string, string> annotations = 18;
   AuditCapturePlane capture_plane = 19;
   AuditCommittedFactReference committed_fact_ref = 20;
+  string event_kind = 21;
+  string subject = 22;
+  google.protobuf.Timestamp recorded_at = 23;
+  string schema_version = 24;
+  string source = 25;
+  AuditLifecyclePhase lifecycle_phase = 26;
+  AuditTerminalOutcome terminal_outcome = 27;
+  AuditFailure failure = 28;
+  AuditExecutionProvenance provenance = 29;
+  AuditRedaction redaction = 30;
 }
 
 message AuditTrailDocument {
@@ -130,4 +207,12 @@ message AuditTrailDocument {
   string committed_actor_type = 21;
   string committed_event_type_url = 22;
   int64 committed_state_version = 23;
+  string event_kind = 24;
+  string schema_version = 25;
+  google.protobuf.Timestamp recorded_at = 26;
+  AuditLifecyclePhase lifecycle_phase = 27;
+  AuditTerminalOutcome terminal_outcome = 28;
+  string subject = 29;
+  string source = 30;
+  string trace_id = 31;
 }

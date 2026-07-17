@@ -471,9 +471,11 @@ public sealed class SecretStoreToolTests
         var originalValue = Encoding.UTF8.GetBytes("old-record");
         var updatedValue = Encoding.UTF8.GetBytes("new-record");
         var wrongExpectedValue = Encoding.UTF8.GetBytes("wrong-record");
+        var defaultDatabaseSameKeyValue = Encoding.UTF8.GetBytes("db-zero-record");
 
         (await database.StringSetAsync(key, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
         (await defaultDatabase.StringSetAsync(defaultDatabaseKey, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
+        (await defaultDatabase.StringSetAsync(key, defaultDatabaseSameKeyValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
         using var target = await RedisSecretStoreSweepTarget.ConnectAsync(connectionString, configuredDatabase);
 
         var scan = await target.ScanAsync($"{prefix}:*", cursor: 0, count: 100);
@@ -491,6 +493,7 @@ public sealed class SecretStoreToolTests
         updated.PreservedTtlMs.Should().BeGreaterThan(0);
 
         ((byte[]?)await database.StringGetAsync(key)).Should().Equal(updatedValue);
+        ((byte[]?)await defaultDatabase.StringGetAsync(key)).Should().Equal(defaultDatabaseSameKeyValue);
         (await database.KeyTimeToLiveAsync(key)).Should().NotBeNull().And.BePositive();
     }
 

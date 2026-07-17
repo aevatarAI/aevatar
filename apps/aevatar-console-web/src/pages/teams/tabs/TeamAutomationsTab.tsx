@@ -4,9 +4,11 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExclamationCircleOutlined,
+  HistoryOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  ReloadOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,20 +32,25 @@ import React from "react";
 import {
   scheduledDispatchApi,
   scheduledWorkflowPromptMaxLength,
-  type ScheduledDispatchConfigurationInput,
-  type ScheduledDispatchListResult,
-  type ScheduledDispatchMutationReceipt,
   type ScheduledDispatchPreview,
-  type ScheduledDispatchRunNowReceipt,
-  type ScheduledDispatchSummary,
 } from "@/shared/api/scheduledDispatchApi";
 import {
+  createTeamAutomationOperationIdentity,
   teamAutomationApi,
+  TeamAutomationApiError,
   type TeamAutomationCreateDraft,
+  type TeamAutomationDisclosure,
+  type TeamAutomationGrant,
+  type TeamAutomationMutationReceipt,
+  type TeamAutomationOperationIdentity,
   type TeamAutomationPermissionReview,
+  type TeamAutomationRoute,
+  type TeamAutomationUpdateInput,
+  type TeamAutomationView,
 } from "@/shared/api/teamAutomationApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
-import type { ServiceIdentity } from "@/shared/models/services";
+import { history } from "@/shared/navigation/history";
+import { buildTeamMemberPublishedRunsHref } from "@/shared/navigation/teamRoutes";
 import {
   AevatarInspectorEmpty,
   AevatarPanel,
@@ -67,15 +74,12 @@ export type TeamAutomationMemberRow = {
   readonly memberId: string;
   readonly name: string;
   readonly serviceId: string;
-  readonly serviceIdentity?: ServiceIdentity;
-  readonly serviceRevisionId?: string;
   readonly workflowSupported: boolean;
 };
 
-type TeamAutomationsTabProps = {
+export type TeamAutomationsTabProps = {
   readonly members?: readonly TeamAutomationMemberRow[];
   readonly scopeId: string;
-  readonly serviceIdentitiesLoading?: boolean;
   readonly teamId: string;
 };
 
@@ -97,20 +101,56 @@ type TeamAutomationCreateStage =
   | "planChanged"
   | "error";
 
-type ManualRunFeedback = Pick<
-  ScheduledDispatchRunNowReceipt,
-  "ackedAt" | "commandId" | "correlationId" | "scheduledFireAt"
->;
+type LifecycleOperationKind = "create" | "delete" | "reauthorize";
+
+type AcceptedLifecycleOperation = {
+  readonly identity: TeamAutomationOperationIdentity;
+  readonly intentKey: string;
+  readonly kind: LifecycleOperationKind;
+  readonly scheduleId: string;
+};
+
+type PersistedOperationIdentity = {
+  readonly idempotencyKey: string;
+  readonly intentKey: string;
+  readonly lifecycleKind: LifecycleOperationKind | null;
+  readonly memberId: string;
+  readonly operationId: string;
+  readonly scheduleId: string | null;
+  readonly schemaVersion: 1;
+  readonly scopeId: string;
+  readonly teamId: string;
+};
 
 const scheduleListTake = 200;
 const scheduleListRetryLimit = 4;
 const scheduleListRetryBaseMs = 600;
 const scheduleListRetryMaxMs = 2_500;
-const scheduleMutationRefreshDelayMs = 1_000;
-const createdScheduleHighlightMs = 4_000;
 const customPreset = "custom";
 const defaultPreset = "weekdays-0900";
 const defaultCronExpression = "0 9 * * 1-5";
+const operationIdentityStorageNamespace =
+  "aevatar.teamAutomationOperationIdentity.v1";
+const operationIntentKinds = new Set([
+  "create",
+  "delete",
+  "pause",
+  "reauthorize",
+  "resume",
+  "run-now",
+  "update",
+]);
+const persistedOperationIdentityKeys = [
+  "idempotencyKey",
+  "intentKey",
+  "lifecycleKind",
+  "memberId",
+  "operationId",
+  "scheduleId",
+  "schemaVersion",
+  "scopeId",
+  "teamId",
+] as const;
 
 function buildDefaultAutomationFormState(memberId = ""): AutomationFormState {
   return {
@@ -136,34 +176,25 @@ function hasAutomationDraft(formState: AutomationFormState): boolean {
   );
 }
 
-function buildScheduledDispatchEditInput({
+function buildTeamAutomationEditInput({
   cronExpression,
   displayName,
   enabled,
   prompt,
-  serviceIdentity,
-  serviceRevisionId,
   timezone,
 }: {
   readonly cronExpression: string;
   readonly displayName: string;
   readonly enabled: boolean;
   readonly prompt: string;
-  readonly serviceIdentity: ServiceIdentity;
-  readonly serviceRevisionId: string;
   readonly timezone?: string;
-}): ScheduledDispatchConfigurationInput {
+}): TeamAutomationUpdateInput {
   return {
     displayName,
     cronExpression,
     timezone,
     enabled,
-    headers: { source: "team-automations" },
-    workflowChatTarget: {
-      identity: serviceIdentity,
-      prompt,
-      ...(serviceRevisionId ? { revisionId: serviceRevisionId } : {}),
-    },
+    prompt,
   };
 }
 
@@ -174,7 +205,6 @@ function buildTeamAutomationCreateDraft({
   member,
   prompt,
   scopeId,
-  serviceRevisionId,
   teamId,
   timezone,
 }: {
@@ -184,7 +214,6 @@ function buildTeamAutomationCreateDraft({
   readonly member: TeamAutomationMemberRow;
   readonly prompt: string;
   readonly scopeId: string;
-  readonly serviceRevisionId: string;
   readonly teamId: string;
   readonly timezone?: string;
 }): TeamAutomationCreateDraft {
@@ -192,9 +221,6 @@ function buildTeamAutomationCreateDraft({
     scopeId,
     teamId,
     memberId: member.memberId,
-    publishedServiceId:
-      trimText(member.serviceIdentity?.serviceId) || trimText(member.serviceId),
-    serviceRevisionId: serviceRevisionId || undefined,
     displayName,
     prompt,
     cronExpression,
@@ -488,25 +514,6 @@ function trimText(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
-function buildServiceIdentityKey(identity: ServiceIdentity | null | undefined): string {
-  if (!identity) {
-    return "";
-  }
-
-  const parts = [
-    identity.tenantId,
-    identity.appId,
-    identity.namespace,
-    identity.serviceId,
-  ].map(trimText);
-
-  return parts.every(Boolean) ? parts.join(":") : "";
-}
-
-function buildScheduleServiceKey(schedule: ScheduledDispatchSummary): string {
-  return trimText(schedule.serviceKey);
-}
-
 function resolveDefaultTimezone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -728,8 +735,8 @@ function resolveCronValidationMessage(
 }
 
 function sortByNextFire(
-  left: ScheduledDispatchSummary,
-  right: ScheduledDispatchSummary,
+  left: TeamAutomationView,
+  right: TeamAutomationView,
 ): number {
   const leftTime = left.nextFireAt ? Date.parse(left.nextFireAt) : Number.MAX_SAFE_INTEGER;
   const rightTime = right.nextFireAt ? Date.parse(right.nextFireAt) : Number.MAX_SAFE_INTEGER;
@@ -743,41 +750,324 @@ function scheduleListRetryDelay(attemptIndex: number): number {
   );
 }
 
-function resolveScheduleStatus(
-  schedule: ScheduledDispatchSummary,
-  manualRunFeedback?: ManualRunFeedback,
-): "active" | "error" | "paused" | "runRequested" {
-  if (manualRunFeedback) {
-    return "runRequested";
-  }
-
-  if (trimText(schedule.lastError)) {
-    return "error";
-  }
-
-  return schedule.enabled ? "active" : "paused";
+function isAuthorizationPlanChanged(error: unknown): boolean {
+  return (
+    error instanceof TeamAutomationApiError &&
+    error.status === 409 &&
+    [
+      "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+      "TEAM_AUTOMATION_REAUTHORIZATION_REQUIRED",
+    ].includes(error.code ?? "")
+  );
 }
 
-function hasBackendObservedManualRun(
-  schedule: ScheduledDispatchSummary,
-  feedback: ManualRunFeedback,
-): boolean {
-  const commandId = trimText(feedback.commandId);
-  const correlationId = trimText(feedback.correlationId);
-  if (commandId && trimText(schedule.lastCommandId) === commandId) {
-    return true;
-  }
-  if (correlationId && trimText(schedule.lastCorrelationId) === correlationId) {
-    return true;
-  }
+function buildOperationIntentKey(
+  kind: string,
+  route: TeamAutomationRoute,
+  scheduleId = "",
+  permissionDigest = "",
+): string {
+  return [
+    kind,
+    route.scopeId,
+    route.teamId,
+    route.memberId,
+    scheduleId,
+    permissionDigest,
+  ].join("\n");
+}
 
-  const lastFireAt = schedule.lastFireAt ? Date.parse(schedule.lastFireAt) : NaN;
-  const scheduledFireAt = feedback.scheduledFireAt
-    ? Date.parse(feedback.scheduledFireAt)
-    : NaN;
-  return Number.isFinite(lastFireAt) &&
-    Number.isFinite(scheduledFireAt) &&
-    lastFireAt >= scheduledFireAt;
+function buildOperationIdentityStoragePrefix(route: TeamAutomationRoute): string {
+  return [
+    operationIdentityStorageNamespace,
+    encodeURIComponent(route.scopeId),
+    encodeURIComponent(route.teamId),
+    encodeURIComponent(route.memberId),
+    "",
+  ].join(":");
+}
+
+function buildOperationIdentityStorageKey(
+  route: TeamAutomationRoute,
+  intentKey: string,
+): string {
+  return buildOperationIdentityStoragePrefix(route) + encodeURIComponent(intentKey);
+}
+
+function getTeamAutomationSessionStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+): boolean {
+  const actualKeys = Object.keys(value).sort();
+  const sortedExpectedKeys = [...expectedKeys].sort();
+  return (
+    actualKeys.length === sortedExpectedKeys.length &&
+    actualKeys.every((key, index) => key === sortedExpectedKeys[index])
+  );
+}
+
+function isBoundedOperationValue(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    value === value.trim() &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function isValidOperationIntentKey(
+  intentKey: unknown,
+  route: TeamAutomationRoute,
+): intentKey is string {
+  if (typeof intentKey !== "string" || intentKey.length === 0 || intentKey.length > 4096) {
+    return false;
+  }
+  const parts = intentKey.split("\n");
+  return (
+    parts.length === 6 &&
+    operationIntentKinds.has(parts[0]) &&
+    parts[1] === route.scopeId &&
+    parts[2] === route.teamId &&
+    parts[3] === route.memberId &&
+    parts.slice(4).every((part) => part.length <= 1024)
+  );
+}
+
+function parsePersistedOperationIdentity(
+  raw: string,
+  route: TeamAutomationRoute,
+  expectedIntentKey?: string,
+): PersistedOperationIdentity | null {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      Array.isArray(value) ||
+      !hasExactKeys(value as Record<string, unknown>, persistedOperationIdentityKeys)
+    ) {
+      return null;
+    }
+    const record = value as Record<string, unknown>;
+    if (
+      record.schemaVersion !== 1 ||
+      record.scopeId !== route.scopeId ||
+      record.teamId !== route.teamId ||
+      record.memberId !== route.memberId ||
+      !isValidOperationIntentKey(record.intentKey, route) ||
+      (expectedIntentKey !== undefined && record.intentKey !== expectedIntentKey) ||
+      !isBoundedOperationValue(record.operationId) ||
+      !isBoundedOperationValue(record.idempotencyKey)
+    ) {
+      return null;
+    }
+
+    const lifecycleKind = record.lifecycleKind;
+    const scheduleId = record.scheduleId;
+    const intentParts = record.intentKey.split("\n");
+    if (
+      lifecycleKind !== null &&
+      (!["create", "delete", "reauthorize"].includes(String(lifecycleKind)) ||
+        lifecycleKind !== intentParts[0])
+    ) {
+      return null;
+    }
+    if (
+      (lifecycleKind === null && scheduleId !== null) ||
+      (lifecycleKind !== null && !isBoundedOperationValue(scheduleId)) ||
+      (lifecycleKind !== null &&
+        lifecycleKind !== "create" &&
+        scheduleId !== intentParts[4])
+    ) {
+      return null;
+    }
+
+    return {
+      idempotencyKey: record.idempotencyKey,
+      intentKey: record.intentKey,
+      lifecycleKind: lifecycleKind as LifecycleOperationKind | null,
+      memberId: route.memberId,
+      operationId: record.operationId,
+      scheduleId: scheduleId as string | null,
+      schemaVersion: 1,
+      scopeId: route.scopeId,
+      teamId: route.teamId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedOperationIdentity(
+  route: TeamAutomationRoute,
+  intentKey: string,
+): PersistedOperationIdentity | null {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return null;
+  }
+  try {
+    const raw = storage.getItem(buildOperationIdentityStorageKey(route, intentKey));
+    return raw
+      ? parsePersistedOperationIdentity(raw, route, intentKey)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedOperationIdentities(
+  route: TeamAutomationRoute,
+): readonly PersistedOperationIdentity[] {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return [];
+  }
+  try {
+    const prefix = buildOperationIdentityStoragePrefix(route);
+    const records: PersistedOperationIdentity[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (!key?.startsWith(prefix)) {
+        continue;
+      }
+      const raw = storage.getItem(key);
+      const record = raw ? parsePersistedOperationIdentity(raw, route) : null;
+      if (
+        record &&
+        buildOperationIdentityStorageKey(route, record.intentKey) === key
+      ) {
+        records.push(record);
+      }
+    }
+    return records;
+  } catch {
+    return [];
+  }
+}
+
+function persistOperationIdentity(
+  route: TeamAutomationRoute,
+  intentKey: string,
+  identity: TeamAutomationOperationIdentity,
+  lifecycle?: Pick<AcceptedLifecycleOperation, "kind" | "scheduleId">,
+): void {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return;
+  }
+  const record: PersistedOperationIdentity = {
+    idempotencyKey: identity.idempotencyKey,
+    intentKey,
+    lifecycleKind: lifecycle?.kind ?? null,
+    memberId: route.memberId,
+    operationId: identity.operationId,
+    scheduleId: lifecycle?.scheduleId ?? null,
+    schemaVersion: 1,
+    scopeId: route.scopeId,
+    teamId: route.teamId,
+  };
+  try {
+    storage.setItem(
+      buildOperationIdentityStorageKey(route, intentKey),
+      JSON.stringify(record),
+    );
+  } catch {
+    // The in-memory identity still protects retries within this component lifetime.
+  }
+}
+
+function removePersistedOperationIdentity(
+  route: TeamAutomationRoute,
+  intentKey: string,
+): void {
+  const storage = getTeamAutomationSessionStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.removeItem(buildOperationIdentityStorageKey(route, intentKey));
+  } catch {
+    // Storage denial must not break a confirmed lifecycle transition.
+  }
+}
+
+function formatDisclosure(
+  disclosure: TeamAutomationDisclosure,
+  intl: IntlShape,
+): string {
+  switch (disclosure) {
+    case "dedicated_credential":
+      return intl.formatMessage({
+        id: "teams.automations.form.agentKeyDedicated",
+        defaultMessage: "Dedicated to this schedule",
+      });
+    case "aevatar_secret_custody":
+      return intl.formatMessage({
+        id: "teams.automations.form.agentKeyManaged",
+        defaultMessage: "Aevatar managed",
+      });
+    case "browser_never_receives_secret":
+      return intl.formatMessage({
+        id: "teams.automations.form.agentKeyNoRawKey",
+        defaultMessage: "Browser never receives the raw Agent Key",
+      });
+    case "delete_revokes_credential":
+      return intl.formatMessage({
+        id: "teams.automations.form.agentKeyDeleteRevokes",
+        defaultMessage: "Delete revokes the Agent Key",
+      });
+    case "pause_resume_preserves_credential":
+      return intl.formatMessage({
+        id: "teams.automations.form.agentKeyPausePreserves",
+        defaultMessage: "Pause and resume preserve the Agent Key",
+      });
+    case "node_ids_are_permission_set":
+      return intl.formatMessage({
+        id: "teams.automations.form.agentKeyNodePermissionSet",
+        defaultMessage: "Node IDs are an exact permission set",
+      });
+  }
+}
+
+function resolveScheduleStatus(
+  schedule: TeamAutomationView,
+):
+  | "active"
+  | "paused"
+  | "pending"
+  | "needsAuthorization"
+  | "revocationPending"
+  | "error" {
+  if (schedule.revocationPending) {
+    return "revocationPending";
+  }
+  switch (schedule.authorizationStatus) {
+    case "provisioning_pending":
+    case "replacement_pending":
+      return "pending";
+    case "needs_authorization":
+      return "needsAuthorization";
+    case "deleting":
+    case "revocation_pending":
+      return "revocationPending";
+    case "failed":
+      return "error";
+    default:
+      return schedule.enabled ? "active" : "paused";
+  }
 }
 
 function useTeamAutomationPermissionReview() {
@@ -785,12 +1075,20 @@ function useTeamAutomationPermissionReview() {
   const [stage, setStage] = React.useState<TeamAutomationCreateStage>("draft");
   const [review, setReview] =
     React.useState<TeamAutomationPermissionReview | null>(null);
+  const [reviewedDraft, setReviewedDraft] =
+    React.useState<TeamAutomationCreateDraft | null>(null);
   const [consentChecked, setConsentChecked] = React.useState(false);
   const [error, setError] = React.useState("");
   const mutation = useMutation({
-    mutationFn: teamAutomationApi.preflightCreate,
+    mutationFn: async (draft: TeamAutomationCreateDraft) => {
+      await teamAutomationApi.refreshAuthorizationCatalog();
+      return teamAutomationApi.preflightCreate(draft);
+    },
     onError: (cause) => {
       const detail = cause instanceof Error ? cause.message : String(cause);
+      setReview(null);
+      setReviewedDraft(null);
+      setConsentChecked(false);
       setStage("error");
       setError(detail);
       void message.error(
@@ -804,12 +1102,15 @@ function useTeamAutomationPermissionReview() {
       );
     },
     onMutate: () => {
+      setReview(null);
+      setReviewedDraft(null);
       setConsentChecked(false);
       setError("");
       setStage("preflight");
     },
-    onSuccess: (nextReview) => {
+    onSuccess: (nextReview, draft) => {
       setReview(nextReview);
+      setReviewedDraft(draft);
       setStage(
         nextReview.status === "plan-changed"
           ? "planChanged"
@@ -819,6 +1120,7 @@ function useTeamAutomationPermissionReview() {
   });
   const reset = React.useCallback(() => {
     setReview(null);
+    setReviewedDraft(null);
     setConsentChecked(false);
     setError("");
     setStage("draft");
@@ -828,25 +1130,70 @@ function useTeamAutomationPermissionReview() {
     setStage(checked ? "consent" : "permissionReview");
   }, []);
 
-  return { consentChecked, error, mutation, reset, review, setConsent, stage };
+  return {
+    consentChecked,
+    error,
+    mutation,
+    reset,
+    review,
+    reviewedDraft,
+    setConsent,
+    stage,
+  };
 }
 
 function TeamAutomationGrantList({
   grants,
   title,
 }: {
-  readonly grants: TeamAutomationPermissionReview["serviceGrants"];
+  readonly grants: readonly TeamAutomationGrant[];
   readonly title: string;
 }) {
+  const intl = useIntl();
+
   return (
     <div style={{ display: "grid", gap: 6 }}>
       <Typography.Text strong>{title}</Typography.Text>
-      {grants.map((grant) => (
-        <Typography.Text key={grant.grantId} style={{ fontSize: 12 }}>
-          {grant.displayName} · {grant.permission}
+      {grants.map((grant, index) => (
+        <Typography.Text key={`${grant.grantId}:${index}`} style={{ fontSize: 12 }}>
+          {grant.displayName} · {formatTeamAutomationGrant(grant, intl)}
         </Typography.Text>
       ))}
     </div>
+  );
+}
+
+function formatTeamAutomationGrant(
+  grant: TeamAutomationGrant,
+  intl: IntlShape,
+): string {
+  if (grant.kind === "service") {
+    return grant.serviceSlug
+      ? intl.formatMessage(
+          {
+            id: "teams.automations.form.serviceGrant",
+            defaultMessage: "NyxID service {serviceSlug}",
+          },
+          { serviceSlug: grant.serviceSlug },
+        )
+      : intl.formatMessage({
+          id: "teams.automations.form.serviceGrantAccess",
+          defaultMessage: "NyxID service access",
+        });
+  }
+
+  return intl.formatMessage(
+    {
+      id:
+        grant.role === "primary"
+          ? "teams.automations.form.nodeGrantPrimary"
+          : "teams.automations.form.nodeGrantFallback",
+      defaultMessage:
+        grant.role === "primary"
+          ? "NyxID primary node for {userServiceId}"
+          : "NyxID fallback node for {userServiceId}",
+    },
+    { userServiceId: grant.userServiceId },
   );
 }
 
@@ -885,7 +1232,7 @@ function TeamAutomationPermissionReviewPanel({
           {intl.formatMessage({
             id: "teams.automations.form.section.permissionReviewHint",
             defaultMessage:
-              "Browser login authorization only confirms this consent. Automation uses a dedicated Agent Key managed by Aevatar.",
+              "Review the backend authorization facts before confirming credential provisioning.",
           })}
         </Typography.Text>
       </div>
@@ -927,7 +1274,7 @@ function TeamAutomationPermissionReviewPanel({
               intl.formatMessage({
                 id: "teams.automations.form.reviewErrorBody",
                 defaultMessage:
-                  "The mock contract could not prepare the review. Keep the draft and try again.",
+                  "The authorization service could not prepare the review. Keep the draft and try again.",
               })}
           </Typography.Text>
         </div>
@@ -957,7 +1304,7 @@ function TeamAutomationPermissionReviewPanel({
             </div>
           ) : null}
 
-          <div
+          {review.status === "ready" ? <div
             style={{
               background: token.colorFillQuaternary,
               border: `1px solid ${token.colorBorderSecondary}`,
@@ -984,17 +1331,32 @@ function TeamAutomationPermissionReviewPanel({
                 )}
               />
               <FactLine
+                text={intl.formatMessage(
+                  {
+                    id: "teams.automations.form.agentKeyScopes",
+                    defaultMessage: "NyxID scopes · {scopes}",
+                  },
+                  { scopes: review.credentialPlan.scopes.join(" ") },
+                )}
+              />
+              <FactLine
                 text={intl.formatMessage({
-                  id: "teams.automations.form.agentKeyManaged",
-                  defaultMessage: "Aevatar managed",
+                  id: "teams.automations.form.agentKeyServiceAllowlist",
+                  defaultMessage: "Exact service allowlist · allow all disabled",
                 })}
               />
               <FactLine
                 text={intl.formatMessage({
-                  id: "teams.automations.form.agentKeyNoRawKey",
-                  defaultMessage: "Browser never receives the raw Agent Key",
+                  id: "teams.automations.form.agentKeyNodeAllowlist",
+                  defaultMessage: "Exact node allowlist · allow all disabled",
                 })}
               />
+              {review.disclosures.map((disclosure, index) => (
+                <FactLine
+                  key={`${disclosure}:${index}`}
+                  text={formatDisclosure(disclosure, intl)}
+                />
+              ))}
               <FactLine
                 text={intl.formatMessage(
                   {
@@ -1046,9 +1408,10 @@ function TeamAutomationPermissionReviewPanel({
                 })}
               />
             </div>
-          </div>
+          </div> : null}
 
-          {stage !== "planChanged" ? (
+          {review.status === "ready" &&
+          (stage === "permissionReview" || stage === "consent") ? (
             <div style={{ display: "grid", gap: 6 }}>
               <Checkbox
                 checked={consentChecked}
@@ -1064,7 +1427,7 @@ function TeamAutomationPermissionReviewPanel({
                 {intl.formatMessage({
                   id: "teams.automations.form.previewOnlyNotice",
                   defaultMessage:
-                    "Preview only. No automation or Agent Key is created until the scoped backend is connected.",
+                    "No automation or Agent Key is created until you confirm this review.",
                 })}
               </Typography.Text>
             </div>
@@ -1086,7 +1449,6 @@ function TeamAutomationPermissionReviewPanel({
 const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   members = [],
   scopeId,
-  serviceIdentitiesLoading = false,
   teamId,
 }) => {
   const intl = useIntl();
@@ -1097,30 +1459,14 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     [members],
   );
   const selectedMember =
-    automatableMembers.find((member) => member.isSelectedMember) ??
-    automatableMembers[0] ??
-    null;
+    automatableMembers.find((member) => member.isSelectedMember) ?? null;
   const unavailableMembers = members.filter((member) => !member.canAutomateMember);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editingSchedule, setEditingSchedule] =
-    React.useState<ScheduledDispatchSummary | null>(null);
+    React.useState<TeamAutomationView | null>(null);
+  const [reauthorizingSchedule, setReauthorizingSchedule] =
+    React.useState<TeamAutomationView | null>(null);
   const [preview, setPreview] = React.useState<ScheduledDispatchPreview | null>(null);
-  const [locallyDeletedScheduleIds, setLocallyDeletedScheduleIds] =
-    React.useState<ReadonlySet<string>>(() => new Set());
-  const [pendingCreatedSchedules, setPendingCreatedSchedules] = React.useState<
-    readonly ScheduledDispatchSummary[]
-  >([]);
-  const [localScheduleEnabledOverrides, setLocalScheduleEnabledOverrides] =
-    React.useState<ReadonlyMap<string, boolean>>(() => new Map());
-  const [manualRunFeedbackByScheduleId, setManualRunFeedbackByScheduleId] =
-    React.useState<ReadonlyMap<string, ManualRunFeedback>>(() => new Map());
-  const [highlightedScheduleId, setHighlightedScheduleId] = React.useState("");
-  const delayedScheduleRefreshRef = React.useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-  const highlightScheduleRef = React.useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
   const [formState, setFormState] = React.useState<AutomationFormState>(() =>
     buildDefaultAutomationFormState(),
   );
@@ -1130,86 +1476,185 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     mutation: permissionReviewMutation,
     reset: resetPermissionReview,
     review: permissionReview,
+    reviewedDraft,
     setConsent: setAgentKeyConsentChecked,
     stage: createStage,
   } = useTeamAutomationPermissionReview();
-  const [hasPreservedCreateDraft, setHasPreservedCreateDraft] =
-    React.useState(false);
-  const scheduleQueryKey = React.useMemo(
-    () => ["scheduled-dispatches", "team", scopeId, teamId] as const,
-    [scopeId, teamId],
+  const [preservedCreateDraft, setPreservedCreateDraft] =
+    React.useState<AutomationFormState | null>(null);
+  const automationRoute = React.useMemo<TeamAutomationRoute | null>(
+    () =>
+      selectedMember
+        ? { scopeId, teamId, memberId: selectedMember.memberId }
+        : null,
+    [scopeId, selectedMember?.memberId, teamId],
   );
-  const serviceKeyToMember = React.useMemo(() => {
-    const next = new Map<string, TeamAutomationMemberRow>();
-    for (const member of automatableMembers) {
-      const serviceKey = buildServiceIdentityKey(member.serviceIdentity);
-      if (serviceKey) {
-        next.set(serviceKey, member);
+  const operationIdentitiesRef = React.useRef(
+    new Map<string, TeamAutomationOperationIdentity>(),
+  );
+  const acceptedLifecycleOperationsRef = React.useRef(
+    new Map<string, AcceptedLifecycleOperation>(),
+  );
+  const [, forceOperationIdentityRender] = React.useReducer(
+    (revision: number) => revision + 1,
+    0,
+  );
+  React.useEffect(() => {
+    operationIdentitiesRef.current.clear();
+    acceptedLifecycleOperationsRef.current.clear();
+    if (!automationRoute) {
+      return;
+    }
+    for (const record of readPersistedOperationIdentities(automationRoute)) {
+      const identity = {
+        idempotencyKey: record.idempotencyKey,
+        operationId: record.operationId,
+      };
+      operationIdentitiesRef.current.set(record.intentKey, identity);
+      if (record.lifecycleKind && record.scheduleId) {
+        acceptedLifecycleOperationsRef.current.set(record.intentKey, {
+          identity,
+          intentKey: record.intentKey,
+          kind: record.lifecycleKind,
+          scheduleId: record.scheduleId,
+        });
       }
     }
-
-    return next;
-  }, [automatableMembers]);
+    forceOperationIdentityRender();
+  }, [automationRoute]);
+  const resolveOperationIdentity = React.useCallback(
+    (intentKey: string) => {
+      const existing = operationIdentitiesRef.current.get(intentKey);
+      if (existing) {
+        return existing;
+      }
+      const persisted = automationRoute
+        ? readPersistedOperationIdentity(automationRoute, intentKey)
+        : null;
+      if (persisted) {
+        const identity = {
+          idempotencyKey: persisted.idempotencyKey,
+          operationId: persisted.operationId,
+        };
+        operationIdentitiesRef.current.set(intentKey, identity);
+        return identity;
+      }
+      const created = createTeamAutomationOperationIdentity();
+      operationIdentitiesRef.current.set(intentKey, created);
+      if (automationRoute) {
+        persistOperationIdentity(automationRoute, intentKey, created);
+      }
+      return created;
+    },
+    [automationRoute],
+  );
+  const releaseOperationIdentity = React.useCallback(
+    (intentKey: string) => {
+      operationIdentitiesRef.current.delete(intentKey);
+      acceptedLifecycleOperationsRef.current.delete(intentKey);
+      if (automationRoute) {
+        removePersistedOperationIdentity(automationRoute, intentKey);
+      }
+      forceOperationIdentityRender();
+    },
+    [automationRoute],
+  );
+  const rememberAcceptedLifecycleOperation = React.useCallback(
+    (
+      kind: LifecycleOperationKind,
+      intentKey: string,
+      receipt: TeamAutomationMutationReceipt,
+    ) => {
+      const identity = operationIdentitiesRef.current.get(intentKey);
+      if (!identity) {
+        return;
+      }
+      const operation = {
+        identity,
+        intentKey,
+        kind,
+        scheduleId: receipt.scheduleId,
+      };
+      acceptedLifecycleOperationsRef.current.set(intentKey, operation);
+      if (automationRoute) {
+        persistOperationIdentity(automationRoute, intentKey, identity, operation);
+      }
+      forceOperationIdentityRender();
+    },
+    [automationRoute],
+  );
+  const scheduleQueryKey = React.useMemo(
+    () => ["team-automations", scopeId, teamId, selectedMember?.memberId ?? ""] as const,
+    [scopeId, selectedMember?.memberId, teamId],
+  );
   const findMemberForSchedule = React.useCallback(
-    (schedule: ScheduledDispatchSummary): TeamAutomationMemberRow | undefined =>
-      serviceKeyToMember.get(buildScheduleServiceKey(schedule)),
-    [serviceKeyToMember],
+    (schedule: TeamAutomationView): TeamAutomationMemberRow | undefined =>
+      selectedMember?.memberId === schedule.memberId ? selectedMember : undefined,
+    [selectedMember],
   );
   const schedulesQuery = useQuery({
-    enabled: scopeId.length > 0 && teamId.length > 0,
-    queryFn: () =>
-      scheduledDispatchApi.listAll({
-        includeTotalCount: true,
-        take: scheduleListTake,
-      }),
+    enabled: Boolean(automationRoute),
+    queryFn: () => {
+      if (!automationRoute) {
+        throw new Error("A canonical Team member route is required.");
+      }
+      return teamAutomationApi.listAll(automationRoute, { take: scheduleListTake });
+    },
     queryKey: scheduleQueryKey,
+    refetchInterval: (query) => {
+      const items = query.state.data?.items ?? [];
+      return items.some((item) =>
+        [
+          "provisioning_pending",
+          "replacement_pending",
+          "deleting",
+          "revocation_pending",
+        ].includes(item.authorizationStatus),
+      )
+        ? 1_000
+        : 10_000;
+    },
+    refetchIntervalInBackground: false,
     retry: (failureCount) => failureCount < scheduleListRetryLimit,
     retryDelay: scheduleListRetryDelay,
   });
   const teamSchedules = React.useMemo(
-    () => {
-      const backendSchedules = schedulesQuery.data?.items ?? [];
-      const backendScheduleIds = new Set(
-        backendSchedules.map((schedule) => trimText(schedule.scheduleId)),
-      );
-      return [
-        ...pendingCreatedSchedules.filter(
-          (schedule) => !backendScheduleIds.has(trimText(schedule.scheduleId)),
-        ),
-        ...backendSchedules,
-      ]
-        .filter(
-          (schedule) =>
-            !schedule.deleted &&
-            !locallyDeletedScheduleIds.has(trimText(schedule.scheduleId)) &&
-            Boolean(findMemberForSchedule(schedule)),
-        )
-        .map((schedule) => {
-          const scheduleId = trimText(schedule.scheduleId);
-          if (!localScheduleEnabledOverrides.has(scheduleId)) {
-            return schedule;
-          }
-
-          return {
-            ...schedule,
-            enabled: localScheduleEnabledOverrides.get(scheduleId) ?? schedule.enabled,
-          };
-        })
-        .sort(sortByNextFire);
-    },
-    [
-      locallyDeletedScheduleIds,
-      localScheduleEnabledOverrides,
-      pendingCreatedSchedules,
-      schedulesQuery.data?.items,
-      findMemberForSchedule,
-    ],
+    () => [...(schedulesQuery.data?.items ?? [])].sort(sortByNextFire),
+    [schedulesQuery.data?.items],
   );
+  React.useEffect(() => {
+    for (const operation of acceptedLifecycleOperationsRef.current.values()) {
+      const schedule = teamSchedules.find(
+        (item) => item.scheduleId === operation.scheduleId,
+      );
+      if (!schedule) {
+        if (operation.kind === "delete" && schedulesQuery.isSuccess) {
+          releaseOperationIdentity(operation.intentKey);
+        }
+        continue;
+      }
+      if (schedule.operationId !== operation.identity.operationId) {
+        continue;
+      }
+      const stillPending =
+        schedule.revocationPending ||
+        [
+          "provisioning_pending",
+          "replacement_pending",
+          "deleting",
+          "revocation_pending",
+        ].includes(schedule.authorizationStatus);
+      if (!stillPending) {
+        releaseOperationIdentity(operation.intentKey);
+      }
+    }
+  }, [releaseOperationIdentity, schedulesQuery.isSuccess, teamSchedules]);
   const activeFormMember =
-    automatableMembers.find((member) => member.memberId === formState.memberId) ??
-    selectedMember;
+    selectedMember?.memberId === formState.memberId ? selectedMember : null;
   const editingScheduleId = trimText(editingSchedule?.scheduleId);
   const isEditingAutomation = editingScheduleId.length > 0;
+  const reauthorizingScheduleId = trimText(reauthorizingSchedule?.scheduleId);
+  const isReauthorizingAutomation = reauthorizingScheduleId.length > 0;
   const trimmedPromptLength = formState.prompt.trim().length;
   const promptTooLong =
     trimmedPromptLength > scheduledWorkflowPromptMaxLength;
@@ -1261,208 +1706,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
 
   const invalidateSchedules = React.useCallback(async () => {
     await queryClient.invalidateQueries({
-      queryKey: ["scheduled-dispatches"],
+      queryKey: scheduleQueryKey,
     });
-  }, [queryClient]);
-  const scheduleDelayedRefresh = React.useCallback(() => {
-    if (delayedScheduleRefreshRef.current) {
-      clearTimeout(delayedScheduleRefreshRef.current);
-    }
-
-    delayedScheduleRefreshRef.current = setTimeout(() => {
-      delayedScheduleRefreshRef.current = null;
-      void invalidateSchedules();
-    }, scheduleMutationRefreshDelayMs);
-  }, [invalidateSchedules]);
-  const removeScheduleFromCache = React.useCallback(
-    (scheduleId: string) => {
-      const normalizedScheduleId = trimText(scheduleId);
-      if (!normalizedScheduleId) {
-        return;
-      }
-
-      queryClient.setQueriesData<ScheduledDispatchListResult>(
-        { queryKey: ["scheduled-dispatches"] },
-        (current) => {
-          if (!current) {
-            return current;
-          }
-
-          const nextItems = current.items.filter(
-            (schedule) => trimText(schedule.scheduleId) !== normalizedScheduleId,
-          );
-          if (nextItems.length === current.items.length) {
-            return current;
-          }
-
-          return {
-            ...current,
-            items: nextItems,
-            totalCount:
-              typeof current.totalCount === "number"
-                ? Math.max(0, current.totalCount - 1)
-                : current.totalCount,
-          };
-        },
-      );
-    },
-    [queryClient],
-  );
-  const hideDeletedSchedule = React.useCallback(
-    (scheduleId: string) => {
-      const normalizedScheduleId = trimText(scheduleId);
-      if (!normalizedScheduleId) {
-        return;
-      }
-
-      setLocallyDeletedScheduleIds((current) => {
-        if (current.has(normalizedScheduleId)) {
-          return current;
-        }
-
-        const next = new Set(current);
-        next.add(normalizedScheduleId);
-        return next;
-      });
-      removeScheduleFromCache(normalizedScheduleId);
-    },
-    [removeScheduleFromCache],
-  );
-  React.useEffect(() => {
-    if (localScheduleEnabledOverrides.size === 0) {
-      return;
-    }
-
-    const backendSchedules = schedulesQuery.data?.items ?? [];
-    if (backendSchedules.length === 0) {
-      return;
-    }
-
-    const backendEnabledByScheduleId = new Map(
-      backendSchedules.map((schedule) => [
-        trimText(schedule.scheduleId),
-        schedule.enabled,
-      ]),
-    );
-    setLocalScheduleEnabledOverrides((current) => {
-      let changed = false;
-      const next = new Map(current);
-      for (const [scheduleId, enabled] of current) {
-        if (backendEnabledByScheduleId.get(scheduleId) === enabled) {
-          next.delete(scheduleId);
-          changed = true;
-        }
-      }
-
-      return changed ? next : current;
-    });
-  }, [
-    localScheduleEnabledOverrides,
-    schedulesQuery.data?.items,
-  ]);
-  React.useEffect(() => {
-    if (manualRunFeedbackByScheduleId.size === 0) {
-      return;
-    }
-
-    const backendSchedules = schedulesQuery.data?.items ?? [];
-    if (backendSchedules.length === 0) {
-      return;
-    }
-
-    const backendScheduleById = new Map(
-      backendSchedules.map((schedule) => [
-        trimText(schedule.scheduleId),
-        schedule,
-      ]),
-    );
-    setManualRunFeedbackByScheduleId((current) => {
-      let changed = false;
-      const next = new Map(current);
-      for (const [scheduleId, feedback] of current) {
-        const backendSchedule = backendScheduleById.get(scheduleId);
-        if (backendSchedule && hasBackendObservedManualRun(backendSchedule, feedback)) {
-          next.delete(scheduleId);
-          changed = true;
-        }
-      }
-
-      return changed ? next : current;
-    });
-  }, [
-    manualRunFeedbackByScheduleId,
-    schedulesQuery.data?.items,
-  ]);
-
-  const updateScheduleEnabledLocally = React.useCallback(
-    (scheduleId: string, enabled: boolean) => {
-      const normalizedScheduleId = trimText(scheduleId);
-      if (!normalizedScheduleId) {
-        return;
-      }
-
-      const updatedAt = new Date().toISOString();
-      setLocalScheduleEnabledOverrides((current) => {
-        const next = new Map(current);
-        next.set(normalizedScheduleId, enabled);
-        return next;
-      });
-      setPendingCreatedSchedules((current) =>
-        current.map((schedule) =>
-          trimText(schedule.scheduleId) === normalizedScheduleId
-            ? {
-                ...schedule,
-                enabled,
-                updatedAt,
-              }
-            : schedule,
-        ),
-      );
-    },
-    [],
-  );
-  const showManualRunFeedback = React.useCallback(
-    (scheduleId: string, receipt: ScheduledDispatchRunNowReceipt) => {
-      const normalizedScheduleId =
-        trimText(scheduleId) || trimText(receipt.scheduleId);
-      if (!normalizedScheduleId) {
-        return;
-      }
-
-      setManualRunFeedbackByScheduleId((current) => {
-        const next = new Map(current);
-        next.set(normalizedScheduleId, {
-          ackedAt: receipt.ackedAt,
-          commandId: receipt.commandId,
-          correlationId: receipt.correlationId,
-          scheduledFireAt: receipt.scheduledFireAt,
-        });
-        return next;
-      });
-      setHighlightedScheduleId(normalizedScheduleId);
-      if (highlightScheduleRef.current) {
-        clearTimeout(highlightScheduleRef.current);
-      }
-      highlightScheduleRef.current = setTimeout(() => {
-        highlightScheduleRef.current = null;
-        setHighlightedScheduleId((current) =>
-          current === normalizedScheduleId ? "" : current,
-        );
-      }, createdScheduleHighlightMs);
-    },
-    [],
-  );
-  React.useEffect(
-    () => () => {
-      if (delayedScheduleRefreshRef.current) {
-        clearTimeout(delayedScheduleRefreshRef.current);
-      }
-      if (highlightScheduleRef.current) {
-        clearTimeout(highlightScheduleRef.current);
-      }
-    },
-    [],
-  );
+  }, [queryClient, scheduleQueryKey]);
 
   const previewMutation = useMutation({
     mutationFn: scheduledDispatchApi.preview,
@@ -1481,14 +1727,29 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       setPreview(result);
     },
   });
+  const requireAutomationRoute = React.useCallback((): TeamAutomationRoute => {
+    if (!automationRoute) {
+      throw new Error("Select a Team member before using automations.");
+    }
+    return automationRoute;
+  }, [automationRoute]);
   const updateMutation = useMutation({
     mutationFn: ({
       input,
       scheduleId,
     }: {
-      readonly input: ScheduledDispatchConfigurationInput;
+      readonly input: TeamAutomationUpdateInput;
       readonly scheduleId: string;
-    }) => scheduledDispatchApi.update(scheduleId, input),
+    }) => {
+      const route = requireAutomationRoute();
+      const intentKey = buildOperationIntentKey("update", route, scheduleId);
+      return teamAutomationApi.update(
+        route,
+        scheduleId,
+        input,
+        resolveOperationIdentity(intentKey),
+      );
+    },
     onError: (error) => {
       void message.error(
         intl.formatMessage(
@@ -1500,21 +1761,193 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ),
       );
     },
-    onSuccess: async () => {
+    onSuccess: async (_receipt, variables) => {
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.updateSuccess",
-          defaultMessage: "Automation updated.",
+          defaultMessage: "Update accepted. Waiting for committed state.",
         }),
       );
       setCreateOpen(false);
       setEditingSchedule(null);
       setPreview(null);
       await invalidateSchedules();
+      releaseOperationIdentity(
+        buildOperationIntentKey(
+          "update",
+          requireAutomationRoute(),
+          variables.scheduleId,
+        ),
+      );
+    },
+  });
+  const createMutation = useMutation({
+    mutationFn: ({
+      draft,
+      permissionDigest,
+      policyVersion,
+    }: {
+      readonly draft: TeamAutomationCreateDraft;
+      readonly permissionDigest: string;
+      readonly policyVersion: string;
+    }) => {
+      const intentKey = buildOperationIntentKey(
+        "create",
+        draft,
+        "",
+        permissionDigest,
+      );
+      return teamAutomationApi.create(
+        draft,
+        permissionDigest,
+        policyVersion,
+        resolveOperationIdentity(intentKey),
+      );
+    },
+    onError: (error, variables) => {
+      if (isAuthorizationPlanChanged(error)) {
+        releaseOperationIdentity(
+          buildOperationIntentKey(
+            "create",
+            variables.draft,
+            "",
+            variables.permissionDigest,
+          ),
+        );
+        resetPermissionReview();
+      }
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.createFailed",
+            defaultMessage: "Automation was not created: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: async (receipt, variables) => {
+      void message.success(
+        intl.formatMessage({
+          id: "teams.automations.messages.createAccepted",
+          defaultMessage: "Automation creation was accepted. Waiting for committed state.",
+        }),
+      );
+      setCreateOpen(false);
+      setPreservedCreateDraft(null);
+      setFormState(buildDefaultAutomationFormState(selectedMember?.memberId ?? ""));
+      resetPermissionReview();
+      rememberAcceptedLifecycleOperation(
+        "create",
+        buildOperationIntentKey(
+          "create",
+          variables.draft,
+          "",
+          variables.permissionDigest,
+        ),
+        receipt,
+      );
+      await invalidateSchedules();
+    },
+  });
+  const reauthorizeMutation = useMutation({
+    mutationFn: ({
+      draft,
+      permissionDigest,
+      policyVersion,
+      scheduleId,
+    }: {
+      readonly draft: TeamAutomationCreateDraft;
+      readonly permissionDigest: string;
+      readonly policyVersion: string;
+      readonly scheduleId: string;
+    }) => {
+      const route = requireAutomationRoute();
+      const intentKey = buildOperationIntentKey(
+        "reauthorize",
+        route,
+        scheduleId,
+        permissionDigest,
+      );
+      const acceptedRetry = [
+        ...acceptedLifecycleOperationsRef.current.values(),
+      ].find(
+        (operation) =>
+          operation.kind === "reauthorize" &&
+          operation.scheduleId === scheduleId,
+      );
+      if (acceptedRetry && acceptedRetry.intentKey !== intentKey) {
+        throw new TeamAutomationApiError(
+          "authorization_plan_changed",
+          409,
+          "TEAM_AUTOMATION_AUTHORIZATION_PLAN_CHANGED",
+        );
+      }
+      return teamAutomationApi.reauthorize(
+        route,
+        scheduleId,
+        draft,
+        permissionDigest,
+        policyVersion,
+        resolveOperationIdentity(intentKey),
+      );
+    },
+    onError: (error, variables) => {
+      if (isAuthorizationPlanChanged(error)) {
+        releaseOperationIdentity(
+          buildOperationIntentKey(
+            "reauthorize",
+            requireAutomationRoute(),
+            variables.scheduleId,
+            variables.permissionDigest,
+          ),
+        );
+        resetPermissionReview();
+      }
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.reauthorizeFailed",
+            defaultMessage: "Authorization was not replaced: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: async (receipt, variables) => {
+      void message.success(
+        intl.formatMessage({
+          id: "teams.automations.messages.reauthorizeAccepted",
+          defaultMessage: "Re-authorization was accepted. Waiting for committed state.",
+        }),
+      );
+      setCreateOpen(false);
+      setReauthorizingSchedule(null);
+      setFormState(buildDefaultAutomationFormState(selectedMember?.memberId ?? ""));
+      resetPermissionReview();
+      rememberAcceptedLifecycleOperation(
+        "reauthorize",
+        buildOperationIntentKey(
+          "reauthorize",
+          requireAutomationRoute(),
+          variables.scheduleId,
+          variables.permissionDigest,
+        ),
+        receipt,
+      );
+      await invalidateSchedules();
     },
   });
   const runNowMutation = useMutation({
-    mutationFn: (scheduleId: string) => scheduledDispatchApi.runNow(scheduleId),
+    mutationFn: (scheduleId: string) => {
+      const route = requireAutomationRoute();
+      const intentKey = buildOperationIntentKey("run-now", route, scheduleId);
+      return teamAutomationApi.runNow(
+        route,
+        scheduleId,
+        resolveOperationIdentity(intentKey),
+      );
+    },
     onError: (error) => {
       void message.error(
         intl.formatMessage(
@@ -1526,84 +1959,183 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ),
       );
     },
-    onSuccess: (receipt, scheduleId) => {
+    onSuccess: async (_receipt, scheduleId) => {
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.runNowSuccess",
-          defaultMessage: "Run requested.",
+          defaultMessage: "Run request accepted.",
         }),
       );
-      showManualRunFeedback(scheduleId, receipt);
-      scheduleDelayedRefresh();
+      await invalidateSchedules();
+      releaseOperationIdentity(
+        buildOperationIntentKey("run-now", requireAutomationRoute(), scheduleId),
+      );
     },
   });
-  const enableMutation = useMutation({
-    mutationFn: (scheduleId: string) =>
-      scheduledDispatchApi.enable(
+  const resumeMutation = useMutation({
+    mutationFn: (scheduleId: string) => {
+      const route = requireAutomationRoute();
+      const intentKey = buildOperationIntentKey("resume", route, scheduleId);
+      return teamAutomationApi.resume(
+        route,
         scheduleId,
-        "Enabled from Team Automations",
-      ),
-    onSuccess: (_receipt, scheduleId) => {
-      updateScheduleEnabledLocally(scheduleId, true);
+        resolveOperationIdentity(intentKey),
+      );
+    },
+    onError: (error) => {
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.resumeFailed",
+            defaultMessage: "Automation was not resumed: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: async (_receipt, scheduleId) => {
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.enableSuccess",
-          defaultMessage: "Automation resumed.",
+          defaultMessage: "Resume accepted. Waiting for committed state.",
         }),
       );
-      scheduleDelayedRefresh();
+      await invalidateSchedules();
+      releaseOperationIdentity(
+        buildOperationIntentKey("resume", requireAutomationRoute(), scheduleId),
+      );
     },
   });
-  const disableMutation = useMutation({
-    mutationFn: (scheduleId: string) =>
-      scheduledDispatchApi.disable(
+  const pauseMutation = useMutation({
+    mutationFn: (scheduleId: string) => {
+      const route = requireAutomationRoute();
+      const intentKey = buildOperationIntentKey("pause", route, scheduleId);
+      return teamAutomationApi.pause(
+        route,
         scheduleId,
-        "Disabled from Team Automations",
-      ),
-    onSuccess: (_receipt, scheduleId) => {
-      updateScheduleEnabledLocally(scheduleId, false);
+        resolveOperationIdentity(intentKey),
+      );
+    },
+    onError: (error) => {
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.pauseFailed",
+            defaultMessage: "Automation was not paused: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: async (_receipt, scheduleId) => {
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.disableSuccess",
-          defaultMessage: "Automation paused.",
+          defaultMessage: "Pause accepted. Waiting for committed state.",
         }),
       );
-      scheduleDelayedRefresh();
+      await invalidateSchedules();
+      releaseOperationIdentity(
+        buildOperationIntentKey("pause", requireAutomationRoute(), scheduleId),
+      );
     },
   });
   const deleteMutation = useMutation({
-    mutationFn: (scheduleId: string) =>
-      scheduledDispatchApi.delete(
+    mutationFn: (scheduleId: string) => {
+      const route = requireAutomationRoute();
+      const intentKey = buildOperationIntentKey("delete", route, scheduleId);
+      return teamAutomationApi.delete(
+        route,
         scheduleId,
-        "Deleted from Team Automations",
-      ),
-    onSuccess: (_receipt, scheduleId) => {
-      hideDeletedSchedule(scheduleId);
+        resolveOperationIdentity(intentKey),
+      );
+    },
+    onError: (error) => {
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.deleteFailed",
+            defaultMessage: "Deletion was not accepted: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: async (receipt, scheduleId) => {
       void message.success(
         intl.formatMessage({
           id: "teams.automations.messages.deleteSuccess",
-          defaultMessage: "Automation deleted.",
+          defaultMessage: "Deletion accepted. Waiting for credential revocation.",
         }),
       );
-      scheduleDelayedRefresh();
+      rememberAcceptedLifecycleOperation(
+        "delete",
+        buildOperationIntentKey(
+          "delete",
+          requireAutomationRoute(),
+          scheduleId,
+        ),
+        receipt,
+      );
+      await invalidateSchedules();
+    },
+  });
+  const retryRevocationMutation = useMutation({
+    mutationFn: async (operation: AcceptedLifecycleOperation) => {
+      const receipt = await teamAutomationApi.retryRevocation(
+        requireAutomationRoute(),
+        operation.scheduleId,
+        operation.identity,
+      );
+      if (
+        receipt.scheduleId !== operation.scheduleId ||
+        receipt.operationId !== operation.identity.operationId
+      ) {
+        throw new Error("Team automation revocation retry receipt did not match the operation.");
+      }
+      return receipt;
+    },
+    onError: (error) => {
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.retryRevocationFailed",
+            defaultMessage: "Credential cleanup retry failed: {message}",
+          },
+          { message: error instanceof Error ? error.message : String(error) },
+        ),
+      );
+    },
+    onSuccess: async () => {
+      void message.success(
+        intl.formatMessage({
+          id: "teams.automations.messages.retryRevocationAccepted",
+          defaultMessage: "Credential cleanup retry accepted.",
+        }),
+      );
+      await invalidateSchedules();
     },
   });
 
   const openCreate = React.useCallback(() => {
     const member = selectedMember;
+    if (!member) {
+      return;
+    }
     setEditingSchedule(null);
-    setFormState((current) =>
-      hasPreservedCreateDraft
-        ? current
-        : buildDefaultAutomationFormState(member?.memberId ?? ""),
+    setReauthorizingSchedule(null);
+    setFormState(
+      preservedCreateDraft?.memberId === member.memberId
+        ? preservedCreateDraft
+        : buildDefaultAutomationFormState(member.memberId),
     );
     setPreview(null);
     resetPermissionReview();
     setCreateOpen(true);
-  }, [hasPreservedCreateDraft, resetPermissionReview, selectedMember]);
+  }, [preservedCreateDraft, resetPermissionReview, selectedMember]);
 
   const openEdit = React.useCallback(
-    (schedule: ScheduledDispatchSummary) => {
+    (schedule: TeamAutomationView) => {
       const member =
         findMemberForSchedule(schedule) ?? selectedMember;
       const cronExpression = trimText(schedule.cronExpression);
@@ -1611,7 +2143,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         cronPresets.find((item) => item.cronExpression === cronExpression)?.value ??
         customPreset;
       setEditingSchedule(schedule);
-      setHasPreservedCreateDraft(false);
+      setReauthorizingSchedule(null);
       setFormState({
         cronExpression,
         displayName: trimText(schedule.displayName),
@@ -1628,6 +2160,54 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     [cronPresets, findMemberForSchedule, resetPermissionReview, selectedMember],
   );
 
+  const openReauthorize = React.useCallback(
+    (schedule: TeamAutomationView) => {
+      const member = findMemberForSchedule(schedule) ?? selectedMember;
+      if (!member) {
+        return;
+      }
+      const cronExpression = trimText(schedule.cronExpression);
+      const preset =
+        cronPresets.find((item) => item.cronExpression === cronExpression)?.value ??
+        customPreset;
+      setEditingSchedule(null);
+      setReauthorizingSchedule(schedule);
+      setFormState({
+        cronExpression,
+        displayName: trimText(schedule.displayName),
+        enabled: schedule.enabled,
+        memberId: member.memberId,
+        preset,
+        prompt: trimText(schedule.prompt),
+        timezone: trimText(schedule.timezone) || resolveDefaultTimezone(),
+      });
+      setPreview(null);
+      resetPermissionReview();
+      setCreateOpen(true);
+    },
+    [cronPresets, findMemberForSchedule, resetPermissionReview, selectedMember],
+  );
+
+  const openScheduleRuns = React.useCallback(
+    (member: TeamAutomationMemberRow | undefined, scheduleId: string) => {
+      const normalizedScheduleId = trimText(scheduleId);
+      const routeMemberId = trimText(member?.memberId);
+      if (!member?.workflowSupported || !routeMemberId || !normalizedScheduleId) {
+        return;
+      }
+
+      history.push(
+        buildTeamMemberPublishedRunsHref({
+          memberId: routeMemberId,
+          scheduleId: normalizedScheduleId,
+          scopeId,
+          teamId,
+        }),
+      );
+    },
+    [scopeId, teamId],
+  );
+
   const updateForm = React.useCallback(
     (patch: Partial<AutomationFormState>) => {
       setFormState((current) => ({
@@ -1636,11 +2216,8 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       }));
       setPreview(null);
       resetPermissionReview();
-      if (!isEditingAutomation) {
-        setHasPreservedCreateDraft(true);
-      }
     },
-    [isEditingAutomation, resetPermissionReview],
+    [resetPermissionReview],
   );
 
   const previewNextRuns = React.useCallback(async () => {
@@ -1675,21 +2252,15 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
 
   const validateAutomationDraft = React.useCallback(() => {
     const member = activeFormMember;
-    const serviceIdentity = member?.serviceIdentity;
     const prompt = formState.prompt.trim();
     const cronExpression = formState.cronExpression.trim();
-    if (!member || !serviceIdentity) {
+    if (!member || !trimText(member.serviceId) || member.serviceId === "--") {
       void message.error(
-        serviceIdentitiesLoading
-          ? intl.formatMessage({
-              id: "teams.automations.messages.serviceIdentityLoading",
-              defaultMessage: "Service identity is still loading.",
-            })
-          : intl.formatMessage({
-              id: "teams.automations.messages.serviceIdentityMissing",
-              defaultMessage:
-                "The selected member does not have a service identity yet.",
-            }),
+        intl.formatMessage({
+          id: "teams.automations.messages.serviceIdentityMissing",
+          defaultMessage:
+            "The selected member does not have a published service identity yet.",
+        }),
       );
       return null;
     }
@@ -1729,11 +2300,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ),
       member,
       prompt,
-      serviceIdentity,
-      serviceRevisionId: trimText(member.serviceRevisionId),
       timezone: trimText(formState.timezone) || undefined,
     };
-  }, [activeFormMember, formState, intl, serviceIdentitiesLoading]);
+  }, [activeFormMember, formState, intl]);
 
   const saveAutomation = React.useCallback(async () => {
     if (permissionReviewMutation.isPending) {
@@ -1749,19 +2318,15 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       displayName,
       member,
       prompt,
-      serviceIdentity,
-      serviceRevisionId,
       timezone,
     } = validatedDraft;
     if (isEditingAutomation) {
       await updateMutation.mutateAsync({
-        input: buildScheduledDispatchEditInput({
+        input: buildTeamAutomationEditInput({
           displayName,
           cronExpression,
           timezone,
           enabled: formState.enabled,
-          serviceIdentity,
-          serviceRevisionId,
           prompt,
         }),
         scheduleId: editingScheduleId,
@@ -1773,7 +2338,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       scopeId,
       teamId,
       member,
-      serviceRevisionId,
       displayName,
       prompt,
       cronExpression,
@@ -1790,13 +2354,39 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       await permissionReviewMutation.mutateAsync(draft);
       return;
     }
+
+    if (!agentKeyConsentChecked || !reviewedDraft) {
+      return;
+    }
+
+    if (isReauthorizingAutomation) {
+      await reauthorizeMutation.mutateAsync({
+        draft: reviewedDraft,
+        permissionDigest: permissionReview.permissionDigest,
+        policyVersion: permissionReview.policyVersion,
+        scheduleId: reauthorizingScheduleId,
+      });
+      return;
+    }
+
+    await createMutation.mutateAsync({
+      draft: reviewedDraft,
+      permissionDigest: permissionReview.permissionDigest,
+      policyVersion: permissionReview.policyVersion,
+    });
   }, [
+    agentKeyConsentChecked,
+    createMutation,
     createStage,
     editingScheduleId,
     formState.enabled,
     isEditingAutomation,
+    isReauthorizingAutomation,
     permissionReview,
     permissionReviewMutation,
+    reauthorizeMutation,
+    reauthorizingScheduleId,
+    reviewedDraft,
     scopeId,
     teamId,
     updateMutation,
@@ -1810,10 +2400,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   }, [saveAutomation]);
 
   const renderStatusPill = (
-    schedule: ScheduledDispatchSummary,
-    manualRunFeedback?: ManualRunFeedback,
+    schedule: TeamAutomationView,
   ) => {
-    const status = resolveScheduleStatus(schedule, manualRunFeedback);
+    const status = resolveScheduleStatus(schedule);
     const statusStyle =
       status === "error"
         ? {
@@ -1821,13 +2410,13 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             border: `1px solid ${token.colorErrorBorder}`,
             color: token.colorError,
           }
-        : status === "runRequested"
+        : status === "pending"
           ? {
               background: token.colorInfoBg,
               border: `1px solid ${token.colorInfoBorder}`,
               color: token.colorInfo,
             }
-        : status === "paused"
+        : status === "paused" || status === "needsAuthorization" || status === "revocationPending"
           ? {
               background: token.colorWarningBg,
               border: `1px solid ${token.colorWarningBorder}`,
@@ -1844,10 +2433,20 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             id: "teams.automations.status.error",
             defaultMessage: "Error",
           })
-        : status === "runRequested"
+        : status === "pending"
           ? intl.formatMessage({
-              id: "teams.automations.status.runRequested",
-              defaultMessage: "Run requested",
+              id: "teams.automations.status.pending",
+              defaultMessage: "Authorizing",
+            })
+        : status === "needsAuthorization"
+          ? intl.formatMessage({
+              id: "teams.automations.status.needsAuthorization",
+              defaultMessage: "Needs authorization",
+            })
+        : status === "revocationPending"
+          ? intl.formatMessage({
+              id: "teams.automations.status.revocationPending",
+              defaultMessage: "Revocation pending",
             })
         : status === "paused"
           ? intl.formatMessage({
@@ -1973,6 +2572,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
 
   const renderAutomationActionButton = ({
     danger,
+    disabled,
     icon,
     label,
     loading,
@@ -1980,6 +2580,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     primary,
   }: {
     readonly danger?: boolean;
+    readonly disabled?: boolean;
     readonly icon: React.ReactNode;
     readonly label: string;
     readonly loading?: boolean;
@@ -1991,6 +2592,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         className="team-automation-action-button"
         aria-label={label}
         danger={danger}
+        disabled={disabled}
         icon={icon}
         loading={loading}
         onClick={onClick}
@@ -2003,6 +2605,33 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   );
 
   const renderAutomationRows = () => {
+    if (!selectedMember) {
+      return (
+        <div style={{ display: "grid", gap: 12 }}>
+          <AevatarInspectorEmpty
+            compact
+            title={intl.formatMessage({
+              id: "teams.automations.member.chooseTitle",
+              defaultMessage: "Choose a member",
+            })}
+            description={intl.formatMessage({
+              id: "teams.automations.member.chooseDescription",
+              defaultMessage:
+                "Open a member's automation surface to view or change its recurring work.",
+            })}
+          />
+          {automatableMembers.map((member) => (
+            <Button
+              key={member.memberId}
+              onClick={() => history.push(member.automationsHref)}
+            >
+              {member.name}
+            </Button>
+          ))}
+        </div>
+      );
+    }
+
     if (schedulesQuery.isLoading) {
       return (
         <div style={{ display: "grid", gap: 12 }}>
@@ -2095,7 +2724,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       (schedule) => resolveScheduleStatus(schedule) === "paused",
     ).length;
     const errorCount = teamSchedules.filter(
-      (schedule) => resolveScheduleStatus(schedule) === "error",
+      (schedule) =>
+        ["error", "needsAuthorization", "revocationPending"].includes(
+          resolveScheduleStatus(schedule),
+        ),
     ).length;
 
     return (
@@ -2169,49 +2801,46 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             intl,
             schedule.timezone,
           );
-          const isPendingCreated = pendingCreatedSchedules.some(
-            (pendingSchedule) =>
-              trimText(pendingSchedule.scheduleId) === scheduleId,
-          );
           const statusMutation =
-            schedule.enabled ? disableMutation : enableMutation;
-          const manualRunFeedback = manualRunFeedbackByScheduleId.get(scheduleId);
-          const status = resolveScheduleStatus(schedule, manualRunFeedback);
-          const isHighlighted = highlightedScheduleId === scheduleId;
+            schedule.enabled ? pauseMutation : resumeMutation;
+          const status = resolveScheduleStatus(schedule);
+          const canViewRuns = Boolean(member?.workflowSupported && scheduleId);
+          const mutationLocked = status === "pending" || status === "revocationPending";
+          const revocationRetryOperation = [
+            ...acceptedLifecycleOperationsRef.current.values(),
+          ].find(
+            (operation) =>
+              operation.scheduleId === scheduleId &&
+              operation.identity.operationId === schedule.operationId,
+          );
+          const canRetryRevocation =
+            Boolean(revocationRetryOperation) &&
+            (schedule.revocationPending ||
+              ["replacement_pending", "deleting", "revocation_pending"].includes(
+                schedule.authorizationStatus,
+              ));
           const rowBorderColor =
-            isHighlighted
-              ? token.colorPrimaryBorder
-              : status === "error"
+            status === "error" || status === "needsAuthorization"
                 ? token.colorErrorBorder
-                : status === "runRequested"
+                : status === "pending"
                   ? token.colorInfoBorder
-                : status === "paused"
+                : status === "paused" || status === "revocationPending"
                   ? token.colorWarningBorder
                   : token.colorBorderSecondary;
-          const rowBackground =
-            isHighlighted
-              ? token.colorPrimaryBg
-              : token.colorBgContainer;
-          const rowShadow = isHighlighted
-            ? token.boxShadowSecondary
-            : token.boxShadowTertiary;
-          const rowOutlineColor =
-            isHighlighted ? token.colorPrimaryBorder : undefined;
+          const rowBackground = token.colorBgContainer;
+          const rowShadow = token.boxShadowTertiary;
 
           const scheduleSecondaryText =
-            manualRunFeedback
-              ? intl.formatMessage(
-                  {
-                    id: "teams.automations.row.manualRunRequested",
-                    defaultMessage: "Run requested {time}",
-                  },
-                  {
-                    time: formatScheduleTime(
-                      manualRunFeedback.ackedAt || manualRunFeedback.scheduledFireAt,
-                      "--",
-                    ),
-                  },
-                )
+            status === "pending"
+              ? intl.formatMessage({
+                  id: "teams.automations.row.awaitingReadModel",
+                  defaultMessage: "Waiting for committed authorization state",
+                })
+              : status === "revocationPending"
+                ? intl.formatMessage({
+                    id: "teams.automations.row.revocationPending",
+                    defaultMessage: "Credential revocation is still converging",
+                  })
               : schedule.nextFireAt
               ? intl.formatMessage(
                   {
@@ -2222,19 +2851,14 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                     time: formatScheduleTime(schedule.nextFireAt, "--"),
                   },
                 )
-              : isPendingCreated
-                ? intl.formatMessage({
-                    id: "teams.automations.row.awaitingReadModel",
-                    defaultMessage: "Waiting for schedule sync",
-                  })
-                : intl.formatMessage({
+              : intl.formatMessage({
                     id: "teams.automations.row.noNextRun",
                     defaultMessage: "No next run",
                   });
 
           const rowAriaLabel =
-            status === "error"
-              ? `${schedule.displayName} ${schedule.lastError}`
+            schedule.lastAuthorizationErrorCode
+              ? `${schedule.displayName} ${schedule.lastAuthorizationErrorCode}`
               : schedule.displayName;
 
           return (
@@ -2248,9 +2872,6 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 border: `1px solid ${rowBorderColor}`,
                 borderRadius: 12,
                 boxShadow: rowShadow,
-                outline: rowOutlineColor
-                  ? `1px solid ${rowOutlineColor}`
-                  : undefined,
               }}
             >
               <div
@@ -2258,7 +2879,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 style={{ display: "grid", gap: 7, minWidth: 0 }}
               >
                 <div style={automationNameLineStyle}>
-                  {renderStatusPill(schedule, manualRunFeedback)}
+                  {renderStatusPill(schedule)}
                   <Typography.Text ellipsis strong>
                     {trimText(schedule.displayName) ||
                       intl.formatMessage({
@@ -2271,19 +2892,26 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   secondary
                   text={intl.formatMessage(
                     {
-                      id: "teams.automations.row.target",
-                      defaultMessage: "Workflow chat · {endpoint}",
+                      id: "teams.automations.row.publishedService",
+                      defaultMessage: "Published service · {serviceId}",
                     },
-                    { endpoint: schedule.serviceEndpointId || "chat" },
+                    { serviceId: schedule.publishedServiceId },
                   )}
                 />
-                {schedule.lastError ? (
-                  <Typography.Text
-                    ellipsis
-                    style={{ color: token.colorError, fontSize: 12 }}
-                  >
-                    {schedule.lastError}
-                  </Typography.Text>
+                {schedule.lastAuthorizationErrorCode ? (
+                  <Tooltip placement="topLeft" title={schedule.lastAuthorizationErrorCode}>
+                    <Typography.Text
+                      ellipsis
+                      style={{
+                        color: token.colorError,
+                        display: "block",
+                        fontSize: 12,
+                        maxWidth: "100%",
+                      }}
+                    >
+                      {schedule.lastAuthorizationErrorCode}
+                    </Typography.Text>
+                  </Tooltip>
                 ) : null}
               </div>
               <div
@@ -2328,6 +2956,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                 }}
               >
                 {renderAutomationActionButton({
+                  disabled: mutationLocked,
                   icon: <EditOutlined />,
                   label: intl.formatMessage({
                     id: "teams.automations.actions.edit",
@@ -2335,7 +2964,34 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   }),
                   onClick: () => openEdit(schedule),
                 })}
+                {status === "needsAuthorization" || status === "error"
+                  ? renderAutomationActionButton({
+                      disabled: reauthorizeMutation.isPending,
+                      icon: <CheckCircleOutlined />,
+                      label: intl.formatMessage({
+                        id: "teams.automations.actions.reauthorize",
+                        defaultMessage: "Re-authorize",
+                      }),
+                      onClick: () => openReauthorize(schedule),
+                    })
+                  : null}
+                {canRetryRevocation && revocationRetryOperation
+                  ? renderAutomationActionButton({
+                      disabled: retryRevocationMutation.isPending,
+                      icon: <ReloadOutlined />,
+                      label: intl.formatMessage({
+                        id: "teams.automations.actions.retryRevocation",
+                        defaultMessage: "Retry cleanup",
+                      }),
+                      loading:
+                        retryRevocationMutation.isPending &&
+                        retryRevocationMutation.variables?.scheduleId === scheduleId,
+                      onClick: () =>
+                        retryRevocationMutation.mutate(revocationRetryOperation),
+                    })
+                  : null}
                 {renderAutomationActionButton({
+                  disabled: mutationLocked || status === "needsAuthorization" || status === "error",
                   icon: <ThunderboltOutlined />,
                   label: intl.formatMessage({
                     id: "teams.automations.actions.runNow",
@@ -2348,6 +3004,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   primary: true,
                 })}
                 {renderAutomationActionButton({
+                  disabled: mutationLocked,
                   icon:
                     schedule.enabled ? (
                       <PauseCircleOutlined />
@@ -2368,8 +3025,19 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                     statusMutation.variables === scheduleId,
                   onClick: () => statusMutation.mutate(scheduleId),
                 })}
+                {canViewRuns
+                  ? renderAutomationActionButton({
+                      icon: <HistoryOutlined />,
+                      label: intl.formatMessage({
+                        id: "teams.automations.actions.viewRuns",
+                        defaultMessage: "View runs",
+                      }),
+                      onClick: () => openScheduleRuns(member, scheduleId),
+                    })
+                  : null}
                 {renderAutomationActionButton({
                   danger: true,
+                  disabled: mutationLocked,
                   icon: <DeleteOutlined />,
                   label: intl.formatMessage({
                     id: "teams.automations.actions.delete",
@@ -2389,7 +3057,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   };
 
   const upcomingSchedules = teamSchedules
-    .filter((schedule) => schedule.enabled && schedule.nextFireAt)
+    .filter(
+      (schedule) =>
+        resolveScheduleStatus(schedule) === "active" && schedule.nextFireAt,
+    )
     .slice(0, 3);
   const formCadence = describeCronExpression(
     formState.cronExpression,
@@ -2400,19 +3071,30 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     formState.cronExpression,
     intl,
   );
-  const canCreateAutomation = Boolean(activeFormMember?.serviceIdentity);
+  const canCreateAutomation = Boolean(
+    activeFormMember &&
+      trimText(activeFormMember.serviceId) &&
+      activeFormMember.serviceId !== "--",
+  );
   const formSubmitting =
     updateMutation.isPending ||
-    permissionReviewMutation.isPending;
+    permissionReviewMutation.isPending ||
+    createMutation.isPending ||
+    reauthorizeMutation.isPending;
   const formTitle = isEditingAutomation
     ? intl.formatMessage({
         id: "teams.automations.form.editTitle",
         defaultMessage: "Edit automation",
       })
-    : intl.formatMessage({
-        id: "teams.automations.form.title",
-        defaultMessage: "New member automation",
-      });
+    : isReauthorizingAutomation
+      ? intl.formatMessage({
+          id: "teams.automations.form.reauthorizeTitle",
+          defaultMessage: "Re-authorize automation",
+        })
+      : intl.formatMessage({
+          id: "teams.automations.form.title",
+          defaultMessage: "New member automation",
+        });
   const formOkText = isEditingAutomation
     ? intl.formatMessage({
         id: "teams.automations.form.save",
@@ -2426,8 +3108,12 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       : createStage === "permissionReview" ||
           createStage === "consent"
         ? intl.formatMessage({
-            id: "teams.automations.form.backendRequired",
-            defaultMessage: "Creation unavailable",
+            id: isReauthorizingAutomation
+              ? "teams.automations.form.reauthorize"
+              : "teams.automations.form.authorizeAndCreate",
+            defaultMessage: isReauthorizingAutomation
+              ? "Authorize replacement"
+              : "Authorize & create automation",
           })
         : createStage === "planChanged"
           ? intl.formatMessage({
@@ -2649,21 +3335,24 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
             Boolean(formCronValidationMessage) ||
             !canCreateAutomation ||
             (!isEditingAutomation &&
-              (createStage === "permissionReview" || createStage === "consent")),
+              (createStage === "permissionReview" || createStage === "consent") &&
+              !agentKeyConsentChecked),
         }}
         okText={formOkText}
         onCancel={() => {
           if (!formSubmitting) {
-            if (isEditingAutomation) {
-              setHasPreservedCreateDraft(false);
+            if (isEditingAutomation || isReauthorizingAutomation) {
               setFormState(
                 buildDefaultAutomationFormState(selectedMember?.memberId ?? ""),
               );
             } else {
-              setHasPreservedCreateDraft(hasAutomationDraft(formState));
+              setPreservedCreateDraft(
+                hasAutomationDraft(formState) ? formState : null,
+              );
             }
             setCreateOpen(false);
             setEditingSchedule(null);
+            setReauthorizingSchedule(null);
             setPreview(null);
             resetPermissionReview();
           }
@@ -2708,16 +3397,15 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   id: "teams.automations.form.memberAria",
                   defaultMessage: "Automation member",
                 })}
-                disabled={formSubmitting || isEditingAutomation}
-                onChange={(memberId) => updateForm({ memberId })}
-                options={automatableMembers.map((member) => ({
-                  label: member.name,
-                  value: member.memberId,
-                }))}
+                disabled
+                options={selectedMember ? [{
+                  label: selectedMember.name,
+                  value: selectedMember.memberId,
+                }] : []}
                 value={activeFormMember?.memberId}
               />
               <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                {activeFormMember?.serviceIdentity
+                {activeFormMember && trimText(activeFormMember.serviceId) !== "--"
                   ? intl.formatMessage({
                       id: "teams.automations.form.identityReady",
                       defaultMessage: "Targets the member's published service.",

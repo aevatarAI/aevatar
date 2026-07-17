@@ -19,14 +19,15 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 {
     private static readonly byte[] HmacKey =
         Convert.FromHexString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    private const string OAuthAuthority = "https://nyx-ui.test";
+    private const string OAuthAuthority = "https://id.example.test";
+    private const string ResourceServerBaseUrl = "https://api.example.test";
     private const string RequiredLlmServiceSlug = "chrono-llm-public";
     private const string RequiredOrnnServiceSlug = "ornn-api";
-    private const string RequiredSandboxServiceSlug = "chrono-sandbox-service";
-    private const string RequiredAevatarResource = $"{OAuthAuthority}/api/v1/proxy/s/aevatar";
-    private const string RequiredLlmResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredLlmServiceSlug}";
-    private const string RequiredOrnnResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredOrnnServiceSlug}";
-    private const string RequiredSandboxResource = $"{OAuthAuthority}/api/v1/proxy/s/{RequiredSandboxServiceSlug}";
+    private const string RequiredSandboxServiceSlug = "chrono-sandbox";
+    private const string RequiredAevatarResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/aevatar";
+    private const string RequiredLlmResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/{RequiredLlmServiceSlug}";
+    private const string RequiredOrnnResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/{RequiredOrnnServiceSlug}";
+    private const string RequiredSandboxResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/{RequiredSandboxServiceSlug}";
     private static readonly string[] RequiredResources =
         [RequiredAevatarResource, RequiredLlmResource, RequiredOrnnResource, RequiredSandboxResource];
 
@@ -100,7 +101,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
-    public async Task ExchangeAuthorizationCodeAsync_MapsRefreshTokenFromNyxIdTokenResponse()
+    public async Task ExchangeAuthorizationCodeAsync_PreservesFinalizedConsentWhenMappingTokenResponse()
     {
         var handler = StubHandler.Text(HttpStatusCode.OK,
             """
@@ -128,8 +129,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         result.ExpiresIn.Should().Be(1800);
         result.Scope.Should().Be("openid profile proxy");
         handler.LastRequestUri.Should().Be($"{OAuthAuthority}/oauth/token");
-        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")["resource"]
-            .Should().Equal(RequiredResources);
+        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")
+            .ContainsKey("resource").Should().BeFalse();
     }
 
     [Fact]
@@ -148,6 +149,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var scope = query["scope"].Should().ContainSingle().Which;
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
+        scope.Should().Contain(AevatarOAuthClientScopes.LlmProxy);
         query["resource"].Should().Equal(RequiredResources);
         query["prompt"].Should().ContainSingle().Which.Should().Be("consent");
         query.ContainsKey("binding_grant_id").Should().BeFalse();
@@ -199,10 +201,11 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
-    public async Task BindingFlow_UsesTheSameRequiredResourcesFromAuthorizeThroughBindingExchange()
+    public async Task BindingFlow_PreservesCompleteConsentAcrossBrokerTokenExchange()
     {
         const string bindingId = "bnd-e2e-user";
-        var accessToken = CreateAccessToken(RequiredResources);
+        const string optionalResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/user-selected-service";
+        var accessToken = CreateAccessToken([.. RequiredResources, optionalResource]);
         var handler = new SequenceHandler(
             JsonSerializer.Serialize(new
             {
@@ -245,13 +248,13 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         var authorizationCodeForm = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
         authorizationCodeForm["grant_type"].Should().ContainSingle().Which.Should().Be("authorization_code");
-        authorizationCodeForm["resource"].Should().Equal(RequiredResources);
+        authorizationCodeForm.ContainsKey("resource").Should().BeFalse();
 
         var bindingExchangeForm = QueryHelpers.ParseQuery($"?{handler.Requests[1].Body}");
         bindingExchangeForm["grant_type"].Should().ContainSingle().Which.Should()
             .Be("urn:ietf:params:oauth:grant-type:token-exchange");
         bindingExchangeForm["subject_token"].Should().ContainSingle().Which.Should().Be(bindingId);
-        bindingExchangeForm["resource"].Should().Equal(RequiredResources);
+        bindingExchangeForm.ContainsKey("resource").Should().BeFalse();
     }
 
     [Fact]
@@ -311,8 +314,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
 
         result.AccessToken.Should().Be(accessToken);
-        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")["resource"]
-            .Should().Equal(RequiredResources);
+        QueryHelpers.ParseQuery($"?{handler.LastRequestBody}")
+            .ContainsKey("resource").Should().BeFalse();
     }
 
     [Fact]
@@ -356,19 +359,6 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         exception.Which.RequiredResources.Should().Equal(RequiredResources);
     }
 
-    [Fact]
-    public async Task ExchangeAuthorizationCodeAsync_MapsInvalidTargetToRequiredServiceAccess()
-    {
-        var broker = NewBroker(
-            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            httpHandler: StubHandler.Text(HttpStatusCode.BadRequest, """{"error":"invalid_target"}"""));
-
-        var act = () => broker.ExchangeAuthorizationCodeAsync("auth-code", "verifier");
-
-        var exception = await act.Should().ThrowAsync<NyxIdRequiredServiceAccessException>();
-        exception.Which.RequiredResources.Should().Equal(RequiredResources);
-    }
-
     private static NyxIdRemoteCapabilityBroker NewBroker(
         AevatarOAuthClientSnapshot snapshot,
         NyxIdBrokerOptions? options = null,
@@ -378,9 +368,12 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
         {
+            ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ",
             RequiredLlmServiceSlug = RequiredLlmServiceSlug,
             AdditionalRequiredServiceSlugs = [RequiredOrnnServiceSlug, RequiredSandboxServiceSlug],
         };
+        if (string.IsNullOrWhiteSpace(options.ResourceServerBaseUrl))
+            options.ResourceServerBaseUrl = $" {ResourceServerBaseUrl}/// ";
         return new NyxIdRemoteCapabilityBroker(
             new FakeHttpClientFactory(httpHandler),
             provider,

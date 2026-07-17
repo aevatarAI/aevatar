@@ -214,13 +214,21 @@ public sealed class ServiceCollectionExtensionsTests
     public void AddChannelIdentity_RegistersCommittedStateProjectionActivationProvider()
     {
         var services = new ServiceCollection();
-        var configuration = new ConfigurationBuilder().Build();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] =
+                    " https://api.example.test/// ",
+            })
+            .Build();
 
         services.AddChannelIdentity(configuration);
         using var provider = services.BuildServiceProvider();
 
         AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
             services);
+        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
+            .Value.ResourceServerBaseUrl.Should().Be("https://api.example.test");
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));

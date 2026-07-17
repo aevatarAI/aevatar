@@ -20,8 +20,8 @@ public sealed class AevatarOAuthClientEsAclOptions
     /// grant is limited to the same internal services that can read actor events.
     /// This is an attestation, not a verified fact: the probe (see
     /// <see cref="AevatarOAuthClientEsAclEnforcementMode"/>) is what actually
-    /// inspects Elasticsearch. In <see cref="AevatarOAuthClientEsAclEnforcementMode.Strict"/>
-    /// a declared-false attestation still fails closed.
+    /// inspects Elasticsearch. <see cref="AevatarOAuthClientEsAclEnforcementMode.Strict"/>
+    /// requires both a positive probe result and a declared-true attestation.
     /// </summary>
     public bool GrantMatchesGrainEventStoreInternal { get; set; }
 
@@ -45,9 +45,9 @@ public enum AevatarOAuthClientEsAclEnforcementMode
     Warn = 1,
 
     /// <summary>
-    /// The guard probes Elasticsearch and throws when the read grant is
-    /// definitively unrestricted, or when the operator attestation is declared
-    /// false. Unverifiable/unavailable probe results are surfaced as warnings.
+    /// The guard requires the live probe to positively classify the read grant as
+    /// restricted and also requires the operator attestation to be true. Every
+    /// other probe status fails closed.
     /// </summary>
     Strict = 2,
 }

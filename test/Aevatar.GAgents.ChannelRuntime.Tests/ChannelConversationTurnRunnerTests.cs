@@ -17,6 +17,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -2405,9 +2406,8 @@ public sealed class ChannelConversationTurnRunnerTests
         var callerScopeResolver = new CapturingCallerScopeResolver();
         var services = new ServiceCollection()
             .AddSingleton(Substitute.For<IUserAgentCatalogQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
+            .AddSingleton(Substitute.For<IWorkflowScheduleApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())
@@ -4561,9 +4561,8 @@ public sealed class ChannelConversationTurnRunnerTests
 
         var services = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(Substitute.For<ISkillRunnerExecutionQueryPort>())
-            .AddSingleton(Substitute.For<ISkillRunnerCommandPort>())
             .AddSingleton(Substitute.For<IScheduledDispatchApplicationService>())
+            .AddSingleton(Substitute.For<IWorkflowScheduleApplicationService>())
             .AddSingleton(Substitute.For<IUserAgentCatalogCommandPort>())
             .AddSingleton<ICallerScopeResolver>(callerScopeResolver)
             .AddSingleton(Substitute.For<IScheduledAgentApiKeyIssuer>())

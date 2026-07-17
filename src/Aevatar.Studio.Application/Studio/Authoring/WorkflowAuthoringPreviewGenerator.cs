@@ -297,7 +297,7 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     private IEnumerable<string> BuildAuthoringSchemaRules()
     {
         yield return $"Use only these top-level fields: {_profile.FormatRootFields()}.";
-        yield return "Do not emit top-level fields from other workflow dialects, including version, inputs, outputs, triggers, on, env, or jobs.";
+        yield return $"Do not emit top-level fields from other workflow dialects, including {_profile.FormatRejectedDialectRootFields()}.";
 
         foreach (var rule in BaseAuthoringSchemaRules)
             yield return rule;
@@ -332,14 +332,18 @@ internal sealed class WorkflowAuthoringPreviewGenerator
     private static bool IsSanitizableParseFinding(ValidationFinding finding)
     {
         if (string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase))
-            return true;
+            return !IsRootFieldPath(finding.Path);
 
         if (!string.Equals(finding.Code, "runtime_validation", StringComparison.OrdinalIgnoreCase))
             return false;
 
         var message = finding.Message ?? string.Empty;
-        return message.Contains("Unknown field '", StringComparison.OrdinalIgnoreCase) ||
-               (message.Contains("Property '", StringComparison.OrdinalIgnoreCase) &&
-                message.Contains("not found on type", StringComparison.OrdinalIgnoreCase));
+        return !IsRootFieldPath(finding.Path) &&
+               (message.Contains("Unknown field '", StringComparison.OrdinalIgnoreCase) ||
+                (message.Contains("Property '", StringComparison.OrdinalIgnoreCase) &&
+                 message.Contains("not found on type", StringComparison.OrdinalIgnoreCase)));
     }
+
+    private static bool IsRootFieldPath(string path) =>
+        path.StartsWith("/", StringComparison.Ordinal) && path.IndexOf("/", 1, StringComparison.Ordinal) < 0;
 }

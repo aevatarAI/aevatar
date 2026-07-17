@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Claims;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -8,12 +9,12 @@ using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -40,11 +41,68 @@ public static class NyxIdLoginFinalizationEndpoints
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status409Conflict)
             .Produces(StatusCodes.Status503ServiceUnavailable);
+
+        app.MapPost("/api/auth/nyxid/authorization-catalog:refresh", HandleAuthorizationCatalogRefreshAsync)
+            .WithTags("Auth")
+            .WithEndpointAudit(
+                "identity.authorization-catalog.refresh",
+                AuditSensitivityLevel.Confidential,
+                "nyxid_authorization_catalog",
+                EndpointAuditTargetResolvers.Static("nyxid_authorization_catalog", "current-owner"))
+            .Produces<NyxIdAuthorizationCatalogRefreshResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    internal static async Task<IResult> HandleAuthorizationCatalogRefreshAsync(
+        HttpContext http,
+        [FromServices] INyxIdAuthorizationCatalogRefreshPort catalogRefresh,
+        CancellationToken ct = default)
+    {
+        var subject = http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? http.User.FindFirst("sub")?.Value;
+        if (string.IsNullOrWhiteSpace(subject))
+        {
+            return Results.Json(new
+            {
+                code = "NYXID_AUTHORIZATION_CATALOG_UNAUTHORIZED",
+                message = "A verified NyxID subject is required.",
+            }, statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var bearerToken = ResolveRequestBearerToken(http);
+        if (bearerToken == null)
+        {
+            return Results.Json(new
+            {
+                code = "NYXID_AUTHORIZATION_CATALOG_UNAUTHORIZED",
+                message = "A current NyxID bearer is required.",
+            }, statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var result = await catalogRefresh
+            .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
+            .ConfigureAwait(false);
+        var response = new NyxIdAuthorizationCatalogRefreshResponse(
+            result.Success,
+            ToCatalogRefreshStatus(result.Status),
+            result.FailureCode);
+        return result.Status switch
+        {
+            NyxIdAuthorizationCatalogRefreshStatus.Observed => Results.Ok(response),
+            NyxIdAuthorizationCatalogRefreshStatus.AccessDenied => Results.Json(
+                response,
+                statusCode: StatusCodes.Status403Forbidden),
+            NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => Results.Json(
+                response,
+                statusCode: StatusCodes.Status403Forbidden),
+            _ => Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
     }
 
     internal static async Task<IResult> HandleConfigAsync(
         [FromServices] IAevatarOAuthClientProvider oauthClientProvider,
-        [FromServices] IOptions<NyxIdBrokerOptions> brokerOptions,
         CancellationToken ct = default)
     {
         try
@@ -55,11 +113,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 ClientId: snapshot.ClientId,
                 Scope: string.IsNullOrWhiteSpace(snapshot.OauthScope)
                     ? AevatarOAuthClientScopes.AuthorizationScope
-                    : snapshot.OauthScope.Trim(),
-                Resources: AevatarOAuthClientResources.RequiredResourceUris(
-                    snapshot.NyxIdAuthority,
-                    brokerOptions.Value.RequiredLlmServiceSlug,
-                    brokerOptions.Value.AdditionalRequiredServiceSlugs)));
+                    : snapshot.OauthScope.Trim()));
         }
         catch (AevatarOAuthClientNotProvisionedException)
         {
@@ -77,8 +131,9 @@ public static class NyxIdLoginFinalizationEndpoints
         [FromServices] INyxIdCapabilityBroker capabilityBroker,
         [FromServices] IExternalIdentityBindingQueryPort bindingQueryPort,
         [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
-        [FromServices] ICommandDispatchService<RefreshBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingRefreshDispatch,
+        [FromServices] ICommandDispatchService<ReplaceBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingReplaceDispatch,
         [FromServices] ILoggerFactory loggerFactory,
+        [FromServices] INyxIdAuthorizationCatalogRefreshPort? catalogRefreshLifecycle = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -157,37 +212,85 @@ public static class NyxIdLoginFinalizationEndpoints
         if (existingBinding != null)
         {
             if (string.Equals(existingBinding.Value, exchange.BindingId, StringComparison.Ordinal))
-                return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
-
-            var probeResult = await ProbeExistingBindingAsync(capabilityBroker, subject, logger, ct).ConfigureAwait(false);
-            if (probeResult == ExistingBindingProbeResult.Usable)
             {
-                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: false));
+                var sameBindingProbe = await ProbeIssuedBindingAsync(
+                    capabilityBroker,
+                    subject,
+                    exchange.BindingId,
+                    logger,
+                    ct).ConfigureAwait(false);
+                if (sameBindingProbe != IssuedBindingProbeResult.Usable)
+                    return BuildIssuedBindingProbeError(sameBindingProbe);
+
+                return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, logger, ct);
             }
 
-            if (probeResult == ExistingBindingProbeResult.Unavailable)
+            var replacementReason = "studio_service_access_review";
+            if (!request.ServiceAccessReview)
+            {
+                var probeResult = await ProbeExistingBindingAsync(capabilityBroker, subject, logger, ct).ConfigureAwait(false);
+                if (probeResult == ExistingBindingProbeResult.Usable)
+                {
+                    await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                    return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, logger, ct);
+                }
+
+                if (probeResult == ExistingBindingProbeResult.Unavailable)
+                {
+                    await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                    return Results.Json(new
+                    {
+                        error = "binding_probe_failed",
+                        detail = "NyxID owner binding could not be verified; retry login finalization later.",
+                    }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
+                replacementReason = "nyxid_login_recovery";
+            }
+
+            var issuedBindingProbe = await ProbeIssuedBindingAsync(
+                capabilityBroker,
+                subject,
+                exchange.BindingId,
+                logger,
+                ct).ConfigureAwait(false);
+            if (issuedBindingProbe != IssuedBindingProbeResult.Usable)
+            {
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return BuildIssuedBindingProbeError(issuedBindingProbe);
+            }
+
+            var replaceResult = await DispatchReplaceBindingAsync(
+                bindingReplaceDispatch,
+                subject,
+                existingBinding.Value,
+                exchange.BindingId,
+                replacementReason,
+                logger,
+                ct).ConfigureAwait(false);
+            if (replaceResult != BindingDispatchOutcome.Accepted)
             {
                 await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
                 return Results.Json(new
                 {
-                    error = "binding_probe_failed",
-                    detail = "NyxID owner binding could not be verified; retry login finalization later.",
+                    error = replaceResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
+                    detail = "NyxID owner binding replacement could not be queued.",
                 }, statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            var refreshResult = await DispatchRefreshBindingAsync(bindingRefreshDispatch, subject, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            if (refreshResult != BindingDispatchOutcome.Accepted)
-            {
-                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                return Results.Json(new
-                {
-                    error = refreshResult == BindingDispatchOutcome.Rejected ? "actor_dispatch_rejected" : "actor_dispatch_failed",
-                    detail = "Stale NyxID owner binding could not be queued for local refresh.",
-                }, statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
+            return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, logger, ct);
+        }
 
-            return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
+        var newBindingProbe = await ProbeIssuedBindingAsync(
+            capabilityBroker,
+            subject,
+            exchange.BindingId,
+            logger,
+            ct).ConfigureAwait(false);
+        if (newBindingProbe != IssuedBindingProbeResult.Usable)
+        {
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return BuildIssuedBindingProbeError(newBindingProbe);
         }
 
         var commitResult = await DispatchCommitBindingAsync(bindingDispatch, subject, exchange.BindingId, logger, ct).ConfigureAwait(false);
@@ -201,13 +304,61 @@ public static class NyxIdLoginFinalizationEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted: true));
+        return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, logger, ct);
+    }
+
+    private static async Task<IResult> CompleteLoginAsync(
+        BrokerAuthorizationCodeResult exchange,
+        NyxIdFinalizedUserInfo user,
+        bool bindingDispatchAccepted,
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefreshLifecycle,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        NyxIdAuthorizationCatalogRefreshResult catalogRefresh;
+        if (catalogRefreshLifecycle is null)
+        {
+            catalogRefresh = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.Unspecified,
+                "nyxid_catalog_refresh_not_configured");
+        }
+        else
+        {
+            try
+            {
+                catalogRefresh = await catalogRefreshLifecycle
+                    .RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                logger.LogWarning(
+                    "NyxID login completed while authorization catalog refresh failed; catalog readiness is degraded.");
+                catalogRefresh = new NyxIdAuthorizationCatalogRefreshResult(
+                    NyxIdAuthorizationCatalogRefreshStatus.Failed,
+                    "nyxid_catalog_refresh_failed");
+            }
+        }
+
+        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted, catalogRefresh));
     }
 
     private enum ExistingBindingProbeResult
     {
         Usable,
         Stale,
+        Unavailable,
+    }
+
+    private enum IssuedBindingProbeResult
+    {
+        Usable,
+        MissingRequiredAccess,
+        Invalid,
         Unavailable,
     }
 
@@ -273,6 +424,71 @@ public static class NyxIdLoginFinalizationEndpoints
         }
     }
 
+    private static async Task<IssuedBindingProbeResult> ProbeIssuedBindingAsync(
+        INyxIdCapabilityBroker capabilityBroker,
+        ExternalSubjectRef subject,
+        string bindingId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            await capabilityBroker
+                .IssueShortLivedByBindingIdAsync(
+                    subject,
+                    bindingId,
+                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
+                    ct)
+                .ConfigureAwait(false);
+            return IssuedBindingProbeResult.Usable;
+        }
+        catch (BindingScopeMismatchException ex)
+        {
+            logger.LogInformation(ex, "New NyxID binding lacks the required proxy scope.");
+            return IssuedBindingProbeResult.MissingRequiredAccess;
+        }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            logger.LogInformation(ex, "New NyxID binding lacks one or more required services.");
+            return IssuedBindingProbeResult.MissingRequiredAccess;
+        }
+        catch (BindingRevokedException ex)
+        {
+            logger.LogWarning(ex, "New NyxID binding was already revoked before adoption.");
+            return IssuedBindingProbeResult.Invalid;
+        }
+        catch (BindingNotFoundException ex)
+        {
+            logger.LogWarning(ex, "New NyxID binding was not found before adoption.");
+            return IssuedBindingProbeResult.Invalid;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "New NyxID binding could not be verified before adoption.");
+            return IssuedBindingProbeResult.Unavailable;
+        }
+    }
+
+    private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
+        probeResult switch
+        {
+            IssuedBindingProbeResult.MissingRequiredAccess => Results.Json(new
+            {
+                error = "required_service_access_missing",
+                detail = "Return to NyxID and keep every service marked as required by Aevatar selected.",
+            }, statusCode: StatusCodes.Status409Conflict),
+            IssuedBindingProbeResult.Invalid => Results.Json(new
+            {
+                error = "issued_binding_invalid",
+                detail = "NyxID issued a binding that was unavailable before Aevatar could adopt it.",
+            }, statusCode: StatusCodes.Status502BadGateway),
+            _ => Results.Json(new
+            {
+                error = "issued_binding_probe_failed",
+                detail = "The new NyxID service grant could not be verified; retry later.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
+
     private static async Task<BindingDispatchOutcome> DispatchCommitBindingAsync(
         ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
         ExternalSubjectRef subject,
@@ -304,31 +520,34 @@ public static class NyxIdLoginFinalizationEndpoints
         }
     }
 
-    private static async Task<BindingDispatchOutcome> DispatchRefreshBindingAsync(
-        ICommandDispatchService<RefreshBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingRefreshDispatch,
+    private static async Task<BindingDispatchOutcome> DispatchReplaceBindingAsync(
+        ICommandDispatchService<ReplaceBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingReplaceDispatch,
         ExternalSubjectRef subject,
+        string expectedPreviousBindingId,
         string bindingId,
+        string reason,
         ILogger logger,
         CancellationToken ct)
     {
         try
         {
-            var accepted = await bindingRefreshDispatch.DispatchAsync(new RefreshBindingCommand
+            var accepted = await bindingReplaceDispatch.DispatchAsync(new ReplaceBindingCommand
             {
                 ExternalSubject = subject,
                 BindingId = bindingId.Trim(),
-                Reason = "nyxid_login_refresh",
+                ExpectedPreviousBindingId = expectedPreviousBindingId.Trim(),
+                Reason = reason,
             }, ct).ConfigureAwait(false);
 
             if (accepted.Succeeded && accepted.Receipt != null)
                 return BindingDispatchOutcome.Accepted;
 
-            logger.LogError("NyxID login finalization stale binding refresh dispatch rejected: error={Error}.", accepted.Error);
+            logger.LogError("NyxID login finalization binding replacement dispatch rejected: error={Error}.", accepted.Error);
             return BindingDispatchOutcome.Rejected;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "NyxID login finalization failed to dispatch RefreshBindingCommand for {Platform}:{Tenant}:{User}.",
+            logger.LogError(ex, "NyxID login finalization failed to dispatch ReplaceBindingCommand for {Platform}:{Tenant}:{User}.",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -339,7 +558,8 @@ public static class NyxIdLoginFinalizationEndpoints
     private static NyxIdLoginFinalizationResponse BuildResponse(
         BrokerAuthorizationCodeResult exchange,
         NyxIdFinalizedUserInfo user,
-        bool bindingDispatchAccepted) =>
+        bool bindingDispatchAccepted,
+        NyxIdAuthorizationCatalogRefreshResult catalogRefresh) =>
         new(
             Tokens: new NyxIdFinalizedTokenSet(
                 AccessToken: exchange.AccessToken ?? string.Empty,
@@ -349,7 +569,32 @@ public static class NyxIdLoginFinalizationEndpoints
                 IdToken: exchange.IdToken,
                 Scope: exchange.Scope),
             User: user,
-            BindingDispatchAccepted: bindingDispatchAccepted);
+            BindingDispatchAccepted: bindingDispatchAccepted,
+            AuthorizationCatalogReady: catalogRefresh.Success,
+            AuthorizationCatalogStatus: ToCatalogRefreshStatus(catalogRefresh.Status),
+            AuthorizationCatalogFailureCode: catalogRefresh.FailureCode);
+
+    private static string ToCatalogRefreshStatus(NyxIdAuthorizationCatalogRefreshStatus status) => status switch
+    {
+        NyxIdAuthorizationCatalogRefreshStatus.Observed => "observed",
+        NyxIdAuthorizationCatalogRefreshStatus.AccessDenied => "access_denied",
+        NyxIdAuthorizationCatalogRefreshStatus.Failed => "failed",
+        NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut => "observation_timed_out",
+        NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => "owner_not_supported",
+        NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable => "catalog_unstable",
+        NyxIdAuthorizationCatalogRefreshStatus.PublishedContractMissing => "published_contract_missing",
+        _ => "not_configured",
+    };
+
+    private static string? ResolveRequestBearerToken(HttpContext http)
+    {
+        var header = http.Request.Headers.Authorization.FirstOrDefault()?.Trim();
+        const string prefix = "Bearer ";
+        if (header == null || !header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var token = header[prefix.Length..].Trim();
+        return token.Length == 0 || token.Contains(',') ? null : token;
+    }
 
     private static NyxIdFinalizedUserInfo ResolveUserInfo(string? idToken)
     {
@@ -452,20 +697,28 @@ public static class NyxIdLoginFinalizationEndpoints
 public sealed record NyxIdLoginConfigurationResponse(
     string BaseUrl,
     string ClientId,
-    string Scope,
-    IReadOnlyList<string> Resources);
+    string Scope);
+
+public sealed record NyxIdAuthorizationCatalogRefreshResponse(
+    bool Ready,
+    string Status,
+    string FailureCode);
 
 public sealed record NyxIdLoginFinalizationRequest
 {
     public string? Code { get; init; }
     public string? CodeVerifier { get; init; }
     public string? RedirectUri { get; init; }
+    public bool ServiceAccessReview { get; init; }
 }
 
 public sealed record NyxIdLoginFinalizationResponse(
     NyxIdFinalizedTokenSet Tokens,
     NyxIdFinalizedUserInfo User,
-    bool BindingDispatchAccepted);
+    bool BindingDispatchAccepted,
+    bool AuthorizationCatalogReady,
+    string AuthorizationCatalogStatus,
+    string AuthorizationCatalogFailureCode);
 
 public sealed record NyxIdFinalizedTokenSet(
     string AccessToken,

@@ -16,7 +16,7 @@ internal static class AuditTrailDocumentFactory
             ContentHash = contentHash,
             Record = record.Clone(),
             OccurredAt = Timestamp.FromDateTimeOffset(observedAt),
-            UpdatedAt = Timestamp.FromDateTimeOffset(observedAt),
+            UpdatedAt = record.RecordedAt?.Clone() ?? Timestamp.FromDateTimeOffset(observedAt),
             AuditActorId = Text(record.AuditActorId),
             ScopeId = Text(record.ScopeId),
             OperationName = Text(record.OperationName),
@@ -34,6 +34,14 @@ internal static class AuditTrailDocumentFactory
             CommittedActorType = CommittedActorType(record),
             CommittedEventTypeUrl = CommittedEventTypeUrl(record),
             CommittedStateVersion = CommittedStateVersion(record),
+            EventKind = Text(record.EventKind),
+            SchemaVersion = Text(record.SchemaVersion),
+            RecordedAt = record.RecordedAt?.Clone(),
+            LifecyclePhase = record.LifecyclePhase,
+            TerminalOutcome = record.TerminalOutcome,
+            Subject = Text(record.Subject),
+            Source = Text(record.Source),
+            TraceId = Text(record.Correlation?.TraceId),
         };
 
     private static string Text(string? value) => value ?? string.Empty;
@@ -46,7 +54,7 @@ internal static class AuditTrailDocumentFactory
 
     private static string CommandId(Audit.AuditRecord record) => Text(record.Correlation?.CommandId);
 
-    private static string CorrelationId(Audit.AuditRecord record) => Text(record.Correlation?.TraceId);
+    private static string CorrelationId(Audit.AuditRecord record) => Text(record.Correlation?.CorrelationId);
 
     private static string SessionId(Audit.AuditRecord record) => Text(record.Correlation?.SessionId);
 

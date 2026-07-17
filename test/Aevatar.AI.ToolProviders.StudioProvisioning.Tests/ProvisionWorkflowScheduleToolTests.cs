@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -394,6 +395,18 @@ public sealed class ProvisionWorkflowScheduleToolTests
         schedulePort.LastRequest.Prompt.Should().Be("run digest");
         schedulePort.LastRequest.DisplayName.Should().Be("Daily digest");
         schedulePort.LastRequest.CallerSubjectExternalUserId.Should().Be("owner-1");
+        schedulePort.LastRequest.OperationId.Should()
+            .MatchRegex("^studio-member-workflow-create:[0-9a-f]{64}$");
+        schedulePort.LastRequest.IdempotencyKey.Should()
+            .MatchRegex("^studio-member-workflow-schedule:[0-9a-f]{64}$");
+        schedulePort.LastRequest.CredentialProvisioningKind.Should()
+            .Be("dedicated_scheduled_invocation_agent_key");
+        schedulePort.LastRequest.ConfirmedPolicyVersion.Should()
+            .Be(RecordingMemberWorkflowSchedulePort.PolicyVersion);
+        schedulePort.PreflightRequests.Should().ContainSingle();
+        schedulePort.PreflightRequests[0].ConfirmedPolicyVersion.Should().BeNull();
+        schedulePort.PreflightRequests[0].OperationId.Should().Be(schedulePort.LastRequest.OperationId);
+        schedulePort.PreflightRequests[0].IdempotencyKey.Should().Be(schedulePort.LastRequest.IdempotencyKey);
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
@@ -403,6 +416,186 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-member-1");
         root.GetProperty("published_service_id").GetString().Should().Be("published-member-1");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenUncertainCallIsRetried_ShouldReuseStableOperationIdentity()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+        const string arguments = """
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai",
+              "prompt": "run digest",
+              "display_name": "Daily digest"
+            }
+            """;
+
+        using (PushContext(
+                   scopeId: "scope-current",
+                   ownerSubject: "owner-1",
+                   accessToken: "access-token-1",
+                   requestId: "transport-request-1",
+                   callId: "tool-call-1",
+                   idempotencyKey: "caller-operation-1"))
+        {
+            ErrorCode(await tool.ExecuteAsync(arguments)).Should().BeNull();
+        }
+
+        using (PushContext(
+                   scopeId: "scope-current",
+                   ownerSubject: "owner-1",
+                   accessToken: "access-token-1",
+                   requestId: "transport-request-2",
+                   callId: "tool-call-2",
+                   idempotencyKey: "caller-operation-1"))
+        {
+            ErrorCode(await tool.ExecuteAsync(arguments)).Should().BeNull();
+        }
+
+        schedulePort.CreateRequests.Should().HaveCount(2);
+        schedulePort.CreateRequests.Select(static request => request.OperationId).Distinct()
+            .Should().ContainSingle();
+        schedulePort.CreateRequests.Select(static request => request.IdempotencyKey).Distinct()
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_Identity_ShouldDistinguishResourcesButNotPayloadDrift()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+
+        await ExecuteScheduleMemberWorkflowAsync(
+            schedulePort,
+            "scope-alpha",
+            "member-alpha",
+            "0 9 * * *",
+            "run digest",
+            "Daily digest");
+        await ExecuteScheduleMemberWorkflowAsync(
+            schedulePort,
+            "scope-beta",
+            "member-alpha",
+            "0 9 * * *",
+            "run digest",
+            "Daily digest");
+        await ExecuteScheduleMemberWorkflowAsync(
+            schedulePort,
+            "scope-alpha",
+            "member-beta",
+            "0 9 * * *",
+            "run digest",
+            "Daily digest");
+        await ExecuteScheduleMemberWorkflowAsync(
+            schedulePort,
+            "scope-alpha",
+            "member-alpha",
+            "0 10 * * *",
+            "run digest",
+            "Daily digest");
+        await ExecuteScheduleMemberWorkflowAsync(
+            schedulePort,
+            "scope-alpha",
+            "member-alpha",
+            "0 9 * * *",
+            "run another digest",
+            "Daily digest");
+
+        schedulePort.CreateRequests.Should().HaveCount(5);
+        schedulePort.CreateRequests.Take(3).Select(static request => request.OperationId)
+            .Should().OnlyHaveUniqueItems();
+        schedulePort.CreateRequests.Take(3).Select(static request => request.IdempotencyKey)
+            .Should().OnlyHaveUniqueItems();
+        schedulePort.CreateRequests[3].OperationId.Should().Be(schedulePort.CreateRequests[0].OperationId);
+        schedulePort.CreateRequests[4].OperationId.Should().Be(schedulePort.CreateRequests[0].OperationId);
+        schedulePort.CreateRequests[3].IdempotencyKey.Should().Be(schedulePort.CreateRequests[0].IdempotencyKey);
+        schedulePort.CreateRequests[4].IdempotencyKey.Should().Be(schedulePort.CreateRequests[0].IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenInvocationIdentityIsMissing_ShouldFailBeforePreflight()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: null,
+            callId: null,
+            idempotencyKey: null);
+
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("operation_identity_unavailable");
+        schedulePort.PreflightRequests.Should().BeEmpty();
+        schedulePort.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenPreflightOmitsPolicyVersion_ShouldFailBeforeCreate()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                true,
+                new ScheduledInvocationAuthorizationPlan
+                {
+                    PermissionDigest = "permission-digest-alpha",
+                    CredentialPolicy = new ScheduledInvocationCredentialPolicy(),
+                },
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("authorization_plan_invalid");
+        ErrorMessage(output).Should().Contain("credential_policy.policy_version");
+        schedulePort.CreateCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenPreflightFails_ShouldReturnFailureAndNotCreateSchedule()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+                "nyxid_catalog_snapshot_stale"),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.SnapshotStale));
+        ErrorMessage(output).Should().Be("nyxid_catalog_snapshot_stale");
+        schedulePort.CreateCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -591,7 +784,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort
         {
             Throw = new InvalidOperationException(
-                "workflow_yaml is not a valid workflow definition: Property 'version' not found on type 'Raw'"),
+                "workflow_yaml is not a valid workflow definition: Unsupported workflow YAML root field 'version'."),
         };
         var tool = await DiscoverToolAsync(port);
 
@@ -607,7 +800,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         // The message is the load-bearing half of the repair loop: the tool
         // description tells the model to fix the YAML "per the error message",
         // so the parser text naming the rejected key must survive the mapping.
-        ErrorMessage(output).Should().Contain("Property 'version' not found on type 'Raw'");
+        ErrorMessage(output).Should().Contain("Unsupported workflow YAML root field 'version'");
     }
 
     [Fact]
@@ -676,10 +869,43 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return tools.Single(tool => tool.Name == ScheduleMemberWorkflowToolName);
     }
 
-    private static AgentToolContextScope PushContext(string? scopeId, string? ownerSubject, string? accessToken)
+    private static async Task ExecuteScheduleMemberWorkflowAsync(
+        RecordingMemberWorkflowSchedulePort schedulePort,
+        string scopeId,
+        string memberId,
+        string scheduleCron,
+        string prompt,
+        string displayName)
+    {
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+        using var _ = PushContext(
+            scopeId,
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            requestId: "request-shared",
+            callId: "call-shared",
+            idempotencyKey: "caller-operation-shared");
+        var output = await tool.ExecuteAsync(JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["member_id"] = memberId,
+            ["schedule_cron"] = scheduleCron,
+            ["schedule_timezone"] = "Asia/Shanghai",
+            ["prompt"] = prompt,
+            ["display_name"] = displayName,
+        }));
+        ErrorCode(output).Should().BeNull();
+    }
+
+    private static AgentToolContextScope PushContext(
+        string? scopeId,
+        string? ownerSubject,
+        string? accessToken,
+        string? requestId = "request-1",
+        string? callId = "call-1",
+        string? idempotencyKey = null)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
-            new AgentToolRequestIdentity("request-1", "call-1"),
+            new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, ownerSubject, "response-1"),
             AgentToolChannelContext.Empty,
@@ -811,13 +1037,121 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
     private sealed class RecordingMemberWorkflowSchedulePort : IStudioMemberWorkflowSchedulePort
     {
-        public StudioMemberWorkflowScheduleRequest? LastRequest { get; private set; }
+        private const string PermissionDigest = "permission-digest-alpha";
+        public const string PolicyVersion = "credential-policy-alpha";
 
-        public Task<StudioMemberWorkflowScheduleResult> EnsureAsync(
+        public List<StudioMemberWorkflowScheduleRequest> PreflightRequests { get; } = [];
+        public List<StudioMemberWorkflowScheduleRequest> CreateRequests { get; } = [];
+        public StudioMemberWorkflowScheduleRequest? LastRequest =>
+            CreateRequests.LastOrDefault() ?? PreflightRequests.LastOrDefault();
+        public int CreateCallCount { get; private set; }
+        public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
+            new(
+                true,
+                new ScheduledInvocationAuthorizationPlan
+                {
+                    PermissionDigest = PermissionDigest,
+                    CredentialPolicy = new ScheduledInvocationCredentialPolicy
+                    {
+                        PolicyVersion = PolicyVersion,
+                    },
+                },
+                ScheduledInvocationAuthorizationFailureCode.Unspecified,
+                string.Empty);
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
             StudioMemberWorkflowScheduleRequest request,
             CancellationToken ct = default)
         {
-            LastRequest = request;
+            PreflightRequests.Add(request);
+            return Task.FromResult(PreflightResult);
+        }
+
+        public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
+        public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            CompleteAsync(request, confirmedPermissionDigest);
+
+        public Task<StudioMemberAutomationListResponse> ListAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationView?> GetAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            string scheduleId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
+            StudioMemberAutomationUpdateCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> PauseAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> ResumeAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> RunNowAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> DeleteAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        private Task<StudioMemberWorkflowScheduleResult> CompleteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest)
+        {
+            CreateCallCount++;
+            if (!string.Equals(confirmedPermissionDigest, PermissionDigest, StringComparison.Ordinal))
+                throw new InvalidOperationException("authorization_plan_changed");
+            if (string.IsNullOrWhiteSpace(request.OperationId))
+                throw new InvalidOperationException("operation_id_required");
+            if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
+                throw new InvalidOperationException("idempotency_key_required");
+            if (!string.Equals(
+                    request.CredentialProvisioningKind,
+                    "dedicated_scheduled_invocation_agent_key",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("credential_provisioning_kind_invalid");
+            }
+            if (!string.Equals(request.ConfirmedPolicyVersion, PolicyVersion, StringComparison.Ordinal))
+                throw new InvalidOperationException("confirmed_policy_version_invalid");
+
+            var preflightRequest = PreflightRequests.LastOrDefault()
+                ?? throw new InvalidOperationException("preflight_required");
+            if (!string.Equals(preflightRequest.OperationId, request.OperationId, StringComparison.Ordinal) ||
+                !string.Equals(preflightRequest.IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("preflight_operation_identity_changed");
+            }
+
+            CreateRequests.Add(request);
             return Task.FromResult(new StudioMemberWorkflowScheduleResult(
                 Success: true,
                 ScopeId: request.ScopeId,

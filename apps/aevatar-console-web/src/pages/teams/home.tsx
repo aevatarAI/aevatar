@@ -25,6 +25,7 @@ import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
+import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
@@ -811,7 +812,7 @@ function buildTeamRosterPreview(input: {
       : {
           href: buildTeamDetailHref({
             scopeId: input.scopeId,
-            tab: "members",
+            tab: builtInTeamDetailTabIds.members,
             teamId: input.team.teamId,
           }),
           kind: "manage-members",
@@ -857,7 +858,7 @@ function buildTeamRosterPreview(input: {
   });
   const membersHref = buildTeamDetailHref({
     scopeId: input.scopeId,
-    tab: "members",
+    tab: builtInTeamDetailTabIds.members,
     teamId: input.team.teamId,
   });
 

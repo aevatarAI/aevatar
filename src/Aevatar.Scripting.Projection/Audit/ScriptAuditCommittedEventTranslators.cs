@@ -91,7 +91,9 @@ public sealed class ScriptCatalogRollbackRequestedAuditTranslator
                 ["target_revision"] = evt.TargetRevision ?? string.Empty,
                 ["proposal_id"] = evt.ProposalId ?? string.Empty,
                 ["reason"] = evt.Reason ?? string.Empty,
-            });
+            },
+            lifecyclePhase: AuditLifecyclePhase.Accepted,
+            terminalOutcome: AuditTerminalOutcome.Unspecified);
 }
 
 public sealed class ScriptCatalogRolledBackAuditTranslator
@@ -185,7 +187,22 @@ public sealed class ScriptRunOutcomeRecordedAuditTranslator
                 ["script_revision"] = evt.ScriptRevision ?? string.Empty,
                 ["command_id"] = evt.CommandId ?? string.Empty,
                 ["correlation_id"] = evt.CorrelationId ?? string.Empty,
-            });
+            },
+            terminalOutcome: succeeded
+                ? AuditTerminalOutcome.Succeeded
+                : AuditTerminalOutcome.Failed,
+            failure: succeeded
+                ? null
+                : new AuditFailure
+                {
+                    Code = "script_run_failed",
+                    Category = AuditFailureCategory.Execution,
+                    Retryability = AuditRetryability.Unknown,
+                    FailedPhase = AuditLifecyclePhase.Running,
+                    SanitizedMessage = "Script run failed.",
+                },
+            runId: evt.ScriptRunId,
+            omittedFields: ["script_run.result", "script_run.error"]);
     }
 }
 
@@ -213,7 +230,12 @@ public abstract class ScriptAuditTranslatorBase<TEvent> : IAuditCommittedEventTr
         string resultSummary,
         AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         bool isDestructive = false,
-        IReadOnlyDictionary<string, string>? annotations = null) =>
+        IReadOnlyDictionary<string, string>? annotations = null,
+        AuditLifecyclePhase lifecyclePhase = AuditLifecyclePhase.Terminal,
+        AuditTerminalOutcome terminalOutcome = AuditTerminalOutcome.Succeeded,
+        AuditFailure? failure = null,
+        string runId = "",
+        IReadOnlyList<string>? omittedFields = null) =>
         new(
             operationName,
             targetKind,
@@ -222,5 +244,10 @@ public abstract class ScriptAuditTranslatorBase<TEvent> : IAuditCommittedEventTr
             sensitivityLevel,
             isDestructive,
             ResultSummary: resultSummary,
-            Annotations: annotations);
+            Annotations: annotations,
+            LifecyclePhase: lifecyclePhase,
+            TerminalOutcome: terminalOutcome,
+            Failure: failure,
+            RunId: runId,
+            OmittedFields: omittedFields);
 }

@@ -166,7 +166,14 @@ public static class AgentToolExecutionContextMapper
             FromCredentialSourcePayload(payload.CredentialSource),
             FromSkillRecoveryPayload(payload.SkillRecovery),
             StripOwnedControlKeys(payload.ExternalMetadata));
-        return context with { ToolVisibility = FromToolVisibilityPayload(payload.ToolVisibility) };
+        return context with
+        {
+            ToolVisibility = FromToolVisibilityPayload(payload.ToolVisibility),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Platform),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.Tenant),
+                AgentToolExecutionContext.Normalize(payload.NyxIdAuthority?.ExternalUserId)),
+        };
     }
 
     public static AgentToolExecutionContextPayload ToPayload(this AgentToolExecutionContext context)
@@ -224,6 +231,16 @@ public static class AgentToolExecutionContextMapper
             CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
             SkillRecovery = ToSkillRecoveryPayload(context.SkillRecovery),
         };
+
+        if (context.NyxIdAuthority.IsComplete)
+        {
+            payload.NyxIdAuthority = new AgentToolNyxIdAuthorityContextPayload
+            {
+                Platform = context.NyxIdAuthority.Platform ?? string.Empty,
+                Tenant = context.NyxIdAuthority.Tenant ?? string.Empty,
+                ExternalUserId = context.NyxIdAuthority.ExternalUserId ?? string.Empty,
+            };
+        }
 
         if (context.Routing.MaxToolRoundsOverride.HasValue)
             payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;

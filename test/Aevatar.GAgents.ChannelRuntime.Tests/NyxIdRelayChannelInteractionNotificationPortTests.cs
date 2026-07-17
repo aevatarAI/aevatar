@@ -372,7 +372,7 @@ public sealed class NyxIdRelayChannelInteractionNotificationPortTests
                 new Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddressEndpoint(
                     platform == "lark" ? larkReceiveId ?? conversationId : conversationId,
                     platform == "lark" ? "chat_id" : string.Empty)),
-            OutputFormat: SkillRunnerOutputFormat.Auto,
+            OutputFormat: ScheduledAgentOutputFormat.Auto,
             TemplateName: string.Empty,
             AgentType: string.Empty);
 

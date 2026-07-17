@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions.Workflows;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
@@ -59,14 +60,14 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         "A status of 'accepted' means the YAML was validated and the bind was dispatched — the bind and any run complete " +
         "asynchronously, so verify the run in the Observatory before reporting the workflow as running.";
 
-    public string ParametersSchema => """
+    public string ParametersSchema => $$"""
         {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "workflow_yaml": {
               "type": "string",
-              "description": "The workflow definition body as inline YAML. Required. Schema (snake_case keys): the only top-level keys are name (required), description, configuration, roles, steps. roles is a list of {id, name, system_prompt, ...}; steps is a list of {id, type, target_role, parameters, next, branches, ...}. Do NOT use top-level keys from other workflow dialects such as version, inputs, outputs, triggers, on, env, or jobs — the parser rejects unknown keys and the tool returns the parse error."
+              "description": "The workflow definition body as inline YAML. Required. Schema (snake_case keys): the authorable top-level keys are {{WorkflowYamlRootSchema.FormatAuthorableRootFields()}}. name is required. roles is a list of {id, name, system_prompt, ...}; steps is a list of {id, type, target_role, parameters, next, branches, ...}. Do NOT use top-level keys from other workflow dialects such as {{WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}} — the parser rejects unknown keys and the tool returns the parse error."
             },
             "display_name": {
               "type": "string",

@@ -5,7 +5,7 @@ public sealed class NyxIdToolOptions
 {
     public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
     public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
-    public const string DefaultSandboxServiceSlug = "chrono-sandbox-service";
+    public const string DefaultSandboxServiceSlug = "chrono-sandbox";
 
     /// <summary>
     /// The single default NyxID base URL (the identity/OIDC authority AND the proxy host — the
@@ -34,6 +34,13 @@ public sealed class NyxIdToolOptions
     /// like the share-ops Lark bot) opt in by setting this to <c>true</c>.
     /// </summary>
     public bool EnableSshExecTool { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, expose the managed-sandbox target of <c>codex_exec</c>.
+    /// A matching <c>ICodexExecutionPort</c> must be registered by the host; endpoint,
+    /// image, credential, and admission policy remain operator-owned configuration.
+    /// </summary>
+    public bool EnableManagedCodexExecTool { get; set; }
 
     /// <summary>
     /// When <c>true</c>, <c>ssh_exec</c> returns <c>RequiresApproval=false</c> so the

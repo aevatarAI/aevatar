@@ -38,8 +38,17 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("https://nyx.chrono-ai.fun");
         html.Should().NotContain("https://nyx-api.chrono-ai.fun");
         html.Should().NotContain("37a93189-2734-406e-bca1-7dbdf25c5a53");
+        if (path == "/cqrs")
+        {
+            html.Should().Contain("const NYXID_API = CFG.nyxidApi");
+            html.Should().Contain("const NYXID_USER_API = NYXID_API");
+            html.Should().NotContain("const NYXID_AUTHORITY = CFG.authority");
+        }
         if (path == "/admin")
         {
+            html.Should().Contain("var NYX_API=BACKEND_CONSOLE_CONFIG.nyxidApi");
+            html.Should().Contain("fetch(NYX_API+'/api/v1/admin/users");
+            html.Should().NotContain("var NYX_AUTHORITY=BACKEND_CONSOLE_CONFIG.authority");
             html.Should().Contain("searchParams.append('resource'");
             html.Should().Contain("id=\"obs-run-in\"");
             html.Should().Contain("/api/workflow/observatory/admin/runs/");
@@ -70,6 +79,19 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("toast('正在刷新审计日志');");
         html.Should().NotContain(
             "if(!AUDIT_LOADED||AUDIT_LOADING){ if(!AUDIT_LOADING) loadAuditTrail(); }");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryPolling_ShouldKeepCachedDetailVisible()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function loadObsDetail(runId,rerender,refresh)");
+        html.Should().Contain("detail:previousDetail");
+        html.Should().Contain("if(cache&&cache.loading&&!d)");
+        html.Should().Contain("loadObsDetail(selected.id,function(){ reList();");
+        html.Should().NotContain("delete OBS_DETAIL[selected.id]");
     }
 
     private static async Task<WebApplication> CreateAppAsync()

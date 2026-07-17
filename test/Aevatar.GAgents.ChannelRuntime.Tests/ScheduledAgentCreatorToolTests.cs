@@ -3,12 +3,13 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using FluentAssertions;
@@ -51,13 +52,7 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("output_format", out var outputFormat).Should().BeTrue();
         outputFormat.GetProperty("enum").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEquivalentTo("auto", "text", "feishu_doc");
-        properties.TryGetProperty("external_trigger_sources", out var externalSources).Should().BeTrue();
-        externalSources.GetProperty("items").GetProperty("properties")
-            .GetProperty("kind")
-            .GetProperty("enum")
-            .EnumerateArray()
-            .Select(static x => x.GetString())
-            .Should().BeEquivalentTo("webhook", "channel_inbound");
+        properties.TryGetProperty("external_trigger_sources", out _).Should().BeFalse();
         schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEmpty();
     }
@@ -72,11 +67,6 @@ public sealed class ScheduledAgentCreatorToolTests
         using var document = JsonDocument.Parse(result);
         document.RootElement.GetProperty("error").GetString().Should().Contain("access token");
         harness.Handler.Requests.Should().BeEmpty();
-        await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-            Arg.Any<string>(),
-            Arg.Any<InitializeSkillRunnerCommand>(),
-            Arg.Any<bool>(),
-            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -101,6 +91,7 @@ public sealed class ScheduledAgentCreatorToolTests
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","nyx_api_key":"bad"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":"tavily-search"}""")]
     [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","required_service_slugs":["tavily-search",123]}""")]
+    [InlineData("""{"skill_ref":"daily","schedule_cron":"0 9 * * *","schedule_timezone":"UTC","external_trigger_sources":[{"source_id":"webhook-main","kind":"webhook"}]}""")]
     public async Task ExecuteAsync_InvalidRequests_ShouldFailBeforeKeyCreation(string argumentsJson)
     {
         var harness = CreateHarness();
@@ -112,11 +103,6 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -142,11 +128,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().Contain(expectedDetailFragment);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -168,11 +149,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().StartWith(expectedDetailPrefix);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -216,11 +192,6 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("output_format");
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -240,11 +211,6 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Contain(expectedErrorFragment);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -308,82 +274,66 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
             document.RootElement.GetProperty("detail").GetString().Should().Be(expectedDetail);
             harness.Handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
-    [Theory]
-    [InlineData("""{"error":true,"message":"service lookup denied"}""", "service_resolution_failed")]
-    [InlineData("not-json", "service_resolution_invalid_json")]
-    public async Task ExecuteAsync_WhenServiceKeyListResponseInvalid_ShouldFailClosedWithoutKeyCreation(
-        string servicesResponseJson,
-        string expectedError)
+    [Fact]
+    public async Task ExecuteAsync_WhenCommittedOwnerSnapshotIsUnavailable_ShouldFailBeforeSideEffects()
     {
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/keys", servicesResponseJson);
-        var harness = CreateHarness(handler: handler);
+        var harness = CreateHarness(
+            authorizationCatalogQueryPort: new FixedSnapshotQueryPort(null));
 
         await WithToolContext(async () =>
         {
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
-            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
-            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
-            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotNotFound");
+            harness.Handler.Requests.Should().BeEmpty();
+            await harness.CreationPort.DidNotReceive().CreateAsync(
+                Arg.Any<ScheduledWorkflowAgentCreateRequest>(), Arg.Any<CancellationToken>());
         });
     }
 
     [Fact]
     public async Task ExecuteAsync_WhenRequiredServiceMissing_ShouldFailClosedWithoutBroadKey()
     {
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/keys", """{"keys":[{"id":"svc-lark","slug":"api-lark-bot"}]}""");
-        var harness = CreateHarness(handler: handler);
+        var harness = CreateHarness(authorizationSnapshot: CreateSnapshot(
+            ServiceEvidence("svc-ornn", "ornn-api"),
+            ServiceEvidence("svc-lark", "api-lark-bot"),
+            ServiceEvidence("svc-llm", "chrono-llm-public")));
 
         await WithToolContext(async () =>
         {
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_not_found:ornn-api");
-            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
-            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("nyxid_service_slug_not_found:api-lark-bot-inbound");
+            harness.Handler.Requests.Should().BeEmpty();
         });
     }
 
     [Fact]
     public async Task ExecuteAsync_WhenRequiredServiceAmbiguous_ShouldFailClosedWithoutKeyCreation()
     {
-        var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/keys", """
-            {
-              "keys": [
-                {"id":"svc-ornn-1","slug":"ornn-api"},
-                {"id":"svc-ornn-2","slug":"ornn-api"},
-                {"id":"svc-lark","slug":"api-lark-bot"}
-              ]
-            }
-            """);
-        var harness = CreateHarness(handler: handler);
+        var harness = CreateHarness(authorizationSnapshot: CreateSnapshot(
+            ServiceEvidence("svc-ornn-1", "ornn-api"),
+            ServiceEvidence("svc-ornn-2", "ornn-api"),
+            ServiceEvidence("svc-lark", "api-lark-bot"),
+            ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
+            ServiceEvidence("svc-llm", "chrono-llm-public")));
 
         await WithToolContext(async () =>
         {
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_ambiguous:ornn-api");
-            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
+            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceAmbiguous");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("nyxid_service_slug_ambiguous:ornn-api");
+            harness.Handler.Requests.Should().BeEmpty();
         });
     }
 
@@ -391,18 +341,13 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_RequiredServiceSlugs_ShouldBeResolvedIntoScopedKeyAllowlist()
     {
         var handler = CreateSuccessHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/keys", """
-            {
-              "keys": [
-                {"id":"svc-ornn","slug":"ornn-api"},
-                {"id":"svc-lark","slug":"api-lark-bot"},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"},
-                {"id":"svc-tavily","slug":"tavily-search"},
-                {"id":"svc-github","slug":"api-github"}
-              ]
-            }
-            """);
-        var harness = CreateHarness(handler: handler);
+        var harness = CreateHarness(
+            handler: handler,
+            authorizationSnapshot: CreateSnapshot(
+                DefaultAuthorizationServices
+                    .Append(ServiceEvidence("svc-tavily", "tavily-search"))
+                    .Append(ServiceEvidence("svc-github", "api-github"))
+                    .ToArray()));
 
         await WithToolContext(async () =>
         {
@@ -422,7 +367,9 @@ public sealed class ScheduledAgentCreatorToolTests
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
-                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure", "svc-tavily", "svc-github");
+                .Should().Equal(
+                    "svc-ornn", "svc-lark", "svc-lark-failure", "svc-tavily", "svc-github", "svc-lark", "svc-llm");
+            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Get);
         });
     }
 
@@ -435,22 +382,20 @@ public sealed class ScheduledAgentCreatorToolTests
         // yet every run failed NyxID's proxy scope check with HTTP 403 api_key_scope_forbidden.
         // The issued key must be authorized for the owner's pinned LLM route.
         var handler = CreateSuccessHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/keys", """
-            {
-              "keys": [
-                {"id":"svc-ornn","slug":"ornn-api"},
-                {"id":"svc-lark","slug":"api-lark-bot"},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"},
-                {"id":"svc-chrono","slug":"chrono-llm"}
-              ]
-            }
-            """);
-
-        var ownerLlmConfigSource = Substitute.For<IOwnerLlmConfigSource>();
-        ownerLlmConfigSource.GetForScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new OwnerLlmConfig("gpt-5.5", "/api/v1/proxy/s/chrono-llm", 0)));
-
-        var harness = CreateHarness(handler: handler, ownerLlmConfigSource: ownerLlmConfigSource);
+        var ownerLLMQueryPort = new RecordingOwnerLLMEvidenceQueryPort(
+            new ScheduledInvocationOwnerLLMEvidence(
+                17,
+                string.Empty,
+                "chrono-llm",
+                AuthorizationGrantRequirement.Required));
+        var harness = CreateHarness(
+            handler: handler,
+            authorizationSnapshot: CreateSnapshot(
+                DefaultAuthorizationServices
+                    .Where(static service => service.ServiceSlug != "chrono-llm-public")
+                    .Append(ServiceEvidence("svc-chrono", "chrono-llm"))
+                    .ToArray()),
+            ownerLLMQueryPort: ownerLLMQueryPort);
 
         await WithToolContext(async () =>
         {
@@ -459,7 +404,7 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
-            await ownerLlmConfigSource.Received().GetForScopeAsync("scope-bot-1", Arg.Any<CancellationToken>());
+            ownerLLMQueryPort.ScopeIds.Should().Equal("scope-bot-1", "scope-bot-1");
 
             var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
@@ -475,11 +420,14 @@ public sealed class ScheduledAgentCreatorToolTests
         // The shared gateway route uses the bearer token directly and needs no per-service grant,
         // so a gateway/empty PreferredLlmRoute must leave the scoped allowlist unchanged.
         var handler = CreateSuccessHandler();
-        var ownerLlmConfigSource = Substitute.For<IOwnerLlmConfigSource>();
-        ownerLlmConfigSource.GetForScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new OwnerLlmConfig("gpt-5.5", null, 0)));
-
-        var harness = CreateHarness(handler: handler, ownerLlmConfigSource: ownerLlmConfigSource);
+        var harness = CreateHarness(
+            handler: handler,
+            ownerLLMQueryPort: new RecordingOwnerLLMEvidenceQueryPort(
+                new ScheduledInvocationOwnerLLMEvidence(
+                    18,
+                    string.Empty,
+                    string.Empty,
+                    AuthorizationGrantRequirement.NotRequired)));
 
         await WithToolContext(async () =>
         {
@@ -496,43 +444,23 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenOwnerLlmConfigQueryFails_ShouldFailBeforeKeyCreation()
+    public async Task ExecuteAsync_WhenOwnerLlmEvidenceMissing_ShouldFailBeforeKeyCreation()
     {
         var handler = CreateSuccessHandler();
-        var ownerLlmConfigSource = Substitute.For<IOwnerLlmConfigSource>();
-        ownerLlmConfigSource.GetForScopeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns<Task<OwnerLlmConfig>>(_ => throw new InvalidOperationException("owner config unavailable"));
-        var harness = CreateHarness(handler: handler, ownerLlmConfigSource: ownerLlmConfigSource);
+        var harness = CreateHarness(
+            handler: handler,
+            ownerLLMQueryPort: new RecordingOwnerLLMEvidenceQueryPort(null));
 
         await WithToolContext(async () =>
         {
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("owner_llm_config_unavailable");
-            document.RootElement.GetProperty("detail").GetString().Should().Be("owner config unavailable");
+            document.RootElement.GetProperty("error").GetString().Should().Be("SnapshotNotFound");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("owner_llm_authorization_evidence_not_found");
             handler.Requests.Should().BeEmpty();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
-    }
-
-    [Theory]
-    [InlineData("/api/v1/proxy/s/chrono-llm", "chrono-llm")]
-    [InlineData("/api/v1/proxy/s/chrono-llm/v1", "chrono-llm")]
-    [InlineData("  /api/v1/proxy/s/Custom-LLM  ", "Custom-LLM")]
-    [InlineData("chrono-llm", "chrono-llm")]
-    [InlineData(null, null)]
-    [InlineData("", null)]
-    [InlineData("   ", null)]
-    [InlineData("/api/v1/llm/gateway/v1", null)]
-    [InlineData("https://nyx.example.com/api/v1/proxy/s/chrono-llm", null)]
-    public void ExtractProxyServiceSlug_ShouldReturnSlugOnlyForProxyServiceRoutes(string? route, string? expected)
-    {
-        ScheduledAgentApiKeyIssuer.ExtractProxyServiceSlug(route).Should().Be(expected);
     }
 
     [Fact]
@@ -553,14 +481,11 @@ public sealed class ScheduledAgentCreatorToolTests
                 """);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_not_found:tavily-search");
-            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
+            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("nyxid_service_slug_not_found:tavily-search");
+            handler.Requests.Should().BeEmpty();
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -582,14 +507,8 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
-            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
             handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Post);
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
@@ -615,72 +534,8 @@ public sealed class ScheduledAgentCreatorToolTests
             document.RootElement.GetProperty("error").GetString().Should().Be("api_key_create_failed");
             document.RootElement.GetProperty("http_status").GetInt32().Should().Be(400);
             document.RootElement.GetProperty("detail").GetString().Should().Contain("not owned by user");
-            document.RootElement.GetProperty("hint").GetString().Should().Contain("organization");
+            document.RootElement.GetProperty("hint").GetString().Should().Contain("owned");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-        });
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenRequiredServicesAreOrgOwned_ShouldMintKeyUnderTargetOrg()
-    {
-        // Every required service is shared through the same org -> the scoped key must be created
-        // under that org's user_id so NyxID's per-owner allowed_service_ids check passes.
-        var handler = CreateSuccessHandler(serviceListJson: """
-            {
-              "keys": [
-                {"id":"svc-ornn","slug":"ornn-api","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}},
-                {"id":"svc-lark","slug":"api-lark-bot","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI"}}
-              ]
-            }
-            """);
-        var harness = CreateHarness(handler: handler);
-
-        await WithToolContext(async () =>
-        {
-            var result = await harness.Tool.ExecuteAsync(BaseArgs);
-
-            using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
-
-            var createRequest = handler.Requests.Single(request =>
-                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
-            using var createBody = JsonDocument.Parse(createRequest.Body!);
-            createBody.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-chrono");
-            createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
-            createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
-                .Select(static x => x.GetString())
-                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
-        });
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenRequiredServicesSpanOwners_ShouldFailClosed()
-    {
-        var handler = CreateSuccessHandler(serviceListJson: """
-            {
-              "keys": [
-                {"id":"svc-ornn","slug":"ornn-api"},
-                {"id":"svc-lark","slug":"api-lark-bot","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI","allowed":true}},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
-              ]
-            }
-            """);
-        var harness = CreateHarness(handler: handler);
-
-        await WithToolContext(async () =>
-        {
-            var result = await harness.Tool.ExecuteAsync(BaseArgs);
-
-            using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("required_services_cross_owner");
-            handler.Requests.Should().NotContain(request =>
-                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
         });
     }
 
@@ -697,49 +552,33 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("api_key_lifetime_invalid");
-            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Get);
+            document.RootElement.GetProperty("error").GetString().Should().Be("authenticated_owner_context_unavailable");
+            handler.Requests.Should().BeEmpty();
             handler.Requests.Should().NotContain(request =>
                 request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
         });
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenRequiredOrgServiceIsViewerOnly_ShouldFailUnreachableWithoutCreatingKey()
+    public async Task ExecuteAsync_WhenRequiredServiceIsViewOnly_ShouldFailBeforeCreatingKey()
     {
-        // A personal caller can mint an allow-all key spanning owners, but only for org services it
-        // can actually proxy. An org service the caller merely views (allowed=false) would 403 on
-        // every run, so refuse up front instead of minting a doomed key.
-        var handler = CreateSuccessHandler(serviceListJson: """
-            {
-              "keys": [
-                {"id":"svc-ornn","slug":"ornn-api"},
-                {"id":"svc-lark","slug":"api-lark-bot","credential_source":{"type":"org","org_id":"org-chrono","org_name":"ChronoAI","allowed":false}},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
-              ]
-            }
-            """);
-        var harness = CreateHarness(handler: handler);
+        var viewOnly = ServiceEvidence("svc-lark", "api-lark-bot");
+        viewOnly.Access = NyxIdAuthorizationAccess.ViewOnly;
+        var harness = CreateHarness(authorizationSnapshot: CreateSnapshot(
+            ServiceEvidence("svc-ornn", "ornn-api"),
+            viewOnly,
+            ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
+            ServiceEvidence("svc-llm", "chrono-llm-public")));
 
         await WithToolContext(async () =>
         {
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("required_service_unreachable");
-            document.RootElement.GetProperty("detail").GetString().Should().Contain("api-lark-bot");
-            document.RootElement.GetProperty("hint").GetString().Should().Contain("member");
-            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
+            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceAccessDenied");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("nyxid_service_access_denied:svc-lark");
+            harness.Handler.Requests.Should().BeEmpty();
         });
     }
 
@@ -816,7 +655,7 @@ public sealed class ScheduledAgentCreatorToolTests
             agentKey.SecretReference.Ref.Should().NotBe("full-secret-key");
             captured.Schedule.Headers["scheduled_agent.agent_type"].Should().Be(ScheduledWorkflowAgentDefaults.AgentType);
             captured.Schedule.Headers["scheduled_agent.conversation_id"].Should().Be("oc_conversation");
-            captured.Schedule.Headers["scheduled_agent.output_format"].Should().Be(SkillRunnerOutputFormat.FeishuDoc.ToString());
+            captured.Schedule.Headers["scheduled_agent.output_format"].Should().Be(ScheduledAgentOutputFormat.FeishuDoc.ToString());
             captured.Schedule.Headers["scheduled_agent.api_key_id"].Should().Be("key-created");
             captured.Schedule.Headers["scheduled_agent.nyx_provider_slug"].Should().Be("api-lark-bot");
             captured.Schedule.Headers["workflow.llm.model"].Should().Be("gpt-5.1");
@@ -850,13 +689,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.LarkReceiveIdFallback.Should().BeEmpty();
             captured.CatalogEntry.LarkReceiveIdTypeFallback.Should().BeEmpty();
 #pragma warning restore CS0612
-            captured.CatalogEntry.OutputFormat.Should().Be(SkillRunnerOutputFormat.FeishuDoc);
+            captured.CatalogEntry.OutputFormat.Should().Be(ScheduledAgentOutputFormat.FeishuDoc);
             captured.CatalogEntry.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
 
             var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
@@ -865,18 +699,10 @@ public sealed class ScheduledAgentCreatorToolTests
             createBody.RootElement.GetProperty("scopes").GetString().Should().Be("read proxy");
             createBody.RootElement.GetProperty("expires_at").GetString().Should().NotBeNullOrWhiteSpace();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
-                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
+                .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure", "svc-llm");
             // Personal-owned services: target_org_id is omitted so the request stays byte-identical
             // to the pre-org behavior.
             createBody.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
-
-            var preflight = harness.Handler.Requests.Should().ContainSingle(request =>
-                    request.Method == HttpMethod.Get &&
-                    request.Path == "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json")
-                .Subject;
-            preflight.Authorization.Should().NotBeNull();
-            preflight.Authorization!.Scheme.Should().Be("Bearer");
-            preflight.Authorization.Parameter.Should().Be("full-secret-key");
 
             var resolved = await secretVault.ResolveAsync(new ResolveSecretRequest(
                 agentKey.SecretReference.Ref,
@@ -891,16 +717,14 @@ public sealed class ScheduledAgentCreatorToolTests
     [Fact]
     public async Task ExecuteAsync_WhenInvokedFromScheduledRun_ShouldPreserveExistingOutboundSlug()
     {
-        var handler = CreateSuccessHandler(serviceListJson: """
-            {
-              "keys": [
-                {"id":"svc-ornn","slug":"ornn-api"},
-                {"id":"svc-scheduled-lark","slug":"api-lark-bot-scheduled"},
-                {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
-              ]
-            }
-            """);
-        var harness = CreateHarness(handler: handler);
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(
+            handler: handler,
+            authorizationSnapshot: CreateSnapshot(
+                ServiceEvidence("svc-ornn", "ornn-api"),
+                ServiceEvidence("svc-scheduled-lark", "api-lark-bot-scheduled"),
+                ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
+                ServiceEvidence("svc-llm", "chrono-llm-public")));
         ScheduledWorkflowAgentCreateRequest? captured = null;
         harness.CreationPort.CreateAsync(
                 Arg.Do<ScheduledWorkflowAgentCreateRequest>(value => captured = value),
@@ -935,7 +759,7 @@ public sealed class ScheduledAgentCreatorToolTests
             var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
-                .Should().BeEquivalentTo("svc-ornn", "svc-scheduled-lark", "svc-lark-failure");
+                .Should().BeEquivalentTo("svc-ornn", "svc-scheduled-lark", "svc-lark-failure", "svc-llm");
         });
     }
 
@@ -1116,85 +940,7 @@ public sealed class ScheduledAgentCreatorToolTests
             var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
-                .Should().BeEquivalentTo("svc-lark", "svc-lark-failure");
-        });
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenMintedKeyPreflightForbidden_ShouldReturnActionableErrorAndSubmitRevocationIntent()
-    {
-        var handler = CreateSuccessHandler();
-        handler.Add(
-            HttpMethod.Get,
-            "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json",
-            """{"error":"forbidden","message":"API key does not have access to this service"}""",
-            HttpStatusCode.Forbidden);
-        var harness = CreateHarness(handler: handler);
-
-        await WithToolContext(async () =>
-        {
-            var result = await harness.Tool.ExecuteAsync(BaseArgs);
-
-            using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("scheduled_skill_preflight_access_denied");
-            document.RootElement.GetProperty("http_status").GetInt32().Should().Be(403);
-            document.RootElement.GetProperty("service_slug").GetString().Should().Be("ornn-api");
-            document.RootElement.GetProperty("skill_ref").GetString().Should().Be("daily-report");
-            document.RootElement.GetProperty("detail").GetString().Should().Contain("missing proxy scope or service authorization");
-            document.RootElement.GetProperty("hint").GetString().Should().Contain("recreate the scheduled agent");
-
-            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
-                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
-                    intent.ApiKeyId == "key-created" &&
-                    intent.OwnerScope.MatchesStrictly(
-                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
-                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
-                        ScheduledCredentialVaultReferenceAvailability.NotApplicable),
-                Arg.Any<CancellationToken>(),
-                "session-token");
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
-        });
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_WhenMintedKeyPreflightNotFound_ShouldReturnNotFoundAndSubmitRevocationIntent()
-    {
-        var handler = CreateSuccessHandler();
-        handler.Add(
-            HttpMethod.Get,
-            "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json",
-            """{"error":"missing"}""",
-            HttpStatusCode.NotFound);
-        var harness = CreateHarness(handler: handler);
-
-        await WithToolContext(async () =>
-        {
-            var result = await harness.Tool.ExecuteAsync(BaseArgs);
-
-            using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("scheduled_skill_preflight_skill_not_found");
-            document.RootElement.GetProperty("http_status").GetInt32().Should().Be(404);
-            document.RootElement.GetProperty("hint").GetString().Should().Contain("Check skill_ref");
-            handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
-            await harness.CatalogCommandPort.Received(1).RequestCredentialRevocationAsync(
-                Arg.Is<ScheduledAgentCredentialRevocationIntent>(intent =>
-                    intent.ApiKeyId == "key-created" &&
-                    intent.OwnerScope.MatchesStrictly(
-                        OwnerScope.ForChannel("nyx-user-1", "lark", "scope-bot-1", "ou_sender")) &&
-                    intent.VaultRevocationDescriptor.ReferenceAvailability ==
-                        ScheduledCredentialVaultReferenceAvailability.NotApplicable),
-                Arg.Any<CancellationToken>(),
-                "session-token");
-            await harness.SkillRunnerPort.DidNotReceive().InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>());
+                .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
         });
     }
 
@@ -1262,9 +1008,11 @@ public sealed class ScheduledAgentCreatorToolTests
         RoutingJsonHandler? handler = null,
         OwnerScope? scope = null,
         bool callerScopeUnavailable = false,
-        IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         ISecretVault? secretVault = null,
-        ScheduledAgentCreatorOptions? options = null)
+        ScheduledAgentCreatorOptions? options = null,
+        NyxIdAuthorizationCatalogSnapshot? authorizationSnapshot = null,
+        INyxIdAuthorizationCatalogQueryPort? authorizationCatalogQueryPort = null,
+        IScheduledInvocationOwnerLLMEvidenceQueryPort? ownerLLMQueryPort = null)
     {
         handler ??= CreateSuccessHandler();
 
@@ -1272,13 +1020,6 @@ public sealed class ScheduledAgentCreatorToolTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         var nyxClientFactory = new TestNyxIdApiClientFactory(nyxClient);
-        var skillRunnerPort = Substitute.For<ISkillRunnerCommandPort>();
-        skillRunnerPort.InitializeAsync(
-                Arg.Any<string>(),
-                Arg.Any<InitializeSkillRunnerCommand>(),
-                Arg.Any<bool>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
         var creationPort = Substitute.For<IScheduledWorkflowAgentCreationPort>();
         creationPort.CreateAsync(
                 Arg.Any<ScheduledWorkflowAgentCreateRequest>(),
@@ -1305,58 +1046,57 @@ public sealed class ScheduledAgentCreatorToolTests
 
         var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var effectiveOptions = options ?? new ScheduledAgentCreatorOptions();
 
         var services = new ServiceCollection();
         services.AddSingleton<INyxIdApiClientFactory>(nyxClientFactory);
-        services.AddSingleton(skillRunnerPort);
         services.AddSingleton(creationPort);
         services.AddSingleton(resolver);
         services.AddSingleton(queryPort);
         services.AddSingleton(catalogCommandPort);
-        services.AddSingleton(options ?? new ScheduledAgentCreatorOptions());
+        services.AddSingleton(effectiveOptions);
         services.AddSingleton<ScheduledAgentCreateRequestMapper>();
         services.AddSingleton(secretVault ?? new InMemorySecretVault());
-        if (ownerLlmConfigSource is not null)
-            services.AddSingleton(ownerLlmConfigSource);
         services.AddSingleton<ScheduledAgentApiKeyIssuer>();
         services.AddSingleton<IScheduledAgentApiKeyIssuer>(sp => sp.GetRequiredService<ScheduledAgentApiKeyIssuer>());
         services.AddSingleton<ScheduledAgentCredentialLifecycle>();
 
         var provider = services.BuildServiceProvider();
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            authorizationCatalogQueryPort ?? new FixedSnapshotQueryPort(
+                authorizationSnapshot ?? CreateSnapshot(DefaultAuthorizationServices)),
+            ownerLLMQueryPort: ownerLLMQueryPort ?? new RecordingOwnerLLMEvidenceQueryPort(
+                new ScheduledInvocationOwnerLLMEvidence(
+                    29,
+                    string.Empty,
+                    "chrono-llm-public",
+                    AuthorizationGrantRequirement.Required)));
         var tool = new ScheduledAgentCreatorTool(
             provider.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
             provider.GetRequiredService<ScheduledAgentCreateRequestMapper>(),
-            provider.GetRequiredService<ScheduledAgentCredentialLifecycle>());
+            provider.GetRequiredService<ScheduledAgentCredentialLifecycle>(),
+            planner,
+            new ScheduledInvocationAuthorizationRevalidator(planner, TimeProvider.System),
+            effectiveOptions,
+            timeProvider: TimeProvider.System);
 
-        return new CreatorHarness(tool, handler, skillRunnerPort, creationPort, queryPort, catalogCommandPort);
+        return new CreatorHarness(tool, handler, creationPort, queryPort, catalogCommandPort);
     }
 
-    private const string DefaultServiceListJson = """
-        {
-          "keys": [
-            {"id":"svc-ornn","slug":"ornn-api"},
-            {"id":"svc-lark","slug":"api-lark-bot"},
-            {"id":"svc-lark-failure","slug":"api-lark-bot-inbound"}
-          ]
-        }
-        """;
+    private static readonly NyxIdAuthorizationServiceEvidence[] DefaultAuthorizationServices =
+    [
+        ServiceEvidence("svc-ornn", "ornn-api"),
+        ServiceEvidence("svc-lark", "api-lark-bot"),
+        ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
+        ServiceEvidence("svc-llm", "chrono-llm-public"),
+    ];
 
     private static RoutingJsonHandler CreateSuccessHandler(
-        string createApiKeyResponse = """{"id":"key-created","full_key":"full-secret-key"}""",
-        string? serviceListJson = null)
+        string createApiKeyResponse = """{"id":"key-created","full_key":"full-secret-key"}""")
     {
         var handler = new RoutingJsonHandler();
-        handler.Add(HttpMethod.Get, "/api/v1/keys", serviceListJson ?? DefaultServiceListJson);
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", createApiKeyResponse);
-        handler.Add(HttpMethod.Get, "/api/v1/proxy/s/ornn-api/api/v1/skills/daily-report/json", """
-            {
-              "data": {
-                "name": "daily-report",
-                "files": { "SKILL.md": "Run daily report." }
-              }
-            }
-            """);
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-created", """{"ok":true}""");
         return handler;
     }
@@ -1395,8 +1135,12 @@ public sealed class ScheduledAgentCreatorToolTests
         AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials("session-token", "session-token", null),
-            Caller = new AgentToolCallerContext(callerScopeId, null, "message-1"),
+            Caller = new AgentToolCallerContext(callerScopeId, "nyx-user-1", "message-1"),
             Channel = new AgentToolChannelContext("lark", channelSenderId, channelRegistrationScopeId, "message-1", "om_1", channelDeliveryTargetId),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "binding-lark-alpha",
+                "nyx-user-1",
+                "tenant-lark-alpha"),
             ExternalMetadata = externalMetadata ?? BaseExternalMetadata(),
         };
 
@@ -1427,10 +1171,39 @@ public sealed class ScheduledAgentCreatorToolTests
         return metadata;
     }
 
+    private static NyxIdAuthorizationCatalogSnapshot CreateSnapshot(
+        params NyxIdAuthorizationServiceEvidence[] services)
+    {
+        var owner = new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "nyx-user-1",
+        };
+        var clonedServices = services.Select(static service => service.Clone()).ToArray();
+        var now = DateTimeOffset.UtcNow;
+        return new NyxIdAuthorizationCatalogSnapshot(
+            owner,
+            23,
+            now.AddMinutes(-1),
+            now.AddMinutes(10),
+            string.Empty,
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, clonedServices),
+            clonedServices);
+    }
+
+    private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug) => new()
+    {
+        UserServiceId = id,
+        ServiceSlug = slug,
+        DisplayName = slug,
+        Access = NyxIdAuthorizationAccess.Permitted,
+        NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+    };
+
     private sealed record CreatorHarness(
         ScheduledAgentCreatorTool Tool,
         RoutingJsonHandler Handler,
-        ISkillRunnerCommandPort SkillRunnerPort,
         IScheduledWorkflowAgentCreationPort CreationPort,
         IUserAgentCatalogQueryPort CatalogQueryPort,
         IUserAgentCatalogCommandPort CatalogCommandPort);
@@ -1475,6 +1248,40 @@ public sealed class ScheduledAgentCreatorToolTests
                 {
                     Content = new StringContent("""{"error":true,"message":"not found"}""", Encoding.UTF8, "application/json"),
                 };
+        }
+    }
+
+    private sealed class FixedSnapshotQueryPort : INyxIdAuthorizationCatalogQueryPort
+    {
+        private readonly NyxIdAuthorizationCatalogSnapshot? _snapshot;
+
+        public FixedSnapshotQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
+        {
+            _snapshot = snapshot;
+        }
+
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(_snapshot);
+        }
+    }
+
+    private sealed class RecordingOwnerLLMEvidenceQueryPort(
+        ScheduledInvocationOwnerLLMEvidence? evidence)
+        : IScheduledInvocationOwnerLLMEvidenceQueryPort
+    {
+        public List<string> ScopeIds { get; } = [];
+
+        public Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
+            string scopeId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ScopeIds.Add(scopeId);
+            return Task.FromResult(evidence);
         }
     }
 

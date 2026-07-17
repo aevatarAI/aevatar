@@ -121,10 +121,9 @@ export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
   const normalizedRedirectUri = tryResolveHttpUrl(redirectUri, {
     allowRelative: true,
   });
-  const configurationError =
-    !normalizedRedirectUri
-        ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')
-        : undefined;
+  const configurationError = !normalizedRedirectUri
+    ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')
+    : undefined;
 
   return {
     enabled: Boolean(normalizedRedirectUri),

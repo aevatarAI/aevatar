@@ -57,18 +57,15 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         if (documentProvider.ElasticsearchEnabled)
         {
             AddElasticsearchStores(services, configuration);
-            services.Configure<AevatarOAuthClientEsAclOptions>(options =>
-            {
-                options.EnforcementMode = AevatarOAuthClientEsAclEnforcementMode.Strict;
-            });
-            // Replace the identity module's default Unavailable probe with a real
-            // HTTP-backed probe that inspects the Elasticsearch security API using
-            // the SAME endpoint/credentials the projection store uses, so the ACL
-            // startup guard verifies the cluster instead of self-attesting a flag.
-            services.Replace(ServiceDescriptor.Singleton<IOAuthClientEsAclProbe>(
-                sp => new HttpOAuthClientEsAclProbe(
-                    ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
-                    sp.GetService<ILogger<HttpOAuthClientEsAclProbe>>())));
+            // Keep the operator-bound enforcement mode. The conservative built-in
+            // HTTP probe cannot prove that every other Elasticsearch identity is
+            // denied, so forcing Strict here would make the stock Mainnet
+            // composition impossible to start. Warn remains the deployable default;
+            // Strict is an explicit deployment policy paired with a stronger probe.
+            // Replace only the identity module's Unavailable fallback. A deployment may
+            // pre-register a stronger verifier that can positively prove the effective
+            // grant; Mainnet must not overwrite it with the conservative built-in probe.
+            RegisterDefaultOAuthClientEsAclProbe(services, configuration);
             services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IHostedService, AevatarOAuthClientEsAclStartupGuard>());
             // Self-heal projection-index schema drift at startup (reindex + atomic alias swap)
@@ -90,6 +87,35 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         return services;
     }
 
+    private static void RegisterDefaultOAuthClientEsAclProbe(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var registrations = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(IOAuthClientEsAclProbe))
+            .ToArray();
+        var customRegistrations = registrations
+            .Where(static descriptor =>
+                descriptor.ImplementationType != typeof(UnavailableOAuthClientEsAclProbe))
+            .ToArray();
+        if (customRegistrations.Length > 1)
+        {
+            throw new InvalidOperationException(
+                "Mainnet requires exactly one custom IOAuthClientEsAclProbe registration.");
+        }
+
+        foreach (var fallback in registrations.Except(customRegistrations))
+            services.Remove(fallback);
+
+        if (customRegistrations.Length == 1)
+            return;
+
+        services.AddSingleton<IOAuthClientEsAclProbe>(sp =>
+            new HttpOAuthClientEsAclProbe(
+                ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
+                sp.GetService<ILogger<HttpOAuthClientEsAclProbe>>()));
+    }
+
     private static void AddElasticsearchStores(IServiceCollection services, IConfiguration configuration)
     {
         RegisterElasticsearchAuditTrailArtifactStore(services, configuration);
@@ -101,7 +127,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<ChatRoutePolicyCurrentStateDocument>(services, configuration, static document => document.ActorId);
         TryAddElasticsearchStore<DeviceRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogDocument>(services, configuration, static document => document.Id);
-        TryAddElasticsearchStore<SkillRunnerExecutionDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogNyxCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentApiKeyRevocationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<HealthProbeTargetDocument>(services, configuration, static document => document.Id);
@@ -121,7 +146,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddInMemoryStore<ChatRoutePolicyCurrentStateDocument>(services, static document => document.ActorId);
         TryAddInMemoryStore<DeviceRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogDocument>(services, static document => document.Id);
-        TryAddInMemoryStore<SkillRunnerExecutionDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogNyxCredentialDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentApiKeyRevocationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<HealthProbeTargetDocument>(services, static document => document.Id);
@@ -154,7 +178,6 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<ChatRoutePolicyCurrentStateDocument>(services, "chat-route-policy-current-state", "ChatRoutePolicyGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<DeviceRegistrationDocument>(services, "device-registration", "DeviceGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);
-        TryAddReadModelDescriptor<SkillRunnerExecutionDocument>(services, "skill-runner-execution", "SkillRunnerGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogNyxCredentialDocument>(services, "user-agent-catalog-nyx-credential", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentApiKeyRevocationDocument>(services, "user-agent-api-key-revocation", "UserAgentCatalogGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<HealthProbeTargetDocument>(services, "health-probe-target", "HealthProbeGAgent", engineLabel, shape);
@@ -359,21 +382,39 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                         $"Elasticsearch audit artifact index '{_indexName}' was not found.");
                 }
 
-                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, null);
+                return new AuditTrailPage(
+                    [],
+                    null,
+                    DateTimeOffset.UtcNow,
+                    AuditQueryCoverage.Create(
+                        query,
+                        truncated: false,
+                        ingestionWatermark: null,
+                        completeThrough: null,
+                        schemaCompatibility: AuditSchemaCompatibility.Current));
             }
 
             await EnsureSuccessAsync(response, "audit artifact query", cancellationToken);
             var payload = await response.Content.ReadAsStringAsync(cancellationToken);
             using var jsonDocument = JsonDocument.Parse(payload);
-            var watermark = ParseAuditQueryWatermark(jsonDocument.RootElement);
+            var ingestionWatermark = ParseAuditIngestionWatermark(jsonDocument.RootElement);
+            var schemaCompatibility = ParseAuditSchemaCompatibility(jsonDocument.RootElement);
             if (!jsonDocument.RootElement.TryGetProperty("hits", out var hitsNode) ||
                 !hitsNode.TryGetProperty("hits", out var hitItems))
             {
-                return new AuditTrailPage([], null, DateTimeOffset.UtcNow, watermark);
+                return new AuditTrailPage(
+                    [],
+                    null,
+                    DateTimeOffset.UtcNow,
+                    AuditQueryCoverage.Create(
+                        query,
+                        truncated: false,
+                        ingestionWatermark: ingestionWatermark,
+                        completeThrough: null,
+                        schemaCompatibility: schemaCompatibility));
             }
 
-            var records = new List<AuditRecord>();
-            string? nextCursor = null;
+            var recordsWithCursors = new List<(AuditRecord Record, string? Cursor)>();
             foreach (var hit in hitItems.EnumerateArray())
             {
                 if (!hit.TryGetProperty("_source", out var sourceNode))
@@ -383,15 +424,24 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 if (storageDocument.Artifact?.Record is not { } record)
                     continue;
 
-                records.Add(record.Clone());
-                nextCursor = BuildSearchAfterCursor(hit);
+                recordsWithCursors.Add((record.Clone(), BuildSearchAfterCursor(hit)));
             }
+
+            var truncated = recordsWithCursors.Count > boundedTake;
+            var pageItems = recordsWithCursors.Take(boundedTake).ToArray();
+            var records = pageItems.Select(static item => item.Record).ToArray();
+            var nextCursor = truncated ? pageItems.LastOrDefault().Cursor : null;
 
             return new AuditTrailPage(
                 records,
-                records.Count == boundedTake ? nextCursor : null,
+                nextCursor,
                 DateTimeOffset.UtcNow,
-                watermark);
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated,
+                    ingestionWatermark,
+                    completeThrough: null,
+                    schemaCompatibility: schemaCompatibility));
         }
 
         public async Task<AuditTrailArtifactWriteResult> UpsertAsync(
@@ -526,7 +576,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             var filters = BuildAuditQueryFilters(query);
             var root = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
-                ["size"] = boundedTake,
+                ["size"] = boundedTake + 1,
                 ["sort"] = new object[]
                 {
                     new Dictionary<string, object?>
@@ -548,11 +598,55 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 },
                 ["aggs"] = new Dictionary<string, object?>
                 {
-                    ["query_watermark"] = new Dictionary<string, object?>
+                    ["ingestion"] = new Dictionary<string, object?>
                     {
-                        ["max"] = new Dictionary<string, object?>
+                        ["global"] = new Dictionary<string, object?>(),
+                        ["aggs"] = new Dictionary<string, object?>
                         {
-                            ["field"] = "artifact.occurred_at",
+                            ["watermark"] = new Dictionary<string, object?>
+                            {
+                                ["max"] = new Dictionary<string, object?>
+                                {
+                                    ["field"] = "artifact.recorded_at",
+                                },
+                            },
+                        },
+                    },
+                    ["incompatible_schema_records"] = new Dictionary<string, object?>
+                    {
+                        ["filter"] = new Dictionary<string, object?>
+                        {
+                            ["bool"] = new Dictionary<string, object?>
+                            {
+                                ["filter"] = new object[]
+                                {
+                                    new Dictionary<string, object?>
+                                    {
+                                        ["exists"] = new Dictionary<string, object?>
+                                        {
+                                            ["field"] = "artifact.schema_version",
+                                        },
+                                    },
+                                },
+                                ["must_not"] = new object[]
+                                {
+                                    new Dictionary<string, object?>
+                                    {
+                                        ["term"] = new Dictionary<string, object?>
+                                        {
+                                            ["artifact.schema_version.keyword"] =
+                                                AuditContractSemantics.CurrentSchemaVersion,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    ["legacy_schema_records"] = new Dictionary<string, object?>
+                    {
+                        ["missing"] = new Dictionary<string, object?>
+                        {
+                            ["field"] = "artifact.schema_version",
                         },
                     },
                 },
@@ -588,7 +682,9 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddTerm(filters, "artifact.operation_name.keyword", query.OperationName);
             AddTerm(filters, "artifact.target_kind.keyword", query.TargetKind);
             AddTerm(filters, "artifact.target_id.keyword", query.TargetId);
-            AddTerm(filters, "artifact.correlation_id.keyword", query.TraceId);
+            AddTerm(filters, "artifact.trace_id.keyword", query.TraceId);
+            AddTerm(filters, "artifact.correlation_id.keyword", query.CorrelationId);
+            AddTerm(filters, "artifact.record.correlation.causation_id.keyword", query.CausationId);
             AddTerm(filters, "artifact.request_id.keyword", query.RequestId);
             AddTerm(filters, "artifact.command_id.keyword", query.CommandId);
             AddTerm(filters, "artifact.record.correlation.call_id.keyword", query.CallId);
@@ -602,6 +698,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             AddEnumTerm(filters, "artifact.record.actor_kind.keyword", query.ActorKind);
             AddEnumTerm(filters, "artifact.record.operation_kind.keyword", query.OperationKind);
             AddEnumTerm(filters, "artifact.outcome.keyword", query.Outcome);
+            AddEnumTerm(filters, "artifact.lifecycle_phase.keyword", query.LifecyclePhase);
+            AddEnumTerm(filters, "artifact.terminal_outcome.keyword", query.TerminalOutcome);
             AddEnumTerm(filters, "artifact.sensitivity_level.keyword", query.SensitivityLevel);
             AddEnumTerm(filters, "artifact.record.capture_plane.keyword", query.CapturePlane);
             if (query.CommittedStateVersion.HasValue)
@@ -728,10 +826,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             return Convert.ToBase64String(Encoding.UTF8.GetBytes(sortNode.GetRawText()));
         }
 
-        private static DateTimeOffset? ParseAuditQueryWatermark(JsonElement root)
+        private static DateTimeOffset? ParseAuditIngestionWatermark(JsonElement root)
         {
             if (!root.TryGetProperty("aggregations", out var aggregations) ||
-                !aggregations.TryGetProperty("query_watermark", out var watermark) ||
+                !aggregations.TryGetProperty("ingestion", out var ingestion) ||
+                !ingestion.TryGetProperty("watermark", out var watermark) ||
                 !watermark.TryGetProperty("value_as_string", out var value) ||
                 value.ValueKind != JsonValueKind.String)
             {
@@ -745,6 +844,36 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 out var parsed)
                 ? parsed
                 : null;
+        }
+
+        private static AuditSchemaCompatibility ParseAuditSchemaCompatibility(JsonElement root)
+        {
+            if (!root.TryGetProperty("aggregations", out var aggregations))
+                return AuditSchemaCompatibility.Incompatible;
+
+            if (!aggregations.TryGetProperty("incompatible_schema_records", out var incompatible) ||
+                !incompatible.TryGetProperty("doc_count", out var incompatibleCountNode) ||
+                !incompatibleCountNode.TryGetInt64(out var incompatibleCount))
+            {
+                return AuditSchemaCompatibility.Incompatible;
+            }
+
+            if (incompatibleCount > 0)
+                return AuditSchemaCompatibility.Incompatible;
+
+            if (!aggregations.TryGetProperty("legacy_schema_records", out var legacy) ||
+                !legacy.TryGetProperty("doc_count", out var count) ||
+                !count.TryGetInt64(out var legacyCount))
+            {
+                return AuditSchemaCompatibility.Incompatible;
+            }
+
+            if (legacyCount > 0)
+            {
+                return AuditSchemaCompatibility.ContainsLegacyRecords;
+            }
+
+            return AuditSchemaCompatibility.Current;
         }
 
         private static AuditTrailArtifactWriteResult EvaluateExisting(

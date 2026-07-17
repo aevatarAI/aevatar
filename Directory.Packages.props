@@ -123,6 +123,7 @@
     <!-- ════════════════════════════════════════════════════════════ -->
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.2.0" />
     <PackageVersion Include="OpenAI" Version="2.9.1" />
+    <PackageVersion Include="Alibaba.OpenSandbox" Version="0.1.4" />
     <PackageVersion Include="Azure.Identity" Version="1.17.1" />
     <PackageVersion Include="LlmTornado" Version="3.8.43" />
     <PackageVersion Include="SIPSorcery" Version="8.0.23" />

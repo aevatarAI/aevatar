@@ -38,6 +38,7 @@ import {
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
+import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import type {
   StudioGraphEdgeData,
@@ -55,11 +56,14 @@ type MemberPublishedRunsReplayProps = {
   readonly initialActorId?: string;
   readonly initialRunId?: string;
   readonly memberId: string;
+  readonly scheduleId?: string;
   readonly scopeId: string;
   readonly teamId?: string;
 };
 
 type RunStatusTone = "default" | "processing" | "success" | "warning" | "error";
+
+const memberPublishedRunsTake = 200;
 
 const memberPublishedRunsReplayCss = `
 .member-published-runs-replay {
@@ -160,6 +164,41 @@ const memberPublishedRunsReplayCss = `
   gap: 8px;
   justify-content: space-between;
   min-width: 0;
+}
+
+.member-published-runs-replay__filter {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.member-published-runs-replay__filter-label {
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.member-published-runs-replay__filter-value {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-published-runs-replay__filter-hint {
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .member-published-runs-replay__list {
@@ -1067,12 +1106,14 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   initialActorId,
   initialRunId,
   memberId,
+  scheduleId,
   scopeId,
   teamId,
 }) => {
   const [selectedStepId, setSelectedStepId] = React.useState("");
   const normalizedInitialActorId = trimOptional(initialActorId);
   const normalizedInitialRunId = trimOptional(initialRunId);
+  const normalizedScheduleId = trimOptional(scheduleId);
   const normalizedTeamId = trimOptional(teamId);
 
   const memberQuery = useQuery({
@@ -1092,8 +1133,25 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
 
   const runsQuery = useQuery({
     enabled: memberReady,
-    queryFn: () => scopeRuntimeApi.listMemberRuns(scopeId, memberId, { take: 200 }),
-    queryKey: ["runtime-member-published-runs", scopeId, memberId],
+    queryFn: () =>
+      scopeRuntimeApi.listMemberRuns(
+        scopeId,
+        memberId,
+        normalizedScheduleId
+          ? {
+              scheduleId: normalizedScheduleId,
+              take: memberPublishedRunsTake,
+            }
+          : {
+              take: memberPublishedRunsTake,
+            },
+      ),
+    queryKey: [
+      "runtime-member-published-runs",
+      scopeId,
+      memberId,
+      normalizedScheduleId,
+    ],
     retry: false,
   });
 
@@ -1128,11 +1186,19 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
         actorId: selectedCatalogRun.actorId || undefined,
         memberId,
         runId: selectedCatalogRun.runId,
+        scheduleId: normalizedScheduleId || undefined,
         scopeId,
         teamId: normalizedTeamId,
       }),
     );
-  }, [memberId, normalizedInitialRunId, normalizedTeamId, scopeId, selectedCatalogRun]);
+  }, [
+    memberId,
+    normalizedInitialRunId,
+    normalizedScheduleId,
+    normalizedTeamId,
+    scopeId,
+    selectedCatalogRun,
+  ]);
 
   const auditQuery = useQuery({
     enabled: auditCanLoad,
@@ -1218,13 +1284,14 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
           actorId: run.actorId || undefined,
           memberId,
           runId: run.runId,
+          scheduleId: normalizedScheduleId || undefined,
           scopeId,
           teamId: normalizedTeamId,
         }),
       );
       setSelectedStepId("");
     },
-    [memberId, normalizedTeamId, scopeId],
+    [memberId, normalizedScheduleId, normalizedTeamId, scopeId],
   );
 
   const handleNodeSelect = React.useCallback((nodeId: string) => {
@@ -1243,13 +1310,13 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunDisplayName = getRunDisplayName(selectedRun);
   const teamOverviewHref = buildTeamDetailHref({
     scopeId,
-    tab: "overview",
+    tab: builtInTeamDetailTabIds.overview,
     teamId: normalizedTeamId,
   });
   const teamMembersHref = buildTeamDetailHref({
     memberId,
     scopeId,
-    tab: "members",
+    tab: builtInTeamDetailTabIds.members,
     teamId: normalizedTeamId,
   });
   const backToTeamMembersLabel = t(
@@ -1341,6 +1408,31 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
               />
             </Tooltip>
           </div>
+          {normalizedScheduleId ? (
+            <div
+              className="member-published-runs-replay__filter"
+              data-testid="member-published-runs-schedule-filter"
+            >
+              <span className="member-published-runs-replay__filter-label">
+                {t(
+                  "pages.runs.memberPublishedRuns.scheduleFilter",
+                  "Schedule filter",
+                )}
+              </span>
+              <span
+                className="member-published-runs-replay__filter-value"
+                title={normalizedScheduleId}
+              >
+                {normalizedScheduleId}
+              </span>
+              <span className="member-published-runs-replay__filter-hint">
+                {t(
+                  "pages.runs.memberPublishedRuns.scheduleFilterLagHint",
+                  "Accepted manual runs may take a moment to appear.",
+                )}
+              </span>
+            </div>
+          ) : null}
         </div>
         <div className="member-published-runs-replay__list">
           {memberQuery.isLoading || memberNotFound || runsQuery.isLoading ? (
@@ -1395,10 +1487,15 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={
-                  t(
-                    "pages.runs.memberPublishedRuns.noRuns",
-                    "No published runs yet.",
-                  )
+                  normalizedScheduleId
+                    ? t(
+                        "pages.runs.memberPublishedRuns.noScheduleRuns",
+                        "No runs for this schedule yet. Accepted manual runs may take a moment to appear.",
+                      )
+                    : t(
+                        "pages.runs.memberPublishedRuns.noRuns",
+                        "No published runs yet.",
+                      )
                 }
               />
             </div>

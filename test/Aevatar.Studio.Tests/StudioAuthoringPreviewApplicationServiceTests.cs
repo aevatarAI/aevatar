@@ -78,7 +78,7 @@ public sealed class StudioAuthoringPreviewApplicationServiceTests
         var parsed = new WorkflowParser().Parse(yaml);
         parsed.Name.Should().Be("generated");
         parsed.Steps.Should().ContainSingle(step => step.Id == "chat");
-        llm.StreamCallCount.Should().Be(1);
+        llm.StreamCallCount.Should().Be(2);
     }
 
     [Fact]

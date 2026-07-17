@@ -88,6 +88,35 @@ public sealed class ScheduledDispatchCurrentStateProjector
             TargetActorId = state.TargetActorId ?? string.Empty,
             Deleted = state.Deleted,
             Completed = state.Completed,
+            TeamOwned = state.TeamAutomationOwner != null,
+            TeamAutomationOwner = state.TeamAutomationOwner == null
+                ? null
+                : new TeamMemberAutomationOwnerDocument
+                {
+                    ScopeId = state.TeamAutomationOwner.ScopeId ?? string.Empty,
+                    MemberId = state.TeamAutomationOwner.MemberId ?? string.Empty,
+                },
+            TeamAutomationLifecycleStatus = ToProjectionLifecycleStatus(
+                state.TeamAutomationLifecycleStatus),
+            TeamAutomationOperationId = state.TeamAutomationOperationId ?? string.Empty,
+            TeamAutomationIdempotencyKey = state.TeamAutomationIdempotencyKey ?? string.Empty,
+            ActiveCredentialOwner = state.ActiveTeamCredentialOwner == null
+                ? null
+                : new ScheduledInvocationAuthorizationOwnerDocument
+                {
+                    Authority = state.ActiveTeamCredentialOwner.Authority ?? string.Empty,
+                    OwnerKind = state.ActiveTeamCredentialOwner.OwnerKind ?? string.Empty,
+                    OwnerSubject = state.ActiveTeamCredentialOwner.OwnerSubject ?? string.Empty,
+                },
+            CredentialGeneration = state.TeamCredentialGeneration,
+            NyxidRevocationStatus = state.NyxidRevocationStatus.ToString(),
+            VaultRevocationStatus = state.VaultRevocationStatus.ToString(),
+            RevocationPending = state.PendingRevocationTeamCredential != null ||
+                state.NyxidRevocationStatus == TeamAutomationEffectTrackStatusState.Pending ||
+                state.VaultRevocationStatus == TeamAutomationEffectTrackStatusState.Pending,
+            LastAuthorizationErrorCode = state.LastAuthorizationErrorCode ?? string.Empty,
+            PermissionDigest = state.TeamAutomationPermissionDigest ?? string.Empty,
+            PolicyVersion = state.TeamAutomationPolicyVersion ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -101,6 +130,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.DeletedAt = state.DeletedAt;
         document.OneShotFireAt = state.OneShotFireAt;
         document.CompletedAt = state.CompletedAt;
+        document.CredentialExpiresAt = state.TeamCredentialExpiresAt?.ToDateTimeOffset();
         document.Headers = state.Headers
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
@@ -174,7 +204,6 @@ public sealed class ScheduledDispatchCurrentStateProjector
         stateKind switch
         {
             ScheduledDispatchScheduleKindState.Workflow => ScheduledDispatchScheduleKind.Workflow,
-            ScheduledDispatchScheduleKindState.SkillRunner => ScheduledDispatchScheduleKind.SkillRunner,
             _ => ScheduledDispatchScheduleKind.Generic,
         };
 
@@ -271,6 +300,24 @@ public sealed class ScheduledDispatchCurrentStateProjector
         stateMode == ScheduledDispatchScheduleModeState.OneShotAtUtc
             ? ScheduledDispatchScheduleMode.OneShotAtUtc
             : ScheduledDispatchScheduleMode.RecurringCron;
+
+    private static TeamAutomationLifecycleStatusDocument ToProjectionLifecycleStatus(
+        TeamAutomationLifecycleStatusState status) =>
+        status switch
+        {
+            TeamAutomationLifecycleStatusState.ProvisioningPending =>
+                TeamAutomationLifecycleStatusDocument.ProvisioningPending,
+            TeamAutomationLifecycleStatusState.Active => TeamAutomationLifecycleStatusDocument.Active,
+            TeamAutomationLifecycleStatusState.NeedsAuthorization =>
+                TeamAutomationLifecycleStatusDocument.NeedsAuthorization,
+            TeamAutomationLifecycleStatusState.ReplacementPending =>
+                TeamAutomationLifecycleStatusDocument.ReplacementPending,
+            TeamAutomationLifecycleStatusState.Deleting => TeamAutomationLifecycleStatusDocument.Deleting,
+            TeamAutomationLifecycleStatusState.RevocationPending =>
+                TeamAutomationLifecycleStatusDocument.RevocationPending,
+            TeamAutomationLifecycleStatusState.Failed => TeamAutomationLifecycleStatusDocument.Failed,
+            _ => TeamAutomationLifecycleStatusDocument.Unspecified,
+        };
 
     private static long ResolveTimestampSeconds(Timestamp? timestamp) =>
         timestamp?.Seconds ?? 0;

@@ -6,18 +6,18 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 
 /// <summary>
 /// Single-use guard for NyxID identity-assertion <c>jti</c> values: it lets an assertion be
-/// consumed exactly once within its own lifetime so a captured assertion cannot be replayed.
+/// consumed exactly once within its accepted lifetime so a captured assertion cannot be replayed.
 /// </summary>
 internal interface IIdentityAssertionReplayGuard
 {
     /// <summary>
     /// Records first use of <paramref name="jti"/> and returns <see langword="true"/>; returns
     /// <see langword="false"/> if the same <paramref name="jti"/> was already consumed and its
-    /// lifetime (bounded by <paramref name="expiresUtc"/>) has not yet elapsed.
+    /// accepted lifetime (bounded by <paramref name="acceptedUntilUtc"/>) has not yet elapsed.
     /// </summary>
     ValueTask<bool> TryConsumeAsync(
         string jti,
-        DateTimeOffset expiresUtc,
+        DateTimeOffset acceptedUntilUtc,
         CancellationToken cancellationToken = default);
 }
 
@@ -49,7 +49,7 @@ internal sealed class InMemoryIdentityAssertionReplayGuard : IIdentityAssertionR
 
     public ValueTask<bool> TryConsumeAsync(
         string jti,
-        DateTimeOffset expiresUtc,
+        DateTimeOffset acceptedUntilUtc,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -70,10 +70,10 @@ internal sealed class InMemoryIdentityAssertionReplayGuard : IIdentityAssertionR
                     return ValueTask.FromResult(false);
             }
 
-            // Bound the retention window by the assertion's own expiry; a non-positive window
-            // (already-expired assertion) is rejected upstream by lifetime validation, but if it
-            // reaches here we still record it so an immediate duplicate is caught.
-            var retainUntil = expiresUtc > now ? expiresUtc : now;
+            // Bound retention by the validator's accepted-lifetime boundary. A non-positive
+            // window is rejected upstream by lifetime validation, but if it reaches here we
+            // still record it so an immediate duplicate is caught.
+            var retainUntil = acceptedUntilUtc > now ? acceptedUntilUtc : now;
             _seenExpiryByJti[jti] = retainUntil;
             _expiryOrder.Enqueue(jti, retainUntil);
             return ValueTask.FromResult(true);
@@ -131,7 +131,7 @@ internal sealed class GarnetIdentityAssertionSingleUseStore : IIdentityAssertion
 /// <summary>
 /// Cluster-wide single-use guard backed by Garnet's atomic SET-NX operation and key TTL.
 /// Multiple host replicas share the same key namespace, so exactly one request can consume
-/// a given assertion <c>jti</c> during its signed lifetime.
+/// a given assertion <c>jti</c> during its accepted lifetime.
 /// </summary>
 internal sealed class DistributedIdentityAssertionReplayGuard : IIdentityAssertionReplayGuard
 {
@@ -151,13 +151,13 @@ internal sealed class DistributedIdentityAssertionReplayGuard : IIdentityAsserti
 
     public ValueTask<bool> TryConsumeAsync(
         string jti,
-        DateTimeOffset expiresUtc,
+        DateTimeOffset acceptedUntilUtc,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(jti))
             throw new ArgumentException("jti must be a non-empty value.", nameof(jti));
 
-        var retention = expiresUtc - _timeProvider.GetUtcNow();
+        var retention = acceptedUntilUtc - _timeProvider.GetUtcNow();
         if (retention < MinimumRetention)
             retention = MinimumRetention;
 

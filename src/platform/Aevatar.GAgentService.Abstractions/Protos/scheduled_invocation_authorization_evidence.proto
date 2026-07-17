@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.schedules.authorization;
+option csharp_namespace = "Aevatar.GAgentService.Abstractions.Schedules.Authorization";
+
+enum AuthorizationOwnerKind {
+  AUTHORIZATION_OWNER_KIND_UNSPECIFIED = 0;
+  AUTHORIZATION_OWNER_KIND_PERSONAL = 1;
+  AUTHORIZATION_OWNER_KIND_ORGANIZATION = 2;
+}
+
+enum NyxIdAuthorizationAccess {
+  NYX_ID_AUTHORIZATION_ACCESS_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_ACCESS_PERMITTED = 1;
+  NYX_ID_AUTHORIZATION_ACCESS_VIEW_ONLY = 2;
+  NYX_ID_AUTHORIZATION_ACCESS_DENIED = 3;
+}
+
+enum NyxIdNodeRole {
+  NYX_ID_NODE_ROLE_UNSPECIFIED = 0;
+  NYX_ID_NODE_ROLE_PRIMARY = 1;
+  NYX_ID_NODE_ROLE_FALLBACK = 2;
+}
+
+enum NyxIdNodeEdgeKind {
+  NYX_ID_NODE_EDGE_KIND_UNSPECIFIED = 0;
+  NYX_ID_NODE_EDGE_KIND_USER_SERVICE_PRIMARY = 1;
+  NYX_ID_NODE_EDGE_KIND_NODE_BINDING = 2;
+}
+
+enum AuthorizationGrantRequirement {
+  AUTHORIZATION_GRANT_REQUIREMENT_UNSPECIFIED = 0;
+  AUTHORIZATION_GRANT_REQUIREMENT_REQUIRED = 1;
+  AUTHORIZATION_GRANT_REQUIREMENT_NOT_REQUIRED = 2;
+}
+
+message AuthorizationOwnerIdentity {
+  string authority = 1;
+  AuthorizationOwnerKind owner_kind = 2;
+  string owner_subject = 3;
+}
+
+message NyxIdAuthorizationNodeEvidence {
+  string node_id = 1;
+  string display_name = 2;
+  NyxIdNodeRole role = 3;
+  NyxIdNodeEdgeKind edge_kind = 4;
+  string binding_id = 5;
+  int32 route_priority = 6;
+}
+
+message NyxIdAuthorizationServiceEvidence {
+  string user_service_id = 1;
+  string service_slug = 2;
+  string display_name = 3;
+  NyxIdAuthorizationAccess access = 4;
+  AuthorizationGrantRequirement node_grant_requirement = 5;
+  repeated NyxIdAuthorizationNodeEvidence nodes = 6;
+}
+
+message NyxIdAuthorizationCatalogContent {
+  AuthorizationOwnerIdentity owner = 1;
+  repeated NyxIdAuthorizationServiceEvidence services = 2;
+}
+
+message WorkflowRevisionAuthorizationEvidence {
+  repeated string connector_capability_refs = 1;
+  bool owner_llm_route_required = 2;
+  repeated string nyx_id_service_ids = 3;
+  repeated string nyx_id_service_slugs = 4;
+  AuthorizationGrantRequirement service_grant_requirement = 5;
+}

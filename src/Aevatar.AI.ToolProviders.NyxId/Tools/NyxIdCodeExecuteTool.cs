@@ -81,10 +81,6 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
                    ?? _sandboxServiceSlug
                    ?? await DiscoverSandboxSlugAsync(token, ct);
 
-        // Last resort: try well-known sandbox slugs directly
-        if (string.IsNullOrWhiteSpace(slug))
-            slug = await ProbeKnownSandboxSlugsAsync(token, ct);
-
         if (string.IsNullOrWhiteSpace(slug))
         {
             return """{"error":"No sandbox service connected. Use nyxid_catalog to browse available sandbox services, then connect one with nyxid_services."}""";
@@ -92,7 +88,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
 
         _logger.LogInformation("[code_execute] {Language} via slug={Slug}", language, slug);
 
-        // Current chrono-sandbox-service exposes /execute with body { language, script }.
+        // chrono-sandbox exposes /execute with body { language, script }.
         // Older sandbox builds expose /run with body { language, code }. We POST the modern
         // contract first; on a NyxID-proxy 404 (slug exists but upstream returned 404, which
         // indicates the path doesn't exist on that backend), retry the legacy contract so a
@@ -148,7 +144,7 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
             return null;
 
         // Parse the connected services context to find sandbox slug.
-        // The context contains lines like: "- **name** (slug: `chrono-sandbox-service`)"
+        // The context contains lines like: "- **name** (slug: `chrono-sandbox`)"
         foreach (var line in context.Split('\n'))
         {
             if (!line.Contains("sandbox", StringComparison.OrdinalIgnoreCase))
@@ -202,53 +198,6 @@ public sealed class NyxIdCodeExecuteTool : IAgentTool
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[code_execute] Fallback sandbox discovery failed");
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Last resort: try well-known sandbox slugs with a lightweight probe request.
-    /// If the proxy returns a non-error response, the slug is valid.
-    /// </summary>
-    private static readonly string[] KnownSandboxSlugs =
-        [NyxIdToolOptions.DefaultSandboxServiceSlug, "chrono-sandbox", "sandbox"];
-
-    private async Task<string?> ProbeKnownSandboxSlugsAsync(string token, CancellationToken ct)
-    {
-        foreach (var candidate in KnownSandboxSlugs)
-        {
-            try
-            {
-                // Probe with a minimal request — just check if the slug is routable.
-                // NyxID proxy returns {"error": true, "status": 404} when the slug doesn't exist.
-                // Any other response (even upstream 4xx/5xx) means the slug is valid.
-                var response = await _client.ProxyRequestAsync(
-                    token, candidate, "/health", "GET", null, null, ct);
-
-                // Check for NyxID-level "slug not found" error
-                if (response.Contains("\"error\"") &&
-                    (response.Contains("\"status\": 404") || response.Contains("\"status\":404")))
-                {
-                    continue; // This slug doesn't exist in NyxID
-                }
-
-                // Check for connection-level errors (the response from SendAsync catch block)
-                if (response.Contains("\"error\": true") && response.Contains("\"message\""))
-                {
-                    continue; // Network error, can't determine if slug exists
-                }
-
-                _logger.LogInformation("[code_execute] Probed known sandbox slug: {Slug}", candidate);
-                return candidate;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "[code_execute] Failed to probe known sandbox slug: {Slug}",
-                    candidate);
-            }
         }
 
         return null;

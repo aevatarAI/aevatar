@@ -41,6 +41,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
 
         var document = await store.GetAsync("schedule-1");
         document.Should().NotBeNull();
+        (await store.GetAsync("scheduled-dispatch:schedule-1")).Should().BeNull();
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.ServiceId.Should().Be("svc");
         document.ServiceEndpointId.Should().Be("chat");
@@ -348,6 +349,111 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.Should().NotBeNull();
         document!.OverdueFireDetectedCount.Should().Be(3);
         document.LastOverdueFireAt.Should().Be(lastOverdueFireAt);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldProjectTeamOwnerAndHealthWithoutCredentialReferences()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-16T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-schedule",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            CurrentTeamId = "team-alpha",
+        };
+        state.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
+        state.TeamAutomationOperationId = "operation-alpha";
+        state.TeamAutomationPermissionDigest = "digest-alpha";
+        state.TeamCredentialGeneration = 3;
+        state.LastAuthorizationErrorCode = "vault_revoke_pending";
+        state.TeamCredentialExpiresAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-16T00:00:00+00:00"));
+        state.PendingRevocationTeamCredential = new ScheduledInvocationAgentKeyCredentialReferenceState
+        {
+            ApiKeyId = "api-key-sensitive-id",
+            KeyExpiresAtUnixMs = DateTimeOffset.Parse("2026-08-16T00:00:00+00:00")
+                .ToUnixTimeMilliseconds(),
+            SecretReference = new SecretReference
+            {
+                Ref = "sec-sensitive-reference",
+                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                OwnerScopeKey = "scope-alpha:member-alpha",
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-schedule"),
+            WrapCommitted(
+                state,
+                version: 17,
+                eventId: "evt-team",
+                observedAt: DateTimeOffset.Parse("2026-07-16T01:00:00+00:00")));
+
+        var document = await store.GetAsync("team-schedule");
+        document.Should().NotBeNull();
+        document!.TeamOwned.Should().BeTrue();
+        document.TeamAutomationOwner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerDocument
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+        });
+        document.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusDocument.RevocationPending);
+        document.RevocationPending.Should().BeTrue();
+        document.StateVersion.Should().Be(17);
+        AssertDocumentDoesNotContain(document, "api-key-sensitive-id");
+        AssertDocumentDoesNotContain(document, "sec-sensitive-reference");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldExposeNeedsAuthorizationWithStableCredentialFailureCode()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-16T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-needs-authorization",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+        };
+        state.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.NeedsAuthorization;
+        state.LastAuthorizationErrorCode = "credential_unresolvable";
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-needs-authorization"),
+            WrapCommitted(
+                state,
+                version: 18,
+                eventId: "evt-needs-authorization",
+                observedAt: DateTimeOffset.Parse("2026-07-16T02:00:00+00:00")));
+
+        var document = await store.GetAsync("team-needs-authorization");
+        document.Should().NotBeNull();
+        document!.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusDocument.NeedsAuthorization);
+        document.LastAuthorizationErrorCode.Should().Be("credential_unresolvable");
+        document.StateVersion.Should().Be(18);
     }
 
     private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>

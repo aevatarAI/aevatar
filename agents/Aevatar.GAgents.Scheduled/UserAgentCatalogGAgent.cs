@@ -111,8 +111,8 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
                 existing?.LarkReceiveIdFallback,
                 existing?.LarkReceiveIdTypeFallback),
 #pragma warning restore CS0612
-            OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
-                ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
+            OutputFormat = command.OutputFormat == ScheduledAgentOutputFormat.Auto
+                ? existing?.OutputFormat ?? ScheduledAgentOutputFormat.Auto
                 : command.OutputFormat,
         };
 

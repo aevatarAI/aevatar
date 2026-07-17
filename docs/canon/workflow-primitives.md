@@ -400,14 +400,28 @@ steps:
 
 #### NyxID `codex_exec` 工具
 
-`codex_exec` 是 NyxID tool provider 提供的受限 SSH command profile，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。
+`codex_exec` 是 NyxID tool provider 暴露的受限执行路由，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。它只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 `danger-full-access`。
 
-- 路由：`service` 是 NyxID SSH 类型 UserService 的 slug/UUID，不是裸 `node_id`。NyxID 把 service 解析为 catalog SSH service，再通过该 service 的 node binding 路由。若 Codex 装在 node 机器本身，SSH service 必须指向该机器并绑定该 node。
-- 输入：工具只接受 `service`、`principal`、`prompt` 与可选 `timeout_secs`。prompt 会在 Aevatar 内编码后，由固定的 `codex exec -` 命令通过 stdin 提交，workflow 不能追加 shell/Codex flags。
-- 实现：`ssh_exec` 与 `codex_exec` 共用 typed NyxID SSH executor；service 解析、caller token、HTTP 调用和 timeout 只有一份实现。两个 tool 各自只负责边界参数解析与策略。
-- 配置：Codex 安装、登录态、model、sandbox、approval policy 与其他 Codex 行为由目标 SSH principal 的 node-local Codex 配置负责；进程工作目录由该 SSH 账号/目标主机部署负责。Aevatar 和 NyxID 不选择 Codex Pro 或任何模型。
-- 边界：NyxID SSH exec 最长 `300s`，prompt 最多 `6000` UTF-8 bytes，stdout/stderr 各最多 `1MiB`。预计超过五分钟的任务使用 `workflows/codex_long_running_handoff.yaml` 的 submit/callback continuation 模式。
-- 安全：`codex_exec` 与 `ssh_exec` 一起受 `NyxIdToolOptions.EnableSshExecTool` 和同一审批策略控制。目标主机应是专用 sandbox；不要在 workflow YAML 中携带 Codex token、`CODEX_HOME`、model 或 sandbox bypass 参数。
+- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 直连 OpenSandbox，固定使用 operator-owned digest 镜像、`empty_git` workspace、Landlock profile、NyxID Responses gateway 和最长 `180s` timeout。调用者必须有 authenticated NyxID authority、有效 broker binding、`llm:proxy` consent，并位于部署 allowlist。
+- `private_ssh`：`target.private_ssh.service` 是 NyxID SSH UserService 的 slug/UUID，不是 `node_id`；`principal` 是该 service 允许的 Unix principal。Codex 登录态、workspace 与 sandbox policy 由目标机固定 wrapper 负责，最长 `300s`。
+- prompt 最多 `6000` UTF-8 bytes，只通过 stdin/file boundary 进入固定命令，不参与 shell command 拼接。
+- managed target 返回包含 `status/target/output/exit_code/diagnostic_id/elapsed_ms` 的 JSON；private SSH target 保留 NyxID SSH executor 的结构化结果。
+- 配置检查、node online 或 OpenSandbox health 只证明局部依赖；必须运行真实 sample 并得到精确 `CODEX_EXEC_READY` 才能声明可用。
+
+Managed sample 不接收调用者路由参数：
+
+```yaml
+steps:
+  - id: verify_managed_codex
+    type: tool_call
+    timeout_ms: 200000
+    parameters:
+      tool: codex_exec
+      arguments: >-
+        {"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"Reply with exactly CODEX_EXEC_READY","timeout_secs":180}
+```
+
+Private SSH sample 使用 nested target，禁止继续使用旧的 root-level `service/principal`：
 
 ```yaml
 steps:
@@ -416,8 +430,11 @@ steps:
     timeout_ms: 320000
     parameters:
       tool: codex_exec
-      arguments: '{"service":"${json(input.service)}","principal":"${json(input.principal)}","prompt":"${json(input.prompt)}","timeout_secs":300}'
+      arguments: >-
+        {"target":{"kind":"private_ssh","private_ssh":{"service":"${json(input.service)}","principal":"${json(input.principal)}"}},"prompt":"${json(input.prompt)}","timeout_secs":300}
 ```
+
+完整架构边界见 [Managed Codex Execution](managed-codex-execution.md)，部署与 tenant smoke 见 [managed codex_exec rollout runbook](../operations/2026-07-16-managed-codex-exec-rollout.md)。
 
 #### Lark approval status 工具
 

@@ -10,6 +10,7 @@ using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
 using NSubstitute;
@@ -20,6 +21,7 @@ using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
@@ -2233,17 +2235,17 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
         var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
-        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory, new ScheduledAgentCreatorOptions());
+        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory);
         var agentBuilderSource = new AgentBuilderToolSource(
             Substitute.For<IUserAgentCatalogQueryPort>(),
-            Substitute.For<ISkillRunnerExecutionQueryPort>(),
-            Substitute.For<ISkillRunnerCommandPort>(),
             Substitute.For<IScheduledDispatchApplicationService>(),
             Substitute.For<IScheduledWorkflowAgentCreationPort>(),
             catalogCommandPort,
             Substitute.For<ICallerScopeResolver>(),
             new ScheduledAgentCreateRequestMapper(),
-            new ScheduledAgentCredentialLifecycle(new InMemorySecretVault(), catalogCommandPort, issuer));
+            new ScheduledAgentCredentialLifecycle(new InMemorySecretVault(), catalogCommandPort, issuer),
+            Substitute.For<IScheduledInvocationAuthorizationPlanner>(),
+            Substitute.For<IScheduledInvocationAuthorizationRevalidator>());
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
             toolSources: [agentBuilderSource]);

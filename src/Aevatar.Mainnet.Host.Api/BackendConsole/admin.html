@@ -1631,23 +1631,40 @@ function obsOpenDirectRun(runId,rerenderList,rerenderDetail){
   delete OBS_DETAIL[runId];
   loadObsDetail(runId,function(){ if(rerenderList) rerenderList(); if(rerenderDetail) rerenderDetail(); });
 }
-/* 选中 run 时懒加载详情 + DAG，缓存到 OBS_DETAIL[runId]。 */
-function loadObsDetail(runId,rerender){
+function obsDetailsEqual(left,right){
+  if(left===right) return true;
+  if(!left||!right) return false;
+  return JSON.stringify(left)===JSON.stringify(right);
+}
+/* 选中 run 时懒加载详情 + DAG，缓存到 OBS_DETAIL[runId]；轮询刷新保留已渲染详情。 */
+function loadObsDetail(runId,rerender,refresh){
   if(!runId) return Promise.resolve();
-  if(OBS_DETAIL[runId] && (OBS_DETAIL[runId].loading || OBS_DETAIL[runId].detail)) { if(rerender) rerender(); return Promise.resolve(); }
-  OBS_DETAIL[runId]={loading:true,err:null,detail:null}; if(rerender) rerender();
+  var cache=OBS_DETAIL[runId]||null;
+  if(cache&&cache.loading) return Promise.resolve(false);
+  if(cache&&cache.detail&&!refresh) return Promise.resolve(false);
+  var previousDetail=(cache&&cache.detail)||null;
+  OBS_DETAIL[runId]={loading:true,err:null,detail:previousDetail};
+  if(rerender&&!previousDetail) rerender();
   var base=(ACCOUNT&&ACCOUNT.admin)
     ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)
     : '/api/workflow/observatory/runs/'+encodeURIComponent(runId);
   return Promise.all([
     adminJson(base).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
     loadObsGraph(runId).catch(function(){ return null; })
-  ]).then(function(res){ var d=res[0], g=res[1];
-    if(d&&d.forbidden){ OBS_DETAIL[runId]={loading:false,err:'无权查看该 run（403）',detail:null}; }
-    else if(!d){ OBS_DETAIL[runId]={loading:false,err:'该 run 不存在或不在当前账号的可见范围',detail:null}; }
-    else { var detail=mapObsDetail(d,g); OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail); }
-  }).catch(function(e){ OBS_DETAIL[runId]={loading:false,err:(e&&(e.body||e.message))||'详情加载失败',detail:null}; })
-  .then(function(){ if(rerender) rerender(); });
+  ]).then(function(res){ var d=res[0], g=res[1], err=null;
+    if(d&&d.forbidden) err='无权查看该 run（403）';
+    else if(!d) err='该 run 不存在或不在当前账号的可见范围';
+    if(err){
+      if(previousDetail){ OBS_DETAIL[runId]={loading:false,err:null,refreshErr:err,detail:previousDetail}; return false; }
+      OBS_DETAIL[runId]={loading:false,err:err,detail:null}; return true;
+    }
+    var detail=mapObsDetail(d,g), changed=!obsDetailsEqual(previousDetail,detail);
+    OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail);
+    return changed;
+  }).catch(function(e){ var err=(e&&(e.body||e.message))||'详情加载失败';
+    if(previousDetail){ OBS_DETAIL[runId]={loading:false,err:null,refreshErr:err,detail:previousDetail}; return false; }
+    OBS_DETAIL[runId]={loading:false,err:err,detail:null}; return true;
+  }).then(function(changed){ if(rerender&&changed) rerender(); return changed; });
 }
 function loadObsGraph(runId){
   var path=(ACCOUNT&&ACCOUNT.admin)
@@ -1767,8 +1784,8 @@ var SCHED_LOADED=false, SCHED_ERR=null, SCHED_BUSY=null, SCHED_PREVIEW=null;
 var SCHED_FILTER='all';        /* all | enabled | disabled | failing —— 真实页无过滤，此为增强项 */
 var SCHED_TIMER=null;          /* 3s 轮询句柄（对齐真实页 startSchedulePolling 的 3000ms） */
 var SCHED_OPEN={};             /* 展开了详情（serviceKey/serviceId/payloadTypeUrl）的行 id 集合 */
-/* scheduleKind 0=Generic 1=Workflow 2=SkillRunner（数值，后端无 string 枚举转换器） */
-var SCHED_KIND_LABEL={0:'Generic',1:'Workflow',2:'SkillRunner'};
+/* scheduleKind 0=Generic 1=Workflow（数值，后端无 string 枚举转换器） */
+var SCHED_KIND_LABEL={0:'Generic',1:'Workflow'};
 function _schKind(k){ return SCHED_KIND_LABEL[k]!=null?SCHED_KIND_LABEL[k]:('kind '+k); }
 /* targetKind 0=Envelope 1=ServiceInvocation */
 var SCHED_TARGET_LABEL={0:'Envelope',1:'ServiceInvocation'};
@@ -3039,8 +3056,8 @@ function obsDetail(r){
   var chips='<span class="run-chip c-scope">scope '+esc(r.scope)+'</span><span class="run-chip c-def">def '+esc(r.definition)+'</span><span class="run-chip c-run">'+esc(r.id)+'</span><button class="ibtn" data-act="obsCopy" data-copy="'+esc(r.id)+'" style="height:24px">复制</button>';
   var head='<div class="obs-detail-head"><div class="odh-top"><span class="sub-title" style="font-size:16px">'+esc(r.name)+'</span>'+statusTag(r.status)+'</div>'+
     '<div class="run-chips">'+chips+'</div></div>';
-  if(cache&&cache.loading) return head+'<div class="obs-loading">正在加载运行详情…</div>';
-  if(cache&&cache.err) return head+'<div class="alert"><span class="grow">'+esc(cache.err)+'</span><button class="btn" data-act="obsReloadDetail" data-run="'+esc(r.id)+'">重试</button></div>';
+  if(cache&&cache.loading&&!d) return head+'<div class="obs-loading">正在加载运行详情…</div>';
+  if(cache&&cache.err&&!d) return head+'<div class="alert"><span class="grow">'+esc(cache.err)+'</span><button class="btn" data-act="obsReloadDetail" data-run="'+esc(r.id)+'">重试</button></div>';
   if(!d) return head+'<div class="obs-loading">准备加载运行详情…</div>';
   r=d; /* 渲染映射后的详情，沿用既有结构 */
   var usage='<div class="usage-strip">'+
@@ -3102,21 +3119,23 @@ function viewObservatory(){
 function bindObservatory(root){
   /* root = 本次渲染的 .view（每次渲染都是新元素），事件委托不会跨访问累积 */
   function reList(){ var l=root.querySelector('#obs-list'); if(l) l.innerHTML=obsList(); }
-  function reDetail(){ var d=root.querySelector('#obs-detail'); if(d) d.innerHTML=obsDetail(obsSelected()); }
+  function reDetail(resetScroll){ var d=root.querySelector('#obs-detail'); if(d){ var scrollTop=resetScroll?0:d.scrollTop;
+    d.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; } }
   function reBar(){ var b=root.querySelector('.obs-filterbar'); if(b) b.outerHTML=obsFilterBar(); }
   function reAdminBar(){ var b=root.querySelector('.obs-adminbar'); if(b){ var v=viewObservatory(); /* 仅用其 adminBar 片段刷新提示 */ } }
-  function selectRun(id){ OBS_STATE.selectedId=id; reList(); reDetail(); loadObsDetail(id,reDetail); }
+  function selectRun(id){ OBS_STATE.selectedId=id; reList(); reDetail(true); loadObsDetail(id,function(){ if(OBS_STATE.selectedId===id) reDetail(true); }); }
   /* 首屏拉取真实运行列表，到达后选中首行并预取其详情 */
   loadObsRuns(function(){ reList(); reDetail(); var sel=obsSelected(); if(sel) loadObsDetail(sel.id,reDetail); });
   if(OBS_POLL_TIMER) clearInterval(OBS_POLL_TIMER);
   OBS_POLL_TIMER=setInterval(function(){
     var routeParts=curParts();
     if(document.hidden||(routeParts[0]||defaultModule())!=='observatory') return;
+    var listBefore=JSON.stringify({runs:OBS_RUNS,err:OBS_RUNS_ERR});
     loadObsRuns().then(function(){
-      reList(); var selected=obsSelected();
+      if(listBefore!==JSON.stringify({runs:OBS_RUNS,err:OBS_RUNS_ERR})){ reList(); reDetail(); }
+      var selected=obsSelected();
       if(!selected){ reDetail(); return; }
-      delete OBS_DETAIL[selected.id];
-      loadObsDetail(selected.id,reDetail);
+      loadObsDetail(selected.id,function(){ reList(); if(OBS_STATE.selectedId===selected.id) reDetail(); },true);
     });
   },3000);
   root.addEventListener('click',function(ev){

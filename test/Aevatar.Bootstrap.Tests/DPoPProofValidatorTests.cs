@@ -69,6 +69,25 @@ public sealed class DPoPProofValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_WhenThumbprintLengthDoesNotMatch_ShouldFailWithoutThrowing()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var truncatedThumbprint = ComputeEcThumbprint(key)[..^1];
+        var proof = CreateProof(key, Method, Uri, DateTimeOffset.UtcNow, Guid.NewGuid().ToString("N"));
+
+        var result = await CreateValidator().ValidateAsync(
+            proof,
+            AccessToken,
+            truncatedThumbprint,
+            Method,
+            Uri,
+            iatSkewSeconds: 60);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("dpop_thumbprint_mismatch");
+    }
+
+    [Fact]
     public async Task ValidateAsync_WhenIatIsStale_ShouldFail()
     {
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -79,6 +98,31 @@ public sealed class DPoPProofValidatorTests
 
         result.Succeeded.Should().BeFalse();
         result.ErrorCode.Should().Be("dpop_iat_stale");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenIatIsOutsideDateTimeRange_ShouldFailWithoutThrowing()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var jkt = ComputeEcThumbprint(key);
+        var proof = CreateProof(
+            key,
+            Method,
+            Uri,
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid().ToString("N"),
+            iatSeconds: long.MaxValue);
+
+        var result = await CreateValidator().ValidateAsync(
+            proof,
+            AccessToken,
+            jkt,
+            Method,
+            Uri,
+            iatSkewSeconds: 60);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("dpop_iat_missing");
     }
 
     [Fact]
@@ -301,7 +345,8 @@ public sealed class DPoPProofValidatorTests
         DateTimeOffset iat,
         string? jti,
         ECDsa? signWith = null,
-        string? athAccessToken = AccessToken)
+        string? athAccessToken = AccessToken,
+        long? iatSeconds = null)
     {
         var publicJwk = JsonWebKeyConverter.ConvertFromECDsaSecurityKey(new ECDsaSecurityKey(key));
         var jwkJson =
@@ -313,7 +358,7 @@ public sealed class DPoPProofValidatorTests
         {
             $"\"htm\":\"{htm}\"",
             $"\"htu\":\"{htu}\"",
-            $"\"iat\":{iat.ToUnixTimeSeconds()}",
+            $"\"iat\":{iatSeconds ?? iat.ToUnixTimeSeconds()}",
         };
         if (jti is not null)
             payloadMembers.Add($"\"jti\":\"{jti}\"");

@@ -8,6 +8,31 @@ owner: eanzhao
 
 Aevatar 的 Agent 可以通过 NyxID LLM Gateway 使用用户在 NyxID 上配置的 LLM API Key（OpenAI、Anthropic、DeepSeek 等），无需在 Aevatar 端存储任何密钥。
 
+## Catalog lifecycle authority
+
+NyxID catalog snapshots are owned by one catalog actor per authenticated `authority + owner_kind + owner_subject`. This identity is independent of Aevatar `scopeId`; adapters must not derive one from the other. Host and Identity adapters may use a transient bearer to read the external catalog, but dispatch only secret-free typed activation, observation, refresh-failure, invalidation, or cleanup commands. The actor commits the corresponding domain event and the unified projection pipeline materializes its actor-scoped current-state replica.
+
+Activation is committed before an external refresh begins. Every refresh captures the actor's `lifecycle_fence` and includes it as `expected_lifecycle_fence` on the observation. Invalidation and cleanup advance the fence, so an older in-flight response cannot clear a later revocation or recreate a cleaned catalog. A successful current-fence observation activates or refreshes the snapshot; a `401/403` response or explicit binding revocation invalidates it immediately; transient provider failures record a failure without extending `fresh_until`.
+
+Cleanup is stronger than invalidation: it clears services, observation freshness, revision, and content digest while retaining owner identity and a terminal reason. Invalidation and cleanup both produce projected tombstones, including when the actor has never published a successful observation. Consumers can therefore distinguish `missing` from an actor-owned `invalidated` or `cleaned` state through the projected `state_version`, `lifecycle_fence`, and lifecycle fields. Scheduling reads this replica only and never fetches, refreshes, replays, or primes NyxID inside the query call stack.
+
+## Published topology contract boundary
+
+The external source of truth is a published NyxID contract, not the shape or iteration order of a runtime JSON response. The read-only audit target for this integration is `/Users/chronoai/Code/NyxID`; Aevatar work must not patch that repository as part of Milestone 33.
+
+At NyxID revision `c885cbfa`, `GET /api/v1/user-services` and its response schemas are included in the published OpenAPI document. Runtime handlers and prose exist for `GET /api/v1/nodes` and `GET /api/v1/nodes/{node_id}/bindings`, but those routes and their response schemas are not included in that published OpenAPI document. Route existence is not a contract locator.
+
+Before node-backed catalog evidence can be authoritative, a published locator must guarantee all of the following:
+
+- the exact owner of every user service, node, and binding, including personal versus organization ownership;
+- caller access and visibility semantics, including inherited and cross-owner resources;
+- the exact service-to-primary-node and service-to-binding topology;
+- route order and tie behavior, including whether priority alone is total ordering;
+- edge multiplicity, including whether repeated bindings are distinct authorization facts;
+- a revision or watermark that proves the service, node, and binding reads belong to one coherent source snapshot.
+
+Until that locator exists, any plan that depends on those unproven node/topology fields is blocked and must fail closed. Aevatar must not manufacture authority by sorting node or binding identifiers, selecting a minimum priority, collapsing repeated edges, or treating two equal local reads as a published ordering or snapshot guarantee. Organization ownership and cross-owner topology remain unsupported for the same reason. The adapter's double-read/content-digest check can detect local instability, but it cannot replace the missing NyxID contract.
+
 ## 原理
 
 ```
@@ -81,10 +106,10 @@ Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴
 这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。集群自举注册的 OAuth client 以及 `/oauth/authorize` 必须使用同一 canonical scope：
 
 ```text
-openid urn:nyxid:scope:broker_binding proxy
+openid profile email offline_access urn:nyxid:scope:broker_binding proxy llm:proxy
 ```
 
-如果旧 binding 对应的 OAuth client 未包含 `proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 完成绑定刷新；Aevatar 不会降级到 bot-owner credential 或缓存 token。
+如果旧 binding 对应的 OAuth client 未包含 `proxy` 或 `llm:proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
 
 ---
 

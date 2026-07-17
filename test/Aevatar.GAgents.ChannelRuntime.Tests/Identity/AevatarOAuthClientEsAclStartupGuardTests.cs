@@ -99,7 +99,7 @@ public sealed class AevatarOAuthClientEsAclStartupGuardTests
 
         await guard.Invoking(g => g.StartAsync(CancellationToken.None))
             .Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*NOT restricted*");
+            .WithMessage("*probeStatus=Unrestricted*");
     }
 
     [Fact]
@@ -131,19 +131,22 @@ public sealed class AevatarOAuthClientEsAclStartupGuardTests
         await guard.Invoking(g => g.StartAsync(CancellationToken.None)).Should().NotThrowAsync();
     }
 
-    [Fact]
-    public async Task StartAsync_WhenStrict_AndProbeUnverifiable_WithAttestation_ShouldNotThrow()
+    [Theory]
+    [InlineData(EsAclProbeStatus.Unverifiable)]
+    [InlineData(EsAclProbeStatus.Unavailable)]
+    public async Task StartAsync_WhenStrict_AndProbeIsNotPositive_WithAttestation_ShouldThrow(
+        EsAclProbeStatus probeStatus)
     {
-        // Unverifiable (e.g. transport error) must not crash Strict startup; it
-        // relies on the operator attestation and warns instead.
         await using var provider = BuildProvider(
             mode: AevatarOAuthClientEsAclEnforcementMode.Strict,
             aclAsserted: true,
             probe: new FakeOAuthClientEsAclProbe(
-                EsAclProbeResult.Unverifiable("test: security API unreachable")));
+                new EsAclProbeResult(probeStatus, "test: ACL restriction could not be confirmed")));
         var guard = ActivatorUtilities.CreateInstance<AevatarOAuthClientEsAclStartupGuard>(provider);
 
-        await guard.Invoking(g => g.StartAsync(CancellationToken.None)).Should().NotThrowAsync();
+        await guard.Invoking(g => g.StartAsync(CancellationToken.None))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*probeStatus={probeStatus}*");
     }
 
     private static ServiceProvider BuildProvider(

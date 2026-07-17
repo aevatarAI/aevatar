@@ -6,6 +6,7 @@ using Aevatar.Bootstrap.Hosting;
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgents.Scheduled;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Hosting;
@@ -17,6 +18,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using NSubstitute;
 using System.Net;
 using System.Text.Json;
 
@@ -69,6 +71,9 @@ public sealed class MainnetHealthEndpointsTests
         builder.Services.AddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.AddSingleton<IAuditTrailQueryPort, ReadyAuditTrailQueryPort>();
         builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.AddMainnetAgentProjectionDocumentStores(builder.Configuration);
+        builder.Services.AddSingleton(Substitute.For<IScheduledAgentCredentialLifecycle>());
+        builder.Services.AddScheduledAgents(builder.Configuration);
         builder.AddStudioCapability();
         builder.AddAuditTrailCapabilityBundle();
 
@@ -168,7 +173,12 @@ public sealed class MainnetHealthEndpointsTests
                 [],
                 null,
                 DateTimeOffset.UnixEpoch,
-                DateTimeOffset.UnixEpoch));
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated: false,
+                    ingestionWatermark: null,
+                    completeThrough: null,
+                    schemaCompatibility: AuditSchemaCompatibility.Current)));
         }
     }
 

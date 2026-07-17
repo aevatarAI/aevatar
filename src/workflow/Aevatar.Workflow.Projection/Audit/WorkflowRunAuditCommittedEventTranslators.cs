@@ -46,18 +46,23 @@ public sealed class WorkflowRunExecutionStartedAuditTranslator
         WorkflowRunExecutionStartedEvent evt)
     {
         var runId = string.IsNullOrWhiteSpace(evt.RunId) ? context.OriginActorId : evt.RunId;
+        var scopeId = WorkflowAuditScopeResolver.Resolve(context, evt.ScopeId);
         return WorkflowSeed(
             "workflow.run.started",
             "workflow_run",
             runId,
-            evt.ScopeId,
+            scopeId,
             $"Workflow run {runId} execution started.",
             annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflow_name"] = evt.WorkflowName ?? string.Empty,
                 ["definition_actor_id"] = evt.DefinitionActorId ?? string.Empty,
                 ["attempt"] = evt.Attempt.ToString(),
-            });
+            },
+            lifecyclePhase: AuditLifecyclePhase.Running,
+            terminalOutcome: AuditTerminalOutcome.Unspecified,
+            runId: runId,
+            omittedFields: ["workflow.input"]);
     }
 }
 
@@ -72,6 +77,7 @@ public sealed class WorkflowCompletedAuditTranslator
         WorkflowCompletedEvent evt)
     {
         var runId = string.IsNullOrWhiteSpace(evt.RunId) ? context.OriginActorId : evt.RunId;
+        var scopeId = WorkflowAuditScopeResolver.Resolve(context);
         var outcome = evt.Success ? "succeeded" : "failed";
         // `output` and `error` are free-text and may embed business payload — record
         // only the terminal outcome and whether an error was present, never the body.
@@ -80,14 +86,29 @@ public sealed class WorkflowCompletedAuditTranslator
             "workflow.run.completed",
             "workflow_run",
             runId,
-            string.Empty,
+            scopeId,
             $"Workflow run {runId} completed ({outcome}).",
             annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflow_name"] = evt.WorkflowName ?? string.Empty,
                 ["outcome"] = outcome,
                 ["error_present"] = errorPresent ? "true" : "false",
-            });
+            },
+            terminalOutcome: evt.Success
+                ? AuditTerminalOutcome.Succeeded
+                : AuditTerminalOutcome.Failed,
+            failure: evt.Success
+                ? null
+                : new AuditFailure
+                {
+                    Code = "workflow_failed",
+                    Category = AuditFailureCategory.Execution,
+                    Retryability = AuditRetryability.Unknown,
+                    FailedPhase = AuditLifecyclePhase.Running,
+                    SanitizedMessage = "Workflow execution failed.",
+                },
+            runId: runId,
+            omittedFields: ["workflow.output", "workflow.error"]);
     }
 }
 
@@ -102,17 +123,20 @@ public sealed class WorkflowStoppedAuditTranslator
         WorkflowStoppedEvent evt)
     {
         var runId = string.IsNullOrWhiteSpace(evt.RunId) ? context.OriginActorId : evt.RunId;
+        var scopeId = WorkflowAuditScopeResolver.Resolve(context);
         return WorkflowSeed(
             "workflow.run.stopped",
             "workflow_run",
             runId,
-            string.Empty,
+            scopeId,
             $"Workflow run {runId} stopped.",
             annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["workflow_name"] = evt.WorkflowName ?? string.Empty,
                 ["reason"] = evt.Reason ?? string.Empty,
-            });
+            },
+            terminalOutcome: AuditTerminalOutcome.Cancelled,
+            runId: runId);
     }
 }
 
@@ -127,16 +151,19 @@ public sealed class WorkflowRunStoppedAuditTranslator
         WorkflowRunStoppedEvent evt)
     {
         var runId = string.IsNullOrWhiteSpace(evt.RunId) ? context.OriginActorId : evt.RunId;
+        var scopeId = WorkflowAuditScopeResolver.Resolve(context);
         return WorkflowSeed(
             "workflow.run.stopped-run",
             "workflow_run",
             runId,
-            string.Empty,
+            scopeId,
             $"Workflow run {runId} stopped.",
             annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["reason"] = evt.Reason ?? string.Empty,
-            });
+            },
+            terminalOutcome: AuditTerminalOutcome.Cancelled,
+            runId: runId);
     }
 }
 
@@ -151,17 +178,21 @@ public sealed class WorkflowRunForkRequestedAuditTranslator
         WorkflowRunForkRequestedEvent evt)
     {
         var sourceRunId = string.IsNullOrWhiteSpace(evt.SourceRunId) ? context.OriginActorId : evt.SourceRunId;
+        var scopeId = WorkflowAuditScopeResolver.Resolve(context, evt.ScopeId);
         return WorkflowSeed(
             "workflow.run.fork-requested",
             "workflow_run",
             sourceRunId,
-            evt.ScopeId,
+            scopeId,
             $"Workflow run {sourceRunId} requested a fork (attempt {evt.Attempt}).",
             annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["start_at_step_id"] = evt.StartAtStepId ?? string.Empty,
                 ["attempt"] = evt.Attempt.ToString(),
-            });
+            },
+            lifecyclePhase: AuditLifecyclePhase.Accepted,
+            terminalOutcome: AuditTerminalOutcome.Unspecified,
+            runId: sourceRunId);
     }
 }
 
@@ -176,12 +207,13 @@ public sealed class BindWorkflowRunDefinitionAuditTranslator
         BindWorkflowRunDefinitionEvent evt)
     {
         var runId = string.IsNullOrWhiteSpace(evt.RunId) ? context.OriginActorId : evt.RunId;
+        var scopeId = WorkflowAuditScopeResolver.Resolve(context, evt.ScopeId);
         // workflow_yaml / inline_workflow_yamls are the definition body — never recorded.
         return WorkflowSeed(
             "workflow.run.definition-bound",
             "workflow_run",
             runId,
-            evt.ScopeId,
+            scopeId,
             $"Workflow run {runId} bound to definition `{evt.WorkflowName}`.",
             annotations: new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -248,7 +280,12 @@ public abstract class WorkflowAuditTranslatorBase<TEvent> : IAuditCommittedEvent
         string resultSummary,
         AuditSensitivityLevel sensitivityLevel = AuditSensitivityLevel.Confidential,
         bool isDestructive = false,
-        IReadOnlyDictionary<string, string>? annotations = null) =>
+        IReadOnlyDictionary<string, string>? annotations = null,
+        AuditLifecyclePhase lifecyclePhase = AuditLifecyclePhase.Terminal,
+        AuditTerminalOutcome terminalOutcome = AuditTerminalOutcome.Succeeded,
+        AuditFailure? failure = null,
+        string runId = "",
+        IReadOnlyList<string>? omittedFields = null) =>
         new(
             operationName,
             targetKind,
@@ -257,5 +294,10 @@ public abstract class WorkflowAuditTranslatorBase<TEvent> : IAuditCommittedEvent
             sensitivityLevel,
             isDestructive,
             ResultSummary: resultSummary,
-            Annotations: annotations);
+            Annotations: annotations,
+            LifecyclePhase: lifecyclePhase,
+            TerminalOutcome: terminalOutcome,
+            Failure: failure,
+            RunId: runId,
+            OmittedFields: omittedFields);
 }

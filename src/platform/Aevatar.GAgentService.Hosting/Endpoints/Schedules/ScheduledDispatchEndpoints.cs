@@ -360,6 +360,7 @@ public static class ScheduledDispatchEndpoints
 
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledDispatchConfigurationHttpRequest
 {
     private const string DefaultWorkflowScheduleNyxIdScope = "proxy";
@@ -486,6 +487,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind);
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
 {
     public string? ActorId { get; init; }
@@ -504,6 +506,7 @@ public sealed record ScheduledDispatchEnvelopeTargetHttpRequest
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledDispatchServiceInvocationTargetHttpRequest
 {
     public required ServiceIdentity Identity { get; init; }
@@ -689,6 +692,7 @@ public sealed record ScheduledServiceInvocationAuthHttpRequest
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHttpRequest
 {
     public required string Scope { get; init; }
@@ -715,6 +719,7 @@ public sealed record ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceHt
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
 {
     public required ScheduledServiceInvocationNyxIdSubjectRefHttpRequest Subject { get; init; }
@@ -741,6 +746,7 @@ public sealed record ScheduledServiceInvocationNyxIdCredentialSourceHttpRequest
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledServiceInvocationNyxIdSubjectRefHttpRequest
 {
     public required string Platform { get; init; }

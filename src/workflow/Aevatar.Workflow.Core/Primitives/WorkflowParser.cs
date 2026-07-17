@@ -5,7 +5,9 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using YamlDotNet.RepresentationModel;
 using Aevatar.Foundation.Abstractions.Interactions;
+using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Core.Agreement;
 using System.Collections;
 using System.Globalization;
@@ -83,6 +85,7 @@ public sealed class WorkflowParser
     /// <exception cref="InvalidOperationException">YAML 为空或缺少必填字段时抛出。</exception>
     public WorkflowDefinition Parse(string yaml)
     {
+        ValidateRootSchema(yaml);
         var raw = D.Deserialize<Raw>(yaml) ?? throw new InvalidOperationException("YAML 为空");
         return new WorkflowDefinition
         {
@@ -97,6 +100,29 @@ public sealed class WorkflowParser
             },
             OnFailure = MapOnFailure(raw.OnFailure),
         };
+    }
+
+    private static void ValidateRootSchema(string yaml)
+    {
+        YamlStream stream = new();
+        using var reader = new StringReader(yaml);
+        stream.Load(reader);
+
+        if (stream.Documents.Count == 0)
+            return;
+
+        if (stream.Documents[0].RootNode is not YamlMappingNode root)
+            return;
+
+        foreach (var key in root.Children.Keys.OfType<YamlScalarNode>())
+        {
+            var rootField = key.Value;
+            if (WorkflowYamlRootSchema.IsAcceptedRootField(rootField))
+                continue;
+
+            throw new InvalidOperationException(
+                $"Unsupported workflow YAML root field '{rootField}'. Allowed root fields: {WorkflowYamlRootSchema.FormatAcceptedRootFields()}.");
+        }
     }
 
     private static RoleDefinition MapRole(RawRole role)

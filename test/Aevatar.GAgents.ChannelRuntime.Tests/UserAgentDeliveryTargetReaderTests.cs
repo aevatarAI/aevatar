@@ -31,7 +31,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
                 ApiKeyId = "key-1",
-                OutputFormat = SkillRunnerOutputFormat.Text,
+                OutputFormat = ScheduledAgentOutputFormat.Text,
             });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
@@ -48,7 +48,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
         target.Should().NotBeNull();
         target!.NyxApiKey.Should().Be("live-key");
         target.ConversationId.Should().Be("oc_chat_1");
-        target.OutputFormat.Should().Be(SkillRunnerOutputFormat.Text);
+        target.OutputFormat.Should().Be(ScheduledAgentOutputFormat.Text);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public sealed class UserAgentDeliveryTargetReaderTests
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
                 ApiKeyId = "key-scheduled-agent",
-                OutputFormat = SkillRunnerOutputFormat.Text,
+                OutputFormat = ScheduledAgentOutputFormat.Text,
             });
         credentialReader.GetAsync("agent-1", Arg.Any<CancellationToken>())
             .Returns(new UserAgentCatalogNyxCredentialDocument
