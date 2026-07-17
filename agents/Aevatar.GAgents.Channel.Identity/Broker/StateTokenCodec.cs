@@ -121,7 +121,7 @@ public sealed class StateTokenCodec
         catch (AevatarOAuthClientNotProvisionedException)
         {
             // Distinct from a real signature mismatch — cluster is still
-            // bootstrapping (DCR not yet completed). Same root cause as
+            // materializing the configured OAuth client. Same root cause as
             // /init's "正在初始化" hint; surface a separate code so the
             // callback handler / ops dashboards can branch on it instead of
             // blaming the caller for a bad signature.

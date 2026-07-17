@@ -7,6 +7,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -18,7 +19,7 @@ public sealed class AevatarOAuthClientProjectionProviderTests
     {
         var document = ProvisionedDocument();
         document.RedirectUri = "https://backend.test/api/oauth/nyxid-callback";
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), new InMemorySecretVault());
+        var provider = CreateProvider(document, new InMemorySecretVault());
 
         var snapshot = await provider.GetAsync();
 
@@ -33,7 +34,7 @@ public sealed class AevatarOAuthClientProjectionProviderTests
         document.RedirectUri = "https://backend.test/api/oauth/nyxid-callback";
         document.RedirectUris.Add("https://backend.test/api/oauth/nyxid-callback");
         document.RedirectUris.Add("https://console.test/auth/callback");
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), new InMemorySecretVault());
+        var provider = CreateProvider(document, new InMemorySecretVault());
 
         var snapshot = await provider.GetAsync();
 
@@ -59,7 +60,7 @@ public sealed class AevatarOAuthClientProjectionProviderTests
         var document = ProvisionedDocument();
         document.HmacKey = ByteString.Empty;
         document.HmacKeyRef = stored.Reference;
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), vault);
+        var provider = CreateProvider(document, vault);
 
         var snapshot = await provider.GetAsync();
 
@@ -76,7 +77,7 @@ public sealed class AevatarOAuthClientProjectionProviderTests
         var document = ProvisionedDocument();
         document.HmacKey = ByteString.CopyFrom(legacyKey);
         document.HmacKeyRef.Should().BeNull("legacy documents carry no vault ref");
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), new InMemorySecretVault());
+        var provider = CreateProvider(document, new InMemorySecretVault());
 
         var snapshot = await provider.GetAsync();
 
@@ -112,7 +113,7 @@ public sealed class AevatarOAuthClientProjectionProviderTests
         document.PreviousHmacKeyRef = previousRef.Reference;
         document.PreviousHmacKid = "v1";
         document.PreviousHmacDemotedAtUnix = 1700000500;
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), vault);
+        var provider = CreateProvider(document, vault);
 
         var snapshot = await provider.GetAsync();
 
@@ -151,7 +152,7 @@ public sealed class AevatarOAuthClientProjectionProviderTests
         };
         document.PreviousHmacKid = "v1";
         document.PreviousHmacDemotedAtUnix = 1700000500;
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), vault);
+        var provider = CreateProvider(document, vault);
 
         var snapshot = await provider.GetAsync();
 
@@ -180,7 +181,7 @@ public sealed class AevatarOAuthClientProjectionProviderTests
         var document = ProvisionedDocument();
         document.HmacKey = ByteString.Empty;
         document.HmacKeyRef = stored.Reference;
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), vault);
+        var provider = CreateProvider(document, vault);
         var codec = new StateTokenCodec(provider, options: null, timeProvider: null);
 
         var subject = new ExternalSubjectRef
@@ -211,9 +212,36 @@ public sealed class AevatarOAuthClientProjectionProviderTests
             Purpose = CredentialSecretPurposes.OAuthStateTokenHmacKey,
             OwnerScopeKey = AevatarOAuthClientGAgent.WellKnownId,
         };
-        var provider = new AevatarOAuthClientProjectionProvider(new StubReader(document), new InMemorySecretVault());
+        var provider = CreateProvider(document, new InMemorySecretVault());
 
         await Assert.ThrowsAsync<AevatarOAuthClientNotProvisionedException>(() => provider.GetAsync());
+    }
+
+    [Fact]
+    public async Task GetAsync_DoesNotCombineConfiguredClientWithStaleProjectedClient()
+    {
+        var document = ProvisionedDocument();
+        document.ClientId = "stale-projected-client";
+        var provider = CreateProvider(document, new InMemorySecretVault(), "configured-client");
+
+        var act = () => provider.GetAsync();
+
+        await act.Should()
+            .ThrowAsync<AevatarOAuthClientNotProvisionedException>()
+            .WithMessage("*has not been materialized*");
+    }
+
+    [Fact]
+    public async Task GetAsync_DoesNotFallBackToProjectedClientId_WhenConfigurationIsMissing()
+    {
+        var document = ProvisionedDocument();
+        var provider = CreateProvider(document, new InMemorySecretVault(), "  ");
+
+        var act = () => provider.GetAsync();
+
+        await act.Should()
+            .ThrowAsync<AevatarOAuthClientNotProvisionedException>()
+            .WithMessage($"*{AevatarOAuthClientOptions.ClientIdConfigurationKey}*");
     }
 
     private static byte[] FilledKey(byte value)
@@ -222,6 +250,15 @@ public sealed class AevatarOAuthClientProjectionProviderTests
         Array.Fill(key, value);
         return key;
     }
+
+    private static AevatarOAuthClientProjectionProvider CreateProvider(
+        AevatarOAuthClientDocument document,
+        ISecretVault vault,
+        string clientId = "client-id") =>
+        new(
+            new StubReader(document),
+            vault,
+            Options.Create(new AevatarOAuthClientOptions { ClientId = clientId }));
 
     private static AevatarOAuthClientDocument ProvisionedDocument() => new()
     {

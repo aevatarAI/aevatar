@@ -17,7 +17,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// </summary>
 public sealed class IdentityOAuthClientRebuildEndpointTests
 {
-    private const string OperatorClientId = "17cecaad-214b-4521-9dba-d435462e4095";
+    private const string ConfiguredClientId = "17cecaad-214b-4521-9dba-d435462e4095";
     private const string AdminBearer = "admin-bearer-token";
     private const string LegacyStaticTokenHeader = "X-Aevatar-Admin-Token";
 
@@ -29,7 +29,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var result = await InvokeRebuildAsync(
             authorizer: null,
             bearer: AdminBearer,
-            body: SampleBody(),
             dispatch: dispatch);
 
         var doc = await ReadJsonAsync(result);
@@ -46,7 +45,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
             authorizer: new FakePlatformAdminAuthorizer(true),
             bearer: null,
             legacyStaticTokenHeader: "legacy-token",
-            body: SampleBody(),
             dispatch: dispatch);
 
         var ctx = NewHttpContext();
@@ -56,40 +54,20 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
     }
 
     [Fact]
-    public async Task Returns400_WhenClientIdMissing()
+    public async Task Returns503_WhenConfiguredClientIdMissing()
     {
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
             static _ => OAuthClientReceipt());
         var result = await InvokeRebuildAsync(
             authorizer: new FakePlatformAdminAuthorizer(true),
             bearer: AdminBearer,
-            body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
-                client_id: null,
-                client_id_issued_at_unix: null),
-            dispatch: dispatch);
+            dispatch: dispatch,
+            configuredClientId: "  ");
 
-        var doc = await ReadJsonAsync(result);
-        doc.RootElement.GetProperty("error").GetString().Should().Be("client_id_required");
+        var (doc, statusCode) = await ReadJsonWithStatusAsync(result);
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        doc.RootElement.GetProperty("error").GetString().Should().Be("oauth_client_id_not_configured");
         dispatch.Commands.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Returns400_WhenIssuedAtUnixOutOfRange()
-    {
-        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
-            static _ => OAuthClientReceipt());
-        var result = await InvokeRebuildAsync(
-            authorizer: new FakePlatformAdminAuthorizer(true),
-            bearer: AdminBearer,
-            body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
-                client_id: OperatorClientId,
-                client_id_issued_at_unix: long.MaxValue),
-            dispatch: dispatch);
-
-        var doc = await ReadJsonAsync(result);
-        doc.RootElement.GetProperty("error").GetString().Should().Be("client_id_issued_at_unix_invalid");
-        dispatch.Commands.Should().BeEmpty(
-            "rejected request must not dispatch the actor command");
     }
 
     [Fact]
@@ -103,15 +81,12 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
                 role: "user",
                 grantSource: PlatformAdminGrantSources.AllowedEmail),
             bearer: AdminBearer,
-            body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
-                client_id: OperatorClientId,
-                client_id_issued_at_unix: 1700000000),
             dispatch: dispatch);
 
         dispatch.Commands.Should().ContainSingle();
         var cmd = dispatch.Commands[0];
-        cmd.ClientId.Should().Be(OperatorClientId);
-        cmd.ClientIdIssuedAtUnix.Should().Be(1700000000);
+        cmd.ClientId.Should().Be(ConfiguredClientId);
+        cmd.ClientIdIssuedAtUnix.Should().BeGreaterThan(0);
         cmd.RedirectUri.Should().Be(NyxIdRedirectUriResolver.Resolve());
         cmd.OauthScope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         cmd.NyxidAuthority.Should().NotBeNullOrWhiteSpace();
@@ -133,7 +108,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var result = await InvokeRebuildAsync(
             authorizer: new FakePlatformAdminAuthorizer(true),
             bearer: AdminBearer,
-            body: SampleBody(),
             dispatch: new ThrowingCommandDispatch<ProvisionAevatarOAuthClientCommand>());
 
         var ctx = NewHttpContext();
@@ -147,7 +121,6 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         var result = await InvokeRebuildAsync(
             authorizer: new FakePlatformAdminAuthorizer(true),
             bearer: AdminBearer,
-            body: SampleBody(),
             dispatch: new RejectingCommandDispatch<ProvisionAevatarOAuthClientCommand>());
 
         var ctx = NewHttpContext();
@@ -159,17 +132,12 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         doc.RootElement.GetProperty("error").GetString().Should().Be("actor_dispatch_rejected");
     }
 
-    private static IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest SampleBody() =>
-        new(
-            client_id: OperatorClientId,
-            client_id_issued_at_unix: 1700000000);
-
     private static Task<IResult> InvokeRebuildAsync(
         IPlatformAdminAuthorizer? authorizer,
         string? bearer,
-        IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest body,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch,
         string? legacyStaticTokenHeader = null,
+        string configuredClientId = ConfiguredClientId,
         CancellationToken ct = default)
     {
         var http = NewHttpContext();
@@ -180,7 +148,7 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
 
         return IdentityOAuthEndpoints.HandleAevatarOAuthClientRebuildCoreAsync(
             http: http,
-            body: body,
+            clientOptions: new AevatarOAuthClientOptions { ClientId = configuredClientId },
             adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,
@@ -207,6 +175,15 @@ public sealed class IdentityOAuthClientRebuildEndpointTests
         context.Response.Body.Position = 0;
         var text = await new StreamReader(context.Response.Body, Encoding.UTF8).ReadToEndAsync();
         return JsonDocument.Parse(text);
+    }
+
+    private static async Task<(JsonDocument Document, int StatusCode)> ReadJsonWithStatusAsync(IResult result)
+    {
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+        context.Response.Body.Position = 0;
+        var text = await new StreamReader(context.Response.Body, Encoding.UTF8).ReadToEndAsync();
+        return (JsonDocument.Parse(text), context.Response.StatusCode);
     }
 
     private static HttpContext NewHttpContext()

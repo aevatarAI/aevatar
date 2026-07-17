@@ -246,7 +246,7 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         });
         var firstClientId = _agent.State.ClientId;
         _agent.State.RedirectUri.Should().Be("http://+:8080/api/oauth/nyxid-callback",
-            "first DCR persists whatever the bootstrap supplied");
+            "first DCR persists whatever the explicit Ensure command supplied");
 
         _registrar.NextClientId = "client-after-redirect-fix";
         await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
@@ -407,6 +407,52 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
         (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryScheduledEvent>())
             .Should()
             .ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleProvision_ConfiguredClientClearsLegacyDcrRetry()
+    {
+        _registrar.ThrowOnRegister = new InvalidOperationException("nyxid unavailable");
+        await _agent.HandleEnsureProvisioned(new EnsureAevatarOAuthClientProvisionedCommand
+        {
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            ClientName = "aevatar",
+        });
+        var staleRetry = new AevatarOAuthClientProvisioningRetryFiredEvent
+        {
+            Attempt = _agent.State.ProvisioningRetryAttempt,
+            DueUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+            NyxidAuthority = _agent.State.ProvisioningRetryAuthority,
+            RedirectUri = _agent.State.ProvisioningRetryRedirectUri,
+            ClientName = _agent.State.ProvisioningRetryClientName,
+            CallbackId = _agent.State.ProvisioningRetryCallbackId,
+            CallbackGeneration = _agent.State.ProvisioningRetryCallbackGeneration,
+            FiredAtUnixMs = _agent.State.ProvisioningRetryDueUnixMs,
+        };
+
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = "configured-client",
+            ClientIdIssuedAtUnix = 1700000000,
+            NyxidAuthority = "https://nyxid.test",
+            RedirectUri = "https://aevatar.test/api/oauth/nyxid-callback",
+            OauthScope = AevatarOAuthClientScopes.AuthorizationScope,
+        });
+
+        _agent.State.ClientId.Should().Be("configured-client");
+        _agent.State.ProvisioningRetryAttempt.Should().Be(0);
+        _agent.State.ProvisioningRetryCallbackId.Should().BeEmpty();
+        (await ReadEventsAsync<AevatarOAuthClientProvisioningRetryClearedEvent>())
+            .Should()
+            .ContainSingle(evt => evt.Reason == "configured_client_provisioned");
+
+        _registrar.ThrowOnRegister = null;
+        _registrar.NextClientId = "unexpected-dcr-client";
+        await _agent.HandleProvisioningRetryFired(staleRetry);
+
+        _registrar.Calls.Should().ContainSingle("the cleared retry callback must not re-enter DCR");
+        _agent.State.ClientId.Should().Be("configured-client");
     }
 
     [Fact]
@@ -595,10 +641,8 @@ public sealed class AevatarOAuthClientGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleProvision_ManualOverride_AcceptsCallerSuppliedClientId()
     {
-        // ProvisionAevatarOAuthClientCommand is the test / manual fixture
-        // path; bootstrap NEVER uses it. Verifies the flow keeps working
-        // for tests that pre-seed a known client_id (e.g. integration tests
-        // pinning a fixture).
+        // ProvisionAevatarOAuthClientCommand is shared by configured bootstrap,
+        // operator repair, and tests that pin a known client_id.
         await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
         {
             ClientId = "manual-fixture-client",

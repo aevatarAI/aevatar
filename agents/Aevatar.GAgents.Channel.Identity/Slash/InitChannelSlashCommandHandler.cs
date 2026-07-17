@@ -57,8 +57,8 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
         }
         catch (AevatarOAuthClientNotProvisionedException ex)
         {
-            // Cluster cold-start: DCR bootstrap is still running (or temporarily
-            // unreachable from NyxID). Distinct from a real broker failure —
+            // Cluster cold-start: configured client materialization is still
+            // running. Distinct from a real broker failure —
             // the user retrying in 30s typically resolves it without ops
             // intervention. Logged at Information so the gap shows up in
             // dashboards but does not page on every silo restart.

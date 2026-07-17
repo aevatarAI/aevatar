@@ -13,6 +13,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.Tests.Shared;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -219,8 +220,15 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
                 siloBuilder.ConfigureServices(services =>
                 {
                     var forwardingObserver = new ObservingStreamForwardingRegistry();
+                    var configuration = new ConfigurationBuilder()
+                        .AddInMemoryCollection(new Dictionary<string, string?>
+                        {
+                            [$"{AevatarOAuthClientBootstrapOptions.SectionName}:Enabled"] = "false",
+                            [AevatarOAuthClientOptions.ClientIdConfigurationKey] = "channel-identity-projection-test-client",
+                        })
+                        .Build();
                     services.AddSingleton(forwardingObserver);
-                    services.AddChannelIdentity();
+                    services.AddChannelIdentity(configuration);
                     services.AddInMemoryDocumentProjectionStore<ExternalIdentityBindingDocument, string>(
                         static document => document.Id,
                         static key => key);
