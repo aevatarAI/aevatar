@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -28,7 +29,11 @@ public sealed class SystemSkillOverlayPromptInjectionTests
 
         var prompt = DecorateViaReflection(agent, "kernel invariant");
 
-        prompt.Should().StartWith($"kernel invariant\n\n{OverlayMarkdown}");
+        prompt.Should().Contain("built-in prompt floor");
+        prompt.IndexOf("kernel invariant", StringComparison.Ordinal).Should().BeLessThan(
+            prompt.IndexOf("built-in prompt floor", StringComparison.Ordinal));
+        prompt.IndexOf("built-in prompt floor", StringComparison.Ordinal).Should().BeLessThan(
+            prompt.IndexOf(OverlayMarkdown, StringComparison.Ordinal));
         // Direct chat is inherently a dm turn: the seam resolves the dm platform (global-scope members).
         provider.LastRequest.Platform.Should().Be(SystemSkillOverlayRequest.DirectChatPlatform);
     }
@@ -44,11 +49,13 @@ public sealed class SystemSkillOverlayPromptInjectionTests
     }
 
     [Fact]
-    public async Task NyxIdChatGAgent_DirectChat_KernelOnly_WhenNoProviderRegistered()
+    public async Task NyxIdChatGAgent_DirectChat_RetainsBuiltInFloor_WhenNoGlobalProviderRegistered()
     {
         var agent = await CreateActivatedNyxIdChatAgentAsync(overlayProvider: null, "nyxid-chat-overlay-none");
 
-        DecorateViaReflection(agent, "kernel invariant").Should().StartWith("kernel invariant");
+        var prompt = DecorateViaReflection(agent, "kernel invariant");
+        prompt.Should().Contain("kernel invariant");
+        prompt.Should().Contain("built-in prompt floor");
     }
 
     [Fact]
@@ -156,6 +163,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var services = new ServiceCollection()
             .AddSingleton(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddSingleton<IBuiltInPromptFloorProvider>(new StubBuiltInPromptFloorProvider())
             .AddSingleton<IActorRuntimeCallbackScheduler, NoOpCallbackScheduler>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
@@ -207,12 +215,21 @@ public sealed class SystemSkillOverlayPromptInjectionTests
 
         public int GetCurrentCalls { get; private set; }
 
-        public SystemSkillOverlay GetCurrent(SystemSkillOverlayRequest request)
+        public GlobalSystemSkillPromptLayer GetCurrent(SystemSkillOverlayRequest request)
         {
             GetCurrentCalls++;
             LastRequest = request;
-            return new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown, SourceWatermark = "test-watermark" };
+            return new GlobalSystemSkillPromptLayer(
+                overlayMarkdown,
+                new GlobalSystemSkillPromptProvenance("test-watermark"),
+                new PromptLayerBounds(32 * 1024, 8192));
         }
+    }
+
+    private sealed class StubBuiltInPromptFloorProvider : IBuiltInPromptFloorProvider
+    {
+        public BuiltInPromptFloorLayer GetFloor() =>
+            new("built-in prompt floor", new BuiltInPromptFloorProvenance("test-floor"));
     }
 
     private sealed class NoOpCallbackScheduler : IActorRuntimeCallbackScheduler

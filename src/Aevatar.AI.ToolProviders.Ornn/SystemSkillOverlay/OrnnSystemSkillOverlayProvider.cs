@@ -1,11 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using AbstractionsOptions = Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions;
-using OverlayMessage = Aevatar.AI.Abstractions.SystemSkillOverlay;
 
 namespace Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 
@@ -15,9 +15,8 @@ namespace Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 /// variant per channel platform, and serves them to both reply seams via <see cref="GetCurrent"/> —
 /// a synchronous O(1) cached read. Staleness triggers a single-flight, fire-and-forget background
 /// refresh using the per-turn token supplied by the seam; the current turn always serves
-/// last-known-good, so the reply hot path never waits on Ornn ("never query-time"). When the set is
-/// unreachable or empty it degrades to the built-in default (<see cref="ISystemSkillOverlayFallback"/>),
-/// preserving capability behavior with no regression.
+/// last-known-good, so the reply hot path never waits on Ornn ("never query-time"). Missing or empty
+/// remote content returns no global layer; the mandatory built-in floor is owned separately.
 /// </summary>
 public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
 {
@@ -30,7 +29,6 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
 
     private readonly AbstractionsOptions _options;
     private readonly OrnnSkillClient _client;
-    private readonly ISystemSkillOverlayFallback? _fallback;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
 
@@ -41,16 +39,14 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
     public OrnnSystemSkillOverlayProvider(
         AbstractionsOptions options,
         OrnnSkillClient client,
-        ISystemSkillOverlayFallback? fallback = null,
         ILogger<OrnnSystemSkillOverlayProvider>? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _client = client ?? throw new ArgumentNullException(nameof(client));
-        _fallback = fallback;
         _logger = logger ?? NullLogger<OrnnSystemSkillOverlayProvider>.Instance;
     }
 
-    public OverlayMessage? GetCurrent(SystemSkillOverlayRequest request)
+    public GlobalSystemSkillPromptLayer? GetCurrent(SystemSkillOverlayRequest request)
     {
         try
         {
@@ -62,14 +58,11 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
             _logger.LogWarning(ex, "System skill overlay refresh scheduling failed; serving cached overlay");
         }
 
-        // Fall back per RESOLVED platform variant, not per whole snapshot: a set with only
-        // platform-scoped members leaves the global-only variant empty, so a dm/telegram turn must
-        // still get the built-in default rather than an empty overlay (the no-regression floor).
         var resolved = _snapshot?.Resolve(request.Platform);
-        if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.OverlayMarkdown))
+        if (resolved is not null && !string.IsNullOrWhiteSpace(resolved.Content))
             return resolved;
 
-        return _fallback?.GetFallback();
+        return null;
     }
 
     private void TriggerRefreshIfStale(string? token)
@@ -211,14 +204,14 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-        var byPlatform = new Dictionary<string, OverlayMessage>(StringComparer.Ordinal);
+        var byPlatform = new Dictionary<string, GlobalSystemSkillPromptLayer>(StringComparer.Ordinal);
         foreach (var platform in platforms)
             byPlatform[platform] = RenderVariant(members, platform, maxSkills, maxBytes, watermark);
 
         return new Snapshot(guid, watermark, globalOnly, byPlatform);
     }
 
-    private static OverlayMessage RenderVariant(
+    private static GlobalSystemSkillPromptLayer RenderVariant(
         IReadOnlyList<ParsedMember> members,
         string? platform,
         int maxSkills,
@@ -231,12 +224,10 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
             .ToArray();
 
         var markdown = SystemSkillOverlayRenderer.Render(entries, maxSkills, maxBytes);
-        return new OverlayMessage
-        {
-            OverlayMarkdown = markdown,
-            SourceWatermark = string.IsNullOrEmpty(markdown) ? string.Empty : watermark,
-            MaterializedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        };
+        return new GlobalSystemSkillPromptLayer(
+            markdown,
+            new GlobalSystemSkillPromptProvenance(string.IsNullOrEmpty(markdown) ? string.Empty : watermark),
+            new PromptLayerBounds(maxBytes, (maxBytes + 3) / 4));
     }
 
     private static IReadOnlyList<string> ResolveScopes(IEnumerable<string>? tags)
@@ -299,14 +290,14 @@ public sealed class OrnnSystemSkillOverlayProvider : ISystemSkillOverlayProvider
     private sealed class Snapshot(
         string guid,
         string watermark,
-        OverlayMessage globalOnly,
-        IReadOnlyDictionary<string, OverlayMessage> byPlatform)
+        GlobalSystemSkillPromptLayer globalOnly,
+        IReadOnlyDictionary<string, GlobalSystemSkillPromptLayer> byPlatform)
     {
         public string Guid { get; } = guid;
         public string Watermark { get; } = watermark;
         public int PlatformCount => byPlatform.Count;
 
-        public OverlayMessage Resolve(string? platform)
+        public GlobalSystemSkillPromptLayer Resolve(string? platform)
         {
             if (!string.IsNullOrWhiteSpace(platform) &&
                 byPlatform.TryGetValue(platform.Trim().ToLowerInvariant(), out var overlay))

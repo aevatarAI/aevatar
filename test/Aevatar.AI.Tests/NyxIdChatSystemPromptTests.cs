@@ -1,3 +1,4 @@
+using Aevatar.AI.Core.Prompting;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 
@@ -11,9 +12,15 @@ public class NyxIdChatSystemPromptTests
     // composition while invariant assertions stay on the kernel itself.
     private static string ComposedAgentPrompt()
     {
-        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent(default);
-        overlay.Should().NotBeNull();
-        return $"{NyxIdChatSystemPrompt.Value}\n\n{overlay!.OverlayMarkdown}";
+        var floor = new BuiltInPromptFloorProvider().GetFloor();
+        return SystemPromptLayerComposer.Compose(
+            NyxIdChatSystemPrompt.Value,
+            floor,
+            global: null,
+            profile: null,
+            selectedSkill: null,
+            runtimeFacts: null,
+            conversation: null).Prompt;
     }
 
     [Fact]
@@ -50,7 +57,7 @@ public class NyxIdChatSystemPromptTests
     [Fact]
     public void Value_ShouldContainHonestSuccessRule()
     {
-        var prompt = NyxIdChatSystemPrompt.Value;
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("## Honest Success Rule");
         prompt.Should().Contain("successful mutating tool result or typed success receipt");

@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -1024,7 +1025,8 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            overlayProvider: new StubSystemSkillOverlayProvider(overlayMarkdown));
+            overlayProvider: new StubSystemSkillOverlayProvider(overlayMarkdown),
+            builtInPromptFloorProvider: new StubBuiltInPromptFloorProvider("MANDATORY FLOOR"));
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -1048,12 +1050,16 @@ public sealed class ConversationReplyGeneratorTests
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
         systemPrompt.Should().Contain(overlayMarkdown);
+        systemPrompt.Should().Contain("MANDATORY FLOOR");
         systemPrompt.Should().Contain("<channel-context>");
         // Kernel anchor: a stable invariant heading the slimmed kernel still carries, asserting the
         // overlay is appended AFTER the kernel. (Capability how-to like skill-discovery moved out of
         // the kernel into the overlay in #2468, so it is no longer a valid kernel anchor.)
         systemPrompt.Should().Contain("Action-First Behavior");
         systemPrompt!.IndexOf("Action-First Behavior", StringComparison.Ordinal)
+            .Should()
+            .BeLessThan(systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal));
+        systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal)
             .Should()
             .BeLessThan(systemPrompt.IndexOf(overlayMarkdown, StringComparison.Ordinal));
         // Anchor on the INJECTED channel-context runtime block (its rendered sender id), not the
@@ -1145,7 +1151,8 @@ public sealed class ConversationReplyGeneratorTests
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            overlayProvider: overlayMarkdown is null ? null : new StubSystemSkillOverlayProvider(overlayMarkdown));
+            overlayProvider: overlayMarkdown is null ? null : new StubSystemSkillOverlayProvider(overlayMarkdown),
+            builtInPromptFloorProvider: new StubBuiltInPromptFloorProvider("MANDATORY FLOOR"));
 
         await generator.GenerateReplyAsync(
             new ChatActivity
@@ -1161,6 +1168,7 @@ public sealed class ConversationReplyGeneratorTests
 
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("MANDATORY FLOOR");
         systemPrompt.Should().NotContain("Runtime system skills");
         systemPrompt.Should().NotContain("prefer the committed overlay");
     }
@@ -2656,13 +2664,22 @@ public sealed class ConversationReplyGeneratorTests
     {
         public SystemSkillOverlayRequest LastRequest { get; private set; }
 
-        public SystemSkillOverlay? GetCurrent(SystemSkillOverlayRequest request)
+        public GlobalSystemSkillPromptLayer? GetCurrent(SystemSkillOverlayRequest request)
         {
             LastRequest = request;
             return overlayMarkdown is null
                 ? null
-                : new SystemSkillOverlay { OverlayMarkdown = overlayMarkdown };
+                : new GlobalSystemSkillPromptLayer(
+                    overlayMarkdown,
+                    new GlobalSystemSkillPromptProvenance("test-global"),
+                    new PromptLayerBounds(32 * 1024, 8192));
         }
+    }
+
+    private sealed class StubBuiltInPromptFloorProvider(string content) : IBuiltInPromptFloorProvider
+    {
+        public BuiltInPromptFloorLayer GetFloor() =>
+            new(content, new BuiltInPromptFloorProvenance("test-floor"));
     }
 
     private sealed class RecordingStreamingSink : IStreamingReplySink
