@@ -3,6 +3,8 @@ import {
   ensureActiveAuthSession,
   hasRestorableAuthSession,
   NyxIDAuthClient,
+  SERVICE_ACCESS_REVIEW_RETURN_TO,
+  type NyxIDAuthCallbackError,
 } from "./client";
 import type { NyxIDRuntimeConfig } from "./config";
 import { loadStoredAuthSession } from "./session";
@@ -100,6 +102,7 @@ describe("NyxIDAuthClient", () => {
     expect(authorizeUrl.searchParams.get("scope")).toBe(
       "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
     );
+    expect(authorizeUrl.searchParams.get("prompt")).toBeNull();
     expect(authorizeUrl.searchParams.getAll("resource")).toEqual([]);
 
     const pending = JSON.parse(
@@ -113,6 +116,43 @@ describe("NyxIDAuthClient", () => {
         redirectUri: "http://localhost:8000/auth/callback",
         returnTo: "/scopes/scope-1/teams",
         scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+        state: authorizeUrl.searchParams.get("state"),
+        flow: "signIn",
+      }),
+    );
+  });
+
+  it("starts service access review with consent prompt and account return state", async () => {
+    const assign = installLocationAssignSpy();
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        baseUrl: "https://nyx.example",
+        clientId: "broker-client-1",
+        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
+      flow: "serviceAccessReview",
+      returnTo: "/runtime/runs",
+    });
+
+    const authorizeUrl = new URL(assign.mock.calls[0][0]);
+    expect(authorizeUrl.searchParams.get("prompt")).toBe("consent");
+    expect(authorizeUrl.searchParams.getAll("resource")).toEqual([]);
+
+    const pending = JSON.parse(
+      window.localStorage.getItem(
+        "aevatar-console:nyxid:pending:broker-client-1",
+      ) ?? "{}",
+    );
+    expect(pending).toEqual(
+      expect.objectContaining({
+        flow: "serviceAccessReview",
+        returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
         state: authorizeUrl.searchParams.get("state"),
       }),
     );
@@ -155,6 +195,7 @@ describe("NyxIDAuthClient", () => {
         "http://localhost:8000/auth/callback?code=auth-code&state=state-1",
       ),
     ).resolves.toEqual({
+      flow: "signIn",
       returnTo: "/scopes/scope-1/teams",
       session: expect.objectContaining({
         tokens: expect.objectContaining({
@@ -186,6 +227,174 @@ describe("NyxIDAuthClient", () => {
     expect(window.localStorage.getItem(pendingKey)).toBeNull();
     expect(loadStoredAuthSession()?.tokens.accessToken).toBe("access-token");
     expect(loadStoredAuthSession()?.tokens.refreshToken).toBe("refresh-token");
+  });
+
+  it("finalizes service access review with the stored flow flag", async () => {
+    const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
+    window.localStorage.setItem(
+      pendingKey,
+      JSON.stringify({
+        clientId: "broker-client-1",
+        codeVerifier: "pkce-verifier",
+        redirectUri: "http://localhost:8000/auth/callback",
+        returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+        scope: "openid urn:nyxid:scope:broker_binding proxy",
+        state: "state-1",
+        flow: "serviceAccessReview",
+      }),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        tokens: {
+          accessToken: "review-access-token",
+          refreshToken: "review-refresh-token",
+          tokenType: "Bearer",
+          expiresIn: 1800,
+          scope: "openid profile email offline_access proxy",
+        },
+        user: {
+          sub: "owner-user-1",
+        },
+        bindingDispatchAccepted: true,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      new NyxIDAuthClient(runtimeConfig).handleRedirectCallback(
+        "http://localhost:8000/auth/callback?code=auth-code&state=state-1",
+      ),
+    ).resolves.toEqual({
+      flow: "serviceAccessReview",
+      returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+      session: expect.objectContaining({
+        tokens: expect.objectContaining({
+          accessToken: "review-access-token",
+          refreshToken: "review-refresh-token",
+        }),
+      }),
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(input).toBe("/api/auth/nyxid/finalize");
+    expect(JSON.parse(String(init.body))).toEqual({
+      code: "auth-code",
+      codeVerifier: "pkce-verifier",
+      redirectUri: "http://localhost:8000/auth/callback",
+      serviceAccessReview: true,
+    });
+    expect(window.localStorage.getItem(pendingKey)).toBeNull();
+    expect(loadStoredAuthSession()?.tokens.accessToken).toBe("review-access-token");
+  });
+
+  it("preserves service access review retry state when backend finalization fails", async () => {
+    const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
+    window.localStorage.setItem(
+      pendingKey,
+      JSON.stringify({
+        clientId: "broker-client-1",
+        codeVerifier: "pkce-verifier",
+        redirectUri: "http://localhost:8000/auth/callback",
+        returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+        scope: "openid urn:nyxid:scope:broker_binding proxy",
+        state: "state-1",
+        flow: "serviceAccessReview",
+      }),
+    );
+    window.localStorage.setItem(
+      "aevatar-console:nyxid:session",
+      JSON.stringify({
+        tokens: {
+          accessToken: "existing-access-token",
+          tokenType: "Bearer",
+          expiresIn: 3600,
+          expiresAt: Date.now() + 3_600_000,
+        },
+        user: {
+          sub: "owner-user-1",
+        },
+      }),
+    );
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+      text: async () =>
+        JSON.stringify({
+          code: "binding_probe_failed",
+          message: "backend raw message",
+        }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      new NyxIDAuthClient(runtimeConfig).handleRedirectCallback(
+        "http://localhost:8000/auth/callback?code=auth-code&state=state-1",
+      ),
+    ).rejects.toMatchObject({
+      name: "NyxIDAuthCallbackError",
+      flow: "serviceAccessReview",
+      returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+      message:
+        "NyxID service binding verification failed. The service may be temporarily unavailable; try Manage service access again.",
+    } satisfies Partial<NyxIDAuthCallbackError>);
+
+    expect(window.localStorage.getItem(pendingKey)).toBeNull();
+    expect(loadStoredAuthSession()?.tokens.accessToken).toBe(
+      "existing-access-token",
+    );
+  });
+
+  it("preserves the existing Studio session when service access review is denied", async () => {
+    const pendingKey = "aevatar-console:nyxid:pending:broker-client-1";
+    window.localStorage.setItem(
+      pendingKey,
+      JSON.stringify({
+        clientId: "broker-client-1",
+        codeVerifier: "pkce-verifier",
+        redirectUri: "http://localhost:8000/auth/callback",
+        returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+        scope: "openid urn:nyxid:scope:broker_binding proxy",
+        state: "state-1",
+        flow: "serviceAccessReview",
+      }),
+    );
+    window.localStorage.setItem(
+      "aevatar-console:nyxid:session",
+      JSON.stringify({
+        tokens: {
+          accessToken: "existing-access-token",
+          tokenType: "Bearer",
+          expiresIn: 3600,
+          expiresAt: Date.now() + 3_600_000,
+        },
+        user: {
+          sub: "owner-user-1",
+        },
+      }),
+    );
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      new NyxIDAuthClient(runtimeConfig).handleRedirectCallback(
+        "http://localhost:8000/auth/callback?error=access_denied&state=state-1",
+      ),
+    ).rejects.toMatchObject({
+      name: "NyxIDAuthCallbackError",
+      flow: "serviceAccessReview",
+      returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
+      message:
+        "NyxID service access review was cancelled or denied. Your current Studio session is still active; choose Manage service access to try again.",
+    } satisfies Partial<NyxIDAuthCallbackError>);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(pendingKey)).toBeNull();
+    expect(loadStoredAuthSession()?.tokens.accessToken).toBe(
+      "existing-access-token",
+    );
   });
 
   it("refreshes an expired local session before returning it as active", async () => {
