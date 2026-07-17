@@ -129,7 +129,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             },
             "nyx_provider_slug": {
               "type": "string",
-              "description": "Optional one-shot reminder outbound delivery provider slug for the current channel context, such as api-lark-bot-2. Use only to require the current outbound channel provider explicitly; mismatches with the current channel context are rejected."
+              "description": "Optional one-shot reminder outbound delivery provider slug, such as api-lark-bot-2. Use to select a connected provider for reminder delivery; this does not apply to cron schedules."
             },
             "output_format": {
               "type": "string",
