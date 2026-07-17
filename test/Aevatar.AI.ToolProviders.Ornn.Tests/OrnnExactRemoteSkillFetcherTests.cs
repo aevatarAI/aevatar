@@ -292,8 +292,17 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         };
 
         var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
-        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
-        assertion.Which.Message.Should().Contain(expectedMessage);
+        var exception = assertion.Which;
+        exception.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        exception.ResourceKind.Should().Be(
+            isSkillset ? ExactRemoteResourceKind.Skillset : ExactRemoteResourceKind.Skill);
+        exception.Guid.Should().Be(isSkillset ? SkillsetGuid : SkillGuid);
+        exception.LiteralVersion.Should().Be(isSkillset ? "2.0" : "1.2");
+        exception.Message.Should().Contain(expectedMessage);
+        if (responseJson == "{")
+            exception.InnerException.Should().BeOfType<JsonException>();
+        else
+            exception.InnerException.Should().BeNull();
         AssertOnlyExactRequests(
             handler,
             isSkillset ? SkillsetGuid : SkillGuid,
