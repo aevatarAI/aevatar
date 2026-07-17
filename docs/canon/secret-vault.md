@@ -53,8 +53,8 @@ dotnet run --project tools/secret-store -- reencrypt-sweep --keyring ~/.aevatar/
 
 - 使用 Redis `SCAN` 按 `SecretVaultPrefix` 与 `RuntimeSecretPrefix` 分别扫描；
 - 每条记录先按 Protobuf 解析并用 keyring 解密，再用当前 active 数据密钥重新 AES-256-GCM 加密；
-- 写回必须用 Lua compare-and-set，对比原始 value，避免覆盖并发写入；
-- Lua 写回时读取 `PTTL` 并保留 TTL：有 TTL 用 `PSETEX`，无 TTL 用 `SET`；
+- 扫描、读取与写回必须通过 `--database` 选定的同一个 Redis 逻辑数据库；写回使用带原始 value 条件的事务 compare-and-set，避免覆盖并发改写或删除；
+- 条件事务提交前读取剩余 TTL，并把该值作为事务内写入的 expiry：有 TTL 的记录保持过期语义，无 TTL 的记录继续永久保存；
 - 支持 `--dry-run`、`--checkpoint`、`--resume`、`--verify`；
 - sweep 失败、CAS 冲突、verify 失败都必须显式暴露，不能静默当成功。
 

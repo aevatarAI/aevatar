@@ -67,11 +67,30 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         return value.IsNull ? null : (byte[]?)value;
     }
 
-    public async Task<SecretStoreCasResult> CompareExchangeAsync(
+    public Task<SecretStoreCasResult> CompareExchangeAsync(
         string key,
         byte[] expectedValue,
         byte[] newValue,
+        CancellationToken ct = default) =>
+        CompareExchangeCoreAsync(key, expectedValue, newValue, beforeTransactionCommit: null, ct);
+
+    internal Task<SecretStoreCasResult> CompareExchangeWithBeforeCommitAsync(
+        string key,
+        byte[] expectedValue,
+        byte[] newValue,
+        Func<CancellationToken, Task> beforeTransactionCommit,
         CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(beforeTransactionCommit);
+        return CompareExchangeCoreAsync(key, expectedValue, newValue, beforeTransactionCommit, ct);
+    }
+
+    private async Task<SecretStoreCasResult> CompareExchangeCoreAsync(
+        string key,
+        byte[] expectedValue,
+        byte[] newValue,
+        Func<CancellationToken, Task>? beforeTransactionCommit,
+        CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(expectedValue);
@@ -87,6 +106,11 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
 
         var remainingTtl = await _database.KeyTimeToLiveAsync(key);
         ct.ThrowIfCancellationRequested();
+        if (beforeTransactionCommit != null)
+        {
+            await beforeTransactionCommit(ct);
+            ct.ThrowIfCancellationRequested();
+        }
 
         var transaction = _database.CreateTransaction();
         transaction.AddCondition(Condition.StringEqual(key, expectedValue));

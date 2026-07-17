@@ -468,12 +468,19 @@ public sealed class SecretStoreToolTests
         var key = $"{prefix}:record";
         var defaultDatabaseKey = $"{prefix}:default-database-record";
         var missingKey = $"{prefix}:missing";
+        var changedBeforeCommitKey = $"{prefix}:changed-before-commit";
+        var deletedBeforeCommitKey = $"{prefix}:deleted-before-commit";
+        var permanentKey = $"{prefix}:permanent";
         var originalValue = Encoding.UTF8.GetBytes("old-record");
         var updatedValue = Encoding.UTF8.GetBytes("new-record");
         var wrongExpectedValue = Encoding.UTF8.GetBytes("wrong-record");
+        var competingValue = Encoding.UTF8.GetBytes("competing-record");
         var defaultDatabaseValue = Encoding.UTF8.GetBytes("default-database-record");
 
         (await database.StringSetAsync(key, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
+        (await database.StringSetAsync(changedBeforeCommitKey, originalValue)).Should().BeTrue();
+        (await database.StringSetAsync(deletedBeforeCommitKey, originalValue)).Should().BeTrue();
+        (await database.StringSetAsync(permanentKey, originalValue)).Should().BeTrue();
         (await defaultDatabase.StringSetAsync(key, defaultDatabaseValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
         (await defaultDatabase.StringSetAsync(missingKey, defaultDatabaseValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
         (await defaultDatabase.StringSetAsync(defaultDatabaseKey, defaultDatabaseValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
@@ -500,6 +507,34 @@ public sealed class SecretStoreToolTests
         (await database.KeyTimeToLiveAsync(key)).Should().NotBeNull().And.BePositive();
         ((byte[]?)await defaultDatabase.StringGetAsync(key)).Should().Equal(defaultDatabaseValue);
         ((byte[]?)await defaultDatabase.StringGetAsync(missingKey)).Should().Equal(defaultDatabaseValue);
+
+        var changedBeforeCommit = await target.CompareExchangeWithBeforeCommitAsync(
+            changedBeforeCommitKey,
+            originalValue,
+            updatedValue,
+            async _ =>
+            {
+                (await database.StringSetAsync(changedBeforeCommitKey, competingValue)).Should().BeTrue();
+            });
+        changedBeforeCommit.Status.Should().Be(SecretStoreCasStatus.Conflict);
+        ((byte[]?)await database.StringGetAsync(changedBeforeCommitKey)).Should().Equal(competingValue);
+
+        var deletedBeforeCommit = await target.CompareExchangeWithBeforeCommitAsync(
+            deletedBeforeCommitKey,
+            originalValue,
+            updatedValue,
+            async _ =>
+            {
+                (await database.KeyDeleteAsync(deletedBeforeCommitKey)).Should().BeTrue();
+            });
+        deletedBeforeCommit.Status.Should().Be(SecretStoreCasStatus.Missing);
+        (await database.KeyExistsAsync(deletedBeforeCommitKey)).Should().BeFalse();
+
+        var permanentUpdated = await target.CompareExchangeAsync(permanentKey, originalValue, updatedValue);
+        permanentUpdated.Status.Should().Be(SecretStoreCasStatus.Updated);
+        permanentUpdated.PreservedTtlMs.Should().Be(-1);
+        ((byte[]?)await database.StringGetAsync(permanentKey)).Should().Equal(updatedValue);
+        (await database.KeyTimeToLiveAsync(permanentKey)).Should().BeNull();
     }
 
     private static string RequireGarnetConnectionString() =>
