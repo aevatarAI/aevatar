@@ -73,7 +73,7 @@ Keep the architecture consistent with the node pool. Startup option validation r
 
 ## NyxID account readiness
 
-The cluster-owned Aevatar OAuth client must advertise `llm:proxy`. A user binding created before that scope was added must be refreshed through the normal NyxID/Aevatar consent flow. Do not work around `invalid_scope` by forwarding the inbound bearer or broadening the delegated scope.
+The cluster-owned Aevatar OAuth client must use the canonical interactive authorization scope (`openid profile email offline_access urn:nyxid:scope:broker_binding proxy`). Separately, NyxID's broker/delegation policy must permit a short-lived `llm:proxy` capability. Do not add `llm:proxy` to `/oauth/authorize`, forward the inbound bearer, or broaden the delegated scope to work around `invalid_scope`.
 
 For P0, allow only the intended NyxID subject. The initial subject is:
 
@@ -88,7 +88,7 @@ After deployment, run the public Ornn skill `aevatar-codex-exec-workflow-sample`
 - `managed_sandbox_disabled` / `target_not_configured`: host feature wiring is disabled.
 - `managed_feature_not_enabled`: caller subject is absent from the allowlist.
 - `nyxid_binding_required` / `nyxid_binding_revoked`: repeat the normal login/consent binding flow.
-- `llm_proxy_scope_missing`: OAuth client or binding predates `llm:proxy`; refresh consent.
+- `llm_proxy_scope_missing`: NyxID broker/delegation policy did not issue the `llm:proxy` capability; do not repair this by adding it to `/oauth/authorize`.
 - `llm_service_access_missing`: binding does not grant the configured LLM resource.
 - `managed_capacity_unavailable`: P0 process-local slot is busy; retry later.
 - `sandbox_provisioning_failed`: inspect control-plane connectivity, API key, quota, architecture, and image pull.

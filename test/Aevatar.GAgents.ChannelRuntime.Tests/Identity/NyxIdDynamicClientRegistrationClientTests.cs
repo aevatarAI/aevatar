@@ -38,7 +38,7 @@ public sealed class NyxIdDynamicClientRegistrationClientTests
         var scope = request.GetProperty("scope").GetString();
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
-        scope.Should().Contain(AevatarOAuthClientScopes.LlmProxy);
+        scope.Should().NotContain("llm:proxy", "capability scopes are not interactive OAuth scopes");
     }
 
     [Fact]

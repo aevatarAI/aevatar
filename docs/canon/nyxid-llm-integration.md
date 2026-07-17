@@ -103,13 +103,13 @@ Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴
 - `/model preset <preset-id>`：按 NyxID 返回的 setup preset 使用或创建 service
 - `/model reset`：清空用户偏好，回退到 bot 默认配置
 
-这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。`Aevatar:BackendConsole:OidcClientId` 配置的 OAuth client 与 `/oauth/authorize` 必须使用同一 canonical scope：
+这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。`Aevatar:BackendConsole:OidcClientId` 配置的 OAuth client 与 `/oauth/authorize` 必须使用同一 canonical interactive authorization scope：
 
 ```text
-openid profile email offline_access urn:nyxid:scope:broker_binding proxy llm:proxy
+openid profile email offline_access urn:nyxid:scope:broker_binding proxy
 ```
 
-如果旧 binding 对应的 OAuth client 未包含 `proxy` 或 `llm:proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
+`llm:proxy` 是短期 capability token-exchange scope，不是 interactive OAuth scope；DCR、Console login 与 channel `/init` 都不得把它发送到 `/oauth/authorize`。managed execution 只有在请求短期 capability 时才使用它。如果旧 binding 缺少 canonical authorization scope，用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
 
 ---
 

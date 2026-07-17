@@ -39,7 +39,7 @@ The prompt is capped at 6000 UTF-8 bytes. Managed execution writes it to `/works
 
 Authenticated workflow ingress records a typed NyxID authority (`platform`, `tenant`, `external_user_id`) separately from the caller bearer. The managed adapter ignores the reusable caller bearer and asks `INyxIdCapabilityBroker` for a new short-lived capability with exactly `llm:proxy`.
 
-The broker exchange requires the first-party NyxID user's Aevatar binding. Studio login finalization creates that binding with `platform=nyxid` and `external_user_id=sub`. Existing users whose binding predates the `llm:proxy` OAuth scope must consent again.
+The broker exchange requires the first-party NyxID user's Aevatar binding. Studio login finalization creates that binding with `platform=nyxid` and `external_user_id=sub`. `llm:proxy` is a capability scope, not an interactive authorization scope: the browser, DCR, and channel `/init` flows must not add it to `/oauth/authorize`. NyxID's broker/delegation policy is the authority that decides whether the short-lived exchange may issue it; a rejected capability exchange fails closed as `llm_proxy_scope_missing` and is not repaired by repeating consent with an invalid authorization scope.
 
 Only the short-lived capability enters OpenSandbox Credential Vault. The runner receives the public placeholder `credential-vault-placeholder`; Credential Proxy replaces it only for HTTPS `POST` requests matching the configured NyxID gateway host and path. The original caller token, delegated token, OpenSandbox API key, and provider credentials must not appear in image layers, workspace files, command output, tool results, or logs.
 
