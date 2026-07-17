@@ -22,7 +22,7 @@ public class WorkflowDefinitionCatalogTests
         registry.Register("test", "name: test\nsteps: []");
 
         registry.GetYaml("test").Should().Contain("name: test");
-        registry.GetYaml("TEST").Should().NotBeNull(); // 不区分大小写
+        registry.GetYaml("TEST").Should().NotBeNull(); // Case-insensitive lookup.
         registry.GetYaml("nonexistent").Should().BeNull();
         registry.GetDefinition("test")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("test"));
     }
@@ -53,7 +53,7 @@ public class WorkflowDefinitionCatalogTests
     [Fact]
     public void FileLoader_LoadsYamlFiles()
     {
-        // 创建临时目录
+        // Create a temporary directory.
         var tmpDir = Path.Combine(Path.GetTempPath(), $"wf_test_{Guid.NewGuid():N}");
         Directory.CreateDirectory(tmpDir);
 
@@ -245,7 +245,11 @@ public class WorkflowDefinitionCatalogTests
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
         allowed.Should().Contain("aevatar_create_team");
+        allowed.Should().Contain("aevatar_list_teams");
+        allowed.Should().Contain("aevatar_get_team");
         allowed.Should().Contain("aevatar_create_member");
+        allowed.Should().Contain("aevatar_list_members");
+        allowed.Should().Contain("aevatar_get_member");
         allowed.Should().Contain("aevatar_bind_member_workflow");
         allowed.Should().Contain("aevatar_schedule_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
