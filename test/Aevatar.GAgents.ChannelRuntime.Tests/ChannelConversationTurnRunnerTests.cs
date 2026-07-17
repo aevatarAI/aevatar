@@ -2601,6 +2601,7 @@ public sealed class ChannelConversationTurnRunnerTests
         // above), so scope-scoped tools (e.g. scheduled_agent_creator) work on the bound-sender path too.
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
+        toolContext.Caller.OwnerScopeId.Should().Be("nyx-user-1");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         toolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-1");

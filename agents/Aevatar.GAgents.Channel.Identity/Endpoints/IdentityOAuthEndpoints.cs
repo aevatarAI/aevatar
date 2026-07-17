@@ -228,6 +228,20 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status409Conflict);
         }
 
+        var ownerScopeId = ResolveOwnerScopeId(exchange.IdToken);
+        if (string.IsNullOrWhiteSpace(ownerScopeId))
+        {
+            logger.LogWarning(
+                "OAuth callback succeeded but id_token did not carry a stable NyxID uid/sub claim. correlation={CorrelationId}",
+                decode.CorrelationId);
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return Results.Json(new
+            {
+                error = "owner_scope_missing",
+                detail = "NyxID binding succeeded but Aevatar could not resolve the canonical owner scope. Re-run /init later.",
+            }, statusCode: StatusCodes.Status502BadGateway);
+        }
+
         var actorId = subject.ToActorId();
 
         if (existingBinding is not null)
@@ -248,6 +262,7 @@ public static class IdentityOAuthEndpoints
                 {
                     ExternalSubject = subject.Clone(),
                     BindingId = exchange.BindingId,
+                    OwnerScopeId = ownerScopeId,
                 }, ct)
                 .ConfigureAwait(false);
         }
@@ -848,6 +863,40 @@ public static class IdentityOAuthEndpoints
             {
                 var raw = sub.GetString();
                 return raw is null || raw.Length <= 6 ? raw : raw[..3] + "…" + raw[^3..];
+            }
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+        return null;
+    }
+
+    private static string? ResolveOwnerScopeId(string? idToken)
+    {
+        if (string.IsNullOrWhiteSpace(idToken)) return null;
+        var parts = idToken.Split('.');
+        if (parts.Length < 2) return null;
+        try
+        {
+            var json = System.Text.Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("uid", out var uid) &&
+                uid.ValueKind == System.Text.Json.JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(uid.GetString()))
+            {
+                return uid.GetString()!.Trim();
+            }
+
+            if (doc.RootElement.TryGetProperty("sub", out var sub) &&
+                sub.ValueKind == System.Text.Json.JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(sub.GetString()))
+            {
+                return sub.GetString()!.Trim();
             }
         }
         catch (FormatException)

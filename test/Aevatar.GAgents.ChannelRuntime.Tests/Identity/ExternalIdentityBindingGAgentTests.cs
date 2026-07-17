@@ -76,6 +76,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
 
         _agent.State.BindingId.Should().Be("bnd_first");
@@ -94,6 +95,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
         var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
 
@@ -105,6 +107,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_second",
+            OwnerScopeId = "owner-user-1",
         });
 
         _agent.State.BindingId.Should().Be("bnd_first");
@@ -132,6 +135,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = null,
             BindingId = "bnd_x",
+            OwnerScopeId = "owner-user-1",
         });
 
         _agent.State.BindingId.Should().BeEmpty();
@@ -146,12 +150,14 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
 
         await _agent.HandleReplaceBinding(new ReplaceBindingCommand
         {
             ExternalSubject = subject,
             BindingId = "bnd_second",
+            OwnerScopeId = "owner-user-1",
             ExpectedPreviousBindingId = "bnd_first",
             Reason = "studio_service_access_review",
         });
@@ -171,6 +177,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
         var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
 
@@ -178,6 +185,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
             ExpectedPreviousBindingId = "bnd_first",
             Reason = "studio_service_access_review",
         });
@@ -195,12 +203,14 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_current",
+            OwnerScopeId = "owner-user-1",
         });
 
         await _agent.HandleReplaceBinding(new ReplaceBindingCommand
         {
             ExternalSubject = subject,
             BindingId = "bnd_unadopted",
+            OwnerScopeId = "owner-user-1",
             ExpectedPreviousBindingId = "bnd_stale",
             Reason = "studio_service_access_review",
         });
@@ -218,6 +228,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
         _retirementPort.Failure = new HttpRequestException("NyxID unavailable");
 
@@ -225,6 +236,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_second",
+            OwnerScopeId = "owner-user-1",
             ExpectedPreviousBindingId = "bnd_first",
             Reason = "studio_service_access_review",
         });
@@ -255,6 +267,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = SampleSubject(),
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
 
         await _agent.HandleRevokeBinding(new RevokeBindingCommand
@@ -275,6 +288,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
 
         await _agent.HandleRevokeBinding(new RevokeBindingCommand
@@ -324,6 +338,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             {
                 ExternalSubject = subject,
                 BindingId = "bnd_dispatched",
+                OwnerScopeId = "owner-user-1",
             }),
         };
 
@@ -341,6 +356,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
         });
         await _agent.HandleRevokeBinding(new RevokeBindingCommand
         {
@@ -353,6 +369,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         {
             ExternalSubject = subject,
             BindingId = "bnd_second",
+            OwnerScopeId = "owner-user-1",
         });
 
         _agent.State.BindingId.Should().Be("bnd_second");

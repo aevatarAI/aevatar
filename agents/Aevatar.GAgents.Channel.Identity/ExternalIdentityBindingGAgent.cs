@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -90,6 +91,17 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             return;
         }
 
+        var ownerScopeId = ResolveOwnerScopeId(cmd.OwnerScopeId, cmd.ExternalSubject);
+        if (ownerScopeId is null)
+        {
+            Logger.LogWarning(
+                "CommitBinding rejected: owner_scope_id is required for non-native subject {Platform}:{Tenant}:{User}",
+                cmd.ExternalSubject.Platform,
+                cmd.ExternalSubject.Tenant,
+                cmd.ExternalSubject.ExternalUserId);
+            return;
+        }
+
         if (!string.IsNullOrEmpty(State.BindingId))
         {
             Logger.LogInformation(
@@ -114,6 +126,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             ExternalSubject = cmd.ExternalSubject.Clone(),
             BindingId = cmd.BindingId,
             BoundAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            OwnerScopeId = ownerScopeId,
         });
 
         Logger.LogInformation(
@@ -164,6 +177,17 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             return;
         }
 
+        var ownerScopeId = ResolveOwnerScopeId(cmd.OwnerScopeId, cmd.ExternalSubject);
+        if (ownerScopeId is null)
+        {
+            Logger.LogWarning(
+                "ReplaceBinding rejected: owner_scope_id is required for non-native subject {Platform}:{Tenant}:{User}",
+                cmd.ExternalSubject.Platform,
+                cmd.ExternalSubject.Tenant,
+                cmd.ExternalSubject.ExternalUserId);
+            return;
+        }
+
         var previousBindingId = State.BindingId;
         if (string.Equals(previousBindingId, cmd.BindingId, StringComparison.Ordinal))
         {
@@ -207,6 +231,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             BindingId = cmd.BindingId,
             ReplacedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Reason = reason,
+            OwnerScopeId = ownerScopeId,
         });
 
         Logger.LogInformation(
@@ -335,7 +360,22 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             ExternalSubject = State.ExternalSubject?.Clone(),
             BindingId = State.BindingId,
             BoundAt = State.BoundAt,
+            OwnerScopeId = State.OwnerScopeId,
         });
+
+    private static string? ResolveOwnerScopeId(string? ownerScopeId, ExternalSubjectRef subject)
+    {
+        var normalized = NormalizeOptional(ownerScopeId);
+        if (normalized is not null)
+            return normalized;
+
+        return string.Equals(subject.Platform, OwnerScope.NyxIdPlatform, StringComparison.Ordinal)
+            ? NormalizeOptional(subject.ExternalUserId)
+            : null;
+    }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private async Task QueueBindingRetirementAsync(
         ExternalSubjectRef subject,
@@ -453,6 +493,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         next.BindingId = evt.BindingId ?? string.Empty;
         next.BoundAt = evt.BoundAt;
         next.RevokedAt = null;
+        next.OwnerScopeId = evt.OwnerScopeId ?? string.Empty;
         return next;
     }
 
@@ -465,6 +506,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         next.BindingId = evt.BindingId ?? string.Empty;
         next.BoundAt = evt.ReplacedAt;
         next.RevokedAt = null;
+        next.OwnerScopeId = evt.OwnerScopeId ?? string.Empty;
         AddPendingRetirement(next, evt.PreviousBindingId);
         return next;
     }

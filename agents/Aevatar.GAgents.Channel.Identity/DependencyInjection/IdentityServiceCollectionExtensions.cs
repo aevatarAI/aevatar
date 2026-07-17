@@ -87,7 +87,11 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ExternalIdentityBindingDocument>,
             ExternalIdentityBindingDocumentMetadataProvider>();
-        services.TryAddSingleton<IExternalIdentityBindingQueryPort, ExternalIdentityBindingProjectionQueryPort>();
+        services.TryAddSingleton<ExternalIdentityBindingProjectionQueryPort>();
+        services.TryAddSingleton<IExternalIdentityBindingQueryPort>(sp =>
+            sp.GetRequiredService<ExternalIdentityBindingProjectionQueryPort>());
+        services.TryAddSingleton<IOwnerScopeResolver>(sp =>
+            sp.GetRequiredService<ExternalIdentityBindingProjectionQueryPort>());
 
         // ─── Committed-fact audit for external-identity bindings ───
         // Subject-bearing: the actor id embeds the raw external subject, so the

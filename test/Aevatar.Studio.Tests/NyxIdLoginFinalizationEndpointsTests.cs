@@ -321,6 +321,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
                 ExternalUserId = "owner-user-1",
             },
             BindingId = "bnd-owner-1",
+            OwnerScopeId = "owner-user-1",
         });
     }
 
@@ -388,6 +389,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             ExternalSubject = OwnerSubject("owner-user-1"),
             BindingId = "bnd-reviewed",
             ExpectedPreviousBindingId = "bnd-existing",
+            OwnerScopeId = "owner-user-1",
             Reason = "studio_service_access_review",
         });
     }
@@ -423,6 +425,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             ExternalSubject = OwnerSubject("owner-user-1"),
             BindingId = "bnd-new",
             ExpectedPreviousBindingId = "bnd-existing",
+            OwnerScopeId = "owner-user-1",
             Reason = "nyxid_login_recovery",
         });
         dispatch.Commands.Should().BeEmpty();
@@ -487,6 +490,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             ExternalSubject = OwnerSubject("owner-user-1"),
             BindingId = "bnd-new",
             ExpectedPreviousBindingId = "bnd-existing",
+            OwnerScopeId = "owner-user-1",
             Reason = "nyxid_login_recovery",
         });
     }

@@ -13,6 +13,7 @@ public static class AgentToolExecutionContextMapper
         LLMRequestMetadataKeys.CallId,
         LLMRequestMetadataKeys.ScopeId,
         "scope_id",
+        LLMRequestMetadataKeys.OwnerScopeId,
         LLMRequestMetadataKeys.OwnerSubject,
         LLMRequestMetadataKeys.ResponseId,
         LLMRequestMetadataKeys.NyxIdAccessToken,
@@ -87,7 +88,8 @@ public static class AgentToolExecutionContextMapper
                 : new AgentToolCallerContext(
                     AgentToolExecutionContext.Normalize(caller.ScopeId) ?? mapped.Caller.ScopeId,
                     AgentToolExecutionContext.Normalize(caller.OwnerSubject) ?? mapped.Caller.OwnerSubject,
-                    AgentToolExecutionContext.Normalize(caller.ResponseId) ?? mapped.Caller.ResponseId),
+                    AgentToolExecutionContext.Normalize(caller.ResponseId) ?? mapped.Caller.ResponseId,
+                    mapped.Caller.OwnerScopeId),
             Credentials = caller?.Credentials == null
                 ? mapped.Credentials
                 : mapped.Credentials with
@@ -141,7 +143,8 @@ public static class AgentToolExecutionContextMapper
             new AgentToolCallerContext(
                 AgentToolExecutionContext.Normalize(payload.Caller?.ScopeId),
                 AgentToolExecutionContext.Normalize(payload.Caller?.OwnerSubject),
-                AgentToolExecutionContext.Normalize(payload.Caller?.ResponseId)),
+                AgentToolExecutionContext.Normalize(payload.Caller?.ResponseId),
+                AgentToolExecutionContext.Normalize(payload.Caller?.OwnerScopeId)),
             new AgentToolChannelContext(
                 AgentToolExecutionContext.Normalize(payload.Channel?.Platform),
                 AgentToolExecutionContext.Normalize(payload.Channel?.SenderId),
@@ -199,6 +202,7 @@ public static class AgentToolExecutionContextMapper
                 ScopeId = context.Caller.ScopeId ?? string.Empty,
                 OwnerSubject = context.Caller.OwnerSubject ?? string.Empty,
                 ResponseId = context.Caller.ResponseId ?? string.Empty,
+                OwnerScopeId = context.Caller.OwnerScopeId ?? string.Empty,
             },
             Channel = new AgentToolChannelContextPayload
             {

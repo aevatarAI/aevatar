@@ -207,6 +207,7 @@ public static class NyxIdLoginFinalizationEndpoints
             Tenant = string.Empty,
             ExternalUserId = user.Sub.Trim(),
         };
+        var ownerScopeId = user.Sub.Trim();
 
         var existingBinding = await bindingQueryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
         if (existingBinding != null)
@@ -265,6 +266,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 subject,
                 existingBinding.Value,
                 exchange.BindingId,
+                ownerScopeId,
                 replacementReason,
                 logger,
                 ct).ConfigureAwait(false);
@@ -293,7 +295,13 @@ public static class NyxIdLoginFinalizationEndpoints
             return BuildIssuedBindingProbeError(newBindingProbe);
         }
 
-        var commitResult = await DispatchCommitBindingAsync(bindingDispatch, subject, exchange.BindingId, logger, ct).ConfigureAwait(false);
+        var commitResult = await DispatchCommitBindingAsync(
+            bindingDispatch,
+            subject,
+            exchange.BindingId,
+            ownerScopeId,
+            logger,
+            ct).ConfigureAwait(false);
         if (commitResult != BindingDispatchOutcome.Accepted)
         {
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
@@ -493,6 +501,7 @@ public static class NyxIdLoginFinalizationEndpoints
         ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
         ExternalSubjectRef subject,
         string bindingId,
+        string ownerScopeId,
         ILogger logger,
         CancellationToken ct)
     {
@@ -502,6 +511,7 @@ public static class NyxIdLoginFinalizationEndpoints
             {
                 ExternalSubject = subject,
                 BindingId = bindingId.Trim(),
+                OwnerScopeId = ownerScopeId.Trim(),
             }, ct).ConfigureAwait(false);
 
             if (accepted.Succeeded && accepted.Receipt != null)
@@ -525,6 +535,7 @@ public static class NyxIdLoginFinalizationEndpoints
         ExternalSubjectRef subject,
         string expectedPreviousBindingId,
         string bindingId,
+        string ownerScopeId,
         string reason,
         ILogger logger,
         CancellationToken ct)
@@ -536,6 +547,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 ExternalSubject = subject,
                 BindingId = bindingId.Trim(),
                 ExpectedPreviousBindingId = expectedPreviousBindingId.Trim(),
+                OwnerScopeId = ownerScopeId.Trim(),
                 Reason = reason,
             }, ct).ConfigureAwait(false);
 

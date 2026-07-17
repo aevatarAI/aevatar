@@ -46,6 +46,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         {
             ExternalSubject = subject,
             BindingId = "bnd-issue1313-first",
+            OwnerScopeId = "owner-user-1",
         });
 
         result.Succeeded.Should().BeTrue();
@@ -90,6 +91,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         {
             ExternalSubject = subject,
             BindingId = "bnd-issue1355-revoke",
+            OwnerScopeId = "owner-user-1",
         });
         commit.Succeeded.Should().BeTrue();
 
@@ -143,6 +145,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         {
             ExternalSubject = subject,
             BindingId = "bnd-issue1355-first",
+            OwnerScopeId = "owner-user-1",
         });
         firstCommit.Succeeded.Should().BeTrue();
 
@@ -154,6 +157,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         {
             ExternalSubject = subject,
             BindingId = "bnd-issue1355-second",
+            OwnerScopeId = "owner-user-1",
         });
         duplicateCommit.Succeeded.Should().BeTrue();
 
