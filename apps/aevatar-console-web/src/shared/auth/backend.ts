@@ -1,5 +1,4 @@
 import {
-  readResponseError,
   readResponseErrorDetails,
   type ResponseErrorDetails,
 } from "@/shared/api/http/error";
@@ -8,7 +7,7 @@ import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
 
 export type NyxIDBackendLoginConfig = Pick<
   NyxIDRuntimeConfig,
-  "baseUrl" | "clientId" | "scope"
+  "baseUrl" | "scope"
 >;
 
 export type NyxIDLoginFinalizationRequest = {
@@ -29,11 +28,21 @@ export type NyxIDTokenRefreshRequest = {
   readonly refreshToken: string;
 };
 
+export class NyxIDLoginFinalizationError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(details: ResponseErrorDetails) {
+    super(details.message);
+    this.name = "NyxIDLoginFinalizationError";
+    this.code = details.code;
+    this.status = details.status;
+  }
+}
+
 type BackendLoginConfigResponse = {
   readonly baseUrl?: unknown;
   readonly BaseUrl?: unknown;
-  readonly clientId?: unknown;
-  readonly ClientId?: unknown;
   readonly scope?: unknown;
   readonly Scope?: unknown;
 };
@@ -153,7 +162,6 @@ function decodeBackendLoginConfig(
       /\/+$/,
       "",
     ),
-    clientId: readString(record.clientId ?? record.ClientId, "clientId"),
     scope: readString(record.scope ?? record.Scope, "scope"),
   };
 }
@@ -262,42 +270,15 @@ async function requestBackendJson<T>(
   input: string,
   decoder: (value: unknown) => T,
   init?: RequestInit,
-  formatError?: (details: ResponseErrorDetails) => string | null,
+  createError?: (details: ResponseErrorDetails) => Error,
 ): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
     const details = await readResponseErrorDetails(response);
-    throw new Error(formatError?.(details) ?? details.message);
+    throw createError?.(details) ?? new Error(details.message);
   }
 
   return decoder(await response.json());
-}
-
-function describeNyxIDFinalizationError(
-  details: ResponseErrorDetails,
-): string | null {
-  switch (details.code) {
-    case "required_service_access_missing":
-      return "NyxID service access is still missing. Open Account settings, choose Manage service access, and try again.";
-    case "issued_binding_invalid":
-      return "NyxID returned a service binding that could not be accepted. Open Account settings, choose Manage service access, and try again.";
-    case "issued_binding_probe_failed":
-      return "NyxID service binding verification failed after the review. The service may be temporarily unavailable; try Manage service access again.";
-    case "binding_probe_failed":
-      return "NyxID service binding verification failed. The service may be temporarily unavailable; try Manage service access again.";
-    default:
-      break;
-  }
-
-  if (details.status === 409) {
-    return "NyxID service access review needs to be run again. Open Account settings, choose Manage service access, and try again.";
-  }
-
-  if (details.status === 502 || details.status === 503) {
-    return "NyxID service access review is temporarily unavailable. Open Account settings and try Manage service access again.";
-  }
-
-  return null;
 }
 
 export function loadBackendNyxIDLoginConfig(): Promise<NyxIDBackendLoginConfig> {
@@ -326,7 +307,7 @@ export function finalizeBackendNyxIDLogin(
       },
       method: "POST",
     },
-    describeNyxIDFinalizationError,
+    (details) => new NyxIDLoginFinalizationError(details),
   );
 }
 

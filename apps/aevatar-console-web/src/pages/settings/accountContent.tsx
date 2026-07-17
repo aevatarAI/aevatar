@@ -4,7 +4,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Avatar, Button, Empty, Space, Typography, theme } from "antd";
+import { Alert, Avatar, Button, Empty, Space, Typography, theme } from "antd";
 import React, { useMemo, useState } from "react";
 import {
   NyxIDAuthClient,
@@ -24,7 +24,6 @@ import {
 } from "@/shared/ui/proComponents";
 import { buildSettingsPanelStyle, SummaryField, SummaryMetric } from "./shared";
 import { t } from "@/shared/i18n/messages";
-import { describeError } from "@/shared/ui/errorText";
 
 function formatSessionExpiry(value?: number): string {
   if (!value) {
@@ -123,9 +122,9 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
         flow: "serviceAccessReview",
         returnTo: SERVICE_ACCESS_REVIEW_RETURN_TO,
       });
-    } catch (error) {
+    } catch {
       setServiceAccessReviewPending(false);
-      setServiceAccessReviewError(describeError(error));
+      setServiceAccessReviewError(t("pages.settings.accountcontent.service.access.review.start.failed", "Could not start service access review. Try again."));
     }
   };
 
@@ -248,9 +247,7 @@ const AccountSettingsContent: React.FC<AccountSettingsContentProps> = ({
             />
           </div>
           {serviceAccessReviewError ? (
-            <Typography.Text type="danger">
-              {serviceAccessReviewError}
-            </Typography.Text>
+            <Alert message={serviceAccessReviewError} role="alert" showIcon type="error" />
           ) : null}
         </Space>
       </AevatarPanel>

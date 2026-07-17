@@ -16,7 +16,7 @@ describe("NyxID backend auth API", () => {
     jest.restoreAllMocks();
   });
 
-  it("loads the broker OAuth client config used by backend finalization", async () => {
+  it("loads the broker URL and scope while ignoring its OAuth client id", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -30,7 +30,6 @@ describe("NyxID backend auth API", () => {
 
     await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
       baseUrl: "https://nyx.example",
-      clientId: "broker-client-1",
       scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
     });
 
@@ -47,7 +46,6 @@ describe("NyxID backend auth API", () => {
       status: 200,
       json: async () => ({
         baseUrl: "https://nyx.example/",
-        clientId: "broker-client-1",
         scope: "openid urn:nyxid:scope:broker_binding proxy",
         redirectUri: "https://backend.example/auth/callback",
         RedirectUri: "https://backend.example/AuthCallback",
@@ -57,7 +55,6 @@ describe("NyxID backend auth API", () => {
 
     await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
       baseUrl: "https://nyx.example",
-      clientId: "broker-client-1",
       scope: "openid urn:nyxid:scope:broker_binding proxy",
     });
   });
@@ -162,37 +159,21 @@ describe("NyxID backend auth API", () => {
   });
 
   it.each([
-    [
-      409,
-      "required_service_access_missing",
-      "NyxID service access is still missing. Open Account settings, choose Manage service access, and try again.",
-    ],
-    [
-      409,
-      "issued_binding_invalid",
-      "NyxID returned a service binding that could not be accepted. Open Account settings, choose Manage service access, and try again.",
-    ],
-    [
-      502,
-      "issued_binding_probe_failed",
-      "NyxID service binding verification failed after the review. The service may be temporarily unavailable; try Manage service access again.",
-    ],
-    [
-      503,
-      "binding_probe_failed",
-      "NyxID service binding verification failed. The service may be temporarily unavailable; try Manage service access again.",
-    ],
+    [409, "required_service_access_missing", "Keep required services selected."],
+    [502, "issued_binding_invalid", "The issued binding was unavailable."],
+    [503, "issued_binding_probe_failed", "The issued binding could not be verified."],
+    [503, "binding_probe_failed", "The current binding could not be verified."],
   ])(
-    "returns retry guidance for service access review backend error %s %s",
-    async (status, code, message) => {
+    "preserves typed service access review backend error %s %s",
+    async (status, code, detail) => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: false,
         status,
         statusText: status === 409 ? "Conflict" : "Service Unavailable",
         text: async () =>
           JSON.stringify({
-            code,
-            message: "backend raw message",
+            error: code,
+            detail,
           }),
       } as Response);
       global.fetch = fetchMock as typeof global.fetch;
@@ -204,7 +185,12 @@ describe("NyxID backend auth API", () => {
           redirectUri: "http://localhost:8000/auth/callback",
           serviceAccessReview: true,
         }),
-      ).rejects.toThrow(message);
+      ).rejects.toMatchObject({
+        code,
+        message: code,
+        name: "NyxIDLoginFinalizationError",
+        status,
+      });
     },
   );
 
