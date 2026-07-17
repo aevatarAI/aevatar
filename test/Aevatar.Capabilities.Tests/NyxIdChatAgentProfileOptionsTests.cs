@@ -207,7 +207,8 @@ public sealed class NyxIdChatAgentProfileOptionsTests
             {
                 var duplicate = BuildMember(1);
                 duplicate.ExplicitTriggerAliases.Clear();
-                duplicate.ExplicitTriggerAliases.Add("ALPHA");
+                duplicate.ExplicitTriggerAliases.Add(
+                    profile.Members[0].ExplicitTriggerAliases[0].ToUpperInvariant());
                 profile.Members.Add(duplicate);
                 break;
             }
