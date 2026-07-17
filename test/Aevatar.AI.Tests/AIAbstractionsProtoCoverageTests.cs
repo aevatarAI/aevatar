@@ -582,28 +582,25 @@ public sealed class AIAbstractionsProtoCoverageTests
             Headers = { ["k1"] = "v1" },
         });
 
-        target.Prompt.Should().Be("p1");
-        target.SessionId.Should().Be("s1");
-        target.Headers["k1"].Should().Be("v1");
+        (target.Prompt, target.SessionId, target.Headers["k1"]).Should().Be(("p1", "s1", "v1"));
 
         target.Clone().Should().BeEquivalentTo(target);
         target.ToString().Should().Contain("prompt");
 
         AiMessagesReflection.Descriptor.Should().NotBeNull();
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ChatRequestEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ChatResponseEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageStartEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageContentEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageReasoningEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(TextMessageEndEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolCallEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ToolResultEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionStartedEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionCompletedEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(InitializeRoleAgentEvent));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(AIAgentConfigOverrides));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionState));
-        AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleGAgentState));
+        AiMessagesReflection.Descriptor.MessageTypes.Select(static type => type.Name).Should().Contain(
+            [nameof(ChatRequestEvent), nameof(ChatResponseEvent), nameof(TextMessageStartEvent), nameof(TextMessageContentEvent), nameof(TextMessageReasoningEvent), nameof(TextMessageEndEvent), nameof(ToolCallEvent), nameof(ToolResultEvent), nameof(RoleChatSessionStartedEvent), nameof(RoleChatSessionCompletedEvent), nameof(InitializeRoleAgentEvent), nameof(AIAgentConfigOverrides), nameof(RoleChatSessionState), nameof(RoleGAgentState)]);
+
+        var skillRef = RoundTrip(new ExactRemoteSkillRef { Guid = "11111111-1111-1111-1111-111111111111", LiteralVersion = "1.2" }, ExactRemoteSkillRef.Parser);
+        var skillsetRef = RoundTrip(new ExactRemoteSkillsetRef { Guid = "22222222-2222-2222-2222-222222222222", LiteralVersion = "3.4" }, ExactRemoteSkillsetRef.Parser);
+        (skillRef.Guid, skillRef.LiteralVersion).Should().Be(("11111111-1111-1111-1111-111111111111", "1.2"));
+        (skillsetRef.Guid, skillsetRef.LiteralVersion).Should().Be(("22222222-2222-2222-2222-222222222222", "3.4"));
+        foreach (var descriptor in new[] { ExactRemoteSkillRef.Descriptor, ExactRemoteSkillsetRef.Descriptor })
+        {
+            descriptor.Fields.InFieldNumberOrder().Select(static field => (field.FieldNumber, field.Name))
+                .Should().Equal((1, "guid"), (2, "literal_version"));
+            descriptor.Oneofs.Should().BeEmpty();
+        }
     }
 
     [Fact]

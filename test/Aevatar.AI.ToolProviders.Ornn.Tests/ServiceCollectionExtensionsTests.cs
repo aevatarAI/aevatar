@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
+using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -115,6 +116,31 @@ public sealed class ServiceCollectionExtensionsTests
         sources.Count(x => x is OrnnAgentToolSource).Should().Be(1);
         sources.OfType<OrnnAgentToolSource>().Should().ContainSingle()
             .Which.Should().BeSameAs(provider.GetRequiredService<OrnnAgentToolSource>());
+    }
+
+    [Fact]
+    public void AddOrnnSkills_ShouldAliasOrdinaryAndExactPortsToOneFetcherWithoutExposingItAsToolSource()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(new NotFoundHttpMessageHandler())));
+
+        services.AddOrnnSkills();
+        services.AddOrnnSkills();
+
+        using var provider = services.BuildServiceProvider();
+        var concrete = provider.GetRequiredService<OrnnRemoteSkillFetcher>();
+        var ordinary = provider.GetRequiredService<IRemoteSkillFetcher>();
+        var exact = provider.GetRequiredService<IExactRemoteSkillFetcher>();
+
+        ordinary.Should().BeSameAs(concrete);
+        exact.Should().BeSameAs(concrete);
+        provider.GetServices<IRemoteSkillFetcher>().Should().ContainSingle();
+        provider.GetServices<IExactRemoteSkillFetcher>().Should().ContainSingle();
+        provider.GetRequiredService<ExactRemoteReleaseVerifier>().Should().NotBeNull();
+        provider.GetServices<IAgentToolSource>().Should()
+            .NotContain(source => ReferenceEquals(source, exact));
     }
 
     private sealed class StubOverlayProvider : ISystemSkillOverlayProvider, ISystemSkillOverlayFallback

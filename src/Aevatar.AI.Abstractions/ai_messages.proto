@@ -392,6 +392,16 @@ message SystemSkillOverlay {
   int64 materialized_at = 3;
 }
 
+message ExactRemoteSkillRef {
+  string guid = 1;
+  string literal_version = 2;
+}
+
+message ExactRemoteSkillsetRef {
+  string guid = 1;
+  string literal_version = 2;
+}
+
 // Retired (issue #2498): no longer emitted — the overlay is sourced by the host-level provider, not
 // materialized per-actor. Kept defined so historical journals / queued durable timeouts still
 // deserialize and replay through their no-op handlers. Remove in a later release once no grain journal
