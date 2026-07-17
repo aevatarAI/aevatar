@@ -208,6 +208,72 @@ public class NyxIdChatGAgentTests
         AgentProfileSnapshotCodec.Verify(restored.State.AgentProfile).Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(false, "complete snapshot")]
+    [InlineData(true, "valid digest")]
+    public async Task ActivateAsync_ShouldRejectCommittedBindingWithoutValidCompleteProfile(
+        bool tamperDigest,
+        string expectedMessage)
+    {
+        using var provider = BuildServiceProvider();
+        var actorId = tamperDigest
+            ? "nyxid-chat-profile-replay-invalid-digest"
+            : "nyxid-chat-profile-replay-missing";
+        var binding = new AgentProfileBoundEvent();
+        if (tamperDigest)
+        {
+            var profile = BuildSealedProfile("profile-v1");
+            profile.ProfileVersion = "tampered";
+            binding.Profile = profile;
+        }
+
+        await AppendCommittedEventsAsync(provider, actorId, binding);
+        var agent = CreateAgent(provider, actorId);
+
+        var act = () => agent.ActivateAsync();
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*{expectedMessage}*");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldReplayEquivalentCommittedBindingIdempotently()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "nyxid-chat-profile-replay-equivalent";
+        var profile = BuildSealedProfile("profile-v1");
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = profile.Clone() },
+            new AgentProfileBoundEvent { Profile = profile.Clone() });
+        var agent = CreateAgent(provider, actorId);
+
+        await agent.ActivateAsync();
+
+        AgentProfileSnapshotCodec.ByteEquivalent(agent.State.AgentProfile, profile).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldRejectConflictingCommittedBindingDuringReplay()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "nyxid-chat-profile-replay-conflict";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1") },
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v2") });
+        var agent = CreateAgent(provider, actorId);
+
+        var act = () => agent.ActivateAsync();
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot be replaced*");
+    }
+
     [Fact]
     public async Task Conversations_ShouldKeepIndependentProfileVersions()
     {
@@ -630,6 +696,25 @@ public class NyxIdChatGAgentTests
         Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actorId } },
         Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
     };
+
+    private static async Task AppendCommittedEventsAsync(
+        IServiceProvider provider,
+        string actorId,
+        params IMessage[] events)
+    {
+        var stateEvents = events.Select((evt, index) => new StateEvent
+        {
+            EventId = $"profile-binding-{index + 1}",
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Version = index + 1,
+            EventType = evt.Descriptor.FullName,
+            EventData = Any.Pack(evt),
+            AgentId = actorId,
+        });
+
+        await provider.GetRequiredService<IEventStore>()
+            .AppendAsync(actorId, stateEvents, expectedVersion: 0);
+    }
 
     private static ChatRouteResolver NewChatRouteResolver() =>
         new(new StaticChatRouteFallbackProvider(string.Empty));

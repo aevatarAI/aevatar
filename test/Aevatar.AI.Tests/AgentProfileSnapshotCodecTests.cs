@@ -52,12 +52,36 @@ public sealed class AgentProfileSnapshotCodecTests
     }
 
     [Fact]
+    public void Seal_ShouldRejectSnapshotWithExistingDigest()
+    {
+        var sealedProfile = AgentProfileSnapshotCodec.Seal(BuildProfile("profile-v1"));
+
+        var act = () => AgentProfileSnapshotCodec.Seal(sealedProfile);
+
+        act.Should()
+            .Throw<ArgumentException>()
+            .WithMessage("*digest must be empty before sealing*");
+    }
+
+    [Fact]
     public void Verify_ShouldRejectTamperedSnapshot()
     {
         var sealedProfile = AgentProfileSnapshotCodec.Seal(BuildProfile("profile-v1"));
         sealedProfile.ProfileVersion = "profile-v2";
 
         AgentProfileSnapshotCodec.Verify(sealedProfile).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(31)]
+    [InlineData(33)]
+    public void Verify_ShouldRejectDigestWithInvalidLength(int digestLength)
+    {
+        var profile = BuildProfile("profile-v1");
+        profile.DeterministicPolicySha256 = ByteString.CopyFrom(new byte[digestLength]);
+
+        AgentProfileSnapshotCodec.Verify(profile).Should().BeFalse();
     }
 
     [Fact]
