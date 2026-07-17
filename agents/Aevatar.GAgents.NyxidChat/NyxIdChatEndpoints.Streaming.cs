@@ -38,7 +38,7 @@ public static partial class NyxIdChatEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            accessToken = ExtractBearerToken(http);
+            accessToken = ExtractNyxIdAccessToken(http);
             if (string.IsNullOrWhiteSpace(accessToken))
             {
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -167,7 +167,7 @@ public static partial class NyxIdChatEndpoints
             if (await AevatarScopeAccessGuard.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var accessToken = ExtractBearerToken(http);
+            var accessToken = ExtractNyxIdAccessToken(http);
             if (string.IsNullOrWhiteSpace(accessToken))
             {
                 http.Response.StatusCode = StatusCodes.Status401Unauthorized;

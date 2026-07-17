@@ -12,12 +12,13 @@ namespace Aevatar.Mainnet.Host.Api.Responses;
 internal sealed record NyxIdIdentityAssertionValidationResult(
     bool Succeeded,
     string? Subject = null,
+    IReadOnlyList<Claim>? Claims = null,
     string? ErrorCode = null,
     string? ErrorSummary = null);
 
 internal sealed record NyxIdJwksCacheEntry(
     string Issuer,
-    string? Audience,
+    string Audience,
     IReadOnlyList<SecurityKey> SigningKeys,
     DateTimeOffset ExpiresAtUtc);
 
@@ -29,6 +30,7 @@ internal sealed class NyxIdIdentityAssertionValidator
     private readonly NyxIdToolOptions? _nyxIdOptions;
     private readonly IIdentityAssertionReplayGuard _replayGuard;
     private readonly ILogger<NyxIdIdentityAssertionValidator> _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
     private NyxIdJwksCacheEntry? _cachedKeys;
     private DateTimeOffset _lastForcedRefreshUtc = DateTimeOffset.MinValue;
@@ -47,13 +49,15 @@ internal sealed class NyxIdIdentityAssertionValidator
         IOptions<ResponsesNyxIdIdentityAssertionOptions> options,
         NyxIdToolOptions? nyxIdOptions = null,
         IIdentityAssertionReplayGuard? replayGuard = null,
-        ILogger<NyxIdIdentityAssertionValidator>? logger = null)
+        ILogger<NyxIdIdentityAssertionValidator>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _nyxIdOptions = nyxIdOptions;
         _replayGuard = replayGuard ?? new InMemoryIdentityAssertionReplayGuard(TimeProvider.System);
         _logger = logger ?? NullLogger<NyxIdIdentityAssertionValidator>.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<NyxIdIdentityAssertionValidationResult> ValidateAsync(
@@ -96,15 +100,30 @@ internal sealed class NyxIdIdentityAssertionValidator
         {
             MapInboundClaims = false,
         };
+        if (!handler.CanReadToken(identityToken))
+            return Fail("identity_assertion_malformed", "NyxID identity assertion is malformed.");
+
+        var encodedToken = handler.ReadJwtToken(identityToken);
+        if (!string.Equals(encodedToken.Header.Alg, SecurityAlgorithms.RsaSha256, StringComparison.Ordinal))
+        {
+            return Fail(
+                "identity_assertion_signature_invalid",
+                "NyxID identity assertion must use RS256.");
+        }
+
+        if (string.IsNullOrWhiteSpace(encodedToken.Header.Kid))
+            return Fail("identity_assertion_kid_missing", "NyxID identity assertion is missing kid.");
+
         var parameters = new TokenValidationParameters
         {
             RequireSignedTokens = true,
+            RequireExpirationTime = true,
             ValidateIssuerSigningKey = true,
             IssuerSigningKeys = keys.SigningKeys,
             ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
             ValidateIssuer = true,
             ValidIssuer = keys.Issuer,
-            ValidateAudience = keys.Audience is not null,
+            ValidateAudience = true,
             ValidAudience = keys.Audience,
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(Math.Max(0, _options.ClockSkewSeconds)),
@@ -117,12 +136,30 @@ internal sealed class NyxIdIdentityAssertionValidator
                           NormalizeOptional(principal.FindFirstValue("sub"));
             var jti = NormalizeOptional(principal.FindFirstValue(JwtRegisteredClaimNames.Jti)) ??
                       NormalizeOptional(principal.FindFirstValue("jti"));
+            var issuedAt = ReadNumericDateClaim(principal, JwtRegisteredClaimNames.Iat);
 
             if (subject is null)
                 return Fail("identity_assertion_sub_missing", "NyxID identity assertion is missing sub.");
 
             if (jti is null)
                 return Fail("identity_assertion_jti_missing", "NyxID identity assertion is missing jti.");
+
+            if (issuedAt is null)
+                return Fail("identity_assertion_iat_missing", "NyxID identity assertion is missing a valid iat.");
+
+            var expiresUtc = new DateTimeOffset(
+                DateTime.SpecifyKind(validatedToken.ValidTo, DateTimeKind.Utc));
+            var issuedAtUtc = DateTimeOffset.FromUnixTimeSeconds(issuedAt.Value);
+            var clockSkew = TimeSpan.FromSeconds(Math.Max(0, _options.ClockSkewSeconds));
+            var maximumLifetime = TimeSpan.FromSeconds(Math.Max(1, _options.MaximumLifetimeSeconds));
+            if (issuedAtUtc > _timeProvider.GetUtcNow().Add(clockSkew) ||
+                expiresUtc <= issuedAtUtc ||
+                expiresUtc - issuedAtUtc > maximumLifetime)
+            {
+                return Fail(
+                    "identity_assertion_lifetime_invalid",
+                    "NyxID identity assertion iat/exp lifetime is invalid.");
+            }
 
             var expectedServiceId = NormalizeOptional(_options.ExpectedServiceId);
             if (expectedServiceId is not null)
@@ -139,17 +176,18 @@ internal sealed class NyxIdIdentityAssertionValidator
             // Replay guard runs last: only a signature-valid, claims-valid, in-lifetime assertion
             // is consumed, and each jti is single-use within its lifetime. A duplicate jti means
             // the same proxy-minted assertion is being presented twice and is rejected.
-            // JWT ValidTo is UTC; force the kind so DateTimeOffset never throws on Unspecified.
-            var expiresUtc = new DateTimeOffset(
-                DateTime.SpecifyKind(validatedToken.ValidTo, DateTimeKind.Utc));
-            if (!await _replayGuard.TryConsumeAsync(jti, expiresUtc, cancellationToken))
+            // Retain the jti through the full accepted lifetime, including configured clock skew.
+            if (!await _replayGuard.TryConsumeAsync(jti, expiresUtc.Add(clockSkew), cancellationToken))
             {
                 return Fail(
                     "identity_assertion_replayed",
                     "NyxID identity assertion has already been used (jti replay).");
             }
 
-            return new NyxIdIdentityAssertionValidationResult(true, Subject: subject);
+            return new NyxIdIdentityAssertionValidationResult(
+                true,
+                Subject: subject,
+                Claims: principal.Claims.ToArray());
         }
         catch (SecurityTokenSignatureKeyNotFoundException ex)
         {
@@ -297,11 +335,8 @@ internal sealed class NyxIdIdentityAssertionValidator
         throw new InvalidOperationException("NyxID identity assertion issuer is not configured.");
     }
 
-    // Audience is optional. The proxy mints an assertion for THIS service only when forwarding
-    // to it, and the issuer + RSA signature already establish NyxID as the trusted minter. When
-    // ExpectedAudience is configured it is enforced (defense-in-depth against cross-service token
-    // replay); when absent, audience validation is skipped rather than failing closed.
-    private string? ResolveAudience() => NormalizeOptional(_options.ExpectedAudience);
+    private string ResolveAudience() => NormalizeOptional(_options.ExpectedAudience)
+        ?? throw new InvalidOperationException("NyxID identity assertion audience is not configured.");
 
     private string ResolveDiscoveryUrl()
     {
@@ -317,8 +352,14 @@ internal sealed class NyxIdIdentityAssertionValidator
     }
 
     private string? ResolveNyxIdAuthority() =>
-        NormalizeOptional(_nyxIdOptions?.BaseUrl)?.TrimEnd('/')
-        ?? NormalizeOptional(_options.Issuer)?.TrimEnd('/');
+        NormalizeOptional(_options.Issuer)?.TrimEnd('/')
+        ?? NormalizeOptional(_nyxIdOptions?.BaseUrl)?.TrimEnd('/');
+
+    private static long? ReadNumericDateClaim(ClaimsPrincipal principal, string claimType)
+    {
+        var value = NormalizeOptional(principal.FindFirstValue(claimType));
+        return long.TryParse(value, out var parsed) ? parsed : null;
+    }
 
     private static NyxIdIdentityAssertionValidationResult Fail(string code, string? summary) =>
         new(false, ErrorCode: code, ErrorSummary: summary);

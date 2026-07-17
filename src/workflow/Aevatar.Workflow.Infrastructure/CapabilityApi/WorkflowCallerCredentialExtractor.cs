@@ -9,27 +9,42 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 public static class WorkflowCallerCredentialExtractor
 {
     private const string BearerPrefix = "Bearer ";
+    private const string NyxIdDelegationTokenHeader = "X-NyxID-Delegation-Token";
     private const string DefaultNyxIdCapabilityScope = "proxy";
 
     public static WorkflowCallerCredentialExtractionResult Extract(HttpContext? http)
     {
+        if (http?.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues) == true)
+        {
+            if (delegationValues.Count != 1)
+                return Invalid();
+
+            return ParseCredential(delegationValues[0], http);
+        }
+
         var auth = http?.Request.Headers.Authorization.FirstOrDefault();
         if (auth == null)
             return WorkflowCallerCredentialExtractionResult.Success(null);
         if (string.Equals(auth.Trim(), "Bearer", StringComparison.OrdinalIgnoreCase))
-            return WorkflowCallerCredentialExtractionResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
+            return Invalid();
         if (!auth.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase))
             return WorkflowCallerCredentialExtractionResult.Success(null);
 
-        var bearerToken = auth[BearerPrefix.Length..].Trim();
-        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(bearerToken);
+        return ParseCredential(auth[BearerPrefix.Length..], http);
+    }
+
+    private static WorkflowCallerCredentialExtractionResult ParseCredential(
+        string? rawToken,
+        HttpContext? http)
+    {
+        var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(rawToken);
         if (parsed.IsValid)
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     parsed.NormalizedBearerToken,
                     ResolveAuthenticatedNyxIdAuthority(http)));
 
-        return WorkflowCallerCredentialExtractionResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
+        return Invalid();
     }
 
     private static WorkflowCallerNyxIdAuthority? ResolveAuthenticatedNyxIdAuthority(HttpContext? http)
@@ -40,6 +55,7 @@ public static class WorkflowCallerCredentialExtractor
 
         var externalUserId = ReadFirstClaim(
             principal,
+            "scope_id",
             "uid",
             "sub",
             ClaimTypes.NameIdentifier,
@@ -64,6 +80,9 @@ public static class WorkflowCallerCredentialExtractor
 
         return null;
     }
+
+    private static WorkflowCallerCredentialExtractionResult Invalid() =>
+        WorkflowCallerCredentialExtractionResult.Failure(WorkflowChatRunStartError.InvalidCallerCredential);
 }
 
 public readonly record struct WorkflowCallerCredentialExtractionResult(

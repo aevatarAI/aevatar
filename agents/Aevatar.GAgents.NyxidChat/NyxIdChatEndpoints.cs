@@ -23,6 +23,8 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static partial class NyxIdChatEndpoints
 {
+    private const string NyxIdDelegationTokenHeader = "X-NyxID-Delegation-Token";
+
     public static IEndpointRouteBuilder MapNyxIdChatEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("NyxIdChat");
@@ -324,8 +326,19 @@ public static partial class NyxIdChatEndpoints
         return control;
     }
 
-    private static string? ExtractBearerToken(HttpContext http)
+    private static string? ExtractNyxIdAccessToken(HttpContext http)
     {
+        if (http.Request.Headers.TryGetValue(NyxIdDelegationTokenHeader, out var delegationValues))
+        {
+            if (delegationValues.Count != 1)
+                return null;
+
+            var delegationToken = delegationValues[0]?.Trim();
+            return string.IsNullOrWhiteSpace(delegationToken) || delegationToken.Any(char.IsWhiteSpace)
+                ? null
+                : delegationToken;
+        }
+
         var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(authHeader))
             return null;

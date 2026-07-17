@@ -590,6 +590,47 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_ShouldUseDelegationCredentialAndAuthenticatedScope()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var http = CreateHttpContext();
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        http.Request.Headers["X-NyxID-Identity-Token"] = "identity-assertion-must-not-be-forwarded";
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("scope_id", "caller-scope"),
+            new Claim("uid", "different-uid"),
+            new Claim("sub", "caller-scope"),
+        ], "NyxIdIdentityAssertion"));
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello", ScopeId = "victim-scope" },
+            interactionService,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.ScopeId.Should().Be("caller-scope");
+        capturedCommand.CallerCredential!.BearerToken.Should().Be("delegation-token");
+        capturedCommand.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                "nyxid",
+                string.Empty,
+                "caller-scope",
+                "proxy"));
+    }
+
+    [Fact]
     public async Task HandleChat_ShouldResolveIngressPortAndDispatchFileRefForInlineFile()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
@@ -884,12 +925,23 @@ public sealed class ChatEndpointsInternalTests
         bareBearerHttp.Request.Headers.Authorization = "Bearer";
         var invalidHttp = CreateHttpContext();
         invalidHttp.Request.Headers.Authorization = "Bearer token 123";
+        var delegationHttp = CreateHttpContext();
+        delegationHttp.Request.Headers.Authorization = "Bearer forwarded-token";
+        delegationHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var identityOnlyHttp = CreateHttpContext();
+        identityOnlyHttp.Request.Headers["X-NyxID-Identity-Token"] = "identity-assertion";
+        var invalidDelegationHttp = CreateHttpContext();
+        invalidDelegationHttp.Request.Headers.Authorization = "Bearer fallback-token";
+        invalidDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] = "token with spaces";
 
         var missing = WorkflowCallerCredentialExtractor.Extract(missingHttp);
         var unsupportedScheme = WorkflowCallerCredentialExtractor.Extract(unsupportedSchemeHttp);
         var valid = WorkflowCallerCredentialExtractor.Extract(validHttp);
         var bareBearer = WorkflowCallerCredentialExtractor.Extract(bareBearerHttp);
         var invalid = WorkflowCallerCredentialExtractor.Extract(invalidHttp);
+        var delegation = WorkflowCallerCredentialExtractor.Extract(delegationHttp);
+        var identityOnly = WorkflowCallerCredentialExtractor.Extract(identityOnlyHttp);
+        var invalidDelegation = WorkflowCallerCredentialExtractor.Extract(invalidDelegationHttp);
 
         missingHttpContext.Succeeded.Should().BeTrue();
         missingHttpContext.Credential.Should().BeNull();
@@ -905,6 +957,12 @@ public sealed class ChatEndpointsInternalTests
         invalid.Succeeded.Should().BeFalse();
         invalid.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         invalid.Credential.Should().BeNull();
+        delegation.Succeeded.Should().BeTrue();
+        delegation.Credential!.BearerToken.Should().Be("delegation-token");
+        identityOnly.Succeeded.Should().BeTrue();
+        identityOnly.Credential.Should().BeNull();
+        invalidDelegation.Succeeded.Should().BeFalse();
+        invalidDelegation.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
     }
 
     [Fact]
