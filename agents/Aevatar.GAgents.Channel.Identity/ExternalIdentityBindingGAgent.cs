@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -91,11 +90,11 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             return;
         }
 
-        var ownerScopeId = ResolveOwnerScopeId(cmd.OwnerScopeId, cmd.ExternalSubject);
+        var ownerScopeId = ResolveOwnerScopeId(cmd.OwnerScopeId);
         if (ownerScopeId is null)
         {
             Logger.LogWarning(
-                "CommitBinding rejected: owner_scope_id is required for non-native subject {Platform}:{Tenant}:{User}",
+                "CommitBinding rejected: owner_scope_id is required for subject {Platform}:{Tenant}:{User}",
                 cmd.ExternalSubject.Platform,
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId);
@@ -177,11 +176,11 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             return;
         }
 
-        var ownerScopeId = ResolveOwnerScopeId(cmd.OwnerScopeId, cmd.ExternalSubject);
+        var ownerScopeId = ResolveOwnerScopeId(cmd.OwnerScopeId);
         if (ownerScopeId is null)
         {
             Logger.LogWarning(
-                "ReplaceBinding rejected: owner_scope_id is required for non-native subject {Platform}:{Tenant}:{User}",
+                "ReplaceBinding rejected: owner_scope_id is required for subject {Platform}:{Tenant}:{User}",
                 cmd.ExternalSubject.Platform,
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId);
@@ -363,16 +362,8 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             OwnerScopeId = State.OwnerScopeId,
         });
 
-    private static string? ResolveOwnerScopeId(string? ownerScopeId, ExternalSubjectRef subject)
-    {
-        var normalized = NormalizeOptional(ownerScopeId);
-        if (normalized is not null)
-            return normalized;
-
-        return string.Equals(subject.Platform, OwnerScope.NyxIdPlatform, StringComparison.Ordinal)
-            ? NormalizeOptional(subject.ExternalUserId)
-            : null;
-    }
+    private static string? ResolveOwnerScopeId(string? ownerScopeId) =>
+        NormalizeOptional(ownerScopeId);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
