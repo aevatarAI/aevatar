@@ -5,8 +5,7 @@ namespace Aevatar.AI.ToolProviders.Binding.Tools;
 internal static class ToolOwnerScopeResolver
 {
     public static string? Resolve() =>
-        Normalize(AgentToolRequestContext.OwnerScopeId)
-        ?? Normalize(AgentToolRequestContext.ScopeId);
+        Normalize(AgentToolRequestContext.OwnerScopeId);
 
     public static string MissingMessage => "owner_scope_id not available in request context";
 

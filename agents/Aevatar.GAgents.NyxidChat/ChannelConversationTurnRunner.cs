@@ -663,7 +663,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Transient owner scope lookup failure; bound sender tools may fall back to caller scope. subject={Platform}:{Tenant}:{User}",
+                "Transient owner scope lookup failure; bound sender tools will run without shared owner scope. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -673,7 +673,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogError(
                 ex,
-                "Owner scope lookup raised non-transient exception; bound sender tools may fall back to caller scope. subject={Platform}:{Tenant}:{User}",
+                "Owner scope lookup raised non-transient exception; bound sender tools will run without shared owner scope. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
@@ -2472,7 +2472,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                             senderTenant),
                         Caller = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).Caller with
                         {
-                            OwnerScopeId = NormalizeOptional(senderBinding.OwnerScopeId) ?? senderNyxUserId.Trim(),
+                            OwnerScopeId = NormalizeOptional(senderBinding.OwnerScopeId),
                         },
                     }).ToPayload();
                 }

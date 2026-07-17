@@ -2597,11 +2597,11 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata.Should().NotContainKey("scope_id");
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
         var llmControl = LLMControlContextMapper.FromPayload(result.LlmReplyRequest.LlmControl);
-        // Scope is threaded as a typed Caller field (not via metadata — see the scope_id assertion
-        // above), so scope-scoped tools (e.g. scheduled_agent_creator) work on the bound-sender path too.
+        // Caller scope stays the registration/caller context. Without an owner-scope resolver,
+        // the turn must not synthesize shared-data ownership from the sender token.
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("scope-1");
-        toolContext.Caller.OwnerScopeId.Should().Be("nyx-user-1");
+        toolContext.Caller.OwnerScopeId.Should().BeNull();
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
         toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
         toolContext.SenderBinding.NyxUserId.Should().Be("nyx-user-1");
