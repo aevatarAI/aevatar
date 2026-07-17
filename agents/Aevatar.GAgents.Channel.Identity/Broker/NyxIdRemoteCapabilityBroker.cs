@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -34,6 +35,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
     public const string AuthorizeEndpoint = "/oauth/authorize";
     public const string TokenEndpoint = "/oauth/token";
     public const string BindingsEndpoint = "/oauth/bindings";
+    public const string UserServicesEndpoint = "/api/v1/user-services";
     public const string TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange";
     public const string BindingIdSubjectTokenType = "urn:nyxid:params:oauth:token-type:binding-id";
 
@@ -196,7 +198,44 @@ public sealed class NyxIdRemoteCapabilityBroker :
 
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         var requiredResources = RequiredResourceUris();
+        var payload = await ExchangeBindingTokenAsync(
+                snapshot,
+                externalSubject,
+                bindingId,
+                scope,
+                ct)
+            .ConfigureAwait(false);
+        var accessToken = payload.AccessToken;
+        if (string.IsNullOrWhiteSpace(accessToken))
+            throw new InvalidOperationException("NyxID returned a token-exchange response without an access token.");
 
+        var missingResources = await FindMissingRequiredResourcesAsync(accessToken, requiredResources, ct)
+            .ConfigureAwait(false);
+        if (missingResources.Length > 0)
+        {
+            throw new BindingServiceAccessMismatchException(
+                externalSubject,
+                missingResources,
+                "NyxID binding grant does not include every required service resource.");
+        }
+
+        return new CapabilityHandle
+        {
+            AccessToken = accessToken,
+            ExpiresAtUnix = payload.ExpiresIn.HasValue
+                ? _timeProvider.GetUtcNow().AddSeconds(payload.ExpiresIn.Value).ToUnixTimeSeconds()
+                : 0,
+            Scope = payload.Scope ?? scope.Value,
+        };
+    }
+
+    private async Task<TokenResponse> ExchangeBindingTokenAsync(
+        AevatarOAuthClientSnapshot snapshot,
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CapabilityScope scope,
+        CancellationToken ct)
+    {
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", TokenExchangeGrantType),
@@ -206,11 +245,8 @@ public sealed class NyxIdRemoteCapabilityBroker :
         };
         if (!string.IsNullOrWhiteSpace(scope.Value))
             form.Add(new KeyValuePair<string, string>("scope", scope.Value));
-        // The binding already owns the user's finalized Consent service set.
-        // Sending resource here would narrow every short-lived token back to
-        // Aevatar's configured minimum and make optional services selected in
-        // the consent UI unusable. Inherit the full grant, then validate that
-        // the configured runtime minimum is still present in the issued token.
+        // Inherit the complete Consent grant. Supplying resource here would
+        // narrow away optional services selected by the user.
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -232,7 +268,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
             {
                 throw new BindingServiceAccessMismatchException(
                     externalSubject,
-                    requiredResources,
+                    RequiredResourceUris(),
                     "NyxID returned invalid_target for the required services on token-exchange.");
             }
             _logger.LogError(
@@ -242,31 +278,10 @@ public sealed class NyxIdRemoteCapabilityBroker :
             response.EnsureSuccessStatusCode();
         }
 
-        var payload = await response.Content
+        return await response.Content
             .ReadFromJsonAsync<TokenResponse>(JsonOptions, ct)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("NyxID returned an empty token-exchange response.");
-
-        if (!string.IsNullOrWhiteSpace(payload.AccessToken))
-        {
-            var missingResources = FindMissingRequiredResources(payload.AccessToken, requiredResources);
-            if (missingResources.Length > 0)
-            {
-                throw new BindingServiceAccessMismatchException(
-                    externalSubject,
-                    missingResources,
-                    "NyxID binding token does not grant every required service resource.");
-            }
-        }
-
-        return new CapabilityHandle
-        {
-            AccessToken = payload.AccessToken ?? string.Empty,
-            ExpiresAtUnix = payload.ExpiresIn.HasValue
-                ? _timeProvider.GetUtcNow().AddSeconds(payload.ExpiresIn.Value).ToUnixTimeSeconds()
-                : 0,
-            Scope = payload.Scope ?? scope.Value,
-        };
     }
 
     // ─── INyxIdBrokerCallbackClient ───
@@ -440,13 +455,68 @@ public sealed class NyxIdRemoteCapabilityBroker :
         }
     }
 
-    private static string[] FindMissingRequiredResources(
+    private async Task<string[]> FindMissingRequiredResourcesAsync(
         string accessToken,
-        IReadOnlyCollection<string> requiredResources)
+        IReadOnlyCollection<string> requiredResources,
+        CancellationToken ct)
+    {
+        var grant = ParseTokenServiceGrant(accessToken);
+        if (!grant.Valid)
+            return requiredResources.ToArray();
+
+        var missingResources = AevatarOAuthClientResources.MissingRequiredResources(
+            grant.ResourceUris,
+            requiredResources);
+        if (missingResources.Length == 0)
+            return [];
+
+        var catalogResources = await ResolveGrantedCatalogResourcesAsync(accessToken, grant, ct)
+            .ConfigureAwait(false);
+        return AevatarOAuthClientResources.MissingRequiredResources(
+            grant.ResourceUris.Concat(catalogResources),
+            requiredResources);
+    }
+
+    private async Task<string[]> ResolveGrantedCatalogResourcesAsync(
+        string accessToken,
+        TokenServiceGrant grant,
+        CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{_options.ResourceServerBaseUrl.Trim().TrimEnd('/')}{UserServicesEndpoint}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        var http = CreateHttpClient();
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            _logger.LogError(
+                "NyxID user-service catalog lookup failed: status={StatusCode}, body={Body}",
+                (int)response.StatusCode,
+                Truncate(SecretScrubber.Scrub(body), 256));
+            response.EnsureSuccessStatusCode();
+        }
+
+        var catalog = await response.Content
+            .ReadFromJsonAsync<UserServiceCatalogResponse>(JsonOptions, ct)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("NyxID returned an empty user-service catalog response.");
+        var allowedServiceIds = grant.AllowedServiceIds.ToHashSet(StringComparer.Ordinal);
+        return catalog.Services
+            .Where(service => grant.AllowsEveryService || allowedServiceIds.Contains(service.Id))
+            .Select(static service => service.ResourceUri)
+            .Where(static resource => !string.IsNullOrWhiteSpace(resource))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static TokenServiceGrant ParseTokenServiceGrant(string accessToken)
     {
         var parts = accessToken.Split('.');
         if (parts.Length != 3)
-            return requiredResources.ToArray();
+            return TokenServiceGrant.Invalid;
 
         try
         {
@@ -455,26 +525,48 @@ public sealed class NyxIdRemoteCapabilityBroker :
                 .Replace('_', '/');
             payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
             using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
-            if (!document.RootElement.TryGetProperty("resources", out var resources)
-                || resources.ValueKind != JsonValueKind.Array)
-            {
-                return requiredResources.ToArray();
-            }
-
-            return AevatarOAuthClientResources.MissingRequiredResources(
-                resources.EnumerateArray()
-                    .Where(static item => item.ValueKind == JsonValueKind.String)
-                    .Select(static item => item.GetString()!),
-                requiredResources);
+            var root = document.RootElement;
+            var resourceUris = ReadStringArray(root, "resources", out var hasResourceRestriction);
+            var allowedServiceIds = ReadStringArray(
+                root,
+                "allowed_service_ids",
+                out var hasServiceIdRestriction);
+            var allowAllServices = root.TryGetProperty("allow_all_services", out var allowAll)
+                                   && allowAll.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? allowAll.GetBoolean()
+                : (bool?)null;
+            var allowsEveryService = allowAllServices == true
+                                     || allowAllServices is null
+                                     && !hasResourceRestriction
+                                     && !hasServiceIdRestriction;
+            return new TokenServiceGrant(
+                true,
+                allowsEveryService,
+                resourceUris,
+                allowedServiceIds);
         }
         catch (FormatException)
         {
-            return requiredResources.ToArray();
+            return TokenServiceGrant.Invalid;
         }
         catch (JsonException)
         {
-            return requiredResources.ToArray();
+            return TokenServiceGrant.Invalid;
         }
+    }
+
+    private static string[] ReadStringArray(JsonElement owner, string propertyName, out bool present)
+    {
+        present = owner.TryGetProperty(propertyName, out var values)
+                  && values.ValueKind == JsonValueKind.Array;
+        return present
+            ? values.EnumerateArray()
+                .Where(static item => item.ValueKind == JsonValueKind.String)
+                .Select(static item => item.GetString()!)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray()
+            : [];
     }
 
     private static string Truncate(string value, int max) =>
@@ -493,6 +585,26 @@ public sealed class NyxIdRemoteCapabilityBroker :
         public string? Scope { get; init; }
         public string? TokenType { get; init; }
         public int? ExpiresIn { get; init; }
+    }
+
+    private sealed record TokenServiceGrant(
+        bool Valid,
+        bool AllowsEveryService,
+        string[] ResourceUris,
+        string[] AllowedServiceIds)
+    {
+        public static TokenServiceGrant Invalid { get; } = new(false, false, [], []);
+    }
+
+    private sealed record UserServiceCatalogResponse
+    {
+        public UserServiceCatalogItem[] Services { get; init; } = [];
+    }
+
+    private sealed record UserServiceCatalogItem
+    {
+        public string Id { get; init; } = string.Empty;
+        public string ResourceUri { get; init; } = string.Empty;
     }
 }
 
