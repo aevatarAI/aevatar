@@ -129,7 +129,7 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
             },
             "nyx_provider_slug": {
               "type": "string",
-              "description": "Optional one-shot reminder outbound delivery provider slug, such as api-lark-bot-2. Use only when the user explicitly selects a connected outbound channel; otherwise omit it so the current channel context is used."
+              "description": "Optional one-shot reminder outbound delivery provider slug for the current channel context, such as api-lark-bot-2. Use only to require the current outbound channel provider explicitly; mismatches with the current channel context are rejected."
             },
             "output_format": {
               "type": "string",
@@ -286,6 +286,10 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
         if (!string.IsNullOrWhiteSpace(serviceSlugs.FailureNotificationSlug))
             requiredSlugs.Add(serviceSlugs.FailureNotificationSlug);
         requiredSlugs.AddRange(serviceSlugs.RequiredServiceSlugs);
+        var distinctRequiredSlugs = requiredSlugs
+            .Where(static slug => !string.IsNullOrWhiteSpace(slug))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
         var authority = Normalize(_options.NyxIdAuthority);
         if (authority is null)
@@ -313,8 +317,8 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool
                 subjectExternalUserId,
                 bindingId),
             [],
-            requiredSlugs,
-            requiredSlugs.Count == 0
+            distinctRequiredSlugs,
+            distinctRequiredSlugs.Length == 0
                 ? AuthorizationGrantRequirement.NotRequired
                 : AuthorizationGrantRequirement.Required,
             now.AddDays(_options.ApiKeyLifetimeDays),

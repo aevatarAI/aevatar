@@ -370,7 +370,7 @@ public sealed class ScheduledAgentCreatorToolTests
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().Equal(
-                    "svc-ornn", "svc-lark", "svc-lark-failure", "svc-tavily", "svc-github", "svc-lark", "svc-llm");
+                    "svc-ornn", "svc-lark", "svc-lark-failure", "svc-tavily", "svc-github", "svc-llm");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Get);
         });
     }
@@ -947,7 +947,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_OneShotReminderWithExplicitNyxProviderSlug_ShouldUseItAsOutboundDeliveryProvider()
+    public async Task ExecuteAsync_OneShotReminderWithExplicitNyxProviderSlug_ShouldUseItWhenItMatchesCurrentContext()
     {
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
@@ -972,8 +972,12 @@ public sealed class ScheduledAgentCreatorToolTests
                     DateTimeOffset.UtcNow,
                     "accepted"));
             });
+        var metadata = new Dictionary<string, string>(BaseExternalMetadata(), StringComparer.Ordinal)
+        {
+            [ChannelMetadataKeys.OutboundProviderSlug] = "api-lark-bot-2",
+        };
 
-        await WithToolContext(async () =>
+        await WithToolContext(CreateToolContext(externalMetadata: metadata), async () =>
         {
             var result = await harness.Tool.ExecuteAsync("""
                 {
@@ -996,7 +1000,38 @@ public sealed class ScheduledAgentCreatorToolTests
             var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
-                .Should().BeEquivalentTo("svc-lark-2", "svc-lark-failure", "svc-lark-2", "svc-llm");
+                .Should().BeEquivalentTo("svc-lark-2", "svc-lark-failure", "svc-llm");
+        });
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OneShotReminderWithMismatchedNyxProviderSlug_ShouldFailBeforeKeyCreation()
+    {
+        var handler = CreateSuccessHandler();
+        var harness = CreateHarness(
+            handler: handler,
+            authorizationSnapshot: CreateSnapshot(
+                ServiceEvidence("svc-lark", "api-lark-bot"),
+                ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
+                ServiceEvidence("svc-lark-failure", "api-lark-bot-inbound"),
+                ServiceEvidence("svc-llm", "chrono-llm-public")));
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "schedule_mode": "one_shot",
+                  "delay_seconds": 600,
+                  "one_shot_message": "Send the reminder",
+                  "nyx_provider_slug": "api-lark-bot-2"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString().Should().Be("validation_error");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("nyx_provider_slug must match the current channel outbound provider");
+            handler.Requests.Should().BeEmpty();
         });
     }
 

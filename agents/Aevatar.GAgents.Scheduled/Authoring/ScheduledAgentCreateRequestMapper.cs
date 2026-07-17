@@ -127,9 +127,15 @@ internal sealed class ScheduledAgentCreateRequestMapper
             return ScheduledAgentCreatePlanResult.Failed("conversation_id_unavailable");
 
         var contextOutboundSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ChannelMetadataKeys.OutboundProviderSlug));
-        var primarySlug = requestedOutboundSlug
-            ?? Normalize(AgentToolRequestContext.TryGetExternalMetadata(ScheduledAgentNyxProviderSlugHeader))
-            ?? contextOutboundSlug;
+        var contextScheduledSlug = Normalize(AgentToolRequestContext.TryGetExternalMetadata(ScheduledAgentNyxProviderSlugHeader));
+        var contextPrimarySlug = contextScheduledSlug ?? contextOutboundSlug;
+        if (requestedOutboundSlug is not null &&
+            !string.Equals(requestedOutboundSlug, contextPrimarySlug, StringComparison.Ordinal))
+        {
+            return ScheduledAgentCreatePlanResult.Failed("nyx_provider_slug must match the current channel outbound provider");
+        }
+
+        var primarySlug = requestedOutboundSlug ?? contextPrimarySlug;
         if (primarySlug is null)
             return ScheduledAgentCreatePlanResult.Failed("channel_outbound_provider_slug_unavailable");
 
