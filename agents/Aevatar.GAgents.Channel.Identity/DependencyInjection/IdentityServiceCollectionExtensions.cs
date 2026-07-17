@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Configuration.BackendConsole;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
@@ -49,8 +50,8 @@ public static class IdentityServiceCollectionExtensions
         // Guard against accidental double-registration. Most calls below use
         // TryAdd*, but AddHttpClient / AddHostedService / AddOptions /
         // AddProjection* helpers are NOT idempotent — calling this method
-        // twice would register the bootstrap hosted service twice (two DCR
-        // attempts on startup) and replace named-client config silently. The
+        // twice would register the bootstrap hosted service twice (duplicate
+        // provisioning dispatches) and replace named-client config silently. The
         // sentinel keys off the bootstrap service since it is unique to this
         // module.
         if (services.Any(static d => d.ImplementationType == typeof(AevatarOAuthClientBootstrapService)))
@@ -182,7 +183,7 @@ public static class IdentityServiceCollectionExtensions
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-rebuild"));
 
-        // ─── Broker (OAuth client self-bootstrapping) ───
+        // ─── Broker ───
         // Register broker as a *singleton* and inject IHttpClientFactory so
         // each call resolves a fresh HttpClient backed by the factory's
         // rotating handler pool. The earlier shape — AddHttpClient<T>()
@@ -205,15 +206,19 @@ public static class IdentityServiceCollectionExtensions
         // stay in the identity layer; NyxidChat depends only on the abstraction.
         services.TryAddSingleton<IBindingRevocationReconciler, BindingRevocationReconciler>();
 
-        // ─── OAuth client bootstrap (self-registration via NyxID DCR) ───
-        // DCR registrar stays as AddHttpClient<T>() (transient): the
-        // AevatarOAuthClientGAgent resolves it per command via Services.GetService<>()
-        // so the typed-client pattern's per-resolution handler rotation works
-        // as designed.
+        // ─── OAuth client bootstrap ───
+        // The configured browser PKCE client id is the deployment authority.
+        // The actor materializes that desired configuration into cluster state
+        // so every broker consumer observes one coherent client snapshot.
         services.AddHttpClient<NyxIdDynamicClientRegistrationClient>();
+        var oauthClientOptions = services.AddOptions<AevatarOAuthClientOptions>();
         var bootstrapOptions = services.AddOptions<AevatarOAuthClientBootstrapOptions>();
         if (configuration is not null)
+        {
             bootstrapOptions.Bind(configuration.GetSection(AevatarOAuthClientBootstrapOptions.SectionName));
+            oauthClientOptions.Configure(options =>
+                options.ClientId = BackendConsoleOidcClientIdResolver.Resolve(configuration));
+        }
         services.AddHostedService<AevatarOAuthClientBootstrapService>();
 
         // ─── Webhook validators ───

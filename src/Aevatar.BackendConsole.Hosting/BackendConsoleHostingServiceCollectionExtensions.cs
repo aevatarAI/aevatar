@@ -28,7 +28,7 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         var options = new BackendConsoleOptions
         {
             OidcAuthority = section[nameof(BackendConsoleOptions.OidcAuthority)] ?? string.Empty,
-            OidcClientId = section[nameof(BackendConsoleOptions.OidcClientId)] ?? string.Empty,
+            OidcClientId = BackendConsoleOidcClientIdResolver.Resolve(configuration),
             OidcScope = section[nameof(BackendConsoleOptions.OidcScope)] ?? string.Empty,
             OidcResources = section
                 .GetSection(nameof(BackendConsoleOptions.OidcResources))
@@ -68,7 +68,6 @@ public static class BackendConsoleHostingServiceCollectionExtensions
     private static void ApplyHostEnvironmentOverrides(BackendConsoleOptions options)
     {
         options.OidcAuthority = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_AUTHORITY", options.OidcAuthority);
-        options.OidcClientId = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_CLIENT_ID", options.OidcClientId);
         options.OidcScope = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_SCOPE", options.OidcScope);
         options.NyxApiBaseUrl = EnvironmentOverride("HOST_BACKEND_CONSOLE_NYX_API_BASE_URL", options.NyxApiBaseUrl);
         options.StorageKey = EnvironmentOverride("HOST_BACKEND_CONSOLE_STORAGE_KEY", options.StorageKey);

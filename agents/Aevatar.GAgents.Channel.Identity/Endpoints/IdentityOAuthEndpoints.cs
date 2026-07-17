@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgents.Channel.Identity.Endpoints;
 
@@ -52,9 +53,9 @@ public static class IdentityOAuthEndpoints
         app.MapGet("/api/oauth/aevatar-client/status", HandleAevatarOAuthClientStatusAsync)
             .WithTags("ChannelIdentity")
             .AllowAnonymous();
-        // Operator-only: rebuild the cluster-singleton OAuth client snapshot to
-        // point at an admin-supplied client_id. Aevatar admin policy is checked
-        // inline because this module does not own an ASP.NET auth scheme.
+        // Operator-only: reconcile the cluster-singleton OAuth client snapshot
+        // from deployment configuration. Aevatar admin policy is checked inline
+        // because this module does not own an ASP.NET auth scheme.
         app.MapPost("/api/oauth/aevatar-client/rebuild", HandleAevatarOAuthClientRebuildAsync)
             .WithTags("ChannelIdentity")
             .WithEndpointAudit(
@@ -212,19 +213,17 @@ public static class IdentityOAuthEndpoints
         // exchange succeeded. Post NyxID#576 fix, broker mode is triggered by
         // EITHER `broker_capability_enabled=true` OR `urn:nyxid:scope:broker_binding`
         // appearing in the client's `allowed_scopes` (oauth_broker_service.rs
-        // is_broker_client). Aevatar's DCR call always requests that scope, so
-        // the happy path returns a binding_id automatically — no ops handoff.
-        // Reaching this branch implies the client was misregistered (e.g. an
-        // operator-provisioned confidential client without the scope, or a DCR
-        // race that pre-dates the NyxID#576 fix). Log + 409 with diagnostic.
+        // is_broker_client). Aevatar's configured public client must allow that
+        // scope, so the happy path returns a binding_id automatically. Reaching
+        // this branch means the configured client registration is incomplete.
         if (string.IsNullOrEmpty(exchange.BindingId))
         {
             logger.LogWarning(
-                "OAuth callback succeeded but NyxID did not return a binding_id — the OAuth client is registered without broker capability. Expected `urn:nyxid:scope:broker_binding` in allowed_scopes (DCR self-bootstrap requests this) or `broker_capability_enabled=true` on a manually provisioned client.");
+                "OAuth callback succeeded but NyxID did not return a binding_id — the configured OAuth client is registered without broker capability. Expected `urn:nyxid:scope:broker_binding` in allowed_scopes or `broker_capability_enabled=true`.");
             return Results.Json(new
             {
                 status = "broker_capability_disabled",
-                detail = "Aevatar 已注册到 NyxID,但 OAuth client 未授予 broker capability — DCR 自举正常路径下 scope 会包含 urn:nyxid:scope:broker_binding 与 proxy。请检查 /api/oauth/aevatar-client/status 是否显示 client_id 与 allowed_scopes 一致;若是手动创建的 client,请通过 NyxID admin 把 broker_binding/proxy scope 加入 allowed_scopes 后再重试 /init。",
+                detail = "Aevatar 配置的 OAuth client 未授予 broker capability。请检查 /api/oauth/aevatar-client/status 显示的 client_id 是否与 NyxID registration 一致,并在 NyxID admin 中为该 client 授予 broker_binding/proxy scope 后重试 /init。",
             }, statusCode: StatusCodes.Status409Conflict);
         }
 
@@ -341,7 +340,7 @@ public static class IdentityOAuthEndpoints
                 broker_capability_observed = snapshot.BrokerCapabilityObserved,
                 broker_capability_observed_at = snapshot.BrokerCapabilityObservedAt,
                 ops_handoff = oauthScopeDrifted
-                    ? "Bootstrap must re-run DCR so the OAuth client includes the proxy scope required by LLM route selection."
+                    ? "The configured OAuth client registration must include the canonical proxy-capable scope."
                     : snapshot.BrokerCapabilityObserved
                         ? null
                         : "Operator must enable broker_capability_enabled on this OAuth client at NyxID admin (one-time per cluster).",
@@ -352,7 +351,7 @@ public static class IdentityOAuthEndpoints
             return Results.Json(new
             {
                 status = "not_provisioned",
-                detail = "Bootstrap service has not yet completed NyxID dynamic client registration. Wait or check the host startup logs.",
+                detail = $"OAuth client configuration or actor materialization is unavailable. Check '{AevatarOAuthClientOptions.ClientIdConfigurationKey}' and host startup logs.",
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
     }
@@ -360,30 +359,19 @@ public static class IdentityOAuthEndpoints
     // ─── Operator rebuild ───
 
     /// <summary>
-    /// Body for <c>POST /api/oauth/aevatar-client/rebuild</c>. The operator
-    /// supplies a fresh <c>client_id</c> (typically created via NyxID admin
-    /// after a wedge — see issue #549) and the actor pins its snapshot to
-    /// it. <c>redirect_uri</c> and <c>oauth_scope</c> are NOT operator-
-    /// supplied fields: the endpoint always uses
-    /// <see cref="NyxIdRedirectUriResolver"/> and
-    /// <see cref="AevatarOAuthClientScopes.AuthorizationScope"/> respectively,
-    /// otherwise the next bootstrap pass would observe drift and re-DCR
-    /// away the freshly-pinned client (PR #570 review consensus on the
-    /// drift bug + URL-validation surface).
+    /// Reconciles the actor snapshot from the configured client id and the
+    /// canonical redirect/scope contract. The request cannot supply identity
+    /// fields, so this repair path cannot become a second client-id authority.
     /// </summary>
-    public sealed record RebuildAevatarOAuthClientRequest(
-        string? client_id,
-        long? client_id_issued_at_unix);
-
     internal static Task<IResult> HandleAevatarOAuthClientRebuildAsync(
         HttpContext http,
-        [FromBody] RebuildAevatarOAuthClientRequest? body,
+        [FromServices] IOptions<AevatarOAuthClientOptions> clientOptions,
         [FromServices] ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct) =>
         HandleAevatarOAuthClientRebuildCoreAsync(
             http,
-            body,
+            clientOptions.Value,
             http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
             rebuildDispatch,
             loggerFactory,
@@ -395,7 +383,7 @@ public static class IdentityOAuthEndpoints
     /// </summary>
     internal static async Task<IResult> HandleAevatarOAuthClientRebuildCoreAsync(
         HttpContext http,
-        RebuildAevatarOAuthClientRequest? body,
+        AevatarOAuthClientOptions clientOptions,
         IPlatformAdminAuthorizer? adminAuthorizer,
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> rebuildDispatch,
         ILoggerFactory loggerFactory,
@@ -411,13 +399,13 @@ public static class IdentityOAuthEndpoints
         if (authorization.Rejection is not null)
             return authorization.Rejection;
 
-        if (body is null || string.IsNullOrWhiteSpace(body.client_id))
+        if (string.IsNullOrWhiteSpace(clientOptions.ClientId))
         {
-            return Results.BadRequest(new
+            return Results.Json(new
             {
-                error = "client_id_required",
-                detail = "Body must include client_id (the NyxID-issued OAuth client_id this cluster should pin to).",
-            });
+                error = "oauth_client_id_not_configured",
+                detail = $"Configure a non-empty '{AevatarOAuthClientOptions.ClientIdConfigurationKey}' before reconciling the OAuth client actor.",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
         var authority = NyxIdAuthorityResolver.Resolve(logger);
@@ -425,41 +413,13 @@ public static class IdentityOAuthEndpoints
         var redirectUris = NyxIdRedirectUriResolver.ResolveRegisteredRedirectUris(logger);
         var oauthScope = AevatarOAuthClientScopes.AuthorizationScope;
 
-        // Validate Unix-seconds before dispatching: AevatarOAuthClient
-        // ProjectionProvider later calls DateTimeOffset.FromUnixTimeSeconds
-        // on the persisted value, which throws ArgumentOutOfRangeException
-        // for values like long.MaxValue. Surface the bad input as a 400
-        // here instead of letting the read path crash on the next status
-        // poll (codex P1 on PR #570).
-        long issuedAtUnix;
-        if (body.client_id_issued_at_unix is { } supplied)
-        {
-            try
-            {
-                _ = DateTimeOffset.FromUnixTimeSeconds(supplied);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                return Results.BadRequest(new
-                {
-                    error = "client_id_issued_at_unix_invalid",
-                    detail = "client_id_issued_at_unix must be a Unix-seconds value within DateTimeOffset range.",
-                });
-            }
-            issuedAtUnix = supplied;
-        }
-        else
-        {
-            issuedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        }
-
         CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
         try
         {
             var command = new ProvisionAevatarOAuthClientCommand
             {
-                ClientId = body.client_id!.Trim(),
-                ClientIdIssuedAtUnix = issuedAtUnix,
+                ClientId = clientOptions.ClientId.Trim(),
+                ClientIdIssuedAtUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                 NyxidAuthority = authority,
                 OauthScope = oauthScope,
                 RedirectUri = redirectUri,
@@ -491,7 +451,7 @@ public static class IdentityOAuthEndpoints
 
         logger.LogWarning(
             "Operator rebuild accepted for AevatarOAuthClientGAgent: client_id={ClientId}, authority={Authority}, redirect_uri={RedirectUri}, command_id={CommandId}, admin_user_id={AdminUserId}, admin_email={AdminEmail}, admin_grant_source={GrantSource}.",
-            body.client_id,
+            clientOptions.ClientId,
             authority,
             redirectUri,
             accepted.Receipt.CommandId,
@@ -507,7 +467,7 @@ public static class IdentityOAuthEndpoints
             actor_id = accepted.Receipt.ActorId,
             status_url = OAuthClientStatusUrl,
             admin_grant_source = authorization.Caller.GrantSource,
-            detail = "Provision command accepted for dispatch. Re-poll the status URL; it will reflect the new client_id once the actor commits and projection materializes.",
+            detail = "Configured client reconciliation accepted for dispatch. Re-poll the status URL until actor state and projection materialize.",
         });
     }
 

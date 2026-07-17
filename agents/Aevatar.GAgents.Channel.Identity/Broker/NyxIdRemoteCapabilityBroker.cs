@@ -15,10 +15,8 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// <summary>
 /// Production <see cref="INyxIdCapabilityBroker"/> implementation that talks
 /// to NyxID's broker endpoints (ChronoAIProject/NyxID#549). Reads the
-/// cluster-shared OAuth <c>client_id</c> + HMAC key from
-/// <see cref="IAevatarOAuthClientProvider"/> (cluster singleton actor) so
-/// production deploys need zero broker-specific appsettings — the bootstrap
-/// service self-registers the client at NyxID DCR on first startup.
+/// deployment-owned OAuth <c>client_id</c> and actor-owned HMAC/runtime facts
+/// through <see cref="IAevatarOAuthClientProvider"/>.
 /// </summary>
 /// <remarks>
 /// Resolves <see cref="HttpClient"/> per-request via
@@ -414,7 +412,7 @@ public sealed class NyxIdRemoteCapabilityBroker : INyxIdCapabilityBroker, INyxId
         }
 
         throw new AevatarOAuthClientNotProvisionedException(
-            "Aevatar OAuth client redirect_uri or oauth_scope is not current. Bootstrap must re-run DCR before issuing NyxID authorize URLs.");
+            "Aevatar OAuth client redirect_uri or oauth_scope is not current. Bootstrap must reconcile configured client facts before issuing NyxID authorize URLs.");
     }
 
     private static bool IsInvalidGrant(string body) => IsOAuthError(body, "invalid_grant");

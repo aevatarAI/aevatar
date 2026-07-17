@@ -19,7 +19,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 /// </summary>
 public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
 {
-    private const string OperatorClientId = "17cecaad-214b-4521-9dba-d435462e4095";
+    private const string ConfiguredClientId = "17cecaad-214b-4521-9dba-d435462e4095";
     private const string AdminBearer = "admin-bearer-token";
     private const string LegacyStaticTokenHeader = "X-Aevatar-Admin-Token";
 
@@ -91,7 +91,7 @@ public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
             dispatch: dispatch);
 
         dispatch.Commands.Should().ContainSingle();
-        dispatch.Commands[0].ClientId.Should().Be(OperatorClientId);
+        dispatch.Commands[0].ClientId.Should().Be(ConfiguredClientId);
         authorizer.ResolvedBearers.Should().ContainSingle().Which.Should().Be(AdminBearer);
 
         var (_, statusCode) = await ReadJsonAsync(result);
@@ -112,9 +112,7 @@ public sealed class IdentityOAuthClientRebuildAdminAuthEndpointTests
 
         return IdentityOAuthEndpoints.HandleAevatarOAuthClientRebuildCoreAsync(
             http: http,
-            body: new IdentityOAuthEndpoints.RebuildAevatarOAuthClientRequest(
-                client_id: OperatorClientId,
-                client_id_issued_at_unix: 1700000000),
+            clientOptions: new AevatarOAuthClientOptions { ClientId = ConfiguredClientId },
             adminAuthorizer: authorizer,
             rebuildDispatch: dispatch,
             loggerFactory: NullLoggerFactory.Instance,

@@ -14,12 +14,10 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
-/// Cluster-singleton actor that owns the aevatar host's OAuth client
-/// registration against NyxID. Holds <see cref="AevatarOAuthClientState"/>
-/// (client_id + HMAC key + observed broker capability) so the entire silo
-/// fleet shares one provisioning record — no IConfiguration / appsettings /
-/// secrets store needed. See cluster bootstrap service for the startup
-/// signal wiring.
+/// Cluster-singleton actor that materializes the configured OAuth client and
+/// owns its HMAC key plus observed broker capability. Deployment configuration
+/// owns the client id; committed actor state keeps the fleet coherent and
+/// auditable.
 /// </summary>
 [GAgent("channel.identity.aevatar-oauth-client")]
 public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientState>
@@ -621,23 +619,17 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     }
 
     /// <summary>
-    /// Manual override path: persists a caller-supplied client_id without
-    /// calling NyxID DCR. Tests + manual operator scripts use this; the
-    /// production bootstrap path uses
-    /// <see cref="HandleEnsureProvisioned"/> instead so the actor (not the
-    /// caller) mediates the DCR call. Idempotent: re-issuing the same
+    /// Persists the configured client_id without calling NyxID DCR. Production
+    /// bootstrap and the operator rebuild endpoint both use this command.
+    /// Idempotent: re-issuing the same
     /// snapshot (client_id + authority + redirect_uri + oauth_scope) is a
     /// no-op. Always seeds a fresh HMAC key when the state has none —
     /// bootstrap and provisioning are single-step.
     /// </summary>
     /// <remarks>
     /// The same-snapshot check covers redirect_uri + oauth_scope on top of
-    /// client_id + authority because the operator-rebuild path
-    /// (<c>POST /api/oauth/aevatar-client/rebuild</c>, issue #549) must be
-    /// able to heal a wedged actor whose state has the right client_id but
-    /// stale or empty redirect_uri / oauth_scope — leaving those drifted
-    /// would let the next bootstrap re-DCR and replace the operator's
-    /// freshly-pinned client_id with a new (orphan-creating) one.
+    /// client_id + authority so configured bootstrap and operator reconcile
+    /// can repair a partial snapshot without appending duplicate events.
     /// </remarks>
     [EventHandler]
     public async Task HandleProvision(ProvisionAevatarOAuthClientCommand cmd)
@@ -659,9 +651,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // ProvisionAevatarOAuthClientCommand v1 wire-compatibility, manual
         // operator scripts that only know client_id + authority) would
         // overwrite previously-persisted redirect_uri / oauth_scope with
-        // "" — and the next bootstrap pass would observe the cleared
-        // value, detect drift, re-DCR the freshly-pinned client, and
-        // rotate it away. Codex P1 on PR #570.
+        // "". Empty means "not supplied", not "clear the configured fact".
         var redirectUri = string.IsNullOrEmpty(cmd.RedirectUri) ? State.RedirectUri : cmd.RedirectUri;
         var oauthScope = string.IsNullOrEmpty(cmd.OauthScope) ? State.OauthScope : cmd.OauthScope;
         var redirectUris = cmd.RedirectUris.Count == 0
@@ -697,6 +687,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             await PersistDomainEventAsync(await BuildHmacKeyRotatedEventAsync());
             Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
         }
+
+        await ClearProvisioningRetryAsync("configured_client_provisioned");
     }
 
     /// <summary>

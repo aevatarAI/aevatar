@@ -157,6 +157,10 @@ public sealed class AevatarOAuthClientEsAclStartupGuardTests
             EnforcementMode = mode,
             GrantMatchesGrainEventStoreInternal = aclAsserted,
         }));
+        services.AddSingleton(Options.Create(new AevatarOAuthClientOptions
+        {
+            ClientId = "configured-client-id",
+        }));
         services.AddSingleton(probe);
         services.AddSingleton<Aevatar.Foundation.Abstractions.Credentials.ISecretVault,
             Aevatar.Foundation.Abstractions.Credentials.Testing.InMemorySecretVault>();

@@ -58,7 +58,9 @@ AEVATAR_CONSOLE_PUBLIC_PATH=/
 The browser must not configure its own NyxID OAuth client id or service access.
 Authorization starts from the backend-provided `baseUrl`, `clientId`, `scope`,
 and RFC 8707 `resources`, so the client id and required Aevatar service match
-backend token finalization.
+backend token finalization. The backend derives that client id from the same
+`Aevatar:BackendConsole:OidcClientId` deployment setting used by embedded
+console PKCE; an older OAuth Client Actor projection is never a fallback.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
 `ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
