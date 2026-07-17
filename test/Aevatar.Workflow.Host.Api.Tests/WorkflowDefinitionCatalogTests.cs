@@ -250,6 +250,8 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("aevatar_create_member");
         allowed.Should().Contain("aevatar_list_members");
         allowed.Should().Contain("aevatar_get_member");
+        allowed.Should().Contain("aevatar_list_schedules");
+        allowed.Should().Contain("aevatar_get_schedule");
         allowed.Should().Contain("aevatar_bind_member_workflow");
         allowed.Should().Contain("aevatar_schedule_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
@@ -38,5 +39,24 @@ public sealed class StudioMemberQueryToolSource : IAgentToolSource
             _memberQueryPort is null
                 ? []
                 : [new ListStudioMembersTool(_memberQueryPort), new GetStudioMemberTool(_memberQueryPort)]);
+    }
+}
+
+public sealed class StudioScheduleQueryToolSource : IAgentToolSource
+{
+    private readonly IScheduledDispatchApplicationService? _schedules;
+
+    public StudioScheduleQueryToolSource(IScheduledDispatchApplicationService? schedules = null)
+    {
+        _schedules = schedules;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _schedules is null
+                ? []
+                : [new ListStudioSchedulesTool(_schedules), new GetStudioScheduleTool(_schedules)]);
     }
 }
