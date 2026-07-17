@@ -12,17 +12,21 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
     private const string PublisherActorId = "chat-history-terminal-delivery-port";
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IChatConversationContinuationAdmissionReader _continuationAdmissionReader;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChatTurnHistoryTerminalDeliveryPort> _logger;
 
     public ChatTurnHistoryTerminalDeliveryPort(
         IActorRuntime actorRuntime,
         IActorDispatchPort dispatchPort,
+        IChatConversationContinuationAdmissionReader continuationAdmissionReader,
         ILogger<ChatTurnHistoryTerminalDeliveryPort> logger,
         TimeProvider? timeProvider = null)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _continuationAdmissionReader = continuationAdmissionReader
+            ?? throw new ArgumentNullException(nameof(continuationAdmissionReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -44,7 +48,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
 
         var deliveryId = request.DeliveryId.Trim();
         var scopeId = request.ScopeId.Trim();
-        var conversationResolution = await ResolveConversationAsync(scopeId, request.Conversation).ConfigureAwait(false);
+        var conversationResolution = await ResolveConversationAsync(scopeId, request.Conversation, ct).ConfigureAwait(false);
         if (conversationResolution.Failure != WorkflowChatHistoryTerminalDeliveryReservationFailure.None)
             return new WorkflowChatHistoryTerminalDeliveryReservationResult(null, null, conversationResolution.Failure);
 
@@ -86,12 +90,13 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
 
     private async Task<ConversationIdentityResolution> ResolveConversationAsync(
         string scopeId,
-        WorkflowChatConversationIntent conversation)
+        WorkflowChatConversationIntent conversation,
+        CancellationToken ct)
     {
         return conversation.Intent switch
         {
             WorkflowChatConversationIntentKind.Create => ConversationIdentityResolution.Create(CreateIdentity()),
-            WorkflowChatConversationIntentKind.Continue => await ResolveExistingConversationAsync(scopeId, conversation.ConversationId)
+            WorkflowChatConversationIntentKind.Continue => await ResolveExistingConversationAsync(scopeId, conversation.ConversationId, ct)
                 .ConfigureAwait(false),
             _ => ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable),
         };
@@ -99,27 +104,16 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
 
     private async Task<ConversationIdentityResolution> ResolveExistingConversationAsync(
         string scopeId,
-        string? conversationId)
+        string? conversationId,
+        CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(conversationId))
             return ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
 
         var normalizedConversationId = conversationId.Trim();
-        var actorId = ChatHistoryActorIds.Conversation(scopeId, normalizedConversationId);
-        var actor = await _actorRuntime.GetAsync(actorId).ConfigureAwait(false);
-        if (actor is null)
-        {
-            return ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
-        }
-
-        if (actor.Agent is IChatConversationContinuationAdmission admission)
-        {
-            return admission.CanContinue(scopeId, normalizedConversationId)
-                ? ConversationIdentityResolution.Continue(normalizedConversationId)
-                : ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
-        }
-
-        return ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
+        return await _continuationAdmissionReader.CanContinueAsync(scopeId, normalizedConversationId, ct).ConfigureAwait(false)
+            ? ConversationIdentityResolution.Continue(normalizedConversationId)
+            : ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
     }
 
     public async Task BindAcceptedAsync(

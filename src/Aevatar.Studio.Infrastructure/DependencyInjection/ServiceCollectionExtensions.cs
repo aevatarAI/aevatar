@@ -5,6 +5,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgents.ChatHistory;
 using Aevatar.GAgents.ChatHistory.DependencyInjection;
 using Aevatar.Studio.Infrastructure.Authoring;
 using Aevatar.Studio.Domain.Studio.Compatibility;
@@ -66,6 +67,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ActorBackedChatHistoryStore>();
         services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
+        services.AddSingleton<
+            IChatConversationContinuationAdmissionReader,
+            ChatConversationCurrentStateContinuationAdmissionReader>();
         // Script runtime activity reads the scripting capability's native-document read model;
         // hosts composed without scripting have no reader, and consumers of this port already
         // treat it as optional (resolved via GetService).
