@@ -6,6 +6,7 @@ describe('NyxID runtime config', () => {
   beforeEach(() => {
     process.env = {
       ...originalEnv,
+      NYXID_CLIENT_ID: 'console-client-1',
     };
     window.history.replaceState({}, '', '/login');
   });
@@ -20,7 +21,7 @@ describe('NyxID runtime config', () => {
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: true,
       baseUrl: '',
-      clientId: '',
+      clientId: 'console-client-1',
       redirectUri: `${window.location.origin}/auth/callback`,
       scope: '',
       configurationError: undefined,
@@ -33,26 +34,40 @@ describe('NyxID runtime config', () => {
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: true,
       baseUrl: '',
-      clientId: '',
+      clientId: 'console-client-1',
       redirectUri: 'http://localhost:5173/auth/callback',
       scope: '',
       configurationError: undefined,
     });
   });
 
-  it('does not bake a NyxID OAuth client into frontend runtime config', () => {
+  it('normalizes the frontend OAuth client id from the build environment', () => {
     process.env.NYXID_BASE_URL = 'undefined';
-    process.env.NYXID_CLIENT_ID = 'undefined';
+    process.env.NYXID_CLIENT_ID = '"console-client-2"';
     process.env.NYXID_REDIRECT_URI = 'undefined';
     process.env.NYXID_SCOPE = 'undefined';
 
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: true,
       baseUrl: '',
-      clientId: '',
+      clientId: 'console-client-2',
       redirectUri: `${window.location.origin}/auth/callback`,
       scope: '',
       configurationError: undefined,
+    });
+  });
+
+  it('disables NyxID auth when the frontend OAuth client id is missing', () => {
+    process.env.NYXID_CLIENT_ID = 'undefined';
+
+    expect(getNyxIDRuntimeConfig()).toEqual({
+      enabled: false,
+      baseUrl: '',
+      clientId: '',
+      redirectUri: `${window.location.origin}/auth/callback`,
+      scope: '',
+      configurationError:
+        'NYXID_CLIENT_ID must be configured with a non-empty public OAuth client id.',
     });
   });
 
@@ -62,7 +77,7 @@ describe('NyxID runtime config', () => {
     expect(getNyxIDRuntimeConfig()).toEqual({
       enabled: false,
       baseUrl: '',
-      clientId: '',
+      clientId: 'console-client-1',
       redirectUri: '',
       scope: '',
       configurationError:

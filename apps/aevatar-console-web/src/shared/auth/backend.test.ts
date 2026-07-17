@@ -16,7 +16,7 @@ describe("NyxID backend auth API", () => {
     jest.restoreAllMocks();
   });
 
-  it("loads the broker OAuth client config used by backend finalization", async () => {
+  it("loads the broker URL and scope while ignoring its OAuth client id", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -30,7 +30,6 @@ describe("NyxID backend auth API", () => {
 
     await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
       baseUrl: "https://nyx.example",
-      clientId: "broker-client-1",
       scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
     });
 
@@ -47,7 +46,6 @@ describe("NyxID backend auth API", () => {
       status: 200,
       json: async () => ({
         baseUrl: "https://nyx.example/",
-        clientId: "broker-client-1",
         scope: "openid urn:nyxid:scope:broker_binding proxy",
         redirectUri: "https://backend.example/auth/callback",
         RedirectUri: "https://backend.example/AuthCallback",
@@ -57,7 +55,6 @@ describe("NyxID backend auth API", () => {
 
     await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
       baseUrl: "https://nyx.example",
-      clientId: "broker-client-1",
       scope: "openid urn:nyxid:scope:broker_binding proxy",
     });
   });

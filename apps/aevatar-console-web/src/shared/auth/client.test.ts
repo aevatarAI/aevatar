@@ -67,7 +67,7 @@ describe("NyxIDAuthClient", () => {
     window.localStorage.clear();
   });
 
-  it("starts authorize with the backend broker OAuth client config", async () => {
+  it("starts authorize with the frontend client id and backend URL and scope", async () => {
     const assign = installLocationAssignSpy();
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -95,7 +95,7 @@ describe("NyxIDAuthClient", () => {
     expect(authorizeUrl.origin + authorizeUrl.pathname).toBe(
       "https://nyx.example/oauth/authorize",
     );
-    expect(authorizeUrl.searchParams.get("client_id")).toBe("broker-client-1");
+    expect(authorizeUrl.searchParams.get("client_id")).toBe("console-client-1");
     expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
       "http://localhost:8000/auth/callback",
     );
@@ -107,12 +107,12 @@ describe("NyxIDAuthClient", () => {
 
     const pending = JSON.parse(
       window.localStorage.getItem(
-        "aevatar-console:nyxid:pending:broker-client-1",
+        "aevatar-console:nyxid:pending:console-client-1",
       ) ?? "{}",
     );
     expect(pending).toEqual(
       expect.objectContaining({
-        clientId: "broker-client-1",
+        clientId: "console-client-1",
         redirectUri: "http://localhost:8000/auth/callback",
         returnTo: "/scopes/scope-1/teams",
         scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
@@ -146,7 +146,7 @@ describe("NyxIDAuthClient", () => {
 
     const pending = JSON.parse(
       window.localStorage.getItem(
-        "aevatar-console:nyxid:pending:broker-client-1",
+        "aevatar-console:nyxid:pending:console-client-1",
       ) ?? "{}",
     );
     expect(pending).toEqual(
@@ -488,7 +488,7 @@ describe("NyxIDAuthClient", () => {
     expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/nyxid/config");
     expect(fetchMock.mock.calls[1][0]).toBe("https://nyx.example/oauth/token");
     expect(String(fetchMock.mock.calls[1][1]?.body)).toBe(
-      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=broker-client-1",
+      "grant_type=refresh_token&refresh_token=refresh-token-1&client_id=console-client-1",
     );
   });
 

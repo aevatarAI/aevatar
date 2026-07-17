@@ -36,6 +36,7 @@ const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "crypto",
 );
+const originalNyxIDClientId = process.env.NYXID_CLIENT_ID;
 
 function installLocationAssignSpy() {
   const assign = jest.fn();
@@ -149,6 +150,7 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
 
 describe("SettingsPage", () => {
   beforeEach(() => {
+    process.env.NYXID_CLIENT_ID = "console-client-1";
     window.localStorage.clear();
     window.history.replaceState({}, "", "/settings");
     jest.clearAllMocks();
@@ -186,6 +188,11 @@ describe("SettingsPage", () => {
   });
 
   afterEach(() => {
+    if (originalNyxIDClientId === undefined) {
+      delete process.env.NYXID_CLIENT_ID;
+    } else {
+      process.env.NYXID_CLIENT_ID = originalNyxIDClientId;
+    }
     global.fetch = originalFetch;
     if (originalLocationDescriptor) {
       Object.defineProperty(window, "location", originalLocationDescriptor);
@@ -292,7 +299,7 @@ describe("SettingsPage", () => {
 
     const pending = JSON.parse(
       window.localStorage.getItem(
-        "aevatar-console:nyxid:pending:broker-client-1",
+        "aevatar-console:nyxid:pending:console-client-1",
       ) ?? "{}",
     );
     expect(pending).toEqual(

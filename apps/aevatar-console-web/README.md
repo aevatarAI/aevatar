@@ -42,22 +42,24 @@ console at the hosted backend, set both targets to the hosted API URL in
 `.env.local` and set `AEVATAR_PROXY_PRESERVE_AUTH_HOST=false` so `/api/auth/*`
 uses the hosted backend Host header.
 
-For NyxID login, the console reads the broker OAuth client from Studio Hosting
-via `/api/auth/nyxid/config` and finalizes callbacks through
-`/api/auth/nyxid/finalize`. Keep `/api/auth/*` proxied to the Studio backend.
-Only set a local fallback callback URI when the browser origin differs from the
+For NyxID login, the console reads `baseUrl` and `scope` from Studio Hosting via
+`/api/auth/nyxid/config`, reads the public OAuth client id from the frontend
+build environment, and finalizes callbacks through `/api/auth/nyxid/finalize`.
+Keep `/api/auth/*` proxied to the Studio backend. Set the frontend client id and
+only override the callback URI when the browser origin differs from the
 registered Studio callback:
 
 ```bash
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
+NYXID_CLIENT_ID=replace-with-public-client-id
 ORNN_BASE_URL=https://ornn.chrono-ai.fun
 # Optional when deploying under a sub-path such as /console/
 AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
-The browser must not configure its own NyxID OAuth client id. Authorization
-starts from the backend-provided `baseUrl`, `clientId`, and `scope`, so the
-client id matches backend token finalization.
+`NYXID_CLIENT_ID` is injected into the browser bundle at build time and is the
+single client id used for authorization, PKCE pending state, and token refresh.
+Keep it aligned with the OAuth client configured for backend token finalization.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
 Default service preselection is owned by the NyxID OAuth Client

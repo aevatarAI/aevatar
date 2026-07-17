@@ -7,7 +7,6 @@ import {
   loadBackendNyxIDLoginConfig,
   NyxIDLoginFinalizationError,
   refreshNyxIDTokenSet,
-  type NyxIDBackendLoginConfig,
 } from './backend';
 import {
   clearStoredAuthSession,
@@ -190,14 +189,14 @@ export class NyxIDAuthClient {
       redirectUri,
       scope,
       returnTo,
-      clientId: loginConfig.clientId,
+      clientId: this.config.clientId,
       flow,
     };
-    this.storage.setItem(this.resolvePendingKey(loginConfig), JSON.stringify(pending));
+    this.storage.setItem(this.resolvePendingKey(), JSON.stringify(pending));
 
     const url = new URL(`${loginConfig.baseUrl}/oauth/authorize`);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('client_id', loginConfig.clientId);
+    url.searchParams.set('client_id', this.config.clientId);
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('scope', scope);
     url.searchParams.set('code_challenge', codeChallenge);
@@ -210,8 +209,8 @@ export class NyxIDAuthClient {
     window.location.assign(url.toString());
   }
 
-  private resolvePendingKey(loginConfig: NyxIDBackendLoginConfig): string {
-    return `${PENDING_KEY_PREFIX}${loginConfig.clientId}`;
+  private resolvePendingKey(): string {
+    return `${PENDING_KEY_PREFIX}${this.config.clientId}`;
   }
 
   private loadPendingState(state: string): {
@@ -358,7 +357,11 @@ export async function ensureActiveAuthSession(
     return pendingRefreshPromise;
   }
 
-  pendingRefreshPromise = refreshStoredAuthSession(expiredSession, refreshToken)
+  pendingRefreshPromise = refreshStoredAuthSession(
+    expiredSession,
+    refreshToken,
+    config,
+  )
     .catch(() => {
       clearStoredAuthSession();
       return null;
@@ -373,11 +376,12 @@ export async function ensureActiveAuthSession(
 async function refreshStoredAuthSession(
   expiredSession: NyxIDAuthSession,
   refreshToken: string,
+  config: NyxIDRuntimeConfig,
 ): Promise<NyxIDAuthSession | null> {
   const loginConfig = await loadBackendNyxIDLoginConfig();
   const refreshedTokens = await refreshNyxIDTokenSet({
     baseUrl: loginConfig.baseUrl,
-    clientId: loginConfig.clientId,
+    clientId: config.clientId,
     refreshToken,
   });
   const currentSession = readStoredAuthSession();

@@ -7,7 +7,7 @@ import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
 
 export type NyxIDBackendLoginConfig = Pick<
   NyxIDRuntimeConfig,
-  "baseUrl" | "clientId" | "scope"
+  "baseUrl" | "scope"
 >;
 
 export type NyxIDLoginFinalizationRequest = {
@@ -43,8 +43,6 @@ export class NyxIDLoginFinalizationError extends Error {
 type BackendLoginConfigResponse = {
   readonly baseUrl?: unknown;
   readonly BaseUrl?: unknown;
-  readonly clientId?: unknown;
-  readonly ClientId?: unknown;
   readonly scope?: unknown;
   readonly Scope?: unknown;
 };
@@ -164,7 +162,6 @@ function decodeBackendLoginConfig(
       /\/+$/,
       "",
     ),
-    clientId: readString(record.clientId ?? record.ClientId, "clientId"),
     scope: readString(record.scope ?? record.Scope, "scope"),
   };
 }
