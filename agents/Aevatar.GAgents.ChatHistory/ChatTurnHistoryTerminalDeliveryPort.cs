@@ -106,10 +106,20 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
 
         var normalizedConversationId = conversationId.Trim();
         var actorId = ChatHistoryActorIds.Conversation(scopeId, normalizedConversationId);
-        if (!await _actorRuntime.ExistsAsync(actorId).ConfigureAwait(false))
+        var actor = await _actorRuntime.GetAsync(actorId).ConfigureAwait(false);
+        if (actor is null)
+        {
             return ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
+        }
 
-        return ConversationIdentityResolution.Continue(normalizedConversationId);
+        if (actor.Agent is IChatConversationContinuationAdmission admission)
+        {
+            return admission.CanContinue(scopeId, normalizedConversationId)
+                ? ConversationIdentityResolution.Continue(normalizedConversationId)
+                : ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
+        }
+
+        return ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
     }
 
     public async Task BindAcceptedAsync(

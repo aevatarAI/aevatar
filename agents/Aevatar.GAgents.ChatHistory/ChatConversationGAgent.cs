@@ -16,7 +16,9 @@ namespace Aevatar.GAgents.ChatHistory;
 /// Actor ID: <c>chat-{scopeId}-{conversationId}</c>.
 /// </summary>
 [GAgent("chat.history.conversation")]
-public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, IProjectedActor
+public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
+    IProjectedActor,
+    IChatConversationContinuationAdmission
 {
     public static string ProjectionKind => "chat-conversation";
 
@@ -85,6 +87,22 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+    }
+
+    public bool CanContinue(string scopeId, string conversationId) =>
+        CanContinue(State, scopeId, conversationId);
+
+    public static bool CanContinue(
+        ChatConversationState state,
+        string scopeId,
+        string conversationId)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        return !state.Deleted &&
+               !string.IsNullOrWhiteSpace(state.ScopeId) &&
+               !string.IsNullOrWhiteSpace(state.ConversationId) &&
+               string.Equals(state.ScopeId, scopeId, StringComparison.Ordinal) &&
+               string.Equals(state.ConversationId, conversationId, StringComparison.Ordinal);
     }
 
     protected override ChatConversationState TransitionState(

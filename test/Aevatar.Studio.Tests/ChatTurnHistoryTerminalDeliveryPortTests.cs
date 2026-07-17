@@ -89,6 +89,40 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     }
 
     [Fact]
+    public async Task ReserveAsync_ShouldReturnNotFound_WhenContinuingDeletedConversation()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.SeedDeletedConversation("scope-alpha", "conversation-deleted");
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreatePort(runtime, dispatch);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-deleted")));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
+        runtime.CreatedActors.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ShouldReturnUnavailable_WhenActorDoesNotExposeContinuationAdmission()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.SeedProxyBackedConversation("scope-alpha", "conversation-proxy");
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreatePort(runtime, dispatch);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-proxy")));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
+        runtime.CreatedActors.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BindAcceptedAndAbandonAsync_ShouldDispatchToDeliveryActorWithBusinessDeliveryId()
     {
         var dispatch = new RecordingActorDispatchPort();
@@ -141,10 +175,30 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     private sealed class RecordingActorRuntime : IActorRuntime
     {
         private readonly HashSet<string> _existing = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, IActor> _actors = new(StringComparer.Ordinal);
         public List<(Type AgentType, string? Id)> CreatedActors { get; } = [];
 
         public void SeedExistingConversation(string scopeId, string conversationId) =>
-            _existing.Add(ChatHistoryActorIds.Conversation(scopeId, conversationId));
+            SeedConversation(scopeId, conversationId, deleted: false);
+
+        public void SeedDeletedConversation(string scopeId, string conversationId) =>
+            SeedConversation(scopeId, conversationId, deleted: true);
+
+        public void SeedProxyBackedConversation(string scopeId, string conversationId)
+        {
+            var actorId = ChatHistoryActorIds.Conversation(scopeId, conversationId);
+            _existing.Add(actorId);
+            _actors[actorId] = new NoopActor(actorId, new NoopAgent());
+        }
+
+        private void SeedConversation(string scopeId, string conversationId, bool deleted)
+        {
+            var actorId = ChatHistoryActorIds.Conversation(scopeId, conversationId);
+            _existing.Add(actorId);
+            _actors[actorId] = new NoopActor(
+                actorId,
+                new ConversationAdmissionAgent(scopeId, conversationId, deleted));
+        }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent => CreateAsync(typeof(TAgent), id, ct);
@@ -154,13 +208,17 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
             ct.ThrowIfCancellationRequested();
             CreatedActors.Add((agentType, id));
             if (!string.IsNullOrWhiteSpace(id))
+            {
                 _existing.Add(id);
+                _actors[id] = new NoopActor(id);
+            }
             return Task.FromResult<IActor>(new NoopActor(id ?? string.Empty));
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(null);
+        public Task<IActor?> GetAsync(string id) =>
+            Task.FromResult(_actors.GetValueOrDefault(id));
 
         public Task<bool> ExistsAsync(string id) => Task.FromResult(_existing.Contains(id));
 
@@ -184,15 +242,39 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         }
     }
 
-    private sealed class NoopActor(string id) : IActor
+    private sealed class NoopActor(string id, IAgent? agent = null) : IActor
     {
         public string Id { get; } = id;
-        public IAgent Agent { get; } = new NoopAgent();
+        public IAgent Agent { get; } = agent ?? new NoopAgent();
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class ConversationAdmissionAgent(
+        string scopeId,
+        string conversationId,
+        bool deleted) : IAgent, IChatConversationContinuationAdmission
+    {
+        private readonly ChatConversationState _state = new()
+        {
+            ScopeId = scopeId,
+            ConversationId = conversationId,
+            Deleted = deleted,
+        };
+
+        public string Id => ChatHistoryActorIds.Conversation(scopeId, conversationId);
+
+        public bool CanContinue(string candidateScopeId, string candidateConversationId) =>
+            ChatConversationGAgent.CanContinue(_state, candidateScopeId, candidateConversationId);
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult("conversation-admission");
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class NoopAgent : IAgent
