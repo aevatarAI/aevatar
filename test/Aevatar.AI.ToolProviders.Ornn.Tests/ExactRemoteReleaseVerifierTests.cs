@@ -107,6 +107,52 @@ public sealed class ExactRemoteReleaseVerifierTests
     }
 
     [Fact]
+    public void VerifySkill_WhenToolDeclarationsOnlyShareADelimiterKey_RejectsRelease()
+    {
+        var release = SkillRelease() with
+        {
+            DeclaredTools = [new ExactRemoteToolDeclaration("a", "b\u001fc", [])],
+        };
+        var expectation = SkillExpectation() with
+        {
+            DeclaredTools = [new ExactRemoteToolDeclaration("a\u001fb", "c", [])],
+        };
+
+        Action act = () => _verifier.VerifySkill(release, expectation);
+
+        act.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+    }
+
+    [Fact]
+    public void VerifySkillset_WhenEveryReviewedFieldMatches_ReturnsFetchedRelease()
+    {
+        var release = SkillsetRelease();
+
+        var verified = _verifier.VerifySkillset(release, SkillsetExpectation());
+
+        verified.Should().BeSameAs(release);
+    }
+
+    [Fact]
+    public void VerifySkillset_WhenReferenceOrNameDiffers_RejectsRelease()
+    {
+        var wrongReference = SkillsetExpectation() with
+        {
+            Reference = new ExactRemoteSkillsetRef { Guid = SkillsetGuid, LiteralVersion = "2.1" },
+        };
+        var wrongName = SkillsetExpectation() with { PublishedName = "different" };
+
+        Action referenceAct = () => _verifier.VerifySkillset(SkillsetRelease(), wrongReference);
+        Action nameAct = () => _verifier.VerifySkillset(SkillsetRelease(), wrongName);
+
+        referenceAct.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        nameAct.Should().Throw<ExactRemoteFetchException>()
+            .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+    }
+
+    [Fact]
     public void VerifySkillset_WhenDirectMembersOrClosureDiffer_RejectsRelease()
     {
         var differentDirect = SkillsetExpectation() with

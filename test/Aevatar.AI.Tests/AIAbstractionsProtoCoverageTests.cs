@@ -589,7 +589,22 @@ public sealed class AIAbstractionsProtoCoverageTests
 
         AiMessagesReflection.Descriptor.Should().NotBeNull();
         AiMessagesReflection.Descriptor.MessageTypes.Select(static type => type.Name).Should().Contain(
-            [nameof(ChatRequestEvent), nameof(ChatResponseEvent), nameof(TextMessageStartEvent), nameof(TextMessageContentEvent), nameof(TextMessageReasoningEvent), nameof(TextMessageEndEvent), nameof(ToolCallEvent), nameof(ToolResultEvent), nameof(RoleChatSessionStartedEvent), nameof(RoleChatSessionCompletedEvent), nameof(InitializeRoleAgentEvent), nameof(AIAgentConfigOverrides), nameof(RoleChatSessionState), nameof(RoleGAgentState)]);
+            [
+                nameof(ChatRequestEvent),
+                nameof(ChatResponseEvent),
+                nameof(TextMessageStartEvent),
+                nameof(TextMessageContentEvent),
+                nameof(TextMessageReasoningEvent),
+                nameof(TextMessageEndEvent),
+                nameof(ToolCallEvent),
+                nameof(ToolResultEvent),
+                nameof(RoleChatSessionStartedEvent),
+                nameof(RoleChatSessionCompletedEvent),
+                nameof(InitializeRoleAgentEvent),
+                nameof(AIAgentConfigOverrides),
+                nameof(RoleChatSessionState),
+                nameof(RoleGAgentState),
+            ]);
 
         var skillRef = RoundTrip(new ExactRemoteSkillRef { Guid = "11111111-1111-1111-1111-111111111111", LiteralVersion = "1.2" }, ExactRemoteSkillRef.Parser);
         var skillsetRef = RoundTrip(new ExactRemoteSkillsetRef { Guid = "22222222-2222-2222-2222-222222222222", LiteralVersion = "3.4" }, ExactRemoteSkillsetRef.Parser);

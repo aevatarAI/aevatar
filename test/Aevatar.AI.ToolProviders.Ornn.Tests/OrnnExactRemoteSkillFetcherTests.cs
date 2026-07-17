@@ -88,6 +88,125 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
     }
 
+    [Theory]
+    [InlineData("package")]
+    [InlineData("detail")]
+    public async Task FetchExactSkillAsync_WhenPackageOrDetailVersionDiffers_FailsClosed(string source)
+    {
+        var handler = ExactSkillHandler(
+            packageJson: source == "package" ? SkillPackage(version: "9.9") : null,
+            detailJson: source == "detail" ? SkillDetail(version: "9.9") : null);
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync(
+            "token",
+            new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        assertion.Which.Message.Should().Contain("version");
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FetchExactSkillAsync_WhenRequestedVersionRowIsMissingOrDuplicated_FailsClosed(
+        bool duplicate)
+    {
+        var rows = duplicate
+            ? $"{SkillVersionRow()},{SkillVersionRow()}"
+            : SkillVersionRow(version: "9.9");
+        var handler = ExactSkillHandler(versionsJson: SkillVersions(rows));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync(
+            "token",
+            new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        assertion.Which.Message.Should().Contain("exactly once");
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Fact]
+    public async Task FetchExactSkillAsync_WhenDetailAndVersionHashesDiffer_FailsClosed()
+    {
+        var otherHash = new string('b', 64);
+        var handler = ExactSkillHandler(
+            versionsJson: SkillVersions(SkillVersionRow(
+                skillHash: otherHash,
+                integrity: Integrity(otherHash))));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync(
+            "token",
+            new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        assertion.Which.Message.Should().Contain("hash");
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData("not-hex")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public async Task FetchExactSkillAsync_WhenVersionHashIsNotSha256_FailsClosed(string malformedHash)
+    {
+        var handler = ExactSkillHandler(
+            detailJson: SkillDetail(skillHash: malformedHash),
+            versionsJson: SkillVersions(SkillVersionRow(
+                skillHash: malformedHash,
+                integrity: "sha256-invalid")));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync(
+            "token",
+            new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        assertion.Which.Message.Should().Contain("hash");
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Fact]
+    public async Task FetchExactSkillAsync_WhenIntegrityDoesNotMatchHash_FailsClosed()
+    {
+        var handler = ExactSkillHandler(
+            versionsJson: SkillVersions(SkillVersionRow(integrity: "sha256-invalid")));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync(
+            "token",
+            new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        assertion.Which.Message.Should().Contain("integrity");
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Fact]
+    public async Task FetchExactSkillAsync_WhenToolDeclarationsOnlyShareADelimiterKey_FailsClosed()
+    {
+        var handler = ExactSkillHandler(
+            packageJson: SkillPackage(tool: "a", type: "b\u001fc"),
+            detailJson: SkillDetail(tool: "a\u001fb", type: "c"));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync(
+            "token",
+            new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        assertion.Which.Message.Should().Contain("tools");
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
     [Fact]
     public async Task FetchExactSkillAsync_WhenOneResponseIsUnavailable_StillMakesOnlyTheFixedReads()
     {
@@ -119,9 +238,9 @@ public sealed class OrnnExactRemoteSkillFetcherTests
             new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
         await handler.ExpectedRequestsStarted;
         timeProvider.ExpireTimer();
+        var act = async () => await fetchTask;
 
-        var assertion = await fetchTask.Invoking(static task => task).Should()
-            .ThrowAsync<ExactRemoteFetchException>();
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
         assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.Unavailable);
         handler.Requests.Should().HaveCount(3);
         AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
@@ -203,6 +322,82 @@ public sealed class OrnnExactRemoteSkillFetcherTests
 
         var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
         assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
+    [Fact]
+    public async Task FetchExactSkillsetAsync_WhenStringMemberUsesGuidAndLiteralVersion_ResolvesExactRoot()
+    {
+        var members = $$"""["{{MemberAGuid}}@1.0", "member-b@beta"]""";
+        var handler = ExactSkillsetHandler(detailJson: SkillsetDetail(membersJson: members));
+        var fetcher = CreateFetcher(handler);
+
+        var release = await fetcher.FetchExactSkillsetAsync(
+            "token",
+            new ExactRemoteSkillsetRef { Guid = SkillsetGuid, LiteralVersion = "2.0" });
+
+        release.DirectMembers.Select(member => (member.Guid, member.LiteralVersion)).Should().Equal(
+            (MemberAGuid, "1.0"),
+            (MemberBGuid, "2.0"));
+        AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
+    [Fact]
+    public async Task FetchExactSkillsetAsync_WhenObjectMemberGuidMatchesButLiteralVersionDiffers_FailsClosed()
+    {
+        var members = $$"""
+            [
+              { "guid": "{{MemberAGuid}}", "name": "member-a", "version": "9.9" },
+              { "guid": "{{MemberBGuid}}", "name": "member-b", "version": "2.0" }
+            ]
+            """;
+        var handler = ExactSkillsetHandler(detailJson: SkillsetDetail(membersJson: members));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillsetAsync(
+            "token",
+            new ExactRemoteSkillsetRef { Guid = SkillsetGuid, LiteralVersion = "2.0" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
+    [Fact]
+    public async Task FetchExactSkillsetAsync_WhenDetailVersionDiffers_FailsClosed()
+    {
+        var handler = ExactSkillsetHandler(detailJson: SkillsetDetail(version: "9.9"));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillsetAsync(
+            "token",
+            new ExactRemoteSkillsetRef { Guid = SkillsetGuid, LiteralVersion = "2.0" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        assertion.Which.Message.Should().Contain("version");
+        AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FetchExactSkillsetAsync_WhenRequestedVersionRowIsMissingOrDuplicated_FailsClosed(
+        bool duplicate)
+    {
+        var rows = duplicate
+            ? $"{SkillsetVersionRow()},{SkillsetVersionRow()}"
+            : SkillsetVersionRow(version: "9.9");
+        var handler = ExactSkillsetHandler(versionsJson: SkillsetVersions(rows));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillsetAsync(
+            "token",
+            new ExactRemoteSkillsetRef { Guid = SkillsetGuid, LiteralVersion = "2.0" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        assertion.Which.Message.Should().Contain("exactly once");
         AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
     }
 

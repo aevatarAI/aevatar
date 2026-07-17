@@ -51,7 +51,7 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
     {
         return new OrnnTestHttpMessageHandler(
             hangUntilCanceled: true,
-            expectedRequestCount,
+            expectedRequestCount: expectedRequestCount,
             responseRouter: null);
     }
 
@@ -60,7 +60,7 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
         return new OrnnTestHttpMessageHandler(
             hangUntilCanceled: false,
             expectedRequestCount: 1,
-            responseRouter);
+            responseRouter: responseRouter);
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
