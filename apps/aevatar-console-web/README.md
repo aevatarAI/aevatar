@@ -42,24 +42,25 @@ console at the hosted backend, set both targets to the hosted API URL in
 `.env.local` and set `AEVATAR_PROXY_PRESERVE_AUTH_HOST=false` so `/api/auth/*`
 uses the hosted backend Host header.
 
-For NyxID login, the console reads `baseUrl` and `scope` from Studio Hosting via
-`/api/auth/nyxid/config`, reads the public OAuth client id from the frontend
-build environment, and finalizes callbacks through `/api/auth/nyxid/finalize`.
-Keep `/api/auth/*` proxied to the Studio backend. Set the frontend client id and
-only override the callback URI when the browser origin differs from the
-registered Studio callback:
+For NyxID login, the console reads the authority, public OAuth client id, scope,
+and callback URI from the frontend build environment. It finalizes callbacks
+through `/api/auth/nyxid/finalize`, so keep `/api/auth/*` proxied to the Studio
+backend. Configure all four browser OAuth values before building:
 
 ```bash
-NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
+NYXID_BASE_URL=https://nyx.chrono-ai.fun
 NYXID_CLIENT_ID=replace-with-public-client-id
+NYXID_SCOPE="openid profile email offline_access urn:nyxid:scope:broker_binding proxy"
+NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
 ORNN_BASE_URL=https://ornn.chrono-ai.fun
 # Optional when deploying under a sub-path such as /console/
 AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
-`NYXID_CLIENT_ID` is injected into the browser bundle at build time and is the
-single client id used for authorization, PKCE pending state, and token refresh.
-Keep it aligned with the OAuth client configured for backend token finalization.
+`NYXID_BASE_URL`, `NYXID_CLIENT_ID`, and `NYXID_SCOPE` are injected into the
+browser bundle at build time and are the single configuration source for
+authorization, PKCE pending state, and token refresh. Keep them aligned with
+the OAuth client configured for backend token finalization.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
 Default service preselection is owned by the NyxID OAuth Client

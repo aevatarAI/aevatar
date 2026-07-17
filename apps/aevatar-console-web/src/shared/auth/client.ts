@@ -4,7 +4,6 @@ import {
 } from './config';
 import {
   finalizeBackendNyxIDLogin,
-  loadBackendNyxIDLoginConfig,
   NyxIDLoginFinalizationError,
   refreshNyxIDTokenSet,
 } from './backend';
@@ -177,9 +176,8 @@ export class NyxIDAuthClient {
     const codeVerifier = randomUrlSafeString(48);
     const codeChallenge = await sha256Base64Url(codeVerifier);
     const state = randomUrlSafeString(24);
-    const loginConfig = await loadBackendNyxIDLoginConfig();
     const redirectUri = this.config.redirectUri;
-    const scope = loginConfig.scope;
+    const scope = this.config.scope;
     const flow = readAuthFlow(options.flow);
     const returnTo = resolveReturnToForFlow(flow, options.returnTo);
 
@@ -194,7 +192,7 @@ export class NyxIDAuthClient {
     };
     this.storage.setItem(this.resolvePendingKey(), JSON.stringify(pending));
 
-    const url = new URL(`${loginConfig.baseUrl}/oauth/authorize`);
+    const url = new URL(`${this.config.baseUrl}/oauth/authorize`);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', this.config.clientId);
     url.searchParams.set('redirect_uri', redirectUri);
@@ -378,9 +376,8 @@ async function refreshStoredAuthSession(
   refreshToken: string,
   config: NyxIDRuntimeConfig,
 ): Promise<NyxIDAuthSession | null> {
-  const loginConfig = await loadBackendNyxIDLoginConfig();
   const refreshedTokens = await refreshNyxIDTokenSet({
-    baseUrl: loginConfig.baseUrl,
+    baseUrl: config.baseUrl,
     clientId: config.clientId,
     refreshToken,
   });

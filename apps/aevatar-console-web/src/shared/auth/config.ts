@@ -111,28 +111,51 @@ function tryResolveHttpUrl(
 const MISSING_CLIENT_ID_ERROR =
   'NYXID_CLIENT_ID must be configured with a non-empty public OAuth client id.';
 
+const MISSING_BASE_URL_ERROR =
+  'NYXID_BASE_URL must be configured with the NyxID HTTP(S) authority.';
+
+const INVALID_BASE_URL_ERROR =
+  'NYXID_BASE_URL must be a valid HTTP(S) URL.';
+
+const MISSING_SCOPE_ERROR =
+  'NYXID_SCOPE must be configured with at least one OAuth scope.';
+
 const INVALID_REDIRECT_URI_ERROR =
   'NYXID_REDIRECT_URI must be a valid http(s) URL or a root-relative path such as /auth/callback.';
 
 export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
+  const baseUrl = trimOptional(process.env.NYXID_BASE_URL) ?? '';
+  const normalizedBaseUrl = baseUrl
+    ? tryResolveHttpUrl(baseUrl, { allowRelative: false })?.replace(/\/+$/, '')
+    : undefined;
   const clientId = trimOptional(process.env.NYXID_CLIENT_ID) ?? '';
+  const scope =
+    trimOptional(process.env.NYXID_SCOPE)?.split(/\s+/).join(' ') ?? '';
   const redirectUri =
     trimOptional(process.env.NYXID_REDIRECT_URI) ?? resolveDefaultRedirectUri();
   const normalizedRedirectUri = tryResolveHttpUrl(redirectUri, {
     allowRelative: true,
   });
-  const configurationError = !clientId
-    ? MISSING_CLIENT_ID_ERROR
-    : !normalizedRedirectUri
-      ? INVALID_REDIRECT_URI_ERROR
-      : undefined;
+  const configurationError = !baseUrl
+    ? MISSING_BASE_URL_ERROR
+    : !normalizedBaseUrl
+      ? INVALID_BASE_URL_ERROR
+      : !clientId
+        ? MISSING_CLIENT_ID_ERROR
+        : !scope
+          ? MISSING_SCOPE_ERROR
+          : !normalizedRedirectUri
+            ? INVALID_REDIRECT_URI_ERROR
+            : undefined;
 
   return {
-    enabled: Boolean(clientId && normalizedRedirectUri),
-    baseUrl: '',
+    enabled: Boolean(
+      normalizedBaseUrl && clientId && scope && normalizedRedirectUri,
+    ),
+    baseUrl: normalizedBaseUrl ?? '',
     clientId,
     redirectUri: normalizedRedirectUri ?? '',
-    scope: '',
+    scope,
     configurationError,
   };
 }

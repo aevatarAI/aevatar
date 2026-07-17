@@ -273,15 +273,7 @@ describe("SettingsPage", () => {
     installDeterministicCrypto();
     window.history.replaceState({}, "", "/settings?section=account");
     const assign = installLocationAssignSpy();
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        baseUrl: "https://nyx.example",
-        clientId: "broker-client-1",
-        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-      }),
-    } as Response);
+    const fetchMock = jest.fn();
     global.fetch = fetchMock as typeof global.fetch;
 
     renderWithQueryClient(React.createElement(SettingsPage));
@@ -296,6 +288,7 @@ describe("SettingsPage", () => {
     const authorizeUrl = new URL(assign.mock.calls[0][0]);
     expect(authorizeUrl.searchParams.get("prompt")).toBe("consent");
     expect(authorizeUrl.searchParams.getAll("resource")).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
 
     const pending = JSON.parse(
       window.localStorage.getItem(
@@ -319,15 +312,11 @@ describe("SettingsPage", () => {
     installDeterministicCrypto();
     window.history.replaceState({}, "", "/settings?section=account");
     const assign = installLocationAssignSpy();
-    global.fetch = jest.fn()
-      .mockResolvedValueOnce({
-        ok: false, status: 503, statusText: "Service Unavailable",
-        text: async () => JSON.stringify({ error: "oauth_client_not_provisioned", detail: "Unavailable." }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true, status: 200,
-        json: async () => ({ baseUrl: "https://nyx.example", clientId: "broker-client-1", scope: "openid proxy" }),
-      } as Response) as typeof global.fetch;
+    assign.mockImplementationOnce(() => {
+      throw new Error("Navigation failed");
+    });
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof global.fetch;
 
     renderWithQueryClient(React.createElement(SettingsPage));
     const manageButton = await screen.findByRole("button", { name: "Manage service access" });
@@ -335,8 +324,9 @@ describe("SettingsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not start service access review. Try again.");
     await waitFor(() => expect(manageButton).not.toHaveClass("ant-btn-loading"));
     fireEvent.click(manageButton);
-    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("hides service access review when the user is signed out", async () => {
