@@ -10,7 +10,7 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 /// <summary>
 /// Ornn 远程技能拉取器。通过 OrnnSkillClient 从 Ornn 平台获取技能。
 /// </summary>
-public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
+public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher, IExactRemoteSkillFetcher
 {
     private readonly OrnnSkillClient _client;
     private static readonly char[] PathSeparators = ['/', '\\'];
@@ -23,6 +23,44 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         var skill = await _client.GetSkillJsonAsync(accessToken, nameOrId, ct);
         if (skill == null)
             return null;
+
+        return MapSkill(skill, nameOrId);
+    }
+
+    public async Task<ExactRemoteSkillRelease> FetchExactSkillAsync(
+        string accessToken,
+        Aevatar.AI.Abstractions.ExactRemoteSkillRef reference,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        var evidence = await _client.GetExactSkillAsync(accessToken, reference, ct);
+        return new ExactRemoteSkillRelease(
+            reference.Clone(),
+            evidence.PublishedName,
+            evidence.Provenance,
+            evidence.ExactPackage,
+            evidence.DeclaredTools,
+            MapSkill(evidence.Package, reference.Guid));
+    }
+
+    public async Task<ExactRemoteSkillsetRelease> FetchExactSkillsetAsync(
+        string accessToken,
+        Aevatar.AI.Abstractions.ExactRemoteSkillsetRef reference,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        var evidence = await _client.GetExactSkillsetAsync(accessToken, reference, ct);
+        return new ExactRemoteSkillsetRelease(
+            reference.Clone(),
+            evidence.PublishedName,
+            evidence.Provenance,
+            evidence.Instructions,
+            evidence.DirectMembers.Select(static member => member.Clone()).ToArray(),
+            evidence.FullClosure.Select(static member => member.Clone()).ToArray());
+    }
+
+    private static SkillDefinition MapSkill(OrnnSkillJson skill, string remoteId)
+    {
 
         // 从 SKILL.md 文件内容中提取 instructions
         var instructions = "";
@@ -54,17 +92,17 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
         if (workflows.Count == 0)
             workflows = extraction.Workflows;
         var scriptExtraction = new SkillScriptExtractor().ExtractFromFiles(
-            parsed.Name ?? skill.Name ?? nameOrId,
+            parsed.Name ?? skill.Name ?? remoteId,
             parsed.ScriptEntry,
             extraction.RemainingFiles);
 
         return new SkillDefinition
         {
-            Name = parsed.Name ?? skill.Name ?? nameOrId,
+            Name = parsed.Name ?? skill.Name ?? remoteId,
             Description = parsed.Description ?? skill.Description ?? "",
             Instructions = parsed.Body,
             Source = SkillSource.Remote,
-            RemoteId = nameOrId,
+            RemoteId = remoteId,
             Arguments = parsed.Arguments,
             WhenToUse = parsed.WhenToUse,
             IsModelInvocable = parsed.IsModelInvocable,

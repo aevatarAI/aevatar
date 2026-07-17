@@ -31,7 +31,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnSkillPackageFormatValidator>();
         services.TryAddSingleton<OrnnPublishSkillTool>();
         services.TryAddSingleton<OrnnUpdateSkillTool>();
-        services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
+        services.TryAddSingleton<OrnnRemoteSkillFetcher>();
+        services.TryAddSingleton<IRemoteSkillFetcher>(sp => sp.GetRequiredService<OrnnRemoteSkillFetcher>());
+        services.TryAddSingleton<IExactRemoteSkillFetcher>(sp => sp.GetRequiredService<OrnnRemoteSkillFetcher>());
+        services.TryAddSingleton<ExactRemoteReleaseVerifier>();
         services.TryAddSingleton<OrnnAgentToolSource>();
         services.TryAddAgentToolSourceAlias<OrnnAgentToolSource>(GetOrnnAgentToolSource);
         return services;

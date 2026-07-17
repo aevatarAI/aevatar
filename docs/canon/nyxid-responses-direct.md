@@ -164,6 +164,16 @@ chat-route policy 指定 `tool_set_ref` 或 `tool_choice_hint` 时，三条直�
 
 直连工具的失败语义按边界分层处理。客户端声明但不属于 Aevatar substitute 或 additive 的 forwarded tools 仍然由客户端执行；这类工具不会在 Aevatar 内被降级。只要某个工具名来自 Aevatar-owned substitute/additive discovery，即使客户端也声明了同名工具，该名称也会作为 `owned_tool_names` 写入 run command，并由运行时作为 deny-forward 边界处理，不能被转成 forwarded tool call。Aevatar 本地 direct tools 执行失败时，actor 会把失败转成合法 JSON tool output，并继续把结果送回模型，避免一个可选本地工具异常终止整次 response。该 JSON 只暴露稳定错误码、工具名和异常类型，不透出 token、请求头或内部路径。调用方取消仍然取消整次 run，不会被转成 tool output。chat-route `tool_set_ref` 解析错误仍然 fail closed 返回配置错误；但已经解析出的 tool source、全局 provider、skills/Ornn discovery 如果单个 source 失败，会记录 warning 并跳过该 source，其他可用工具继续进入本次计划。
 
+### 5.1 Ordinary discovery 与 curated exact read
+
+`use_skill`、skill recovery、搜索和系统 overlay 继续使用 ordinary name-or-ID 读取。这条路径服务发现与普通执行，允许按名称读取当前版本，属于 normal trust；它不会因为名称、`@1.1` member 文本或当前 overlay 配置自动获得 curated trust。
+
+需要审核不可变发布证据的调用方必须使用独立的 exact port，并提交 Protobuf `ExactRemoteSkillRef` 或 `ExactRemoteSkillsetRef`。两种引用都只有 GUID 和 literal `major.minor` version，没有 name、dist-tag、latest 或 hash fallback。Exact skill 固定并发读取 versioned package、versioned detail 和 GUID-scoped versions；exact skillset 固定并发读取 versioned detail、versioned closure 和 GUID-scoped versions。三份响应必须在同一个 30 秒预算内完成并互相一致，任何缺失、重复、解析失败或身份/版本/名称/closure 差异都会失败关闭，不追加第四个 name/latest 请求。
+
+读取在反序列化前受限：skill package 原始 JSON 最大 100 MiB，其余五类证据各最大 25 MiB，同时检查 `Content-Length` 与实际流字节。解码后的 skill package 最多 1000 个文件、规范相对路径最多 512 UTF-8 bytes、单文件最多 25 MiB、文件总量最多 50 MiB、声明工具最多 50 个；skillset direct members 最多 100 个，closure 最多 500 个节点。调用方审核的 bounds 只能进一步收紧这些上限。
+
+Version row 的 publisher snapshot 完整保留 `createdBy`、可选 `createdByEmail`、可选 `createdByDisplayName` 与 `createdOn`。只有稳定 subject id 表示发布者身份；email 和 display name 只是该 immutable version 的展示快照，参与完整性比较但不授予权限。`metadata.tools` 同样只是待审核的 package 声明，不会注册或授权工具。Ornn 的 `skillHash/integrity` 覆盖原始 ZIP，而 exact package 返回解包后的 JSON files，因此二者只在 adapter 内用于跨响应一致性检查，不作为调用方的 JSON 内容 hash pin。
+
 ## 6. 显式 Skill 触发
 
 直连入口支持同一套显式 skill 触发语法：

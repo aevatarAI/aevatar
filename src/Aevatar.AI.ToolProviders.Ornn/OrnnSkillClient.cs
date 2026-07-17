@@ -1,5 +1,8 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
+using System.Collections.ObjectModel;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Skills;
@@ -17,6 +20,10 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 /// </summary>
 public sealed class OrnnSkillClient
 {
+    private const int MaximumDeclaredTools = 50;
+    private const int MaximumDirectMembers = 100;
+    private const int MaximumClosureNodes = 500;
+    private const long EvidenceResponseMaximumBytes = NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes;
     private readonly NyxIdApiClient _nyxApi;
     private readonly OrnnOptions _options;
     private readonly ILogger _logger;
@@ -26,6 +33,10 @@ public sealed class OrnnSkillClient
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+
+    private static readonly Regex LiteralVersionPattern = new(
+        "^[0-9]+\\.[0-9]+$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>
     /// Default per-call timeout for Ornn HTTP fetches through the NyxID proxy. Without this, a
@@ -260,6 +271,124 @@ public sealed class OrnnSkillClient
         }
     }
 
+    internal async Task<OrnnExactSkillEvidence> GetExactSkillAsync(
+        string accessToken,
+        Aevatar.AI.Abstractions.ExactRemoteSkillRef reference,
+        CancellationToken ct = default)
+    {
+        ValidateExactReference(
+            reference.Guid,
+            reference.LiteralVersion,
+            ExactRemoteResourceKind.Skill);
+        var encodedGuid = Uri.EscapeDataString(reference.Guid);
+        var encodedVersion = Uri.EscapeDataString(reference.LiteralVersion);
+        var resourceKind = ExactRemoteResourceKind.Skill;
+
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        try
+        {
+            var packageTask = ReadExactDataAsync<OrnnSkillJson>(
+                accessToken,
+                $"/api/v1/skills/{encodedGuid}/json?version={encodedVersion}",
+                NyxIdToolOptions.HardProxyFileArtifactMaxBytes,
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                linkedCts.Token);
+            var detailTask = ReadExactDataAsync<OrnnExactSkillDetail>(
+                accessToken,
+                $"/api/v1/skills/{encodedGuid}?version={encodedVersion}",
+                EvidenceResponseMaximumBytes,
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                linkedCts.Token);
+            var versionsTask = ReadExactDataAsync<OrnnExactVersionItems<OrnnExactSkillVersionRow>>(
+                accessToken,
+                $"/api/v1/skills/{encodedGuid}/versions",
+                EvidenceResponseMaximumBytes,
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                linkedCts.Token);
+
+            await Task.WhenAll(packageTask, detailTask, versionsTask);
+            return BuildExactSkillEvidence(reference, packageTask.Result, detailTask.Result, versionsTask.Result.Items);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            throw ExactRemoteFetchException.Unavailable(
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                $"the shared {_perCallTimeout.TotalSeconds:0.###} second request budget expired");
+        }
+    }
+
+    internal async Task<OrnnExactSkillsetEvidence> GetExactSkillsetAsync(
+        string accessToken,
+        Aevatar.AI.Abstractions.ExactRemoteSkillsetRef reference,
+        CancellationToken ct = default)
+    {
+        ValidateExactReference(
+            reference.Guid,
+            reference.LiteralVersion,
+            ExactRemoteResourceKind.Skillset);
+        var encodedGuid = Uri.EscapeDataString(reference.Guid);
+        var encodedVersion = Uri.EscapeDataString(reference.LiteralVersion);
+        var resourceKind = ExactRemoteResourceKind.Skillset;
+
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        try
+        {
+            var detailTask = ReadExactDataAsync<OrnnSkillSet>(
+                accessToken,
+                $"/api/v1/skillsets/{encodedGuid}?version={encodedVersion}",
+                EvidenceResponseMaximumBytes,
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                linkedCts.Token);
+            var closureTask = ReadExactDataAsync<OrnnExactSkillsetClosure>(
+                accessToken,
+                $"/api/v1/skillsets/{encodedGuid}/closure?version={encodedVersion}",
+                EvidenceResponseMaximumBytes,
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                linkedCts.Token);
+            var versionsTask = ReadExactDataAsync<OrnnExactVersionItems<OrnnExactSkillsetVersionRow>>(
+                accessToken,
+                $"/api/v1/skillsets/{encodedGuid}/versions",
+                EvidenceResponseMaximumBytes,
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                linkedCts.Token);
+
+            await Task.WhenAll(detailTask, closureTask, versionsTask);
+            return BuildExactSkillsetEvidence(reference, detailTask.Result, closureTask.Result, versionsTask.Result.Items);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            throw ExactRemoteFetchException.Unavailable(
+                resourceKind,
+                reference.Guid,
+                reference.LiteralVersion,
+                $"the shared {_perCallTimeout.TotalSeconds:0.###} second request budget expired");
+        }
+    }
+
     public async Task<OrnnSkillPublishResponse> PublishSkillAsync(
         string accessToken,
         byte[] zipBytes,
@@ -454,7 +583,635 @@ public sealed class OrnnSkillClient
             ? prop.GetString()
             : null;
 
+    private async Task<T> ReadExactDataAsync<T>(
+        string accessToken,
+        string path,
+        long maximumBytes,
+        ExactRemoteResourceKind resourceKind,
+        string guid,
+        string literalVersion,
+        CancellationToken ct)
+        where T : class
+    {
+        var response = await _nyxApi.ProxyGetBinaryResponseAsync(
+            accessToken,
+            _options.NyxIdSlug,
+            path,
+            extraHeaders: null,
+            maximumBytes,
+            ct);
+        if (!response.Succeeded)
+        {
+            if (response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    resourceKind,
+                    guid,
+                    literalVersion,
+                    $"response '{path}' exceeded {maximumBytes} bytes");
+            }
+
+            throw ExactRemoteFetchException.Unavailable(
+                resourceKind,
+                guid,
+                literalVersion,
+                string.IsNullOrWhiteSpace(response.Detail) ? $"request '{path}' failed" : response.Detail,
+                response.HttpStatus == 0 ? null : response.HttpStatus);
+        }
+
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<OrnnApiResponse<T>>(response.Content, JsonOptions);
+            return envelope?.Data ?? throw ExactRemoteFetchException.InvalidResponse(
+                resourceKind,
+                guid,
+                literalVersion,
+                $"response '{path}' omitted data");
+        }
+        catch (ExactRemoteFetchException)
+        {
+            throw;
+        }
+        catch (JsonException ex)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                resourceKind,
+                guid,
+                literalVersion,
+                $"response '{path}' was not valid JSON",
+                ex);
+        }
+    }
+
+    private static OrnnExactSkillEvidence BuildExactSkillEvidence(
+        Aevatar.AI.Abstractions.ExactRemoteSkillRef reference,
+        OrnnSkillJson package,
+        OrnnExactSkillDetail detail,
+        IReadOnlyList<OrnnExactSkillVersionRow> versionRows)
+    {
+        RequireGuidMatch(detail.Guid, reference.Guid, ExactRemoteResourceKind.Skill, reference.LiteralVersion);
+        RequireText(package.Name, "package name", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        RequireText(detail.Name, "detail name", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        RequireEqual(package.Name!, detail.Name!, "package/detail name", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        RequireEqual(package.Version, reference.LiteralVersion, "package version", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        RequireEqual(detail.Version, reference.LiteralVersion, "detail version", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        if (package.Metadata is null || detail.Metadata is null)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skill,
+                reference.Guid,
+                reference.LiteralVersion,
+                "package and detail metadata must both be present");
+        }
+
+        var versionRow = SelectExactVersionRow(
+            versionRows,
+            reference.LiteralVersion,
+            static row => row.Version,
+            ExactRemoteResourceKind.Skill,
+            reference.Guid);
+        RequireText(detail.SkillHash, "detail skill hash", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        RequireText(versionRow.SkillHash, "version skill hash", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        RequireText(versionRow.Integrity, "version integrity", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        RequireEqual(detail.SkillHash!, versionRow.SkillHash!, "detail/version skill hash", ExactRemoteResourceKind.Skill, reference.Guid, reference.LiteralVersion);
+        VerifyIntegrity(versionRow.SkillHash!, versionRow.Integrity, reference.Guid, reference.LiteralVersion);
+
+        var packageTools = NormalizeTools(package.Metadata?.Tools, reference.Guid, reference.LiteralVersion);
+        var detailTools = NormalizeTools(detail.Metadata?.Tools, reference.Guid, reference.LiteralVersion);
+        RequireToolSetsEqual(packageTools, detailTools, reference.Guid, reference.LiteralVersion);
+        var exactPackage = ValidatePackage(package.Files, reference.Guid, reference.LiteralVersion);
+        package.Files = exactPackage.Files.ToDictionary(static file => file.Key, static file => file.Value, StringComparer.Ordinal);
+
+        return new OrnnExactSkillEvidence(
+            package,
+            detail.Name!,
+            BuildProvenance(versionRow, reference.Guid, reference.LiteralVersion, ExactRemoteResourceKind.Skill),
+            exactPackage,
+            packageTools);
+    }
+
+    private static OrnnExactSkillsetEvidence BuildExactSkillsetEvidence(
+        Aevatar.AI.Abstractions.ExactRemoteSkillsetRef reference,
+        OrnnSkillSet detail,
+        OrnnExactSkillsetClosure closure,
+        IReadOnlyList<OrnnExactSkillsetVersionRow> versionRows)
+    {
+        RequireGuidMatch(detail.Guid, reference.Guid, ExactRemoteResourceKind.Skillset, reference.LiteralVersion);
+        RequireText(detail.Name, "detail name", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
+        RequireEqual(detail.Version, reference.LiteralVersion, "detail version", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
+        RequireText(detail.Instructions, "detail instructions", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
+        RequireText(closure.Instructions, "closure instructions", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
+        RequireEqual(detail.Instructions!, closure.Instructions!, "detail/closure instructions", ExactRemoteResourceKind.Skillset, reference.Guid, reference.LiteralVersion);
+
+        if (detail.Members.Count > MaximumDirectMembers)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                $"direct member count exceeded {MaximumDirectMembers}");
+        }
+        if (detail.Members.Count == 0)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                "direct members were missing or empty");
+        }
+        if (closure.Items is null)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                "closure items were missing");
+        }
+        if (closure.Items.Count > MaximumClosureNodes)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                $"closure node count exceeded {MaximumClosureNodes}");
+        }
+
+        var versionRow = SelectExactVersionRow(
+            versionRows,
+            reference.LiteralVersion,
+            static row => row.Version,
+            ExactRemoteResourceKind.Skillset,
+            reference.Guid);
+        if (versionRow.MemberCount is null)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                "version member count was missing");
+        }
+        if (versionRow.MemberCount.Value != detail.Members.Count)
+        {
+            throw ExactRemoteFetchException.IntegrityMismatch(
+                ExactRemoteResourceKind.Skillset,
+                reference.Guid,
+                reference.LiteralVersion,
+                "version member count differs from detail members");
+        }
+
+        var closureItems = ValidateClosureItems(closure.Items, reference.Guid, reference.LiteralVersion);
+        var directMembers = ResolveDirectMembers(detail.Members, closureItems, reference.Guid, reference.LiteralVersion);
+        return new OrnnExactSkillsetEvidence(
+            detail.Name!,
+            BuildProvenance(versionRow, reference.Guid, reference.LiteralVersion, ExactRemoteResourceKind.Skillset),
+            detail.Instructions!,
+            directMembers,
+            closureItems.Select(static item => item.Reference).ToArray());
+    }
+
+    private static ExactRemotePackage ValidatePackage(
+        IReadOnlyDictionary<string, string>? files,
+        string guid,
+        string literalVersion)
+    {
+        if (files is null)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skill,
+                guid,
+                literalVersion,
+                "package files were missing");
+        }
+
+        var maximum = ExactRemotePackageBounds.AdapterMaximum;
+        if (files.Count > maximum.MaximumFileCount)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skill,
+                guid,
+                literalVersion,
+                $"package file count exceeded {maximum.MaximumFileCount}");
+        }
+
+        var normalizedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+        var maximumPathBytes = 0;
+        long maximumFileBytes = 0;
+        long totalFileBytes = 0;
+        foreach (var (path, content) in files)
+        {
+            var normalizedPath = NormalizePackagePath(path, guid, literalVersion);
+            if (content is null)
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skill,
+                    guid,
+                    literalVersion,
+                    $"package file '{normalizedPath}' had null content");
+            }
+            if (!normalizedFiles.TryAdd(normalizedPath, content))
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skill,
+                    guid,
+                    literalVersion,
+                    $"package contains duplicate normalized path '{normalizedPath}'");
+            }
+
+            var pathBytes = Encoding.UTF8.GetByteCount(normalizedPath);
+            var fileBytes = Encoding.UTF8.GetByteCount(content);
+            if (pathBytes > maximum.MaximumPathUtf8Bytes || fileBytes > maximum.MaximumFileUtf8Bytes)
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skill,
+                    guid,
+                    literalVersion,
+                    $"package path or file '{normalizedPath}' exceeded adapter bounds");
+            }
+
+            maximumPathBytes = Math.Max(maximumPathBytes, pathBytes);
+            maximumFileBytes = Math.Max(maximumFileBytes, fileBytes);
+            totalFileBytes += fileBytes;
+            if (totalFileBytes > maximum.MaximumTotalFileUtf8Bytes)
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skill,
+                    guid,
+                    literalVersion,
+                    "package total file bytes exceeded adapter bounds");
+            }
+        }
+
+        return new ExactRemotePackage(
+            new ReadOnlyDictionary<string, string>(normalizedFiles),
+            new ExactRemotePackageShape(files.Count, maximumPathBytes, maximumFileBytes, totalFileBytes));
+    }
+
+    private static string NormalizePackagePath(string path, string guid, string literalVersion)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path.Contains('\0'))
+            throw InvalidPackagePath(guid, literalVersion, path);
+
+        var replaced = path.Replace('\\', '/');
+        if (replaced.StartsWith('/') || Regex.IsMatch(replaced, "^[A-Za-z]:/", RegexOptions.CultureInvariant))
+            throw InvalidPackagePath(guid, literalVersion, path);
+
+        var segments = replaced.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || segments.Any(static segment => segment is "." or ".."))
+            throw InvalidPackagePath(guid, literalVersion, path);
+        return string.Join('/', segments);
+    }
+
+    private static ExactRemoteFetchException InvalidPackagePath(string guid, string literalVersion, string? path) =>
+        ExactRemoteFetchException.InvalidResponse(
+            ExactRemoteResourceKind.Skill,
+            guid,
+            literalVersion,
+            $"package path '{path}' is not a normalized relative path");
+
+    private static IReadOnlyList<ExactRemoteToolDeclaration> NormalizeTools(
+        IReadOnlyList<OrnnSkillToolDeclaration>? tools,
+        string guid,
+        string literalVersion)
+    {
+        if (tools is null)
+            return [];
+        if (tools.Count > MaximumDeclaredTools)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skill,
+                guid,
+                literalVersion,
+                $"declared tool count exceeded {MaximumDeclaredTools}");
+        }
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        var normalized = new List<ExactRemoteToolDeclaration>(tools.Count);
+        foreach (var tool in tools)
+        {
+            if (string.IsNullOrWhiteSpace(tool.Tool) || string.IsNullOrWhiteSpace(tool.Type) ||
+                !names.Add(tool.Tool))
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skill,
+                    guid,
+                    literalVersion,
+                    "declared tools contain a blank or duplicate identity");
+            }
+
+            var mcpServers = new List<ExactRemoteMcpServerDeclaration>();
+            var mcpKeys = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var server in tool.McpServers ?? [])
+            {
+                var key = $"{server.Mcp}\u001f{server.Version}";
+                if (string.IsNullOrWhiteSpace(server.Mcp) || string.IsNullOrWhiteSpace(server.Version) ||
+                    !mcpKeys.Add(key))
+                {
+                    throw ExactRemoteFetchException.InvalidResponse(
+                        ExactRemoteResourceKind.Skill,
+                        guid,
+                        literalVersion,
+                        $"declared tool '{tool.Tool}' contains a blank or duplicate MCP server");
+                }
+                mcpServers.Add(new ExactRemoteMcpServerDeclaration(server.Mcp, server.Version));
+            }
+
+            normalized.Add(new ExactRemoteToolDeclaration(
+                tool.Tool,
+                tool.Type,
+                mcpServers.OrderBy(static server => server.Mcp, StringComparer.Ordinal)
+                    .ThenBy(static server => server.Version, StringComparer.Ordinal)
+                    .ToArray()));
+        }
+
+        return normalized.OrderBy(static tool => tool.Tool, StringComparer.Ordinal).ToArray();
+    }
+
+    private static void RequireToolSetsEqual(
+        IReadOnlyList<ExactRemoteToolDeclaration> packageTools,
+        IReadOnlyList<ExactRemoteToolDeclaration> detailTools,
+        string guid,
+        string literalVersion)
+    {
+        var packageKeys = packageTools.Select(ToolKey).ToHashSet(StringComparer.Ordinal);
+        var detailKeys = detailTools.Select(ToolKey).ToHashSet(StringComparer.Ordinal);
+        if (!packageKeys.SetEquals(detailKeys))
+        {
+            throw ExactRemoteFetchException.IntegrityMismatch(
+                ExactRemoteResourceKind.Skill,
+                guid,
+                literalVersion,
+                "package/detail declared tools differ");
+        }
+    }
+
+    private static string ToolKey(ExactRemoteToolDeclaration tool) =>
+        $"{tool.Tool}\u001f{tool.Type}\u001f{string.Join('\u001e', tool.McpServers.Select(static server => $"{server.Mcp}\u001d{server.Version}"))}";
+
+    private static void VerifyIntegrity(string skillHash, string? integrity, string guid, string literalVersion)
+    {
+        byte[] digest;
+        try
+        {
+            digest = Convert.FromHexString(skillHash);
+        }
+        catch (FormatException ex)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skill,
+                guid,
+                literalVersion,
+                "version skill hash is not hexadecimal",
+                ex);
+        }
+
+        if (digest.Length != 32)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                ExactRemoteResourceKind.Skill,
+                guid,
+                literalVersion,
+                "version skill hash is not a SHA-256 digest");
+        }
+
+        var expected = $"sha256-{Convert.ToBase64String(digest)}";
+        if (!string.Equals(integrity, expected, StringComparison.Ordinal))
+        {
+            throw ExactRemoteFetchException.IntegrityMismatch(
+                ExactRemoteResourceKind.Skill,
+                guid,
+                literalVersion,
+                "version integrity does not match the skill hash");
+        }
+    }
+
+    private static ExactRemoteVersionProvenance BuildProvenance(
+        IOrnnExactVersionRow row,
+        string guid,
+        string literalVersion,
+        ExactRemoteResourceKind resourceKind)
+    {
+        RequireText(row.CreatedBy, "version publisher subject", resourceKind, guid, literalVersion);
+        ValidateOptionalSnapshot(row.CreatedByEmail, "publisher email snapshot", resourceKind, guid, literalVersion);
+        ValidateOptionalSnapshot(row.CreatedByDisplayName, "publisher display name snapshot", resourceKind, guid, literalVersion);
+        if (!DateTimeOffset.TryParse(
+                row.CreatedOn,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out var publishedAt))
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                resourceKind,
+                guid,
+                literalVersion,
+                "version published timestamp is missing or invalid");
+        }
+
+        return new ExactRemoteVersionProvenance(
+            row.CreatedBy!,
+            row.CreatedByEmail,
+            row.CreatedByDisplayName,
+            publishedAt.ToUniversalTime());
+    }
+
+    private static void ValidateOptionalSnapshot(
+        string? value,
+        string field,
+        ExactRemoteResourceKind resourceKind,
+        string guid,
+        string literalVersion)
+    {
+        if (value is not null && string.IsNullOrWhiteSpace(value))
+            throw ExactRemoteFetchException.InvalidResponse(resourceKind, guid, literalVersion, $"{field} was blank");
+    }
+
+    private static T SelectExactVersionRow<T>(
+        IReadOnlyList<T> rows,
+        string literalVersion,
+        Func<T, string?> versionSelector,
+        ExactRemoteResourceKind resourceKind,
+        string guid)
+    {
+        var matches = rows.Where(row => string.Equals(versionSelector(row), literalVersion, StringComparison.Ordinal)).ToArray();
+        if (matches.Length != 1)
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                resourceKind,
+                guid,
+                literalVersion,
+                "versions response must contain the requested literal version exactly once");
+        }
+        return matches[0];
+    }
+
+    private static IReadOnlyList<ValidatedClosureItem> ValidateClosureItems(
+        IReadOnlyList<OrnnExactSkillsetClosureItem> items,
+        string guid,
+        string literalVersion)
+    {
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        var validated = new List<ValidatedClosureItem>(items.Count);
+        foreach (var item in items)
+        {
+            RequireText(item.Ref, "closure ref", ExactRemoteResourceKind.Skillset, guid, literalVersion);
+            RequireText(item.Name, "closure name", ExactRemoteResourceKind.Skillset, guid, literalVersion);
+            ValidateExactReference(item.Guid, item.Version, ExactRemoteResourceKind.Skillset);
+            if (item.Depth is null || item.Depth.Value < 0)
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skillset,
+                    guid,
+                    literalVersion,
+                    "closure depth must be non-negative");
+            }
+
+            var normalizedGuid = System.Guid.Parse(item.Guid!).ToString("D");
+            if (!identities.Add(normalizedGuid))
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skillset,
+                    guid,
+                    literalVersion,
+                    "closure contains a duplicate or conflicting GUID");
+            }
+
+            validated.Add(new ValidatedClosureItem(
+                item.Ref!,
+                item.Name!,
+                item.Depth.Value,
+                new Aevatar.AI.Abstractions.ExactRemoteSkillRef
+                {
+                    Guid = item.Guid!,
+                    LiteralVersion = item.Version!,
+                }));
+        }
+        return validated;
+    }
+
+    private static IReadOnlyList<Aevatar.AI.Abstractions.ExactRemoteSkillRef> ResolveDirectMembers(
+        IReadOnlyList<OrnnSkillSetMember> members,
+        IReadOnlyList<ValidatedClosureItem> closureItems,
+        string guid,
+        string literalVersion)
+    {
+        var roots = closureItems.Where(static item => item.Depth == 0).ToArray();
+        if (roots.Length != members.Count)
+        {
+            throw ExactRemoteFetchException.IntegrityMismatch(
+                ExactRemoteResourceKind.Skillset,
+                guid,
+                literalVersion,
+                "closure root count differs from direct member count");
+        }
+
+        var usedRootGuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var resolved = new List<Aevatar.AI.Abstractions.ExactRemoteSkillRef>(members.Count);
+        foreach (var member in members)
+        {
+            RequireText(member.Name, "direct member name", ExactRemoteResourceKind.Skillset, guid, literalVersion);
+            RequireText(member.Version, "direct member version", ExactRemoteResourceKind.Skillset, guid, literalVersion);
+            if (member.Guid is not null && !System.Guid.TryParse(member.Guid, out _))
+            {
+                throw ExactRemoteFetchException.InvalidResponse(
+                    ExactRemoteResourceKind.Skillset,
+                    guid,
+                    literalVersion,
+                    "direct member GUID was invalid");
+            }
+            var matches = roots.Where(root => MemberMatches(member, root)).ToArray();
+            if (matches.Length != 1 || !usedRootGuids.Add(matches[0].Reference.Guid))
+            {
+                throw ExactRemoteFetchException.IntegrityMismatch(
+                    ExactRemoteResourceKind.Skillset,
+                    guid,
+                    literalVersion,
+                    "each direct member must resolve to one unique closure root");
+            }
+            resolved.Add(matches[0].Reference.Clone());
+        }
+        return resolved;
+    }
+
+    private static bool MemberMatches(OrnnSkillSetMember member, ValidatedClosureItem root)
+    {
+        if (!string.IsNullOrWhiteSpace(member.Guid) &&
+            System.Guid.TryParse(member.Guid, out var memberGuid) &&
+            System.Guid.TryParse(root.Reference.Guid, out var rootGuid))
+        {
+            return memberGuid == rootGuid;
+        }
+
+        if (!string.Equals(member.Name, root.Name, StringComparison.Ordinal))
+            return false;
+        return !IsLiteralVersion(member.Version) ||
+               string.Equals(member.Version, root.Reference.LiteralVersion, StringComparison.Ordinal);
+    }
+
+    private static void RequireGuidMatch(
+        string? actual,
+        string expected,
+        ExactRemoteResourceKind resourceKind,
+        string literalVersion)
+    {
+        if (!System.Guid.TryParse(actual, out var actualGuid) ||
+            !System.Guid.TryParse(expected, out var expectedGuid) ||
+            actualGuid != expectedGuid)
+        {
+            throw ExactRemoteFetchException.IntegrityMismatch(
+                resourceKind,
+                expected,
+                literalVersion,
+                "returned GUID differs from the requested GUID");
+        }
+    }
+
+    private static void RequireText(
+        string? value,
+        string field,
+        ExactRemoteResourceKind resourceKind,
+        string guid,
+        string literalVersion)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw ExactRemoteFetchException.InvalidResponse(resourceKind, guid, literalVersion, $"{field} was missing or blank");
+    }
+
+    private static void RequireEqual(
+        string? actual,
+        string expected,
+        string field,
+        ExactRemoteResourceKind resourceKind,
+        string guid,
+        string literalVersion)
+    {
+        if (!string.Equals(actual, expected, StringComparison.Ordinal))
+            throw ExactRemoteFetchException.IntegrityMismatch(resourceKind, guid, literalVersion, $"{field} mismatch");
+    }
+
+    private static void ValidateExactReference(
+        string? guid,
+        string? literalVersion,
+        ExactRemoteResourceKind resourceKind)
+    {
+        if (!System.Guid.TryParseExact(guid, "D", out _) || !IsLiteralVersion(literalVersion))
+        {
+            throw ExactRemoteFetchException.InvalidResponse(
+                resourceKind,
+                guid ?? string.Empty,
+                literalVersion ?? string.Empty,
+                "reference must contain a D-format GUID and a literal major.minor version");
+        }
+    }
+
+    private static bool IsLiteralVersion(string? version) =>
+        version is not null && LiteralVersionPattern.IsMatch(version);
+
     private sealed record NyxIdProxyError(int Status, string Detail);
+
+    private sealed record ValidatedClosureItem(
+        string Ref,
+        string Name,
+        int Depth,
+        Aevatar.AI.Abstractions.ExactRemoteSkillRef Reference);
 }
 
 // DTOs
@@ -492,12 +1249,28 @@ public sealed class OrnnSkillMetadata
     public string? Category { get; set; }
     [JsonPropertyName("tag")]
     public List<string>? Tags { get; set; }
+    public List<OrnnSkillToolDeclaration>? Tools { get; set; }
+}
+
+public sealed class OrnnSkillToolDeclaration
+{
+    public string? Tool { get; set; }
+    public string? Type { get; set; }
+    [JsonPropertyName("mcp-servers")]
+    public List<OrnnMcpServerDeclaration>? McpServers { get; set; }
+}
+
+public sealed class OrnnMcpServerDeclaration
+{
+    public string? Mcp { get; set; }
+    public string? Version { get; set; }
 }
 
 public sealed class OrnnSkillJson
 {
     public string? Name { get; set; }
     public string? Description { get; set; }
+    public string? Version { get; set; }
     public OrnnSkillMetadata? Metadata { get; set; }
     public Dictionary<string, string>? Files { get; set; }
 }
@@ -508,10 +1281,83 @@ public sealed class OrnnSkillSet
 {
     public string? Guid { get; set; }
     public string? Name { get; set; }
+    public string? Version { get; set; }
     /// <summary>Set-level master prompt authored on the skillset itself.</summary>
     public string? Instructions { get; set; }
     public bool IsPrivate { get; set; }
     public List<OrnnSkillSetMember> Members { get; set; } = [];
+}
+
+internal sealed record OrnnExactSkillEvidence(
+    OrnnSkillJson Package,
+    string PublishedName,
+    ExactRemoteVersionProvenance Provenance,
+    ExactRemotePackage ExactPackage,
+    IReadOnlyList<ExactRemoteToolDeclaration> DeclaredTools);
+
+internal sealed record OrnnExactSkillsetEvidence(
+    string PublishedName,
+    ExactRemoteVersionProvenance Provenance,
+    string Instructions,
+    IReadOnlyList<Aevatar.AI.Abstractions.ExactRemoteSkillRef> DirectMembers,
+    IReadOnlyList<Aevatar.AI.Abstractions.ExactRemoteSkillRef> FullClosure);
+
+internal sealed class OrnnExactSkillDetail
+{
+    public string? Guid { get; set; }
+    public string? Name { get; set; }
+    public string? Version { get; set; }
+    public string? SkillHash { get; set; }
+    public OrnnSkillMetadata? Metadata { get; set; }
+}
+
+internal sealed class OrnnExactVersionItems<T>
+{
+    public List<T> Items { get; set; } = [];
+}
+
+internal interface IOrnnExactVersionRow
+{
+    string? CreatedBy { get; }
+    string? CreatedByEmail { get; }
+    string? CreatedByDisplayName { get; }
+    string? CreatedOn { get; }
+}
+
+internal sealed class OrnnExactSkillVersionRow : IOrnnExactVersionRow
+{
+    public string? Version { get; set; }
+    public string? SkillHash { get; set; }
+    public string? Integrity { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? CreatedByEmail { get; set; }
+    public string? CreatedByDisplayName { get; set; }
+    public string? CreatedOn { get; set; }
+}
+
+internal sealed class OrnnExactSkillsetVersionRow : IOrnnExactVersionRow
+{
+    public string? Version { get; set; }
+    public int? MemberCount { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? CreatedByEmail { get; set; }
+    public string? CreatedByDisplayName { get; set; }
+    public string? CreatedOn { get; set; }
+}
+
+internal sealed class OrnnExactSkillsetClosure
+{
+    public string? Instructions { get; set; }
+    public List<OrnnExactSkillsetClosureItem>? Items { get; set; }
+}
+
+internal sealed class OrnnExactSkillsetClosureItem
+{
+    public string? Ref { get; set; }
+    public string? Guid { get; set; }
+    public string? Name { get; set; }
+    public string? Version { get; set; }
+    public int? Depth { get; set; }
 }
 
 /// <summary>
@@ -526,6 +1372,7 @@ public sealed class OrnnSkillSetMember
     public string? Guid { get; init; }
     public string? Name { get; init; }
     public string? Version { get; init; }
+    internal string? RawReference { get; init; }
 
     /// <summary>The id or name to fetch this member's full skill JSON with (guid preferred).</summary>
     public string? Reference =>
@@ -576,8 +1423,13 @@ internal sealed class OrnnSkillSetMemberJsonConverter : JsonConverter<OrnnSkillS
         var trimmed = raw.Trim();
         var at = trimmed.LastIndexOf('@');
         return at > 0
-            ? new OrnnSkillSetMember { Name = trimmed[..at], Version = trimmed[(at + 1)..] }
-            : new OrnnSkillSetMember { Name = trimmed };
+            ? new OrnnSkillSetMember
+            {
+                Name = trimmed[..at],
+                Version = trimmed[(at + 1)..],
+                RawReference = trimmed,
+            }
+            : new OrnnSkillSetMember { Name = trimmed, RawReference = trimmed };
     }
 
     private static string? ReadString(JsonElement root, string propertyName)
