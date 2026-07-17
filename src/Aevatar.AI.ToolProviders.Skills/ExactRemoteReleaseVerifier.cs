@@ -155,10 +155,10 @@ public sealed class ExactRemoteReleaseVerifier
         IReadOnlyList<ExactRemoteToolDeclaration> expected,
         ExactRemoteSkillRef reference)
     {
-        var actualKeys = ToolKeys(actual);
-        var expectedKeys = ToolKeys(expected);
-        if (actualKeys.Count != actual.Count || expectedKeys.Count != expected.Count ||
-            !actualKeys.SetEquals(expectedKeys))
+        var actualDeclarations = ToolDeclarations(actual);
+        var expectedDeclarations = ToolDeclarations(expected);
+        if (actualDeclarations.Count != actual.Count || expectedDeclarations.Count != expected.Count ||
+            !actualDeclarations.SetEquals(expectedDeclarations))
         {
             throw ExactRemoteFetchException.IntegrityMismatch(
                 ExactRemoteResourceKind.Skill,
@@ -168,19 +168,9 @@ public sealed class ExactRemoteReleaseVerifier
         }
     }
 
-    private static HashSet<string> ToolKeys(IReadOnlyList<ExactRemoteToolDeclaration> tools) =>
-        tools.Select(ToolKey).ToHashSet(StringComparer.Ordinal);
-
-    private static string ToolKey(ExactRemoteToolDeclaration tool) =>
-        string.Join(
-            '\u001f',
-            tool.Tool,
-            tool.Type,
-            string.Join(
-                '\u001e',
-                tool.McpServers
-                    .Select(static server => $"{server.Mcp}\u001d{server.Version}")
-                    .OrderBy(static server => server, StringComparer.Ordinal)));
+    private static HashSet<ExactRemoteToolDeclaration> ToolDeclarations(
+        IReadOnlyList<ExactRemoteToolDeclaration> tools) =>
+        tools.ToHashSet(ExactRemoteToolDeclarationComparer.Instance);
 
     private static void VerifyExactRefs(
         IReadOnlyList<ExactRemoteSkillRef> actual,
@@ -201,7 +191,7 @@ public sealed class ExactRemoteReleaseVerifier
         }
     }
 
-    private static HashSet<string> RefKeys(IReadOnlyList<ExactRemoteSkillRef> references) =>
-        references.Select(static reference => $"{reference.Guid}\u001f{reference.LiteralVersion}")
-            .ToHashSet(StringComparer.Ordinal);
+    private static HashSet<(string Guid, string LiteralVersion)> RefKeys(
+        IReadOnlyList<ExactRemoteSkillRef> references) =>
+        references.Select(static reference => (reference.Guid, reference.LiteralVersion)).ToHashSet();
 }

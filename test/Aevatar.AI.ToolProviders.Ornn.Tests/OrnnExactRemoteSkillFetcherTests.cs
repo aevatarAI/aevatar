@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
@@ -109,14 +110,18 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     [Fact]
     public async Task FetchExactSkillAsync_UsesOneSharedTimeoutForAllThreeReads()
     {
-        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
-        var fetcher = CreateFetcher(handler, TimeSpan.FromMilliseconds(100));
+        var timeProvider = new ManualTimeProvider();
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled(expectedRequestCount: 3);
+        var fetcher = CreateFetcher(handler, TimeSpan.FromSeconds(30), timeProvider);
 
-        var act = async () => await fetcher.FetchExactSkillAsync(
+        var fetchTask = fetcher.FetchExactSkillAsync(
             "token",
             new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+        await handler.ExpectedRequestsStarted;
+        timeProvider.ExpireTimer();
 
-        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        var assertion = await fetchTask.Invoking(static task => task).Should()
+            .ThrowAsync<ExactRemoteFetchException>();
         assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.Unavailable);
         handler.Requests.Should().HaveCount(3);
         AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
@@ -203,7 +208,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
 
     private static OrnnRemoteSkillFetcher CreateFetcher(
         OrnnTestHttpMessageHandler handler,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        TimeProvider? timeProvider = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
@@ -211,7 +217,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         var client = new OrnnSkillClient(
             new OrnnOptions { NyxIdSlug = "ornn-api" },
             nyxClient,
-            timeout ?? TimeSpan.FromSeconds(30));
+            timeout ?? TimeSpan.FromSeconds(30),
+            timeProvider ?? TimeProvider.System);
         return new OrnnRemoteSkillFetcher(client);
     }
 
@@ -287,7 +294,9 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     private static string SkillPackage(
         string name = "curated-skill",
         string version = "1.2",
-        string? filesJson = null) => $$"""
+        string? filesJson = null,
+        string tool = "workspace.read",
+        string type = "mcp") => $$"""
         {
           "data": {
             "name": "{{name}}",
@@ -296,8 +305,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
             "metadata": {
               "tools": [
                 {
-                  "tool": "workspace.read",
-                  "type": "mcp",
+                  "tool": {{JsonSerializer.Serialize(tool)}},
+                  "type": {{JsonSerializer.Serialize(type)}},
                   "mcp-servers": [{ "mcp": "workspace-mcp", "version": "2.0" }]
                 }
               ]
@@ -307,18 +316,23 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         }
         """;
 
-    private static string SkillDetail(string name = "curated-skill") => $$"""
+    private static string SkillDetail(
+        string name = "curated-skill",
+        string version = "1.2",
+        string? skillHash = null,
+        string tool = "workspace.read",
+        string type = "mcp") => $$"""
         {
           "data": {
             "guid": "{{SkillGuid}}",
             "name": "{{name}}",
-            "version": "1.2",
-            "skillHash": "{{SkillHash}}",
+            "version": "{{version}}",
+            "skillHash": "{{skillHash ?? SkillHash}}",
             "metadata": {
               "tools": [
                 {
-                  "tool": "workspace.read",
-                  "type": "mcp",
+                  "tool": {{JsonSerializer.Serialize(tool)}},
+                  "type": {{JsonSerializer.Serialize(type)}},
                   "mcp-servers": [{ "mcp": "workspace-mcp", "version": "2.0" }]
                 }
               ]
@@ -327,32 +341,41 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         }
         """;
 
-    private static string SkillVersions() => $$"""
+    private static string SkillVersions(string? itemsJson = null) => $$"""
         {
           "data": {
             "items": [
-              {
-                "version": "1.2",
-                "skillHash": "{{SkillHash}}",
-                "integrity": "{{Integrity(SkillHash)}}",
-                "createdBy": "publisher-subject",
-                "createdByEmail": "publisher@example.test",
-                "createdByDisplayName": "Publisher Name",
-                "createdOn": "2026-07-10T12:30:00Z"
-              }
+              {{itemsJson ?? SkillVersionRow()}}
             ]
           }
         }
         """;
 
-    private static string SkillsetDetail() => $$"""
+    private static string SkillVersionRow(
+        string version = "1.2",
+        string? skillHash = null,
+        string? integrity = null) => $$"""
+        {
+          "version": "{{version}}",
+          "skillHash": "{{skillHash ?? SkillHash}}",
+          "integrity": "{{integrity ?? Integrity(skillHash ?? SkillHash)}}",
+          "createdBy": "publisher-subject",
+          "createdByEmail": "publisher@example.test",
+          "createdByDisplayName": "Publisher Name",
+          "createdOn": "2026-07-10T12:30:00Z"
+        }
+        """;
+
+    private static string SkillsetDetail(
+        string version = "2.0",
+        string? membersJson = null) => $$"""
         {
           "data": {
             "guid": "{{SkillsetGuid}}",
             "name": "reviewed-set",
-            "version": "2.0",
+            "version": "{{version}}",
             "instructions": "Use both reviewed skills.",
-            "members": ["member-a@1.0", "member-b@beta"]
+            "members": {{membersJson ?? "[\"member-a@1.0\", \"member-b@beta\"]"}}
           }
         }
         """;
@@ -370,22 +393,70 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         }
         """;
 
-    private static string SkillsetVersions() => """
+    private static string SkillsetVersions(string? itemsJson = null) => $$"""
         {
           "data": {
             "items": [
-              {
-                "version": "2.0",
-                "memberCount": 2,
-                "createdBy": "set-publisher",
-                "createdByDisplayName": "Set Publisher",
-                "createdOn": "2026-07-11T08:00:00+00:00"
-              }
+              {{itemsJson ?? SkillsetVersionRow()}}
             ]
           }
         }
         """;
 
+    private static string SkillsetVersionRow(string version = "2.0") => $$"""
+        {
+          "version": "{{version}}",
+          "memberCount": 2,
+          "createdBy": "set-publisher",
+          "createdByDisplayName": "Set Publisher",
+          "createdOn": "2026-07-11T08:00:00+00:00"
+        }
+        """;
+
     private static string Integrity(string hex) =>
         $"sha256-{Convert.ToBase64String(Convert.FromHexString(hex))}";
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private ManualTimer? _timer;
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            var timer = new ManualTimer(callback, state);
+            Interlocked.Exchange(ref _timer, timer)?.Dispose();
+            return timer;
+        }
+
+        public void ExpireTimer()
+        {
+            var timer = Volatile.Read(ref _timer)
+                        ?? throw new InvalidOperationException("The timeout timer was not created.");
+            timer.Fire();
+        }
+
+        private sealed class ManualTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private TimerCallback? _callback = callback;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) =>
+                Volatile.Read(ref _callback) is not null;
+
+            public void Dispose() => Interlocked.Exchange(ref _callback, null);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            public void Fire()
+            {
+                Interlocked.Exchange(ref _callback, null)?.Invoke(state);
+            }
+        }
+    }
 }
