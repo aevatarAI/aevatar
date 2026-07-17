@@ -476,6 +476,7 @@ public sealed class SecretStoreToolTests
         var wrongExpectedValue = Encoding.UTF8.GetBytes("wrong-record");
         var competingValue = Encoding.UTF8.GetBytes("competing-record");
         var defaultDatabaseValue = Encoding.UTF8.GetBytes("default-database-record");
+        const long ttlPreservationToleranceMs = 5_000;
 
         (await database.StringSetAsync(key, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
         (await database.StringSetAsync(changedBeforeCommitKey, originalValue)).Should().BeTrue();
@@ -499,12 +500,20 @@ public sealed class SecretStoreToolTests
         missing.Status.Should().Be(SecretStoreCasStatus.Missing);
         var ttlBeforeUpdate = await database.KeyTimeToLiveAsync(key);
         ttlBeforeUpdate.Should().NotBeNull().And.BePositive();
+        var ttlBeforeUpdateMs = (long)Math.Ceiling(ttlBeforeUpdate!.Value.TotalMilliseconds);
         var updated = await target.CompareExchangeAsync(key, originalValue, updatedValue);
         updated.Status.Should().Be(SecretStoreCasStatus.Updated);
-        updated.PreservedTtlMs.Should().BeGreaterThan(0);
+        updated.PreservedTtlMs.Should().BeInRange(
+            ttlBeforeUpdateMs - ttlPreservationToleranceMs,
+            ttlBeforeUpdateMs);
 
         ((byte[]?)await database.StringGetAsync(key)).Should().Equal(updatedValue);
-        (await database.KeyTimeToLiveAsync(key)).Should().NotBeNull().And.BePositive();
+        var ttlAfterUpdate = await database.KeyTimeToLiveAsync(key);
+        ttlAfterUpdate.Should().NotBeNull().And.BePositive();
+        var ttlAfterUpdateMs = (long)Math.Ceiling(ttlAfterUpdate!.Value.TotalMilliseconds);
+        ttlAfterUpdateMs.Should().BeInRange(
+            updated.PreservedTtlMs - ttlPreservationToleranceMs,
+            updated.PreservedTtlMs);
         ((byte[]?)await defaultDatabase.StringGetAsync(key)).Should().Equal(defaultDatabaseValue);
         ((byte[]?)await defaultDatabase.StringGetAsync(missingKey)).Should().Equal(defaultDatabaseValue);
 
