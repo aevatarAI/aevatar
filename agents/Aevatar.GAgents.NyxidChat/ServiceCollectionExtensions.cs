@@ -114,6 +114,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IConversationReplyGenerator>(sp =>
             new NyxIdConversationReplyGenerator(
                 sp.GetRequiredService<ILLMProviderFactory>(),
+                sp.GetRequiredService<IBuiltInPromptFloorProvider>(),
                 sp.GetServices<IAgentToolSource>(),
                 sp.GetServices<IAgentRunMiddleware>(),
                 sp.GetServices<IToolCallMiddleware>(),
@@ -129,7 +130,6 @@ public static class ServiceCollectionExtensions
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
-                builtInPromptFloorProvider: sp.GetRequiredService<IBuiltInPromptFloorProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();

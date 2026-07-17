@@ -109,6 +109,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     public NyxIdConversationReplyGenerator(
         ILLMProviderFactory llmProviderFactory,
+        IBuiltInPromptFloorProvider builtInPromptFloorProvider,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
@@ -124,7 +125,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null,
-        IBuiltInPromptFloorProvider? builtInPromptFloorProvider = null,
         ILarkOutboundClientFactory? larkOutboundClientFactory = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
@@ -143,7 +143,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _fileArtifactReadPort = fileArtifactReadPort;
         _larkOutboundClientFactory = larkOutboundClientFactory;
         _overlayProvider = overlayProvider;
-        _builtInPromptFloorProvider = builtInPromptFloorProvider ?? new BuiltInPromptFloorProvider();
+        _builtInPromptFloorProvider = builtInPromptFloorProvider ??
+                                      throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
 

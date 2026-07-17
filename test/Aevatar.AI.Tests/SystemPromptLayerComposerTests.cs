@@ -73,6 +73,50 @@ public sealed class SystemPromptLayerComposerTests
     }
 
     [Theory]
+    [InlineData(0, 1, "maxUtf8Bytes")]
+    [InlineData(-1, 1, "maxUtf8Bytes")]
+    [InlineData(1, 0, "maxEstimatedTokens")]
+    [InlineData(1, -1, "maxEstimatedTokens")]
+    public void PromptLayerBounds_RejectsNonPositiveLimits(
+        int maxUtf8Bytes,
+        int maxEstimatedTokens,
+        string parameterName)
+    {
+        var construct = () => new PromptLayerBounds(maxUtf8Bytes, maxEstimatedTokens);
+
+        construct.Should().Throw<ArgumentOutOfRangeException>()
+            .Which.ParamName.Should().Be(parameterName);
+    }
+
+    [Fact]
+    public void Compose_RejectsOptionalLayer_WhenOnlyEstimatedTokenLimitIsExceeded()
+    {
+        const string rejectedContent = "12345";
+        var global = new GlobalSystemSkillPromptLayer(
+            rejectedContent,
+            new GlobalSystemSkillPromptProvenance("global"),
+            new PromptLayerBounds(maxUtf8Bytes: 5, maxEstimatedTokens: 1));
+
+        var result = SystemPromptLayerComposer.Compose(
+            Kernel("kernel"),
+            Floor("floor"),
+            global,
+            profile: null,
+            selectedSkill: null,
+            runtimeFacts: null,
+            conversation: null);
+
+        result.Global.Included.Should().BeFalse();
+        result.Global.ActualUtf8Bytes.Should().Be(5);
+        result.Global.EstimatedTokens.Should().Be(2);
+        result.Global.Diagnostics.Should().ContainSingle().Which.Should().Be(
+            new PromptLayerDiagnostic(
+                PromptLayerDiagnosticCode.OptionalLayerRejectedOverBudget,
+                "actual_utf8_bytes=5;max_utf8_bytes=5;estimated_tokens=2;max_estimated_tokens=1"));
+        result.Prompt.Should().NotContain(rejectedContent);
+    }
+
+    [Theory]
     [InlineData("global")]
     [InlineData("profile")]
     [InlineData("selected")]
@@ -80,7 +124,7 @@ public sealed class SystemPromptLayerComposerTests
     [InlineData("conversation")]
     public void Compose_RejectsOnlyTheOverBudgetOptionalLayer(string rejectedSlot)
     {
-        const string rejectedContent = "REJECTED-CONTENT";
+        var rejectedContent = "REJECTED-CONTENT";
         var global = Global("global-ok");
         var profile = new ProfileRoutingPromptLayer(
             "profile-ok",
@@ -119,8 +163,9 @@ public sealed class SystemPromptLayerComposerTests
                     new PromptLayerBounds(1, 1));
                 break;
             case "runtime":
+                rejectedContent = new string('r', 16 * 1024 + 1);
                 runtime = new RuntimeFactsPromptLayer(
-                    new string('r', 16 * 1024 + 1),
+                    rejectedContent,
                     new RuntimeFactsPromptProvenance("runtime"));
                 break;
             case "conversation":

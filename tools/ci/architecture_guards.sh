@@ -2071,6 +2071,13 @@ check_system_skill_overlay_dual_seam_injection() {
     exit 1
   fi
 
+  if rg -q -e 'Services\.GetService<(IBuiltInPromptFloorProvider|ISystemSkillOverlayProvider)>' \
+    -e 'new[[:space:]]+BuiltInPromptFloorProvider[[:space:]]*\(' \
+    "${nyxid_chat_gagent_file}" "${conversation_reply_generator_file}"; then
+    echo "Direct and relay prompt seams must receive prompt providers through explicit constructor dependencies."
+    exit 1
+  fi
+
   if [ ! -f "${prompt_injection_test_file}" ]; then
     echo "System skill overlay prompt injection tests are required."
     exit 1

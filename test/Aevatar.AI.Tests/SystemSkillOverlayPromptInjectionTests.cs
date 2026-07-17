@@ -129,7 +129,9 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         string actorId)
     {
         var services = BuildServices(new InMemoryEventStoreForTests(), overlayProvider);
-        var agent = new NyxIdChatGAgent
+        var agent = new NyxIdChatGAgent(
+            new StubBuiltInPromptFloorProvider(),
+            overlayProvider)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -163,7 +165,6 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var services = new ServiceCollection()
             .AddSingleton(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddSingleton<IBuiltInPromptFloorProvider>(new StubBuiltInPromptFloorProvider())
             .AddSingleton<IActorRuntimeCallbackScheduler, NoOpCallbackScheduler>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
 
@@ -226,7 +227,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         }
     }
 
-    private sealed class StubBuiltInPromptFloorProvider : IBuiltInPromptFloorProvider
+    internal sealed class StubBuiltInPromptFloorProvider : IBuiltInPromptFloorProvider
     {
         public BuiltInPromptFloorLayer GetFloor() =>
             new("built-in prompt floor", new BuiltInPromptFloorProvenance("test-floor"));

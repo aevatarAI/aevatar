@@ -38,12 +38,16 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private const int SystemSkillOverlayPromptLogSampleRate = 64;
 
+    private readonly IBuiltInPromptFloorProvider _builtInPromptFloorProvider;
+    private readonly ISystemSkillOverlayProvider? _systemSkillOverlayProvider;
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly NyxIdRelayOptions? _relayOptions;
     private readonly TimeProvider _timeProvider;
     private int _systemSkillOverlayPromptLogCounter;
 
     public NyxIdChatGAgent(
+        IBuiltInPromptFloorProvider builtInPromptFloorProvider,
+        ISystemSkillOverlayProvider? systemSkillOverlayProvider = null,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
@@ -59,6 +63,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
+        _builtInPromptFloorProvider = builtInPromptFloorProvider ??
+                                      throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
+        _systemSkillOverlayProvider = systemSkillOverlayProvider;
         _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -300,9 +307,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         var decoratedKernel = new KernelPromptLayer(
             base.DecorateSystemPrompt(basePrompt),
             NyxIdChatSystemPrompt.Value.Provenance);
-        var builtInFloor = (Services.GetService<IBuiltInPromptFloorProvider>() ?? new BuiltInPromptFloorProvider())
-            .GetFloor();
-        var global = Services.GetService<ISystemSkillOverlayProvider>()
+        var builtInFloor = _builtInPromptFloorProvider.GetFloor();
+        var global = _systemSkillOverlayProvider
             ?.GetCurrent(SystemSkillOverlayRequest.DirectChat(CurrentTurnNyxIdAccessToken));
         var runtime = runtimeFacts.Length == 0
             ? null
