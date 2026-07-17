@@ -557,7 +557,7 @@ public sealed class ConnectorCallModuleApprovalTests
         resolved.Resolved.Should().BeFalse();
     }
 
-    private static EventEnvelope Envelope(IMessage evt) =>
+    internal static EventEnvelope Envelope(IMessage evt) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -566,7 +566,7 @@ public sealed class ConnectorCallModuleApprovalTests
             Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
         };
 
-    private sealed class ApprovalHarness
+    internal sealed class ApprovalHarness
     {
         public const string RunId = "run-approval";
         public const string StepId = "connector-approval";
@@ -586,6 +586,7 @@ public sealed class ConnectorCallModuleApprovalTests
         {
             Agent = agent;
             Connector = connector;
+            ConnectorResolver = new MutableConnectorResolver(connector);
             ApprovalPort = approvalPort;
             SecretStore = secretStore;
             ConfigurePort = configurePort;
@@ -599,13 +600,14 @@ public sealed class ConnectorCallModuleApprovalTests
         public TestAgent Agent { get; }
         public RecordingConnector Connector { get; }
         public RecordingApprovalPort ApprovalPort { get; }
+        public MutableConnectorResolver ConnectorResolver { get; }
         public IRuntimeSecretStore SecretStore { get; }
-        public RecordingLogger Logger { get; }
-        public IServiceProvider Services { get; }
+        private RecordingLogger Logger { get; }
+        private IServiceProvider Services { get; }
         public DateTimeOffset RemoteExpiresAt { get; } = Now.AddMinutes(2);
         public TestEventHandlerContext Context { get; private set; }
         public ConnectorCallModule Module { get; private set; }
-        private bool ConfigurePort { get; }
+        private bool ConfigurePort { get; set; }
         private int Retry { get; }
 
         public static async Task<ApprovalHarness> CreateAsync(
@@ -641,14 +643,17 @@ public sealed class ConnectorCallModuleApprovalTests
             return harness;
         }
 
-        public async Task BeginAsync(
+        public Task BeginAsync(
             string executionId = "execution-alpha",
             string idempotencyKey = IdempotencyKey,
             string input = RawPayload,
             string httpVerb = "POST",
             string resource = "/resources/alpha") =>
-            await Module.HandleAsync(
-                Envelope(CreateRequest(executionId, idempotencyKey, input, httpVerb, resource)),
+            BeginAsync(CreateRequest(executionId, idempotencyKey, input, httpVerb, resource));
+
+        public Task BeginAsync(StepRequestEvent request) =>
+            Module.HandleAsync(
+                Envelope(request),
                 Context,
                 CancellationToken.None);
 
@@ -693,8 +698,10 @@ public sealed class ConnectorCallModuleApprovalTests
             }
         }
 
-        public void RecreateModuleAndContext()
+        public void RecreateModuleAndContext(bool? configurePort = null)
         {
+            if (configurePort.HasValue)
+                ConfigurePort = configurePort.Value;
             Context = NewContext();
             Module = NewModule();
         }
@@ -720,6 +727,10 @@ public sealed class ConnectorCallModuleApprovalTests
             Context.Scheduled.Last(callback =>
                 callback.Event is WorkflowConnectorApprovalStatusCheckFiredEvent);
 
+        public ScheduledCallback LatestConnectorTimeoutCallback() =>
+            Context.Scheduled.Last(callback =>
+                callback.Event is WorkflowConnectorTimeoutFiredEvent);
+
         public IReadOnlyList<StepCompletedEvent> StepCompletions() =>
             Context.Published.Select(static published => published.evt).OfType<StepCompletedEvent>().ToList();
 
@@ -728,10 +739,10 @@ public sealed class ConnectorCallModuleApprovalTests
 
         private ConnectorCallModule NewModule() =>
             new(
-                new FixedConnectorResolver(Connector),
+                ConnectorResolver,
                 remoteToolApprovalPort: ConfigurePort ? ApprovalPort : null);
 
-        private StepRequestEvent CreateRequest(
+        public StepRequestEvent CreateRequest(
             string executionId,
             string idempotencyKey,
             string input,
@@ -777,20 +788,26 @@ public sealed class ConnectorCallModuleApprovalTests
             };
     }
 
-    private sealed class FixedConnectorResolver(IConnector connector) : IWorkflowConnectorResolver
+    internal sealed class MutableConnectorResolver(IConnector connector) : IWorkflowConnectorResolver
     {
+        public IConnector? Connector { get; set; } = connector;
+        public Queue<IConnector?> Resolutions { get; } = [];
+
         public ValueTask<IConnector?> ResolveAsync(
             IWorkflowExecutionContext context,
             string connectorName,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            var resolved = Resolutions.Count > 0 ? Resolutions.Dequeue() : Connector;
             return ValueTask.FromResult<IConnector?>(
-                string.Equals(connector.Name, connectorName, StringComparison.Ordinal) ? connector : null);
+                resolved != null && string.Equals(resolved.Name, connectorName, StringComparison.Ordinal)
+                    ? resolved
+                    : null);
         }
     }
 
-    private sealed class RecordingConnector(params ConnectorResponse[] responses) : IConnector
+    internal sealed class RecordingConnector(params ConnectorResponse[] responses) : IConnector
     {
         private readonly Queue<ConnectorResponse> _responses = new(responses);
 
@@ -808,7 +825,7 @@ public sealed class ConnectorCallModuleApprovalTests
         }
     }
 
-    private sealed class RecordingApprovalPort : IRemoteToolApprovalPort
+    internal sealed class RecordingApprovalPort : IRemoteToolApprovalPort
     {
         public RemoteToolApprovalSubmission Submission { get; set; } = new("remote", ApprovalHarness.Now.AddMinutes(1));
         public RemoteToolApprovalStatusSnapshot NextStatus { get; set; } = new(
@@ -873,11 +890,13 @@ public sealed class ConnectorCallModuleApprovalTests
         }
     }
 
-    private sealed class TamperingRuntimeSecretStore : IRuntimeSecretStore
+    internal sealed class TamperingRuntimeSecretStore : IRuntimeSecretStore
     {
         private readonly InMemoryRuntimeSecretStore _inner = new();
+        private int _materialResolveCount;
 
         public bool TamperConnectorMaterialOnResolve { get; set; }
+        public int? TamperConnectorMaterialOnResolveNumber { get; set; }
 
         public Task<StoreRuntimeSecretResult> PutAsync(
             StoreRuntimeSecretRequest request,
@@ -889,10 +908,16 @@ public sealed class ConnectorCallModuleApprovalTests
             CancellationToken ct = default)
         {
             var result = await _inner.ResolveAsync(request, ct);
-            if (!TamperConnectorMaterialOnResolve ||
-                request.Purpose != CredentialSecretPurposes.WorkflowConnectorExternalActionMaterial ||
+            if (request.Purpose != CredentialSecretPurposes.WorkflowConnectorExternalActionMaterial ||
                 !result.Resolved ||
                 string.IsNullOrWhiteSpace(result.Secret))
+            {
+                return result;
+            }
+
+            _materialResolveCount++;
+            if (!TamperConnectorMaterialOnResolve &&
+                TamperConnectorMaterialOnResolveNumber != _materialResolveCount)
             {
                 return result;
             }
