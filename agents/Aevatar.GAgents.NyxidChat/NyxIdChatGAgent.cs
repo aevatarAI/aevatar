@@ -1,10 +1,12 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Core.Prompting;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -36,12 +38,16 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private const int SystemSkillOverlayPromptLogSampleRate = 64;
 
+    private readonly IBuiltInPromptFloorProvider _builtInPromptFloorProvider;
+    private readonly ISystemSkillOverlayProvider? _systemSkillOverlayProvider;
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly NyxIdRelayOptions? _relayOptions;
     private readonly TimeProvider _timeProvider;
     private int _systemSkillOverlayPromptLogCounter;
 
     public NyxIdChatGAgent(
+        IBuiltInPromptFloorProvider builtInPromptFloorProvider,
+        ISystemSkillOverlayProvider? systemSkillOverlayProvider = null,
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
@@ -57,6 +63,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
+        _builtInPromptFloorProvider = builtInPromptFloorProvider ??
+                                      throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
+        _systemSkillOverlayProvider = systemSkillOverlayProvider;
         _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -280,13 +289,10 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     protected override string DecorateSystemPrompt(string basePrompt)
     {
-        // Direct-chat seam of the System Skill Overlay (issue #2498). The overlay is injected HERE,
-        // on the chartered direct-chat actor — not in RoleGAgent — so non-channel RoleGAgent
-        // subclasses (classifier, workflow roles) never receive channel capability how-to in their
-        // system prompt (#2586). Relay + local-skill sections follow the overlay (kernel > overlay >
-        // runtime facts), matching the channel seam ordering.
-        var prompt = AppendSystemSkillOverlay(base.DecorateSystemPrompt(basePrompt));
-        prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
+        var runtimeFacts = new System.Text.StringBuilder();
+        AppendRuntimeFact(
+            runtimeFacts,
+            NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions));
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
@@ -295,10 +301,41 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         {
             var skillSection = _localSkillCatalog.BuildSystemPromptSection();
             if (!string.IsNullOrEmpty(skillSection))
-                prompt += "\n" + skillSection;
+                AppendRuntimeFact(runtimeFacts, skillSection);
         }
 
-        return prompt;
+        var decoratedKernel = new KernelPromptLayer(
+            base.DecorateSystemPrompt(basePrompt),
+            NyxIdChatSystemPrompt.Value.Provenance);
+        var builtInFloor = _builtInPromptFloorProvider.GetFloor();
+        var global = _systemSkillOverlayProvider
+            ?.GetCurrent(SystemSkillOverlayRequest.DirectChat(CurrentTurnNyxIdAccessToken));
+        var runtime = runtimeFacts.Length == 0
+            ? null
+            : new RuntimeFactsPromptLayer(
+                runtimeFacts.ToString(),
+                new RuntimeFactsPromptProvenance("nyxid-direct-runtime"));
+        var result = SystemPromptLayerComposer.Compose(
+            decoratedKernel,
+            builtInFloor,
+            global,
+            profile: null,
+            selectedSkill: null,
+            runtime,
+            conversation: null);
+
+        if (global is not null && _systemSkillOverlayPromptLogCounter++ % SystemSkillOverlayPromptLogSampleRate == 0)
+        {
+            Logger.LogInformation(
+                "[{Role}] System prompt layers: global_watermark={GlobalWatermark}, kernel_tokens_estimate={KernelTokensEstimate}, floor_tokens_estimate={FloorTokensEstimate}, global_tokens_estimate={GlobalTokensEstimate}",
+                RoleName,
+                global.Provenance.SourceWatermark,
+                result.Kernel.EstimatedTokens,
+                result.BuiltInFloor.EstimatedTokens,
+                result.Global.EstimatedTokens);
+        }
+
+        return result.Prompt;
     }
 
     public override async Task HandleChatRequest(ChatRequestEvent request)
@@ -309,40 +346,13 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         await SaveDirectChatCompletionAsync(request, CancellationToken.None);
     }
 
-    // Direct-chat seam overlay source (issue #2498): the host-level, context-aware overlay provider,
-    // resolved for a dm turn (global-scope members only). The per-turn token lets the provider refresh
-    // the public Ornn set out of band; the provider degrades to the built-in default when the set is
-    // unreachable or empty. Both reply seams read this same host-level source.
-    private string AppendSystemSkillOverlay(string decorated)
+    private static void AppendRuntimeFact(System.Text.StringBuilder builder, string? content)
     {
-        var overlay = Services.GetService<ISystemSkillOverlayProvider>()
-            ?.GetCurrent(SystemSkillOverlayRequest.DirectChat(CurrentTurnNyxIdAccessToken));
-        var overlayMarkdown = overlay?.OverlayMarkdown;
-        if (string.IsNullOrWhiteSpace(overlayMarkdown))
-            return decorated;
-
-        if (_systemSkillOverlayPromptLogCounter++ % SystemSkillOverlayPromptLogSampleRate == 0)
-        {
-            Logger.LogInformation(
-                "[{Role}] System skill overlay prompt: source_watermark={SourceWatermark}, kernel_tokens_estimate={KernelTokensEstimate}, overlay_tokens_estimate={OverlayTokensEstimate}",
-                RoleName,
-                overlay?.SourceWatermark ?? string.Empty,
-                EstimatePromptTokens(decorated),
-                EstimatePromptTokens(overlayMarkdown));
-        }
-
-        if (string.IsNullOrWhiteSpace(decorated))
-            return overlayMarkdown.Trim();
-
-        return $"{decorated.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
-    }
-
-    private static int EstimatePromptTokens(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return 0;
-
-        return Math.Max(1, (System.Text.Encoding.UTF8.GetByteCount(text) + 3) / 4);
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+        if (builder.Length > 0)
+            builder.Append("\n\n");
+        builder.Append(content.Trim());
     }
 
     private bool RequiresNyxIdProviderMigration()
@@ -364,7 +374,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 ? NyxIdChatServiceDefaults.DisplayName
                 : roleName.Trim(),
             ProviderName = NyxIdChatServiceDefaults.ProviderName,
-            SystemPrompt = NyxIdChatSystemPrompt.Value,
+            SystemPrompt = NyxIdChatSystemPrompt.Value.Content,
             MaxToolRounds = State.ConfigOverrides?.HasMaxToolRounds == true &&
                             State.ConfigOverrides.MaxToolRounds > 0
                 ? State.ConfigOverrides.MaxToolRounds

@@ -394,7 +394,8 @@ public class NyxIdChatGAgentTests
         TimeProvider? timeProvider = null)
     {
         var agent = new NyxIdChatGAgent(
-            llmProviderFactory,
+            new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
+            llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
             relayOptions: relayOptions,
             timeProvider: timeProvider)

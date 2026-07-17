@@ -2034,49 +2034,47 @@ check_orchestration_class_guard() {
 check_system_skill_overlay_dual_seam_injection() {
   local nyxid_chat_gagent_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatGAgent.cs"
   local conversation_reply_generator_file="agents/Aevatar.GAgents.NyxidChat/ConversationReplyGenerator.cs"
+  local nyxid_di_file="agents/Aevatar.GAgents.NyxidChat/ServiceCollectionExtensions.cs"
+  local ornn_di_file="src/Aevatar.AI.ToolProviders.Ornn/ServiceCollectionExtensions.cs"
+  local ornn_provider_file="src/Aevatar.AI.ToolProviders.Ornn/SystemSkillOverlay/OrnnSystemSkillOverlayProvider.cs"
   local prompt_injection_test_file="test/Aevatar.AI.Tests/SystemSkillOverlayPromptInjectionTests.cs"
 
-  # Direct-chat seam: the chartered chat actor (NyxIdChatGAgent) injects the overlay inside its
-  # DecorateSystemPrompt via the shared host-level provider (issue #2498).
   if ! rg -q "override string DecorateSystemPrompt" "${nyxid_chat_gagent_file}" \
-    || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${nyxid_chat_gagent_file}"; then
-    echo "System skill overlay direct-chat seam must inject the overlay in NyxIdChatGAgent.DecorateSystemPrompt via the shared provider (SystemSkillOverlayRequest.DirectChat)."
-    exit 1
-  fi
-
-  # Non-channel isolation (#2586): the base RoleGAgent serves classifier/workflow subclasses too, so
-  # Aevatar.AI.Core must never resolve the overlay provider — otherwise every RoleGAgent subclass
-  # gets channel capability how-to force-injected into its system prompt each turn.
-  if rg -q "ISystemSkillOverlayProvider>" src/Aevatar.AI.Core -g '*.cs'; then
-    echo "Aevatar.AI.Core must not resolve ISystemSkillOverlayProvider; overlay injection belongs to the two chartered seams (NyxIdChatGAgent + ConversationReplyGenerator)."
+    || ! rg -q "SystemSkillOverlayRequest\.DirectChat" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "SystemPromptLayerComposer\.Compose" "${nyxid_chat_gagent_file}" \
+    || ! rg -q "IBuiltInPromptFloorProvider" "${nyxid_chat_gagent_file}"; then
+    echo "NyxIdChatGAgent.DecorateSystemPrompt must compose the typed kernel, mandatory floor, dm global layer, and runtime facts."
     exit 1
   fi
 
   if ! awk '
-    /private string BuildSystemPrompt[[:space:]]*\(/ {
-      in_func = 1
-      body_started = 0
-      brace_depth = 0
-    }
+    /private string BuildSystemPrompt[[:space:]]*\(/ { in_func = 1; body_started = 0; brace_depth = 0 }
     in_func {
       line = $0
-      if (line ~ /AppendSystemSkillOverlay[[:space:]]*\(/) {
-        found = 1
-      }
-
+      if (line ~ /SystemPromptLayerComposer\.Compose[[:space:]]*\(/) found_composer = 1
+      if (line ~ /_builtInPromptFloorProvider\.GetFloor[[:space:]]*\(/) found_floor = 1
       opens = gsub(/\{/, "{", line)
       closes = gsub(/\}/, "}", line)
-      if (!body_started && opens > 0) {
-        body_started = 1
-      }
+      if (!body_started && opens > 0) body_started = 1
       brace_depth += opens - closes
-      if (body_started && brace_depth == 0) {
-        in_func = 0
-      }
+      if (body_started && brace_depth == 0) in_func = 0
     }
-    END { exit(found ? 0 : 1) }
+    END { exit(found_composer && found_floor ? 0 : 1) }
   ' "${conversation_reply_generator_file}"; then
-    echo "System skill overlay channel seam must call AppendSystemSkillOverlay from ConversationReplyGenerator.BuildSystemPrompt."
+    echo "ConversationReplyGenerator.BuildSystemPrompt must compose the typed kernel and mandatory floor through SystemPromptLayerComposer."
+    exit 1
+  fi
+
+  if rg -q -e 'AppendSystemSkillOverlay|LoadBaseSystemPrompt' \
+    "${nyxid_chat_gagent_file}" "${conversation_reply_generator_file}"; then
+    echo "Direct and relay prompt seams must not retain hand-written overlay append or duplicate kernel loading paths."
+    exit 1
+  fi
+
+  if rg -q -e 'Services\.GetService<(IBuiltInPromptFloorProvider|ISystemSkillOverlayProvider)>' \
+    -e 'new[[:space:]]+BuiltInPromptFloorProvider[[:space:]]*\(' \
+    "${nyxid_chat_gagent_file}" "${conversation_reply_generator_file}"; then
+    echo "Direct and relay prompt seams must receive prompt providers through explicit constructor dependencies."
     exit 1
   fi
 
@@ -2085,16 +2083,30 @@ check_system_skill_overlay_dual_seam_injection() {
     exit 1
   fi
 
-  # Both seams must resolve a REAL overlay provider, not just declare the interface or lean on a test
-  # stub: a non-test implementation of ISystemSkillOverlayProvider must exist and be registered in DI,
-  # otherwise the channel seam injects nothing in production and the dual-seam claim is hollow.
-  if ! rg -q -e '[:,][[:space:]]*ISystemSkillOverlayProvider\b' agents src -g '*.cs'; then
-    echo "A production ISystemSkillOverlayProvider implementation is required so the channel seam injects a real overlay (not a test stub)."
+  if ! rg -q 'TryAddSingleton<IBuiltInPromptFloorProvider>' "${nyxid_di_file}"; then
+    echo "AddNyxIdChat must always register the mandatory built-in prompt floor."
     exit 1
   fi
 
-  if ! rg -q -e 'AddSingleton<ISystemSkillOverlayProvider' agents src -g '*.cs'; then
-    echo "ISystemSkillOverlayProvider must be registered in production DI so both reply seams resolve a real overlay."
+  if ! rg -q 'TryAddSingleton<.*ISystemSkillOverlayProvider' "${ornn_di_file}"; then
+    echo "The optional Ornn global prompt layer must have an independent production DI registration."
+    exit 1
+  fi
+
+  if rg -q -e 'ISystemSkillOverlayFallback|IBuiltInPromptFloorProvider' "${ornn_provider_file}"; then
+    echo "The Ornn global provider must not depend on or return the mandatory built-in floor."
+    exit 1
+  fi
+
+  if rg -q 'ISystemSkillOverlayFallback' agents src -g '*.cs'; then
+    echo "The retired remote-or-floor fallback contract must not be reintroduced."
+    exit 1
+  fi
+
+  # Core owns only pure composition and must not resolve host providers.
+  if rg -q -e 'Get(Service|RequiredService)<(ISystemSkillOverlayProvider|IBuiltInPromptFloorProvider)>' \
+    src/Aevatar.AI.Core -g '*.cs'; then
+    echo "Aevatar.AI.Core must remain provider-neutral; host seams supply all typed prompt layers."
     exit 1
   fi
 }
@@ -2140,6 +2152,11 @@ check_system_skill_overlay_set_source() {
   # Never query-time: the seam read GetCurrent must be a synchronous cached read, not an awaited fetch.
   if rg -q -e 'Task<[^>]*>[[:space:]]+GetCurrent' "${provider_interface}"; then
     echo "ISystemSkillOverlayProvider.GetCurrent must be a synchronous cached read (never a query-time fetch)."
+    exit 1
+  fi
+
+  if rg -q -e 'ISystemSkillOverlayFallback|IBuiltInPromptFloorProvider' "${provider_file}"; then
+    echo "Remote gate, TTL, and last-known-good behavior must remain confined to the optional global layer."
     exit 1
   fi
 }

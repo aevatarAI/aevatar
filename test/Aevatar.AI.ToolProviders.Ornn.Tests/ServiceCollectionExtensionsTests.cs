@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
@@ -10,13 +11,11 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddSystemSkillOverlay_WhenEnabledWithSetName_OrnnProviderWinsOverDefaultRegisteredFirst()
+    public void AddSystemSkillOverlay_WhenEnabled_RegistersGlobalProviderWithoutReplacingFloor()
     {
-        // Mirror NyxidChat: the built-in default is registered first via TryAddSingleton, then the
-        // Ornn overlay via AddSingleton — the Ornn provider must win (issue #2498).
         var services = new ServiceCollection();
-        services.TryAddSingleton<ISystemSkillOverlayProvider>(new StubOverlayProvider());
-        services.TryAddSingleton<ISystemSkillOverlayFallback>(new StubOverlayProvider());
+        var floor = new StubFloorProvider();
+        services.AddSingleton<IBuiltInPromptFloorProvider>(floor);
 
         services.AddSystemSkillOverlay(o =>
         {
@@ -27,24 +26,25 @@ public sealed class ServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ISystemSkillOverlayProvider>()
             .Should().BeOfType<OrnnSystemSkillOverlayProvider>();
+        provider.GetRequiredService<IBuiltInPromptFloorProvider>().Should().BeSameAs(floor);
     }
 
     [Fact]
-    public void AddSystemSkillOverlay_WhenRegisteredBeforeDefault_StillWins()
+    public void AddSystemSkillOverlay_WhenFloorRegisteredLater_KeepsIndependentRegistrations()
     {
-        // Reverse order: Ornn first (AddSingleton), then the default TryAddSingleton is skipped — the
-        // Ornn provider must still win, so registration order does not matter.
         var services = new ServiceCollection();
         services.AddSystemSkillOverlay(o =>
         {
             o.Enabled = true;
             o.SetName = "aevatar-system";
         });
-        services.TryAddSingleton<ISystemSkillOverlayProvider>(new StubOverlayProvider());
+        services.AddSingleton<IBuiltInPromptFloorProvider, StubFloorProvider>();
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ISystemSkillOverlayProvider>()
             .Should().BeOfType<OrnnSystemSkillOverlayProvider>();
+        provider.GetRequiredService<IBuiltInPromptFloorProvider>()
+            .Should().BeOfType<StubFloorProvider>();
     }
 
     [Theory]
@@ -117,11 +117,10 @@ public sealed class ServiceCollectionExtensionsTests
             .Which.Should().BeSameAs(provider.GetRequiredService<OrnnAgentToolSource>());
     }
 
-    private sealed class StubOverlayProvider : ISystemSkillOverlayProvider, ISystemSkillOverlayFallback
+    private sealed class StubFloorProvider : IBuiltInPromptFloorProvider
     {
-        public Aevatar.AI.Abstractions.SystemSkillOverlay? GetCurrent(SystemSkillOverlayRequest request) => null;
-
-        public Aevatar.AI.Abstractions.SystemSkillOverlay? GetFallback() => null;
+        public BuiltInPromptFloorLayer GetFloor() =>
+            new("floor", new BuiltInPromptFloorProvenance("test-floor"));
     }
 
     private sealed class NotFoundHttpMessageHandler : HttpMessageHandler

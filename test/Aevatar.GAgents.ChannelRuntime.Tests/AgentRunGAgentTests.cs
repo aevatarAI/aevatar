@@ -29,6 +29,8 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class AgentRunGAgentTests
 {
     private static readonly ConditionalWeakTable<AgentRunGAgent, RecordingReplyGenerationExecutor> RecordingExecutors = new();
+    private static readonly IBuiltInPromptFloorProvider BuiltInPromptFloorProvider =
+        new ConversationReplyGeneratorTests.StubBuiltInPromptFloorProvider("built-in prompt floor");
 
     internal static Task DrainRecordingExecutorAsync(AgentRunGAgent agent) =>
         RecordingExecutors.TryGetValue(agent, out var executor)
@@ -1377,6 +1379,7 @@ public sealed class AgentRunGAgentTests
         var toolSource = new CountingAgentRunToolSource(new AgentRunNoopTool());
         var replyGenerator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [toolSource],
             localSkillCatalog: new LocalSkillCatalog());
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
@@ -1430,6 +1433,7 @@ public sealed class AgentRunGAgentTests
         var providerFactory = new SingleReplyProviderFactory("clean reply");
         var replyGenerator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [new CountingAgentRunToolSource(new AgentRunNoopTool())],
             localSkillCatalog: new LocalSkillCatalog());
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
@@ -1522,6 +1526,7 @@ public sealed class AgentRunGAgentTests
         };
         var replyGenerator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: Substitute.For<ILarkNyxClient>());
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
         var runtime = CreateRunAgent(
@@ -1577,6 +1582,7 @@ public sealed class AgentRunGAgentTests
         var toolSource = new CountingAgentRunToolSource(new AgentRunNoopTool());
         var replyGenerator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [toolSource],
             localSkillCatalog: new LocalSkillCatalog());
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
@@ -1646,6 +1652,7 @@ public sealed class AgentRunGAgentTests
         var providerFactory = new EmptyThenReplyProviderFactory();
         var replyGenerator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [],
             localSkillCatalog: new LocalSkillCatalog());
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
@@ -1707,6 +1714,7 @@ public sealed class AgentRunGAgentTests
         };
         var replyGenerator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources: [],
             preferencesStore: preferencesStore);
         var actorRuntime = new DispatchingActorRuntime(("conversation:c", targetActor));
@@ -1793,6 +1801,7 @@ public sealed class AgentRunGAgentTests
         var providerFactory = new OrderedAutomationToolProviderFactory();
         var replyGenerator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             toolSources:
             [
                 new StaticAgentRunToolSource(
