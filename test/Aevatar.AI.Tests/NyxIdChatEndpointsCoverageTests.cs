@@ -3466,8 +3466,7 @@ public class NyxIdChatEndpointsCoverageTests
         {
             Id = id;
             _runtime = (StubActorRuntime)services.GetRequiredService<IActorRuntime>();
-            _agent = new NyxIdChatGAgent(
-                new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider())
+            _agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider())
             {
                 Services = services,
                 EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
