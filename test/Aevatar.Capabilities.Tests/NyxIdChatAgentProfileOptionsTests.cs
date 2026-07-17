@@ -5,6 +5,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Capabilities.Tests;
@@ -86,6 +87,320 @@ public sealed class NyxIdChatAgentProfileOptionsTests
         var result = CreateValidator(ReviewedBaseline()).Validate(null, EnabledOptions());
 
         result.Succeeded.Should().BeTrue(string.Join(Environment.NewLine, result.Failures ?? []));
+    }
+
+    [Fact]
+    public void Validate_ShouldRejectExternalReferenceDrift()
+    {
+        var options = new NyxIdChatAgentProfileOptions
+        {
+            ExternalReference = "drifted-reference",
+        };
+
+        var result = CreateValidator(new NyxIdChatAgentProfileValidationBaseline([], []))
+            .Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(nameof(options.ExternalReference), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldRejectEnabledSlotWithoutProfilePayload()
+    {
+        var result = CreateValidator(ReviewedBaseline()).Validate(
+            null,
+            new NyxIdChatAgentProfileOptions { Enabled = true });
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains("requires a complete Profile payload", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("agent-kind", "AgentKind")]
+    [InlineData("preset-digest", "DeterministicPolicySha256")]
+    public void Validate_ShouldRejectInvalidConfigurationOwnedProfileFields(
+        string mutation,
+        string expectedFailure)
+    {
+        var options = EnabledOptions();
+        if (mutation == "agent-kind")
+            options.Profile!.AgentKind = "other.agent";
+        else
+            options.Profile!.DeterministicPolicySha256 = ByteString.CopyFrom(new byte[32]);
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(expectedFailure, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(32, true)]
+    [InlineData(33, false)]
+    public void Validate_ShouldEnforceMemberCountBoundaries(int memberCount, bool expectedValid)
+    {
+        var options = EnabledOptions();
+        SetMemberCount(options.Profile!, memberCount);
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        if (expectedValid)
+            result.Succeeded.Should().BeTrue(string.Join(Environment.NewLine, result.Failures ?? []));
+        else
+            result.Failures.Should().Contain(message =>
+                message.Contains("Members must contain between 1 and 32 entries", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(65_535, true)]
+    [InlineData(65_536, true)]
+    [InlineData(65_537, false)]
+    public void Validate_ShouldEnforceSealedSnapshotSizeBoundary(int sealedSize, bool expectedValid)
+    {
+        var options = EnabledOptions();
+        options.Profile = BuildProfileWithSealedSize(sealedSize);
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        if (expectedValid)
+            result.Succeeded.Should().BeTrue(string.Join(Environment.NewLine, result.Failures ?? []));
+        else
+            result.Failures.Should().Contain(message =>
+                message.Contains("sealed profile snapshot cannot exceed 65536 bytes", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("duplicate-intent", "IntentId", "unique within the profile")]
+    [InlineData("duplicate-ref", "SkillRef", "unique within the profile")]
+    [InlineData("duplicate-alias", "ExplicitTriggerAliases", "globally unique ignoring case")]
+    [InlineData("alias-limit", "ExplicitTriggerAliases", "cannot exceed 16 entries")]
+    [InlineData("side-effect", "SideEffectClass", "must be explicit")]
+    public void Validate_ShouldRejectInvalidMemberIdentityAndBounds(
+        string mutation,
+        string fieldName,
+        string reason)
+    {
+        var options = EnabledOptions();
+        var profile = options.Profile!;
+        switch (mutation)
+        {
+            case "duplicate-intent":
+            {
+                var duplicate = BuildMember(1);
+                duplicate.IntentId = profile.Members[0].IntentId;
+                profile.Members.Add(duplicate);
+                break;
+            }
+            case "duplicate-ref":
+            {
+                var duplicate = BuildMember(1);
+                duplicate.SkillRef = profile.Members[0].SkillRef.Clone();
+                profile.Members.Add(duplicate);
+                break;
+            }
+            case "duplicate-alias":
+            {
+                var duplicate = BuildMember(1);
+                duplicate.ExplicitTriggerAliases.Clear();
+                duplicate.ExplicitTriggerAliases.Add("ALPHA");
+                profile.Members.Add(duplicate);
+                break;
+            }
+            case "alias-limit":
+                for (var index = 1; index <= 16; index++)
+                    profile.Members[0].ExplicitTriggerAliases.Add($"alias-{index}");
+                break;
+            default:
+                profile.Members[0].SideEffectClass = AgentProfileSideEffectClass.Unspecified;
+                break;
+        }
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(fieldName, StringComparison.Ordinal) &&
+            message.Contains(reason, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("MaxPlanSteps", 3, false)]
+    [InlineData("MaxPlanSteps", 4, true)]
+    [InlineData("MaxPlanSteps", 5, false)]
+    [InlineData("HandoffTtlSeconds", 899, false)]
+    [InlineData("HandoffTtlSeconds", 900, true)]
+    [InlineData("HandoffTtlSeconds", 901, false)]
+    [InlineData("ClassifierTimeoutMs", 599, false)]
+    [InlineData("ClassifierTimeoutMs", 600, true)]
+    [InlineData("ClassifierTimeoutMs", 601, false)]
+    [InlineData("ExactSkillFetchTimeoutMs", 1_499, false)]
+    [InlineData("ExactSkillFetchTimeoutMs", 1_500, true)]
+    [InlineData("ExactSkillFetchTimeoutMs", 1_501, false)]
+    [InlineData("MaxSelectedSkillBytes", 24_575, false)]
+    [InlineData("MaxSelectedSkillBytes", 24_576, true)]
+    [InlineData("MaxSelectedSkillBytes", 24_577, false)]
+    public void Validate_ShouldEnforceRuntimeParameterBoundaries(
+        string parameter,
+        int value,
+        bool expectedValid)
+    {
+        var options = EnabledOptions();
+        switch (parameter)
+        {
+            case "MaxPlanSteps":
+                options.Profile!.MaxPlanSteps = value;
+                break;
+            case "HandoffTtlSeconds":
+                options.Profile!.HandoffTtlSeconds = value;
+                break;
+            case "ClassifierTimeoutMs":
+                options.Profile!.ClassifierTimeoutMs = value;
+                break;
+            case "ExactSkillFetchTimeoutMs":
+                options.Profile!.ExactSkillFetchTimeoutMs = value;
+                break;
+            default:
+                options.Profile!.MaxSelectedSkillBytes = value;
+                break;
+        }
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        if (expectedValid)
+            result.Succeeded.Should().BeTrue(string.Join(Environment.NewLine, result.Failures ?? []));
+        else
+            result.Failures.Should().Contain(message =>
+                message.Contains(parameter, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(599, false)]
+    [InlineData(600, false)]
+    [InlineData(601, true)]
+    public void Validate_ShouldRejectOnlyColdPreTurnBudgetsAboveMaximum(
+        int classifierTimeoutMs,
+        bool expectedBudgetFailure)
+    {
+        var options = EnabledOptions();
+        options.Profile!.ClassifierTimeoutMs = classifierTimeoutMs;
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+        var hasBudgetFailure = result.Failures?.Any(message =>
+            message.Contains("cold pre-turn budget", StringComparison.Ordinal)) == true;
+
+        hasBudgetFailure.Should().Be(expectedBudgetFailure);
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    [InlineData(3, false)]
+    public void Validate_ShouldAcceptOnlyExplicitActivationModes(int activationMode, bool expectedValid)
+    {
+        var options = EnabledOptions();
+        options.Profile!.ActivationMode = (AgentProfileActivationMode)activationMode;
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        if (expectedValid)
+            result.Succeeded.Should().BeTrue(string.Join(Environment.NewLine, result.Failures ?? []));
+        else
+            result.Failures.Should().Contain(message =>
+                message.Contains("ActivationMode must be Shadow or Enforced", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("maximum", "MaximumToolPolicy")]
+    [InlineData("recovery", "RecoveryToolPolicy")]
+    [InlineData("member", "TaskToolPolicy")]
+    public void Validate_ShouldRejectMissingPolicy(string policy, string expectedFailure)
+    {
+        var options = EnabledOptions();
+        switch (policy)
+        {
+            case "maximum":
+                options.Profile!.MaximumToolPolicy = null;
+                break;
+            case "recovery":
+                options.Profile!.RecoveryToolPolicy = null;
+                break;
+            default:
+                options.Profile!.Members[0].TaskToolPolicy = null;
+                break;
+        }
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(expectedFailure, StringComparison.Ordinal) &&
+            message.Contains("is required", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, 63, true)]
+    [InlineData(false, 64, true)]
+    [InlineData(false, 65, false)]
+    [InlineData(true, 63, true)]
+    [InlineData(true, 64, true)]
+    [InlineData(true, 65, false)]
+    public void Validate_ShouldEnforcePolicyEntryBoundaries(
+        bool toolSetRefs,
+        int entryCount,
+        bool expectedValid)
+    {
+        var options = EnabledOptions();
+        var registeredToolSets = new List<string> { "profile.route" };
+        if (toolSetRefs)
+        {
+            for (var index = 0; index < entryCount; index++)
+            {
+                var name = $"set.{index}";
+                options.Profile!.MaximumToolPolicy.ToolSetRefs.Add(name);
+                registeredToolSets.Add(name);
+            }
+        }
+        else
+        {
+            options.Profile!.MaximumToolPolicy.ToolNames.Clear();
+            options.Profile.MaximumToolPolicy.ToolNames.Add(["recover_tool", "task_tool"]);
+            for (var index = 2; index < entryCount; index++)
+                options.Profile.MaximumToolPolicy.ToolNames.Add($"tool_{index}");
+        }
+
+        var result = CreateValidator(ReviewedBaseline(), registeredToolSets).Validate(null, options);
+
+        if (expectedValid)
+            result.Succeeded.Should().BeTrue(string.Join(Environment.NewLine, result.Failures ?? []));
+        else
+            result.Failures.Should().Contain(message =>
+                message.Contains(toolSetRefs ? "ToolSetRefs" : "ToolNames", StringComparison.Ordinal) &&
+                message.Contains("cannot exceed 64 entries", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("duplicate", "duplicate values")]
+    [InlineData("unknown", "unknown tool set")]
+    public void Validate_ShouldRejectDuplicateOrUnknownPolicyToolSetRef(
+        string mutation,
+        string expectedFailure)
+    {
+        var options = EnabledOptions();
+        options.Profile!.MaximumToolPolicy.ToolSetRefs.Add("profile.route");
+        options.Profile.MaximumToolPolicy.ToolSetRefs.Add(
+            mutation == "duplicate" ? "profile.route" : "missing.route");
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(expectedFailure, StringComparison.Ordinal));
     }
 
     [MemberData(nameof(ValidExactGuids))]
@@ -266,8 +581,9 @@ public sealed class NyxIdChatAgentProfileOptionsTests
     }
 
     private static NyxIdChatAgentProfileOptionsValidator CreateValidator(
-        NyxIdChatAgentProfileValidationBaseline baseline) =>
-        new(new FixedToolSetRegistry(["profile.route"]), baseline);
+        NyxIdChatAgentProfileValidationBaseline baseline,
+        IReadOnlyList<string>? registeredToolSets = null) =>
+        new(new FixedToolSetRegistry(registeredToolSets ?? ["profile.route"]), baseline);
 
     private static NyxIdChatAgentProfileValidationBaseline ReviewedBaseline() =>
         new(["recover_tool"], ["legacy_tool"]);
@@ -300,24 +616,7 @@ public sealed class NyxIdChatAgentProfileOptionsTests
         },
         Members =
         {
-            new AgentProfileSkillMember
-            {
-                IntentId = "intent-alpha",
-                RoutingDescription = "Route alpha requests.",
-                SkillRef = new ExactRemoteSkillRef
-                {
-                    Guid = NonzeroVersionZeroGuid,
-                    LiteralVersion = "1.0",
-                },
-                ExplicitTriggerAliases = { "alpha" },
-                TaskToolPolicy = new AgentProfileToolPolicy
-                {
-                    ToolNames = { "task_tool" },
-                },
-                SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
-                ExpectedSkillName = "skill-alpha",
-                ReviewedPublisherId = "publisher-alpha",
-            },
+            BuildMember(0),
         },
         MaxPlanSteps = 4,
         HandoffTtlSeconds = 900,
@@ -326,6 +625,57 @@ public sealed class NyxIdChatAgentProfileOptionsTests
         MaxSelectedSkillBytes = 24_576,
         ActivationMode = AgentProfileActivationMode.Enforced,
     };
+
+    private static AgentProfileSkillMember BuildMember(int index) => new()
+    {
+        IntentId = $"intent-{index}",
+        RoutingDescription = $"Route intent {index} requests.",
+        SkillRef = new ExactRemoteSkillRef
+        {
+            Guid = $"00000000-0000-0000-0000-{index + 1:000000000000}",
+            LiteralVersion = "1.0",
+        },
+        ExplicitTriggerAliases = { $"alias-{index}" },
+        TaskToolPolicy = new AgentProfileToolPolicy
+        {
+            ToolNames = { "task_tool" },
+        },
+        SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+        ExpectedSkillName = $"skill-{index}",
+        ReviewedPublisherId = $"publisher-{index}",
+    };
+
+    private static void SetMemberCount(AgentProfileSnapshot profile, int memberCount)
+    {
+        profile.Members.Clear();
+        for (var index = 0; index < memberCount; index++)
+            profile.Members.Add(BuildMember(index));
+    }
+
+    private static AgentProfileSnapshot BuildProfileWithSealedSize(int targetSize)
+    {
+        var profile = BuildValidProfile();
+        var baselineSize = AgentProfileSnapshotCodec.Seal(profile).CalculateSize();
+        var firstPayloadLength = Math.Max(0, targetSize - baselineSize - 12);
+        var lastPayloadLength = targetSize - baselineSize;
+        for (var payloadLength = firstPayloadLength; payloadLength <= lastPayloadLength; payloadLength++)
+        {
+            using var stream = new MemoryStream();
+            stream.Write(profile.ToByteArray());
+            using (var output = new CodedOutputStream(stream, leaveOpen: true))
+            {
+                output.WriteTag(100, WireFormat.WireType.LengthDelimited);
+                output.WriteBytes(ByteString.CopyFrom(new byte[payloadLength]));
+                output.Flush();
+            }
+
+            var candidate = AgentProfileSnapshot.Parser.ParseFrom(stream.ToArray());
+            if (AgentProfileSnapshotCodec.Seal(candidate).CalculateSize() == targetSize)
+                return candidate;
+        }
+
+        throw new InvalidOperationException($"Could not construct a profile with sealed size {targetSize}.");
+    }
 
     private static void SetExactGuid(AgentProfileSnapshot profile, bool skillsetRef, string guid)
     {
