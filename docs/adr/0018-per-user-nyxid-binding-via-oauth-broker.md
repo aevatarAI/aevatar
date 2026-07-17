@@ -6,6 +6,19 @@ owner: eanzhao
 
 # ADR-0018: Per-User NyxID Binding via OAuth Broker
 
+## Update 2026-07-17 - OAuth client ID 以部署配置为唯一权威
+
+生产 Console 同时存在静态 BackendConsole OIDC 配置与 `AevatarOAuthClient` Actor 中历史 DCR client ID，导致内嵌 `/admin` 使用配置值，而 Studio `/api/auth/nyxid/config`、authorization-code exchange、token-exchange 与 binding revoke 使用 Actor 旧值。一次登录的 client identity 因入口不同而漂移，且 DCR 失败时无法通过更新配置修复。
+
+最终 contract 收敛为：
+
+- `Aevatar:BackendConsole:OidcClientId` 是浏览器 PKCE 与 NyxID broker 操作的唯一 client ID 配置源。它是公开部署事实，不是 secret。
+- `AevatarOAuthClientProjectionProvider` 从配置读取 `client_id`，从 Actor current-state readmodel 读取 NyxID authority、redirect/scope contract、HMAC key 与 broker capability observation。只有 readmodel 的 client ID 已与配置一致时才返回 snapshot；不一致期间 fail closed，禁止把新配置 ID 与旧 Actor 事实拼接，也禁止回退历史 client ID。
+- Host bootstrap 把配置值封装为强类型 `ProvisionAevatarOAuthClientCommand` 投递给 well-known Actor。Actor 负责串行、幂等地物化配置，并清除历史 DCR retry；bootstrap 同步返回只承诺 dispatch accepted，不在启动调用栈等待 projection。
+- `POST /api/oauth/aevatar-client/rebuild` 只允许平台管理员重新投递当前配置，request 不再接受 `client_id` 或 issued-at 字段，避免管理员请求体成为第二权威源。
+- 配置缺失时 fail closed：Studio login config、broker 操作与 bootstrap 均不得使用 Actor/readmodel 中的旧 client ID 兜底。
+- NyxID 侧必须预先把该 public client 注册为允许 canonical scope、完整 redirect URI allowlist 与 broker capability。正常生产启动不再依赖 DCR 生成 client ID。
+
 ## Update 2026-07-16 - 完整 Consent service 边界与 Studio 后端授权契约
 
 授权页完成后,authorization code 与 broker binding 已经承载用户最终确认的 service 集合.如果 aevatar 在 authorization-code exchange 或后续 binding token-exchange 再发送固定 `resource` 集合,NyxID 会按 RFC 8707 将本次 token 收窄到该集合,使用户在 Consent 页面额外选择的 service 对 Aevatar runtime 不可用.配置化必需 resource 因此只能是校验下限,不能成为用户授权上限.

@@ -57,9 +57,12 @@ AEVATAR_CONSOLE_PUBLIC_PATH=/
 
 The browser must not configure its own NyxID OAuth client id or service access.
 Authorization starts from the backend-provided `baseUrl`, `clientId`, and
-`scope`. The login config endpoint intentionally does not expose RFC 8707
-`resources`: the user's service grant is owned by NyxID Consent and must not be
-replaced by a deployment-owned list.
+`scope`. The backend derives that client id from the same
+`Aevatar:BackendConsole:OidcClientId` deployment setting used by embedded
+console PKCE; an older OAuth Client Actor projection is never a fallback.
+The login config endpoint intentionally does not expose RFC 8707 `resources`:
+the user's service grant is owned by NyxID Consent and must not be replaced by
+a deployment-owned list.
 `NYXID_REDIRECT_URI` must exactly match the Studio login callback registered in
 NyxID when you override it locally.
 Default service preselection is owned by the NyxID OAuth Client
