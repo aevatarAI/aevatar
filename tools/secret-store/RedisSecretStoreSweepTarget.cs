@@ -5,27 +5,6 @@ namespace Aevatar.SecretStore.Tools;
 
 public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisposable
 {
-    // Single integer return matches Garnet's reliable EVAL surface (multi-bulk tables can
-    // collapse status/TTL differently across Redis-compatible engines).
-    // 1 = updated, -1 = conflict, -2 = missing.
-    private const string CompareAndSetScript =
-        """
-        local current = redis.call('GET', KEYS[1])
-        if current == false then
-          return -2
-        end
-        if current ~= ARGV[1] then
-          return -1
-        end
-        local ttl = redis.call('PTTL', KEYS[1])
-        if ttl >= 0 then
-          redis.call('PSETEX', KEYS[1], ttl, ARGV[2])
-        else
-          redis.call('SET', KEYS[1], ARGV[2])
-        end
-        return 1
-        """;
-
     private readonly ConnectionMultiplexer _connection;
     private readonly IDatabase _database;
 
@@ -40,9 +19,6 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         var options = ConfigurationOptions.Parse(connectionString);
         options.AbortOnConnectFail = false;
-        // Pin default database so raw server commands and EVAL share the same logical DB
-        // as StringGet/StringSet against the configured index.
-        options.DefaultDatabase = database;
         var connection = await ConnectionMultiplexer.ConnectAsync(options);
         return new RedisSecretStoreSweepTarget(connection, database);
     }
@@ -102,32 +78,38 @@ public sealed class RedisSecretStoreSweepTarget : ISecretStoreSweepTarget, IDisp
         ArgumentNullException.ThrowIfNull(newValue);
         ct.ThrowIfCancellationRequested();
 
-        RedisKey[] keys = [(RedisKey)key];
-        RedisValue[] values = [expectedValue, newValue];
-        var result = await _database.ScriptEvaluateAsync(CompareAndSetScript, keys, values);
+        var currentValue = await _database.StringGetAsync(key);
+        ct.ThrowIfCancellationRequested();
+        if (currentValue.IsNull)
+            return SecretStoreCasResult.Missing();
+        if (currentValue != (RedisValue)expectedValue)
+            return SecretStoreCasResult.Conflict();
+
+        var remainingTtl = await _database.KeyTimeToLiveAsync(key);
         ct.ThrowIfCancellationRequested();
 
-        var status = (long)result;
-        return status switch
+        var transaction = _database.CreateTransaction();
+        transaction.AddCondition(Condition.StringEqual(key, expectedValue));
+        var writeTask = transaction.StringSetAsync(key, newValue, remainingTtl, When.Always);
+        var committed = await transaction.ExecuteAsync();
+        ct.ThrowIfCancellationRequested();
+        if (committed && await writeTask)
         {
-            1 => SecretStoreCasResult.Updated(await ReadPreservedTtlMsAsync(key, ct)),
-            -2 => SecretStoreCasResult.Missing(),
-            _ => SecretStoreCasResult.Conflict(),
-        };
+            ct.ThrowIfCancellationRequested();
+            return SecretStoreCasResult.Updated(ToTtlMilliseconds(remainingTtl));
+        }
+
+        currentValue = await _database.StringGetAsync(key);
+        ct.ThrowIfCancellationRequested();
+        return currentValue.IsNull
+            ? SecretStoreCasResult.Missing()
+            : SecretStoreCasResult.Conflict();
     }
 
     public void Dispose() => _connection.Dispose();
 
-    private async Task<long> ReadPreservedTtlMsAsync(string key, CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        var ttl = await _database.KeyTimeToLiveAsync(key);
-        ct.ThrowIfCancellationRequested();
-        if (!ttl.HasValue)
-            return -1;
-
-        return Math.Max(0, (long)Math.Ceiling(ttl.Value.TotalMilliseconds));
-    }
+    private static long ToTtlMilliseconds(TimeSpan? ttl) =>
+        ttl.HasValue ? Math.Max(0, (long)Math.Ceiling(ttl.Value.TotalMilliseconds)) : -1;
 
     private static RedisResult[] ReadArray(RedisResult result, string label) =>
         (RedisResult[]?)result ?? throw new InvalidOperationException($"Redis {label} was not an array.");

@@ -471,9 +471,12 @@ public sealed class SecretStoreToolTests
         var originalValue = Encoding.UTF8.GetBytes("old-record");
         var updatedValue = Encoding.UTF8.GetBytes("new-record");
         var wrongExpectedValue = Encoding.UTF8.GetBytes("wrong-record");
+        var defaultDatabaseValue = Encoding.UTF8.GetBytes("default-database-record");
 
         (await database.StringSetAsync(key, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
-        (await defaultDatabase.StringSetAsync(defaultDatabaseKey, originalValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
+        (await defaultDatabase.StringSetAsync(key, defaultDatabaseValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
+        (await defaultDatabase.StringSetAsync(missingKey, defaultDatabaseValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
+        (await defaultDatabase.StringSetAsync(defaultDatabaseKey, defaultDatabaseValue, TimeSpan.FromMinutes(5))).Should().BeTrue();
         using var target = await RedisSecretStoreSweepTarget.ConnectAsync(connectionString, configuredDatabase);
 
         var scan = await target.ScanAsync($"{prefix}:*", cursor: 0, count: 100);
@@ -484,14 +487,19 @@ public sealed class SecretStoreToolTests
 
         var conflict = await target.CompareExchangeAsync(key, wrongExpectedValue, updatedValue);
         conflict.Status.Should().Be(SecretStoreCasStatus.Conflict);
+        ((byte[]?)await database.StringGetAsync(key)).Should().Equal(originalValue);
         var missing = await target.CompareExchangeAsync(missingKey, originalValue, updatedValue);
         missing.Status.Should().Be(SecretStoreCasStatus.Missing);
+        var ttlBeforeUpdate = await database.KeyTimeToLiveAsync(key);
+        ttlBeforeUpdate.Should().NotBeNull().And.BePositive();
         var updated = await target.CompareExchangeAsync(key, originalValue, updatedValue);
         updated.Status.Should().Be(SecretStoreCasStatus.Updated);
         updated.PreservedTtlMs.Should().BeGreaterThan(0);
 
         ((byte[]?)await database.StringGetAsync(key)).Should().Equal(updatedValue);
         (await database.KeyTimeToLiveAsync(key)).Should().NotBeNull().And.BePositive();
+        ((byte[]?)await defaultDatabase.StringGetAsync(key)).Should().Equal(defaultDatabaseValue);
+        ((byte[]?)await defaultDatabase.StringGetAsync(missingKey)).Should().Equal(defaultDatabaseValue);
     }
 
     private static string RequireGarnetConnectionString() =>
