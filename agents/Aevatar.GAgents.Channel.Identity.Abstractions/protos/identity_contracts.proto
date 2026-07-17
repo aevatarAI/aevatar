@@ -17,6 +17,14 @@ message BindingId {
   string value = 1;
 }
 
+// Canonical business data ownership scope shared by native API login and
+// channel bindings. This is deliberately separate from ExternalSubjectRef and
+// channel registration scope: provider subjects and bot configuration scopes
+// remain routing/audit identities, while owner_scope_id keys user-owned data.
+message OwnerScopeId {
+  string value = 1;
+}
+
 // Capability scope requested when issuing a short-lived access token via the
 // NyxID broker. Mirrors RFC 8693 token-exchange `scope` parameter — narrow
 // scope at issuance time so per-turn tokens are minimum-privilege.

@@ -106,6 +106,8 @@ public sealed class MainnetResponsesEndpointsTests
             "user-1",
             responseId,
             new LLMRequestCallerCredentials("secret-token")));
+        provider.LastRequest.ToolContext.Should().NotBeNull();
+        provider.LastRequest.ToolContext!.Caller.OwnerScopeId.Should().Be("user-1");
         // The NyxID bearer is carried on the typed CallerContext.Credentials channel,
         // NOT through LLMRequest.Metadata. Metadata is the log-shaped string-keyed bag
         // that telemetry sinks may serialize; secret material belongs out-of-band.

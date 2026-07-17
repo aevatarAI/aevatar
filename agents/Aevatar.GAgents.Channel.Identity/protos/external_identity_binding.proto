@@ -27,6 +27,9 @@ message ExternalIdentityBindingState {
   // revocation. Keeping this work in actor state makes cleanup recoverable
   // after process failure without making an in-memory reconciler authoritative.
   repeated string pending_retirement_binding_ids = 5;
+  // Canonical business-data owner scope resolved from the NyxID account bound
+  // by this external subject. Separate from registration/channel scope.
+  string owner_scope_id = 6;
 }
 
 // Issued by the OAuth callback handler after exchanging the authorization code
@@ -36,6 +39,7 @@ message ExternalIdentityBindingState {
 message CommitBindingCommand {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   string binding_id = 2;
+  string owner_scope_id = 3;
 }
 
 // Issued by the /unbind handler after a successful NyxID DELETE call, or by
@@ -58,6 +62,7 @@ message ReplaceBindingCommand {
   string binding_id = 2;
   string expected_previous_binding_id = 3;
   string reason = 4;
+  string owner_scope_id = 5;
 }
 
 // Operator/maintenance command: re-materialize the current-state readmodel for
@@ -74,6 +79,7 @@ message ExternalIdentityBoundEvent {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   string binding_id = 2;
   google.protobuf.Timestamp bound_at = 3;
+  string owner_scope_id = 4;
 }
 
 // Persisted when an active binding is atomically replaced. Applying the event
@@ -84,6 +90,7 @@ message ExternalIdentityBindingReplacedEvent {
   string binding_id = 3;
   google.protobuf.Timestamp replaced_at = 4;
   string reason = 5;
+  string owner_scope_id = 6;
 }
 
 // Persisted when a newly issued binding loses a compare-and-swap race and was
@@ -150,4 +157,5 @@ message ExternalIdentityBindingDocument {
   string binding_id = 6;
   google.protobuf.Timestamp bound_at_utc_value = 7;
   google.protobuf.Timestamp revoked_at_utc_value = 8;
+  string owner_scope_id = 9;
 }

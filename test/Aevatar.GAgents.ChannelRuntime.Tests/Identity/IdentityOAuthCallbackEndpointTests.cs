@@ -42,6 +42,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
         bindingDispatch.Commands.Should().ContainSingle();
         bindingDispatch.Commands[0].ExternalSubject.Should().Be(subject);
         bindingDispatch.Commands[0].BindingId.Should().Be(incoming);
+        bindingDispatch.Commands[0].OwnerScopeId.Should().Be("owner-user-1");
         capabilityDispatch.Commands.Should().ContainSingle();
 
         var ctx = NewHttpContext();
@@ -291,12 +292,22 @@ public sealed class IdentityOAuthCallbackEndpointTests
                 Arg.Any<string>(),
                 Arg.Any<string>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new BrokerAuthorizationCodeResult(bindingId, IdToken: null, AccessToken: null)
+            .Returns(Task.FromResult(new BrokerAuthorizationCodeResult(bindingId, CreateIdToken(new { uid = "owner-user-1" }), AccessToken: null)
             {
                 BindingUpdated = bindingUpdated,
             }));
         return broker;
     }
+
+    private static string CreateIdToken(object payload)
+    {
+        var header = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new { alg = "none" }));
+        var body = Base64Url(JsonSerializer.SerializeToUtf8Bytes(payload));
+        return $"{header}.{body}.";
+    }
+
+    private static string Base64Url(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static async Task<string> ReadTextAsync(IResult result)
     {

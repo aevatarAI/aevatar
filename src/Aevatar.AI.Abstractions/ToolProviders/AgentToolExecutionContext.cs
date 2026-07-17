@@ -158,7 +158,7 @@ public enum AgentToolCredentialSource
     ServiceAccount = 6,
 }
 
-public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubject, string? ResponseId)
+public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubject, string? ResponseId, string? OwnerScopeId = null)
 {
     public static AgentToolCallerContext Empty { get; } = new(null, null, null);
 }
