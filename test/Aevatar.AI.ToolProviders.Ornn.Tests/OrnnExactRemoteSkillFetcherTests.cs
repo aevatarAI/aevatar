@@ -14,6 +14,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     private const string MemberAGuid = "33333333-3333-3333-3333-333333333333";
     private const string MemberBGuid = "44444444-4444-4444-4444-444444444444";
     private const string DependencyGuid = "55555555-5555-5555-5555-555555555555";
+    private const int Megabyte = 1024 * 1024;
     private static readonly string SkillHash = new('a', 64);
 
     [Fact]
@@ -71,6 +72,47 @@ public sealed class OrnnExactRemoteSkillFetcherTests
             (MemberBGuid, "2.0"));
 
         AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
+    [Theory]
+    [InlineData(false, "not-a-guid", "1.2")]
+    [InlineData(false, SkillGuid, "")]
+    [InlineData(false, SkillGuid, "latest")]
+    [InlineData(false, SkillGuid, "1")]
+    [InlineData(false, SkillGuid, "1.2.3")]
+    [InlineData(true, "not-a-guid", "2.0")]
+    [InlineData(true, SkillsetGuid, "")]
+    [InlineData(true, SkillsetGuid, "latest")]
+    [InlineData(true, SkillsetGuid, "2")]
+    [InlineData(true, SkillsetGuid, "2.0.1")]
+    public async Task FetchExactAsync_WhenReferenceIsNotGuidPlusLiteralVersion_FailsBeforeHttp(
+        bool isSkillset,
+        string guid,
+        string literalVersion)
+    {
+        var handler = OrnnTestHttpMessageHandler.Routing(
+            _ => throw new InvalidOperationException("Invalid exact references must not reach HTTP."));
+        var fetcher = CreateFetcher(handler);
+
+        Func<Task> act = async () =>
+        {
+            if (isSkillset)
+            {
+                await fetcher.FetchExactSkillsetAsync(
+                    "token",
+                    new ExactRemoteSkillsetRef { Guid = guid, LiteralVersion = literalVersion });
+            }
+            else
+            {
+                await fetcher.FetchExactSkillAsync(
+                    "token",
+                    new ExactRemoteSkillRef { Guid = guid, LiteralVersion = literalVersion });
+            }
+        };
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        handler.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -247,6 +289,47 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     }
 
     [Fact]
+    public async Task FetchExactSkillsetAsync_UsesOneSharedTimeoutForAllThreeReads()
+    {
+        var timeProvider = new ManualTimeProvider();
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled(expectedRequestCount: 3);
+        var fetcher = CreateFetcher(handler, TimeSpan.FromSeconds(30), timeProvider);
+
+        var fetchTask = fetcher.FetchExactSkillsetAsync("token", SkillsetReference());
+        await handler.ExpectedRequestsStarted;
+        timeProvider.ExpireTimer();
+        var act = async () => await fetchTask;
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.Unavailable);
+        AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FetchExactAsync_WhenCallerCancels_PropagatesCancellation(bool isSkillset)
+    {
+        using var callerCts = new CancellationTokenSource();
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled(expectedRequestCount: 3);
+        var fetcher = CreateFetcher(handler);
+        Task fetchTask = isSkillset
+            ? fetcher.FetchExactSkillsetAsync("token", SkillsetReference(), callerCts.Token)
+            : fetcher.FetchExactSkillAsync("token", SkillReference(), callerCts.Token);
+
+        await handler.ExpectedRequestsStarted;
+        callerCts.Cancel();
+        var act = async () => await fetchTask;
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        AssertOnlyExactRequests(
+            handler,
+            isSkillset ? SkillsetGuid : SkillGuid,
+            isSkillset ? "2.0" : "1.2",
+            isSkillset);
+    }
+
+    [Fact]
     public async Task FetchExactSkillAsync_RejectsDeclaredContentLengthBeforeDeserialization()
     {
         var handler = ExactSkillHandler(
@@ -293,6 +376,76 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         var act = async () => await fetcher.FetchExactSkillAsync(
             "token",
             new ExactRemoteSkillRef { Guid = SkillGuid, LiteralVersion = "1.2" });
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData("missing-files")]
+    [InlineData("too-many-files")]
+    [InlineData("duplicate-normalized-path")]
+    [InlineData("unix-absolute-path")]
+    [InlineData("windows-absolute-path")]
+    [InlineData("traversal-path")]
+    [InlineData("single-file-too-large")]
+    [InlineData("total-files-too-large")]
+    public async Task FetchExactSkillAsync_WhenDecodedPackageViolatesAdapterBounds_FailsClosed(
+        string invalidPackage)
+    {
+        var handler = ExactSkillHandler(
+            packageJson: SkillPackage(filesJson: InvalidPackageFilesJson(invalidPackage)));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync("token", SkillReference());
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData("too-many-tools")]
+    [InlineData("blank-tool")]
+    [InlineData("blank-type")]
+    [InlineData("duplicate-tool")]
+    [InlineData("blank-mcp-name")]
+    [InlineData("blank-mcp-version")]
+    [InlineData("duplicate-mcp")]
+    public async Task FetchExactSkillAsync_WhenDeclaredToolsAreInvalid_FailsClosed(string invalidTools)
+    {
+        var handler = ExactSkillHandler(
+            packageJson: SkillPackage(toolsJson: InvalidToolsJson(invalidTools)));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync("token", SkillReference());
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData("blank-subject")]
+    [InlineData("blank-email")]
+    [InlineData("blank-display-name")]
+    [InlineData("invalid-published-at")]
+    public async Task FetchExactSkillAsync_WhenPublisherProvenanceIsInvalid_FailsClosed(
+        string invalidProvenance)
+    {
+        var versionRow = invalidProvenance switch
+        {
+            "blank-subject" => SkillVersionRow(createdBy: " "),
+            "blank-email" => SkillVersionRow(createdByEmail: " "),
+            "blank-display-name" => SkillVersionRow(createdByDisplayName: " "),
+            "invalid-published-at" => SkillVersionRow(createdOn: "not-a-timestamp"),
+            _ => throw new ArgumentOutOfRangeException(nameof(invalidProvenance)),
+        };
+        var handler = ExactSkillHandler(versionsJson: SkillVersions(versionRow));
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync("token", SkillReference());
 
         var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
         assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
@@ -401,6 +554,37 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
     }
 
+    [Theory]
+    [InlineData("empty-members", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("too-many-members", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("missing-closure", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("too-many-closure-nodes", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("missing-member-count", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("mismatched-member-count", ExactRemoteFetchFailureKind.IntegrityMismatch)]
+    [InlineData("negative-depth", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("root-count-mismatch", ExactRemoteFetchFailureKind.IntegrityMismatch)]
+    [InlineData("missing-member-identity", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("invalid-member-guid", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("missing-member-version", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("missing-closure-ref", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("missing-closure-name", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("invalid-closure-guid", ExactRemoteFetchFailureKind.InvalidResponse)]
+    [InlineData("invalid-closure-version", ExactRemoteFetchFailureKind.InvalidResponse)]
+    public async Task FetchExactSkillsetAsync_WhenMemberOrClosureEvidenceIsInvalid_FailsClosed(
+        string invalidEvidence,
+        ExactRemoteFetchFailureKind expectedFailureKind)
+    {
+        var (detailJson, closureJson, versionsJson) = InvalidSkillsetEvidence(invalidEvidence);
+        var handler = ExactSkillsetHandler(detailJson, closureJson, versionsJson);
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillsetAsync("token", SkillsetReference());
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(expectedFailureKind);
+        AssertOnlyExactRequests(handler, SkillsetGuid, "2.0", isSkillset: true);
+    }
+
     private static OrnnRemoteSkillFetcher CreateFetcher(
         OrnnTestHttpMessageHandler handler,
         TimeSpan? timeout = null,
@@ -491,20 +675,15 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         string version = "1.2",
         string? filesJson = null,
         string tool = "workspace.read",
-        string type = "mcp") => $$"""
+        string type = "mcp",
+        string? toolsJson = null) => $$"""
         {
           "data": {
             "name": "{{name}}",
             "description": "A reviewed skill",
             "version": "{{version}}",
             "metadata": {
-              "tools": [
-                {
-                  "tool": {{JsonSerializer.Serialize(tool)}},
-                  "type": {{JsonSerializer.Serialize(type)}},
-                  "mcp-servers": [{ "mcp": "workspace-mcp", "version": "2.0" }]
-                }
-              ]
+              "tools": {{toolsJson ?? SingleToolJson(tool, type)}}
             },
             "files": {{filesJson ?? "{\"SKILL.md\":\"---\\nname: curated-skill\\ndescription: Reviewed\\n---\\nRun it.\",\"docs/readme.md\":\"Reference\"}"}}
           }
@@ -516,7 +695,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         string version = "1.2",
         string? skillHash = null,
         string tool = "workspace.read",
-        string type = "mcp") => $$"""
+        string type = "mcp",
+        string? toolsJson = null) => $$"""
         {
           "data": {
             "guid": "{{SkillGuid}}",
@@ -524,13 +704,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
             "version": "{{version}}",
             "skillHash": "{{skillHash ?? SkillHash}}",
             "metadata": {
-              "tools": [
-                {
-                  "tool": {{JsonSerializer.Serialize(tool)}},
-                  "type": {{JsonSerializer.Serialize(type)}},
-                  "mcp-servers": [{ "mcp": "workspace-mcp", "version": "2.0" }]
-                }
-              ]
+              "tools": {{toolsJson ?? SingleToolJson(tool, type)}}
             }
           }
         }
@@ -549,15 +723,19 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     private static string SkillVersionRow(
         string version = "1.2",
         string? skillHash = null,
-        string? integrity = null) => $$"""
+        string? integrity = null,
+        string createdBy = "publisher-subject",
+        string createdByEmail = "publisher@example.test",
+        string createdByDisplayName = "Publisher Name",
+        string createdOn = "2026-07-10T12:30:00Z") => $$"""
         {
           "version": "{{version}}",
           "skillHash": "{{skillHash ?? SkillHash}}",
           "integrity": "{{integrity ?? Integrity(skillHash ?? SkillHash)}}",
-          "createdBy": "publisher-subject",
-          "createdByEmail": "publisher@example.test",
-          "createdByDisplayName": "Publisher Name",
-          "createdOn": "2026-07-10T12:30:00Z"
+          "createdBy": {{JsonSerializer.Serialize(createdBy)}},
+          "createdByEmail": {{JsonSerializer.Serialize(createdByEmail)}},
+          "createdByDisplayName": {{JsonSerializer.Serialize(createdByDisplayName)}},
+          "createdOn": {{JsonSerializer.Serialize(createdOn)}}
         }
         """;
 
@@ -575,15 +753,11 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         }
         """;
 
-    private static string SkillsetClosure() => $$"""
+    private static string SkillsetClosure(string? itemsJson = null) => $$"""
         {
           "data": {
             "instructions": "Use both reviewed skills.",
-            "items": [
-              { "ref": "dependency@3.0", "guid": "{{DependencyGuid}}", "name": "dependency", "version": "3.0", "depth": 1 },
-              { "ref": "member-a@1.0", "guid": "{{MemberAGuid}}", "name": "member-a", "version": "1.0", "depth": 0 },
-              { "ref": "member-b@2.0", "guid": "{{MemberBGuid}}", "name": "member-b", "version": "2.0", "depth": 0 }
-            ]
+            "items": {{itemsJson ?? DefaultClosureItemsJson()}}
           }
         }
         """;
@@ -598,14 +772,132 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         }
         """;
 
-    private static string SkillsetVersionRow(string version = "2.0") => $$"""
+    private static string SkillsetVersionRow(
+        string version = "2.0",
+        string? memberCountJson = "2") => $$"""
         {
           "version": "{{version}}",
-          "memberCount": 2,
+          {{(memberCountJson is null ? string.Empty : $"\"memberCount\": {memberCountJson},")}}
           "createdBy": "set-publisher",
           "createdByDisplayName": "Set Publisher",
           "createdOn": "2026-07-11T08:00:00+00:00"
         }
+        """;
+
+    private static ExactRemoteSkillRef SkillReference() => new()
+    {
+        Guid = SkillGuid,
+        LiteralVersion = "1.2",
+    };
+
+    private static ExactRemoteSkillsetRef SkillsetReference() => new()
+    {
+        Guid = SkillsetGuid,
+        LiteralVersion = "2.0",
+    };
+
+    private static string InvalidPackageFilesJson(string invalidPackage) => invalidPackage switch
+    {
+        "missing-files" => "null",
+        "too-many-files" => JsonSerializer.Serialize(
+            Enumerable.Range(0, ExactRemotePackageBounds.AdapterMaximum.MaximumFileCount + 1)
+                .ToDictionary(static index => $"files/{index}.txt", static _ => "x")),
+        "duplicate-normalized-path" => """{"docs/readme.md":"a","docs//readme.md":"b"}""",
+        "unix-absolute-path" => """{"/absolute.txt":"x"}""",
+        "windows-absolute-path" => """{"C:/absolute.txt":"x"}""",
+        "traversal-path" => """{"docs/../secret.txt":"x"}""",
+        "single-file-too-large" => JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["large.txt"] = new('x', checked((int)ExactRemotePackageBounds.AdapterMaximum.MaximumFileUtf8Bytes + 1)),
+        }),
+        "total-files-too-large" => JsonSerializer.Serialize(new Dictionary<string, string>
+        {
+            ["first.txt"] = new('x', 25 * Megabyte),
+            ["second.txt"] = new('x', 25 * Megabyte + 1),
+        }),
+        _ => throw new ArgumentOutOfRangeException(nameof(invalidPackage)),
+    };
+
+    private static string InvalidToolsJson(string invalidTools) => invalidTools switch
+    {
+        "too-many-tools" => $"[{string.Join(',', Enumerable.Range(0, 51).Select(index => ToolJson($"tool-{index}")))}]",
+        "blank-tool" => $"[{ToolJson(" ")}]",
+        "blank-type" => $"[{ToolJson("workspace.read", type: " ")}]",
+        "duplicate-tool" => $"[{ToolJson("workspace.read")},{ToolJson("workspace.read")}]",
+        "blank-mcp-name" => $"[{ToolJson("workspace.read", mcpServersJson: "[{\"mcp\":\" \",\"version\":\"2.0\"}]")}]",
+        "blank-mcp-version" => $"[{ToolJson("workspace.read", mcpServersJson: "[{\"mcp\":\"workspace-mcp\",\"version\":\" \"}]")}]",
+        "duplicate-mcp" => $"[{ToolJson("workspace.read", mcpServersJson: "[{\"mcp\":\"workspace-mcp\",\"version\":\"2.0\"},{\"mcp\":\"workspace-mcp\",\"version\":\"2.0\"}]")}]",
+        _ => throw new ArgumentOutOfRangeException(nameof(invalidTools)),
+    };
+
+    private static string SingleToolJson(string tool, string type) => $"[{ToolJson(tool, type)}]";
+
+    private static string ToolJson(
+        string tool,
+        string type = "mcp",
+        string mcpServersJson = "[{\"mcp\":\"workspace-mcp\",\"version\":\"2.0\"}]") => $$"""
+        {
+          "tool": {{JsonSerializer.Serialize(tool)}},
+          "type": {{JsonSerializer.Serialize(type)}},
+          "mcp-servers": {{mcpServersJson}}
+        }
+        """;
+
+    private static (string? DetailJson, string? ClosureJson, string? VersionsJson) InvalidSkillsetEvidence(
+        string invalidEvidence)
+    {
+        var invalidClosureItem = invalidEvidence switch
+        {
+            "negative-depth" => $$"""{ "ref": "dependency@3.0", "guid": "{{DependencyGuid}}", "name": "dependency", "version": "3.0", "depth": -1 }""",
+            "missing-closure-ref" => $$"""{ "guid": "{{DependencyGuid}}", "name": "dependency", "version": "3.0", "depth": 1 }""",
+            "missing-closure-name" => $$"""{ "ref": "dependency@3.0", "guid": "{{DependencyGuid}}", "version": "3.0", "depth": 1 }""",
+            "invalid-closure-guid" => """{ "ref": "dependency@3.0", "guid": "not-a-guid", "name": "dependency", "version": "3.0", "depth": 1 }""",
+            "invalid-closure-version" => $$"""{ "ref": "dependency@latest", "guid": "{{DependencyGuid}}", "name": "dependency", "version": "latest", "depth": 1 }""",
+            _ => null,
+        };
+
+        return invalidEvidence switch
+        {
+            "empty-members" => (SkillsetDetail(membersJson: "[]"), null, null),
+            "too-many-members" => (SkillsetDetail(membersJson: MemberReferencesJson(101)), null, null),
+            "missing-closure" => (null, SkillsetClosure("null"), null),
+            "too-many-closure-nodes" => (null, SkillsetClosure(ClosureItemsJson(501)), null),
+            "missing-member-count" => (null, null, SkillsetVersions(SkillsetVersionRow(memberCountJson: null))),
+            "mismatched-member-count" => (null, null, SkillsetVersions(SkillsetVersionRow(memberCountJson: "3"))),
+            "root-count-mismatch" => (null, SkillsetClosure(RootCountMismatchClosureItemsJson()), null),
+            "missing-member-identity" => (SkillsetDetail(membersJson: $$"""[{ "version": "1.0" }, "member-b@2.0"]"""), null, null),
+            "invalid-member-guid" => (SkillsetDetail(membersJson: $$"""[{ "guid": "not-a-guid", "name": "member-a", "version": "1.0" }, "member-b@2.0"]"""), null, null),
+            "missing-member-version" => (SkillsetDetail(membersJson: $$"""[{ "name": "member-a" }, "member-b@2.0"]"""), null, null),
+            _ when invalidClosureItem is not null =>
+                (null, SkillsetClosure($"[{invalidClosureItem},{DefaultClosureRootsJson()}]"), null),
+            _ => throw new ArgumentOutOfRangeException(nameof(invalidEvidence)),
+        };
+    }
+
+    private static string MemberReferencesJson(int count) => JsonSerializer.Serialize(
+        Enumerable.Range(0, count).Select(static index => $"member-{index}@1.0"));
+
+    private static string ClosureItemsJson(int count) => $"[{string.Join(',', Enumerable.Range(1, count).Select(index => $$"""
+        { "ref": "member-{{index}}@1.0", "guid": "00000000-0000-0000-0000-{{index.ToString("000000000000")}}", "name": "member-{{index}}", "version": "1.0", "depth": 1 }
+        """))}]";
+
+    private static string DefaultClosureItemsJson() => $"[{DefaultClosureDependencyJson()},{DefaultClosureRootsJson()}]";
+
+    private static string DefaultClosureDependencyJson() => $$"""
+        { "ref": "dependency@3.0", "guid": "{{DependencyGuid}}", "name": "dependency", "version": "3.0", "depth": 1 }
+        """;
+
+    private static string DefaultClosureRootsJson() => $$"""
+        { "ref": "member-a@1.0", "guid": "{{MemberAGuid}}", "name": "member-a", "version": "1.0", "depth": 0 },
+        { "ref": "member-b@2.0", "guid": "{{MemberBGuid}}", "name": "member-b", "version": "2.0", "depth": 0 }
+        """;
+
+    private static string RootCountMismatchClosureItemsJson() => $$"""
+        [
+          {{DefaultClosureDependencyJson()}},
+          { "ref": "member-a@1.0", "guid": "{{MemberAGuid}}", "name": "member-a", "version": "1.0", "depth": 0 },
+          { "ref": "member-b@2.0", "guid": "{{MemberBGuid}}", "name": "member-b", "version": "2.0", "depth": 1 }
+        ]
         """;
 
     private static string Integrity(string hex) =>
