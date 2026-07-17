@@ -56,7 +56,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         "reset",
     };
 
-    private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject);
+    private sealed record ResolvedSenderBinding(string BindingId, ExternalSubjectRef Subject, string? OwnerScopeId);
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
     // slash silently consumed.
@@ -637,9 +637,48 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         if (existing is not null)
-            return new ResolvedSenderBinding(existing.Value, subject.Clone());
+        {
+            var ownerScopeId = await TryResolveOwnerScopeIdAsync(subject, ct).ConfigureAwait(false);
+            return new ResolvedSenderBinding(existing.Value, subject.Clone(), ownerScopeId);
+        }
 
         return null;
+    }
+
+    private async Task<string?> TryResolveOwnerScopeIdAsync(ExternalSubjectRef subject, CancellationToken ct)
+    {
+        var resolver = _toolServiceProvider.GetService<IOwnerScopeResolver>();
+        if (resolver is null)
+            return null;
+
+        try
+        {
+            return NormalizeOptional((await resolver.ResolveAsync(subject, ct).ConfigureAwait(false))?.Value);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (IsTransientBindingLookupFailure(ex))
+        {
+            _logger.LogWarning(
+                ex,
+                "Transient owner scope lookup failure; bound sender tools will run without shared owner scope. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Owner scope lookup raised non-transient exception; bound sender tools will run without shared owner scope. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
     }
 
     /// <summary>
@@ -2404,6 +2443,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     senderBinding.BindingId,
                     NyxUserId: null,
                     SenderTenant: senderTenant),
+                Caller = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).Caller with
+                {
+                    OwnerScopeId = senderBinding.OwnerScopeId,
+                },
             }).ToPayload();
             var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(senderAccessToken))
@@ -2427,6 +2470,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                             senderBinding.BindingId,
                             senderNyxUserId.Trim(),
                             senderTenant),
+                        Caller = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).Caller with
+                        {
+                            OwnerScopeId = NormalizeOptional(senderBinding.OwnerScopeId),
+                        },
                     }).ToPayload();
                 }
             }

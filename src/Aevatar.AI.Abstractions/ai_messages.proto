@@ -175,6 +175,7 @@ message AgentToolCallerContextPayload {
   string scope_id = 1;
   string owner_subject = 2;
   string response_id = 3;
+  string owner_scope_id = 4;
 }
 
 message AgentToolNyxIdAuthorityContextPayload {

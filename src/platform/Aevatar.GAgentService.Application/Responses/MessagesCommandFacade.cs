@@ -494,7 +494,7 @@ public sealed class MessagesCommandFacade(
         new(
             new AgentToolRequestIdentity(responseId, null),
             new AgentToolCredentials(bearerToken, null, null),
-            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId),
+            new AgentToolCallerContext(callerScope.ScopeId, callerScope.OwnerSubject, responseId, callerScope.OwnerSubject),
             new AgentToolChannelContext(
                 callerScope.OriginKind.ToString(),
                 null,
