@@ -44,11 +44,10 @@ public sealed class ChatFormRunRequestParserTests
             {
                 ["prompt"] = "describe this",
                 ["workflow"] = "direct",
-                ["scopeId"] = "scope-1",
             },
             [CreateFormFile("file", "cat.png", "image/png", "hello")]);
 
-        var result = await parser.ParseAsync(http, CancellationToken.None);
+        var result = await parser.ParseAsync(http, "scope-1", CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         ingressPort.Requests.Should().ContainSingle();
@@ -61,7 +60,6 @@ public sealed class ChatFormRunRequestParserTests
         result.Input.Should().NotBeNull();
         result.Input!.Prompt.Should().Be("describe this");
         result.Input.Workflow.Should().Be("direct");
-        result.Input.ScopeId.Should().Be("scope-1");
         var part = result.Input.InputParts.Should().ContainSingle().Which;
         part.Type.Should().Be("image");
         part.DataBase64.Should().BeNull();
@@ -85,7 +83,6 @@ public sealed class ChatFormRunRequestParserTests
                   "prompt": "payload prompt",
                   "workflow": "payload-workflow",
                   "sessionId": "payload-session",
-                  "scopeId": "payload-scope",
                   "workflowYaml": "payload-yaml",
                   "workflowYamls": ["payload-root-yaml"],
                   "inputParts": [
@@ -99,20 +96,18 @@ public sealed class ChatFormRunRequestParserTests
                 ["prompt"] = "form prompt",
                 ["workflow"] = "form-workflow",
                 ["sessionId"] = "form-session",
-                ["scopeId"] = "form-scope",
                 ["workflowYaml"] = "form-yaml",
                 ["workflowYamls"] = new StringValues(["form-root-yaml", "form-helper-yaml"]),
             },
             [CreateFormFile("file", "cat.png", "image/png", "hello")]);
 
-        var result = await parser.ParseAsync(http, CancellationToken.None);
+        var result = await parser.ParseAsync(http, "form-scope", CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         result.Input.Should().NotBeNull();
         result.Input!.Prompt.Should().Be("form prompt");
         result.Input.Workflow.Should().Be("form-workflow");
         result.Input.SessionId.Should().Be("form-session");
-        result.Input.ScopeId.Should().Be("form-scope");
         result.Input.WorkflowYaml.Should().Be("form-yaml");
         result.Input.WorkflowYamls.Should().Equal("form-root-yaml", "form-helper-yaml");
         result.Input.InputParts.Should().HaveCount(2);

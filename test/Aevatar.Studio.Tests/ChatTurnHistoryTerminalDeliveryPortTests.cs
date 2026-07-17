@@ -15,26 +15,77 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     private const string WorkflowCorrelationId = "workflow-correlation-alpha";
 
     [Fact]
-    public async Task ReserveAsync_ShouldReturnSeparateDeliveryActorAddressAndBusinessDeliveryId()
+    public async Task ReserveAsync_ShouldGenerateConversationAndTurnForCreateIntent()
     {
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var port = CreatePort(runtime, dispatch);
 
-        var reservation = await port.ReserveAsync(ReservationRequest());
+        var result = await port.ReserveAsync(ReservationRequest(WorkflowChatConversationIntent.Create()));
 
+        result.Succeeded.Should().BeTrue();
+        var reservation = result.Reservation;
         reservation.Should().NotBeNull();
         reservation!.DeliveryId.Should().Be(DeliveryId);
         reservation.DeliveryActorId.Should().StartWith("chat-history-delivery:");
         reservation.DeliveryActorId.Should().NotBe(DeliveryId);
+        result.ChatContext.Should().NotBeNull();
+        result.ChatContext!.ConversationId.Should().NotBeNullOrWhiteSpace();
+        result.ChatContext.ConversationId.Should().NotBe("conversation-from-client");
+        result.ChatContext.TurnId.Should().NotBeNullOrWhiteSpace();
+        result.ChatContext.TurnId.Should().NotBe("turn-from-client");
         runtime.CreatedActors.Should().ContainSingle()
             .Which.Should().Be((typeof(ChatTurnHistoryDeliveryGAgent), reservation.DeliveryActorId));
         var call = dispatch.Calls.Should().ContainSingle().Which;
         call.ActorId.Should().Be(reservation.DeliveryActorId);
         var command = call.Envelope.Payload.Unpack<ChatTurnHistoryDeliveryReserveRequested>();
         command.DeliveryId.Should().Be(DeliveryId);
+        command.ConversationId.Should().Be(result.ChatContext.ConversationId);
+        command.TurnId.Should().Be(result.ChatContext.TurnId);
         command.WorkflowActorId.Should().Be(WorkflowActorId);
         command.WorkflowCommandId.Should().Be(WorkflowCommandId);
+        command.CreateConversationIfMissing.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ShouldContinueExistingConversationAndGenerateTurn()
+    {
+        var runtime = new RecordingActorRuntime();
+        runtime.SeedExistingConversation("scope-alpha", "conversation-existing");
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreatePort(runtime, dispatch);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-existing")));
+
+        result.Succeeded.Should().BeTrue();
+        result.ChatContext.Should().BeEquivalentTo(
+            new WorkflowChatContext(
+                "scope-alpha",
+                "conversation-existing",
+                result.ChatContext!.TurnId));
+        result.ChatContext!.TurnId.Should().NotBeNullOrWhiteSpace();
+        result.ChatContext.TurnId.Should().NotBe("turn-from-client");
+        var command = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload.Unpack<ChatTurnHistoryDeliveryReserveRequested>();
+        command.ConversationId.Should().Be("conversation-existing");
+        command.TurnId.Should().Be(result.ChatContext.TurnId);
+        command.CreateConversationIfMissing.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ShouldReturnNotFound_WhenContinuingMissingConversation()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreatePort(runtime, dispatch);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-missing")));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
+        runtime.CreatedActors.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -76,12 +127,12 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
             dispatchPort,
             NullLogger<ChatTurnHistoryTerminalDeliveryPort>.Instance);
 
-    private static WorkflowChatHistoryTerminalDeliveryReservationRequest ReservationRequest() =>
+    private static WorkflowChatHistoryTerminalDeliveryReservationRequest ReservationRequest(
+        WorkflowChatConversationIntent conversation) =>
         new(
             DeliveryId,
             "scope-alpha",
-            "conversation-alpha",
-            "turn-alpha",
+            conversation,
             "original user text",
             WorkflowActorId,
             WorkflowCommandId,
@@ -91,6 +142,9 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     {
         private readonly HashSet<string> _existing = new(StringComparer.Ordinal);
         public List<(Type AgentType, string? Id)> CreatedActors { get; } = [];
+
+        public void SeedExistingConversation(string scopeId, string conversationId) =>
+            _existing.Add(ChatHistoryActorIds.Conversation(scopeId, conversationId));
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent => CreateAsync(typeof(TAgent), id, ct);

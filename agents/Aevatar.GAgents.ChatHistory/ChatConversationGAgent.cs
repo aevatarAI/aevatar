@@ -99,7 +99,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
             .OrCurrent();
     }
 
-    private static bool TryValidateAppend(
+    private bool TryValidateAppend(
         AppendChatTurnCommand command,
         out ChatTurnAppendRejectionReason rejectionReason)
     {
@@ -107,7 +107,8 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>, 
             string.IsNullOrWhiteSpace(command.ScopeId) ||
             string.IsNullOrWhiteSpace(command.ConversationId) ||
             string.IsNullOrWhiteSpace(command.Turn.TurnId) ||
-            command.Turn.TerminalStatus is ChatTurnTerminalStatus.Unspecified)
+            command.Turn.TerminalStatus is ChatTurnTerminalStatus.Unspecified ||
+            State.Deleted)
         {
             rejectionReason = ChatTurnAppendRejectionReason.Invalid;
             return false;
