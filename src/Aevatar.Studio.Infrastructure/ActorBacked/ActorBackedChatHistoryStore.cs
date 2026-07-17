@@ -3,7 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.ReadModels;
-using Microsoft.Extensions.Logging;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
@@ -19,40 +19,50 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly StudioActorCommandDispatch _commandDispatch;
-    private readonly IChatHistoryIndexTopologyPort _indexTopologyPort;
-    private readonly IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> _indexDocumentReader;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
-    private readonly ILogger<ActorBackedChatHistoryStore> _logger;
 
     public ActorBackedChatHistoryStore(
         IStudioActorBootstrap bootstrap,
         StudioActorCommandDispatch commandDispatch,
-        IChatHistoryIndexTopologyPort indexTopologyPort,
-        IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> indexDocumentReader,
-        IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
-        ILogger<ActorBackedChatHistoryStore> logger)
+        IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
-        _indexTopologyPort = indexTopologyPort ?? throw new ArgumentNullException(nameof(indexTopologyPort));
-        _indexDocumentReader = indexDocumentReader ?? throw new ArgumentNullException(nameof(indexDocumentReader));
         _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
     {
-        var actorId = _indexTopologyPort.GetIndexActorId(scopeId);
-        var document = await _indexDocumentReader.GetAsync(actorId, ct);
-        if (document?.StateRoot == null ||
-            !document.StateRoot.Is(ChatHistoryIndexState.Descriptor))
-            return new ChatHistoryIndex([]);
+        var result = await _conversationDocumentReader.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = "scope_id",
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(scopeId),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = "deleted",
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromBool(false),
+                },
+            ],
+            Sorts =
+            [
+                new ProjectionDocumentSort
+                {
+                    FieldPath = "updated_at_ms",
+                    Direction = ProjectionDocumentSortDirection.Desc,
+                },
+            ],
+            Take = ChatConversationGAgent.MaxTurns,
+        }, ct);
 
-        var state = document.StateRoot.Unpack<ChatHistoryIndexState>();
-        return new ChatHistoryIndex(state.Conversations
+        return new ChatHistoryIndex(result.Items
             .Select(ToConversationMeta)
-            .OrderByDescending(static c => c.UpdatedAt)
-            .ThenBy(static c => c.Id, StringComparer.Ordinal)
             .ToList()
             .AsReadOnly());
     }
@@ -60,18 +70,17 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
     public async Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var actorId = ConversationActorId(scopeId, conversationId);
+        var actorId = ChatHistoryActorIds.Conversation(scopeId, conversationId);
         var document = await _conversationDocumentReader.GetAsync(actorId, ct);
-        if (document?.StateRoot == null ||
-            !document.StateRoot.Is(ChatConversationState.Descriptor))
+        if (document is null || document.Deleted)
             return [];
 
-        var state = document.StateRoot.Unpack<ChatConversationState>();
-        if (state.Messages.Count == 0)
+        if (document.Turns.Count == 0)
             return [];
 
-        return state.Messages
-            .Select(ToStoredChatMessage)
+        return document.Turns
+            .OrderBy(static turn => turn.Sequence)
+            .SelectMany(ToStoredChatMessages)
             .ToList()
             .AsReadOnly();
     }
@@ -80,20 +89,15 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
         string scopeId, string conversationId, ConversationMeta meta,
         IReadOnlyList<StoredChatMessage> messages, CancellationToken ct = default)
     {
-        // Only send to conversation actor; it forwards to index actor internally
         var conversationActor = await EnsureConversationActorAsync(scopeId, conversationId, ct);
-        var metaProto = ToConversationMetaProto(conversationId, meta);
-        var replaceEvt = new MessagesReplacedEvent { Meta = metaProto, ScopeId = scopeId };
-        foreach (var msg in messages)
-            replaceEvt.Messages.Add(ToStoredChatMessageProto(msg));
-
-        await _commandDispatch.DispatchAsync(conversationActor, replaceEvt, PublisherId, ct);
+        var turn = ToAppendCommand(scopeId, conversationId, meta, messages);
+        if (turn is not null)
+            await _commandDispatch.DispatchAsync(conversationActor, turn, PublisherId, ct);
     }
 
     public async Task DeleteConversationAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        // Only send to conversation actor; it forwards to index actor internally
         var conversationActor = await EnsureConversationActorAsync(scopeId, conversationId, ct);
         var deleteEvt = new ConversationDeletedEvent
         {
@@ -108,67 +112,79 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
     private async Task<IActor> EnsureConversationActorAsync(
         string scopeId, string conversationId, CancellationToken ct)
     {
-        // The conversation actor forwards events to the per-scope index
-        // actor internally, so we bootstrap both so their projections
-        // materialize. Ordering doesn't matter; each call is idempotent.
-        await _bootstrap.EnsureAsync<ChatHistoryIndexGAgent>(_indexTopologyPort.GetIndexActorId(scopeId), ct);
         return await _bootstrap.EnsureAsync<ChatConversationGAgent>(
-            ConversationActorId(scopeId, conversationId), ct);
+            ChatHistoryActorIds.Conversation(scopeId, conversationId), ct);
     }
-
-    // ── Actor ID conventions ───────────────────────────────────
-
-    private static string ConversationActorId(string scopeId, string conversationId) => $"chat-{scopeId}-{conversationId}";
 
     // ── Mapping helpers ────────────────────────────────────────
 
-    private static ConversationMeta ToConversationMeta(ConversationMetaProto proto) =>
+    private static ConversationMeta ToConversationMeta(ChatConversationCurrentStateDocument document) =>
         new(
-            Id: proto.Id,
-            Title: proto.Title,
-            ServiceId: proto.ServiceId,
-            ServiceKind: proto.ServiceKind,
-            CreatedAt: FromUnixMs(proto.CreatedAtMs),
-            UpdatedAt: FromUnixMs(proto.UpdatedAtMs),
-            MessageCount: proto.MessageCount,
-            LlmRoute: string.IsNullOrEmpty(proto.LlmRoute) ? null : proto.LlmRoute,
-            LlmModel: string.IsNullOrEmpty(proto.LlmModel) ? null : proto.LlmModel);
+            Id: document.ConversationId,
+            Title: document.Title,
+            ServiceId: document.ServiceId,
+            ServiceKind: document.ServiceKind,
+            CreatedAt: FromUnixMs(document.CreatedAtMs),
+            UpdatedAt: FromUnixMs(document.UpdatedAtMs),
+            MessageCount: document.MessageCount,
+            LlmRoute: string.IsNullOrEmpty(document.LlmRoute) ? null : document.LlmRoute,
+            LlmModel: string.IsNullOrEmpty(document.LlmModel) ? null : document.LlmModel);
 
-    private static ConversationMetaProto ToConversationMetaProto(string conversationId, ConversationMeta meta) =>
-        new()
+    private static IEnumerable<StoredChatMessage> ToStoredChatMessages(ChatConversationTurnDocument turn)
+    {
+        yield return new StoredChatMessage(
+            Id: $"{turn.TurnId}:user",
+            Role: "user",
+            Content: turn.UserText,
+            Timestamp: turn.TerminalTimeMs,
+            Status: "complete");
+
+        yield return new StoredChatMessage(
+            Id: $"{turn.TurnId}:assistant",
+            Role: "assistant",
+            Content: turn.AssistantText,
+            Timestamp: turn.TerminalTimeMs,
+            Status: turn.TerminalStatus == "error" ? "error" : "complete",
+            Error: string.IsNullOrEmpty(turn.SanitizedError) ? null : turn.SanitizedError);
+    }
+
+    private static AppendChatTurnCommand? ToAppendCommand(
+        string scopeId,
+        string conversationId,
+        ConversationMeta meta,
+        IReadOnlyList<StoredChatMessage> messages)
+    {
+        var assistant = messages.LastOrDefault(static message => message.Role == "assistant");
+        if (assistant is null)
+            return null;
+
+        var user = messages.LastOrDefault(message =>
+            message.Role == "user" && message.Timestamp <= assistant.Timestamp);
+        if (user is null)
+            return null;
+
+        return new AppendChatTurnCommand
         {
-            Id = conversationId,
+            ScopeId = scopeId,
+            ConversationId = conversationId,
             Title = meta.Title ?? string.Empty,
             ServiceId = meta.ServiceId ?? string.Empty,
             ServiceKind = meta.ServiceKind ?? string.Empty,
-            CreatedAtMs = meta.CreatedAt.ToUnixTimeMilliseconds(),
-            UpdatedAtMs = meta.UpdatedAt.ToUnixTimeMilliseconds(),
-            MessageCount = meta.MessageCount,
-            LlmRoute = meta.LlmRoute ?? string.Empty,
-            LlmModel = meta.LlmModel ?? string.Empty,
+            Turn = new ChatTurn
+            {
+                TurnId = assistant.Id ?? user.Id ?? Guid.NewGuid().ToString("N"),
+                UserText = user.Content ?? string.Empty,
+                AssistantText = assistant.Content ?? string.Empty,
+                TerminalStatus = assistant.Status == "error"
+                    ? ChatTurnTerminalStatus.Failed
+                    : ChatTurnTerminalStatus.Completed,
+                SanitizedError = assistant.Error ?? string.Empty,
+                TerminalTime = Timestamp.FromDateTimeOffset(FromUnixMs(assistant.Timestamp)),
+                LlmRoute = meta.LlmRoute ?? string.Empty,
+                LlmModel = meta.LlmModel ?? string.Empty,
+            },
         };
-
-    private static StoredChatMessage ToStoredChatMessage(StoredChatMessageProto proto) =>
-        new(
-            Id: proto.Id,
-            Role: proto.Role,
-            Content: proto.Content,
-            Timestamp: proto.Timestamp,
-            Status: proto.Status,
-            Error: string.IsNullOrEmpty(proto.Error) ? null : proto.Error,
-            Thinking: string.IsNullOrEmpty(proto.Thinking) ? null : proto.Thinking);
-
-    private static StoredChatMessageProto ToStoredChatMessageProto(StoredChatMessage msg) =>
-        new()
-        {
-            Id = msg.Id ?? string.Empty,
-            Role = msg.Role ?? string.Empty,
-            Content = msg.Content ?? string.Empty,
-            Timestamp = msg.Timestamp,
-            Status = msg.Status ?? string.Empty,
-            Error = msg.Error ?? string.Empty,
-            Thinking = msg.Thinking ?? string.Empty,
-        };
+    }
 
     private static DateTimeOffset FromUnixMs(long ms) =>
         ms > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : DateTimeOffset.UnixEpoch;

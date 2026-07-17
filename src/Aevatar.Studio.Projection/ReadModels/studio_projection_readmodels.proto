@@ -117,18 +117,19 @@ message UserMemoryCurrentStateDocument {
   google.protobuf.Any state_root = 10;
 }
 
-// ─── ChatHistoryIndex Current State ReadModel ───
-
-message ChatHistoryIndexCurrentStateDocument {
-  string id = 1;
-  string actor_id = 2;
-  int64 state_version = 3;
-  string last_event_id = 4;
-  google.protobuf.Timestamp updated_at = 5;
-  google.protobuf.Any state_root = 10;
-}
-
 // ─── ChatConversation Current State ReadModel ───
+
+message ChatConversationTurnDocument {
+  string turn_id = 1;
+  int32 sequence = 2;
+  string user_text = 3;
+  string assistant_text = 4;
+  string terminal_status = 5;
+  string sanitized_error = 6;
+  int64 terminal_time_ms = 7;
+  string llm_route = 8;
+  string llm_model = 9;
+}
 
 message ChatConversationCurrentStateDocument {
   string id = 1;
@@ -136,7 +137,18 @@ message ChatConversationCurrentStateDocument {
   int64 state_version = 3;
   string last_event_id = 4;
   google.protobuf.Timestamp updated_at = 5;
-  google.protobuf.Any state_root = 10;
+  string scope_id = 20;
+  string conversation_id = 21;
+  string title = 22;
+  string service_id = 23;
+  string service_kind = 24;
+  int64 created_at_ms = 25;
+  int64 updated_at_ms = 26;
+  int32 message_count = 27;
+  string llm_route = 28;
+  string llm_model = 29;
+  bool deleted = 30;
+  repeated ChatConversationTurnDocument turns = 31;
 }
 
 // ─── StudioMember Current State ReadModel ───

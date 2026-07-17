@@ -21,6 +21,7 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.PromptRequired => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.InvalidCallerCredential => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.InvalidFileInput => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.InvalidChatHistory => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status400BadRequest,
         };
     }
@@ -41,6 +42,7 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.PromptRequired => ("PROMPT_REQUIRED", "Prompt is required."),
             WorkflowChatRunStartError.InvalidCallerCredential => ("INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
             WorkflowChatRunStartError.InvalidFileInput => ("INVALID_FILE_INPUT", "File input is invalid."),
+            WorkflowChatRunStartError.InvalidChatHistory => ("INVALID_CHAT_HISTORY", "Chat history intent is invalid."),
             _ => ("RUN_START_FAILED", "Failed to resolve actor."),
         };
     }
