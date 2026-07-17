@@ -268,6 +268,86 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
     }
 
+    [Theory]
+    [InlineData(false, "{", "not valid JSON")]
+    [InlineData(false, "{}", "omitted data")]
+    [InlineData(true, "{", "not valid JSON")]
+    [InlineData(true, "{}", "omitted data")]
+    public async Task FetchExactAsync_WhenEnvelopeIsMalformedOrOmitsData_FailsClosedWithoutFallback(
+        bool isSkillset,
+        string responseJson,
+        string expectedMessage)
+    {
+        var handler = isSkillset
+            ? ExactSkillsetHandler(detailJson: responseJson)
+            : ExactSkillHandler(packageJson: responseJson);
+        var fetcher = CreateFetcher(handler);
+
+        Func<Task> act = async () =>
+        {
+            if (isSkillset)
+                await fetcher.FetchExactSkillsetAsync("token", SkillsetReference());
+            else
+                await fetcher.FetchExactSkillAsync("token", SkillReference());
+        };
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        assertion.Which.Message.Should().Contain(expectedMessage);
+        AssertOnlyExactRequests(
+            handler,
+            isSkillset ? SkillsetGuid : SkillGuid,
+            isSkillset ? "2.0" : "1.2",
+            isSkillset);
+    }
+
+    [Theory]
+    [InlineData("package")]
+    [InlineData("detail")]
+    public async Task FetchExactSkillAsync_WhenPackageOrDetailMetadataIsMissing_FailsClosedWithoutFallback(
+        string source)
+    {
+        var handler = ExactSkillHandler(
+            packageJson: source == "package" ? SkillPackage(includeMetadata: false) : null,
+            detailJson: source == "detail" ? SkillDetail(includeMetadata: false) : null);
+        var fetcher = CreateFetcher(handler);
+
+        var act = async () => await fetcher.FetchExactSkillAsync("token", SkillReference());
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        assertion.Which.Message.Should().Contain("metadata");
+        AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FetchExactAsync_WhenReturnedGuidDiffers_FailsClosedWithoutFallback(bool isSkillset)
+    {
+        var handler = isSkillset
+            ? ExactSkillsetHandler(detailJson: SkillsetDetail(guid: SkillGuid))
+            : ExactSkillHandler(detailJson: SkillDetail(guid: SkillsetGuid));
+        var fetcher = CreateFetcher(handler);
+
+        Func<Task> act = async () =>
+        {
+            if (isSkillset)
+                await fetcher.FetchExactSkillsetAsync("token", SkillsetReference());
+            else
+                await fetcher.FetchExactSkillAsync("token", SkillReference());
+        };
+
+        var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
+        assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        assertion.Which.Message.Should().Contain("returned GUID");
+        AssertOnlyExactRequests(
+            handler,
+            isSkillset ? SkillsetGuid : SkillGuid,
+            isSkillset ? "2.0" : "1.2",
+            isSkillset);
+    }
+
     [Fact]
     public async Task FetchExactSkillAsync_UsesOneSharedTimeoutForAllThreeReads()
     {
@@ -389,6 +469,9 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     [InlineData("unix-absolute-path")]
     [InlineData("windows-absolute-path")]
     [InlineData("traversal-path")]
+    [InlineData("null-file-content")]
+    [InlineData("blank-path")]
+    [InlineData("nul-path")]
     [InlineData("single-file-too-large")]
     [InlineData("total-files-too-large")]
     public async Task FetchExactSkillAsync_WhenDecodedPackageViolatesAdapterBounds_FailsClosed(
@@ -402,6 +485,15 @@ public sealed class OrnnExactRemoteSkillFetcherTests
 
         var assertion = await act.Should().ThrowAsync<ExactRemoteFetchException>();
         assertion.Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.InvalidResponse);
+        var expectedMessage = invalidPackage switch
+        {
+            "null-file-content" => "null content",
+            "blank-path" or "nul-path" => "normalized relative path",
+            "total-files-too-large" => "total file bytes",
+            _ => null,
+        };
+        if (expectedMessage is not null)
+            assertion.Which.Message.Should().Contain(expectedMessage);
         AssertOnlyExactRequests(handler, SkillGuid, "1.2", isSkillset: false);
     }
 
@@ -676,37 +768,42 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         string? filesJson = null,
         string tool = "workspace.read",
         string type = "mcp",
-        string? toolsJson = null) => $$"""
+        string? toolsJson = null,
+        bool includeMetadata = true) => $$"""
         {
           "data": {
             "name": "{{name}}",
             "description": "A reviewed skill",
             "version": "{{version}}",
-            "metadata": {
-              "tools": {{toolsJson ?? SingleToolJson(tool, type)}}
-            },
+            "metadata": {{(includeMetadata ? SkillMetadataJson(tool, type, toolsJson) : "null")}},
             "files": {{filesJson ?? "{\"SKILL.md\":\"---\\nname: curated-skill\\ndescription: Reviewed\\n---\\nRun it.\",\"docs/readme.md\":\"Reference\"}"}}
           }
         }
         """;
 
     private static string SkillDetail(
+        string guid = SkillGuid,
         string name = "curated-skill",
         string version = "1.2",
         string? skillHash = null,
         string tool = "workspace.read",
         string type = "mcp",
-        string? toolsJson = null) => $$"""
+        string? toolsJson = null,
+        bool includeMetadata = true) => $$"""
         {
           "data": {
-            "guid": "{{SkillGuid}}",
+            "guid": "{{guid}}",
             "name": "{{name}}",
             "version": "{{version}}",
             "skillHash": "{{skillHash ?? SkillHash}}",
-            "metadata": {
-              "tools": {{toolsJson ?? SingleToolJson(tool, type)}}
-            }
+            "metadata": {{(includeMetadata ? SkillMetadataJson(tool, type, toolsJson) : "null")}}
           }
+        }
+        """;
+
+    private static string SkillMetadataJson(string tool, string type, string? toolsJson) => $$"""
+        {
+          "tools": {{toolsJson ?? SingleToolJson(tool, type)}}
         }
         """;
 
@@ -740,11 +837,12 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         """;
 
     private static string SkillsetDetail(
+        string guid = SkillsetGuid,
         string version = "2.0",
         string? membersJson = null) => $$"""
         {
           "data": {
-            "guid": "{{SkillsetGuid}}",
+            "guid": "{{guid}}",
             "name": "reviewed-set",
             "version": "{{version}}",
             "instructions": "Use both reviewed skills.",
@@ -806,6 +904,9 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         "unix-absolute-path" => """{"/absolute.txt":"x"}""",
         "windows-absolute-path" => """{"C:/absolute.txt":"x"}""",
         "traversal-path" => """{"docs/../secret.txt":"x"}""",
+        "null-file-content" => """{"empty.txt":null}""",
+        "blank-path" => """{" ":"x"}""",
+        "nul-path" => """{"bad\u0000path":"x"}""",
         "single-file-too-large" => JsonSerializer.Serialize(new Dictionary<string, string>
         {
             ["large.txt"] = new('x', checked((int)ExactRemotePackageBounds.AdapterMaximum.MaximumFileUtf8Bytes + 1)),
@@ -813,7 +914,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         "total-files-too-large" => JsonSerializer.Serialize(new Dictionary<string, string>
         {
             ["first.txt"] = new('x', 25 * Megabyte),
-            ["second.txt"] = new('x', 25 * Megabyte + 1),
+            ["second.txt"] = new('x', 25 * Megabyte),
+            ["third.txt"] = "x",
         }),
         _ => throw new ArgumentOutOfRangeException(nameof(invalidPackage)),
     };
