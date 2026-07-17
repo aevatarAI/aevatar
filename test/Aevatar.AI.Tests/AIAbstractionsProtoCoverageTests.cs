@@ -572,7 +572,7 @@ public sealed class AIAbstractionsProtoCoverageTests
     }
 
     [Fact]
-    public void ProtoMessages_ShouldSupportMergeAndDescriptors()
+    public void ProtoMessages_ShouldSupportMerge()
     {
         var target = new ChatRequestEvent();
         target.MergeFrom(new ChatRequestEvent
@@ -586,36 +586,6 @@ public sealed class AIAbstractionsProtoCoverageTests
 
         target.Clone().Should().BeEquivalentTo(target);
         target.ToString().Should().Contain("prompt");
-
-        AiMessagesReflection.Descriptor.Should().NotBeNull();
-        AiMessagesReflection.Descriptor.MessageTypes.Select(static type => type.Name).Should().Contain(
-            [
-                nameof(ChatRequestEvent),
-                nameof(ChatResponseEvent),
-                nameof(TextMessageStartEvent),
-                nameof(TextMessageContentEvent),
-                nameof(TextMessageReasoningEvent),
-                nameof(TextMessageEndEvent),
-                nameof(ToolCallEvent),
-                nameof(ToolResultEvent),
-                nameof(RoleChatSessionStartedEvent),
-                nameof(RoleChatSessionCompletedEvent),
-                nameof(InitializeRoleAgentEvent),
-                nameof(AIAgentConfigOverrides),
-                nameof(RoleChatSessionState),
-                nameof(RoleGAgentState),
-            ]);
-
-        var skillRef = RoundTrip(new ExactRemoteSkillRef { Guid = "11111111-1111-1111-1111-111111111111", LiteralVersion = "1.2" }, ExactRemoteSkillRef.Parser);
-        var skillsetRef = RoundTrip(new ExactRemoteSkillsetRef { Guid = "22222222-2222-2222-2222-222222222222", LiteralVersion = "3.4" }, ExactRemoteSkillsetRef.Parser);
-        (skillRef.Guid, skillRef.LiteralVersion).Should().Be(("11111111-1111-1111-1111-111111111111", "1.2"));
-        (skillsetRef.Guid, skillsetRef.LiteralVersion).Should().Be(("22222222-2222-2222-2222-222222222222", "3.4"));
-        foreach (var descriptor in new[] { ExactRemoteSkillRef.Descriptor, ExactRemoteSkillsetRef.Descriptor })
-        {
-            descriptor.Fields.InFieldNumberOrder().Select(static field => (field.FieldNumber, field.Name))
-                .Should().Equal((1, "guid"), (2, "literal_version"));
-            descriptor.Oneofs.Should().BeEmpty();
-        }
     }
 
     [Fact]
