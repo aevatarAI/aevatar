@@ -3,12 +3,16 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.ChatRouting.Abstractions;
+using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
@@ -19,6 +23,313 @@ namespace Aevatar.AI.Tests;
 
 public class NyxIdChatGAgentTests
 {
+    [Fact]
+    public async Task CreateTargetResolver_ShouldCopySelectedProfileForMatchingDirectRoute()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "profile.route"));
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "profile.route" },
+                },
+            },
+            []));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            NewChatRouteResolver(),
+            source);
+        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        source.CallCount.Should().Be(1);
+        runtime.CreateCalls.Should().ContainSingle();
+        command.AgentProfile.Should().NotBeNull();
+        AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
+        command.AgentProfile.Should().NotBeSameAs(source.Snapshot);
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_ShouldRejectProfileRouteDriftBeforeCreatingActor()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel
+                {
+                    ToolSetRef = new ChatRouteToolSetRef { Name = "drifted.route" },
+                },
+            },
+            []));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            NewChatRouteResolver(),
+            source);
+
+        var result = await resolver.ResolveAsync(new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" });
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        source.CallCount.Should().Be(1);
+        runtime.CreateCalls.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CreateTargetResolver_ShouldRejectProfileRouteWithoutCompleteToolSetRef(
+        bool missingForwardToModel)
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var routeSnapshot = missingForwardToModel
+            ? null
+            : new ChatRoutePolicySnapshot(
+                new ChatRouteAction { ForwardToModel = new ForwardToModel() },
+                []);
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(routeSnapshot);
+        var routeResolver = missingForwardToModel
+            ? new ChatRouteResolver(new MissingForwardToModelFallbackProvider())
+            : NewChatRouteResolver();
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            routeResolver,
+            source);
+        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        source.CallCount.Should().Be(1);
+        runtime.CreateCalls.Should().BeEmpty();
+        command.AgentProfile.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldBindProfileBeforeCreationAndRegistrationEvents()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        const string actorId = "nyxid-chat-profile-order";
+        var agent = CreateAgent(provider, actorId);
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+            AgentProfile = BuildSealedProfile("profile-v1"),
+        }));
+
+        var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+        events.Select(static stateEvent => stateEvent.EventData.TypeUrl).Should().Equal(
+            Any.Pack(new AgentProfileBoundEvent()).TypeUrl,
+            Any.Pack(new NyxIdChatConversationCreationStartedEvent()).TypeUrl,
+            Any.Pack(new NyxIdChatConversationRegistrationAcceptedEvent()).TypeUrl);
+        agent.State.AgentProfile.ProfileVersion.Should().Be("profile-v1");
+        registry.RegisteredActors.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldNotAppendEquivalentBindingTwice()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        const string actorId = "nyxid-chat-profile-repeat";
+        var agent = CreateAgent(provider, actorId);
+        var profile = BuildSealedProfile("profile-v1");
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+            AgentProfile = profile.Clone(),
+        }));
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+            AgentProfile = profile.Clone(),
+        }));
+
+        var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+        events.Count(static stateEvent => stateEvent.EventData.Is(AgentProfileBoundEvent.Descriptor))
+            .Should()
+            .Be(1);
+        registry.RegisteredActors.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldRejectDifferentOrMissingProfileAfterBinding()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        const string actorId = "nyxid-chat-profile-conflict";
+        var agent = CreateAgent(provider, actorId);
+
+        await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            AgentProfile = BuildSealedProfile("profile-v1"),
+        }));
+
+        var replace = () => agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            AgentProfile = BuildSealedProfile("profile-v2"),
+        }));
+        var remove = () => agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+        }));
+
+        await replace.Should().ThrowAsync<InvalidOperationException>();
+        await remove.Should().ThrowAsync<InvalidOperationException>();
+        registry.RegisteredActors.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task HandleCreateConversationAsync_ShouldRejectInvalidDigestBeforeRegistryIo()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        const string actorId = "nyxid-chat-profile-bad-digest";
+        var agent = CreateAgent(provider, actorId);
+        var profile = BuildSealedProfile("profile-v1");
+        profile.ProfileVersion = "tampered";
+
+        var act = () => agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            AgentProfile = profile,
+        }));
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        registry.RegisteredActors.Should().BeEmpty();
+        (await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldRestoreBoundProfileFromCommittedEvents()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        const string actorId = "nyxid-chat-profile-restart";
+        var first = CreateAgent(provider, actorId);
+        await first.ActivateAsync();
+        await first.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            AgentProfile = BuildSealedProfile("profile-v1"),
+        }));
+        await first.DeactivateAsync();
+
+        var restored = CreateAgent(provider, actorId);
+        await restored.ActivateAsync();
+
+        restored.State.AgentProfile.Should().NotBeNull();
+        restored.State.AgentProfile.ProfileVersion.Should().Be("profile-v1");
+        AgentProfileSnapshotCodec.Verify(restored.State.AgentProfile).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(false, "complete snapshot")]
+    [InlineData(true, "valid digest")]
+    public async Task ActivateAsync_ShouldRejectCommittedBindingWithoutValidCompleteProfile(
+        bool tamperDigest,
+        string expectedMessage)
+    {
+        using var provider = BuildServiceProvider();
+        var actorId = tamperDigest
+            ? "nyxid-chat-profile-replay-invalid-digest"
+            : "nyxid-chat-profile-replay-missing";
+        var binding = new AgentProfileBoundEvent();
+        if (tamperDigest)
+        {
+            var profile = BuildSealedProfile("profile-v1");
+            profile.ProfileVersion = "tampered";
+            binding.Profile = profile;
+        }
+
+        await AppendCommittedEventsAsync(provider, actorId, binding);
+        var agent = CreateAgent(provider, actorId);
+
+        var act = () => agent.ActivateAsync();
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*{expectedMessage}*");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldReplayEquivalentCommittedBindingIdempotently()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "nyxid-chat-profile-replay-equivalent";
+        var profile = BuildSealedProfile("profile-v1");
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = profile.Clone() },
+            new AgentProfileBoundEvent { Profile = profile.Clone() });
+        var agent = CreateAgent(provider, actorId);
+
+        await agent.ActivateAsync();
+
+        AgentProfileSnapshotCodec.ByteEquivalent(agent.State.AgentProfile, profile).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldRejectConflictingCommittedBindingDuringReplay()
+    {
+        using var provider = BuildServiceProvider();
+        const string actorId = "nyxid-chat-profile-replay-conflict";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1") },
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v2") });
+        var agent = CreateAgent(provider, actorId);
+
+        var act = () => agent.ActivateAsync();
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot be replaced*");
+    }
+
+    [Fact]
+    public async Task Conversations_ShouldKeepIndependentProfileVersions()
+    {
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        var agents = Enumerable.Range(1, 4)
+            .Select(index => CreateAgent(provider, $"nyxid-chat-profile-{index}"))
+            .ToArray();
+
+        for (var index = 0; index < agents.Length; index++)
+        {
+            await agents[index].HandleEventAsync(CreateEnvelope(agents[index].Id, new NyxIdChatConversationCreateCommand
+            {
+                ScopeId = "scope-a",
+                AgentProfile = BuildSealedProfile($"profile-v{index + 1}"),
+            }));
+        }
+
+        agents.Select(static agent => agent.State.AgentProfile.ProfileVersion)
+            .Should()
+            .Equal("profile-v1", "profile-v2", "profile-v3", "profile-v4");
+    }
+
     [Fact]
     public async Task ActivateAsync_ShouldPinNyxIdProviderOnFirstInitialization()
     {
@@ -419,6 +730,88 @@ public class NyxIdChatGAgentTests
         Propagation = new EnvelopePropagation { CorrelationId = Guid.NewGuid().ToString("N") },
     };
 
+    private static async Task AppendCommittedEventsAsync(
+        IServiceProvider provider,
+        string actorId,
+        params IMessage[] events)
+    {
+        var stateEvents = events.Select((evt, index) => new StateEvent
+        {
+            EventId = $"profile-binding-{index + 1}",
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Version = index + 1,
+            EventType = evt.Descriptor.FullName,
+            EventData = Any.Pack(evt),
+            AgentId = actorId,
+        });
+
+        await provider.GetRequiredService<IEventStore>()
+            .AppendAsync(actorId, stateEvents, expectedVersion: 0);
+    }
+
+    private static ChatRouteResolver NewChatRouteResolver() =>
+        new(new StaticChatRouteFallbackProvider(string.Empty));
+
+    private static AgentProfileSnapshot BuildSealedProfile(
+        string profileVersion,
+        string routeToolSetRef = "") =>
+        AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = profileVersion,
+            AgentKind = "nyxid.chat",
+            RouteToolSetRef = routeToolSetRef,
+        });
+
+    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = new ChatRouteAction
+            {
+                ForwardToModel = new ForwardToModel { ModelName = modelName },
+            },
+            MatchedRuleId = string.Empty,
+            UsedFallback = true,
+            ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+    }
+
+    private sealed class MissingForwardToModelFallbackProvider : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = new ChatRouteAction(),
+            MatchedRuleId = string.Empty,
+            UsedFallback = true,
+            ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+    }
+
+    private sealed class StaticChatRoutePolicyQueryPort(ChatRoutePolicySnapshot? snapshot)
+        : IChatRoutePolicyQueryPort
+    {
+        public static StaticChatRoutePolicyQueryPort ForSnapshot(ChatRoutePolicySnapshot? snapshot) => new(snapshot);
+
+        public Task<ChatRoutePolicySnapshot?> LookupForCallerAsync(
+            OwnerScope callerScope,
+            CancellationToken ct = default) =>
+            Task.FromResult(snapshot);
+    }
+
+    private sealed class FixedAgentProfileSnapshotSource(AgentProfileSnapshot snapshot)
+        : INyxIdChatAgentProfileSnapshotSource
+    {
+        public AgentProfileSnapshot Snapshot { get; } = snapshot;
+        public int CallCount { get; private set; }
+
+        public AgentProfileSnapshot? GetSnapshotForNewConversation()
+        {
+            CallCount++;
+            return Snapshot.Clone();
+        }
+    }
+
     private sealed class RecordingGAgentActorRegistryCommandPort : IGAgentActorRegistryCommandPort
     {
         public GAgentActorRegistryCommandStage RegisterStage { get; init; } =
@@ -507,17 +900,21 @@ public class NyxIdChatGAgentTests
 
     private sealed class RecordingActorRuntime : IActorRuntime
     {
+        public List<(System.Type Type, string? Id)> CreateCalls { get; } = [];
         public List<string> DestroyedActors { get; } = [];
 
         public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new RecordingActor(id));
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
-            where TAgent : IAgent =>
-            Task.FromResult<IActor>(new RecordingActor(id ?? Guid.NewGuid().ToString("N")));
+            where TAgent : IAgent
+        {
+            CreateCalls.Add((typeof(TAgent), id));
+            return Task.FromResult<IActor>(new RecordingActor(id ?? Guid.NewGuid().ToString("N")));
+        }
 
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
         {
-            _ = agentType;
+            CreateCalls.Add((agentType, id));
             return Task.FromResult<IActor>(new RecordingActor(id ?? Guid.NewGuid().ToString("N")));
         }
 

@@ -36,7 +36,9 @@ using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.StatusDashboard.Executors;
+using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
@@ -55,6 +57,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -63,6 +66,53 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldComposeDisabledProfileSourceWithEmptyReplaceableBaseline()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var profileOptions = app.Services.GetRequiredService<IOptions<NyxIdChatAgentProfileOptions>>().Value;
+        var baseline = app.Services.GetRequiredService<NyxIdChatAgentProfileValidationBaseline>();
+        var source = app.Services.GetRequiredService<INyxIdChatAgentProfileSnapshotSource>();
+
+        profileOptions.Enabled.Should().BeFalse();
+        profileOptions.ExternalReference.Should().Be(NyxIdChatAgentProfileOptions.StableExternalReference);
+        baseline.RequiredRecoveryToolNames.Should().BeEmpty();
+        baseline.DeniedLegacyToolNames.Should().BeEmpty();
+        source.Should().BeOfType<MainnetNyxIdChatAgentProfileSnapshotSource>();
+        source.GetSnapshotForNewConversation().Should().BeNull();
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_ShouldAllowReviewedBaselineReplacementAtCompositionSeam()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        var reviewed = new NyxIdChatAgentProfileValidationBaseline(
+            ["recover_tool"],
+            ["legacy_tool"]);
+        builder.Services.Replace(ServiceDescriptor.Singleton(reviewed));
+
+        using var app = builder.Build();
+
+        app.Services.GetRequiredService<NyxIdChatAgentProfileValidationBaseline>()
+            .Should()
+            .BeSameAs(reviewed);
+    }
+
     [Fact]
     public async Task AddAevatarMainnetHost_WithInMemoryDependencies_ShouldBuildAndStartFullComposition()
     {
