@@ -122,27 +122,29 @@ public static partial class AgentProfileProductionSchemaScanner
         string identifier,
         HashSet<string> forbiddenNames)
     {
+        if (IsForbiddenIdentifier(identifier))
+            forbiddenNames.Add(qualifiedName);
+    }
+
+    internal static bool IsForbiddenIdentifier(string identifier)
+    {
         var words = IdentifierWordPattern()
             .Matches(identifier)
             .Select(static match => match.Value.ToLowerInvariant())
             .ToArray();
         if (words.Any(AtomicDeniedTokens.Contains))
-        {
-            forbiddenNames.Add(qualifiedName);
-            return;
-        }
+            return true;
 
         for (var start = 0; start < words.Length; start++)
         {
             for (var length = 2; start + length <= words.Length; length++)
             {
                 if (CompoundDeniedTokens.Contains(string.Join('_', words, start, length)))
-                {
-                    forbiddenNames.Add(qualifiedName);
-                    return;
-                }
+                    return true;
             }
         }
+
+        return false;
     }
 
     [GeneratedRegex("[A-Z]+(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[0-9]+", RegexOptions.CultureInvariant)]

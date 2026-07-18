@@ -138,6 +138,100 @@ public sealed class NyxIdChatAgentProfileOptionsTests
     }
 
     [Theory]
+    [InlineData(true, "SkillsetProvenance")]
+    [InlineData(false, "SkillRef")]
+    public void Validate_ShouldRejectMissingExactReference(bool skillsetRef, string expectedFailure)
+    {
+        var options = EnabledOptions();
+        if (skillsetRef)
+            options.Profile!.SkillsetProvenance = null;
+        else
+            options.Profile!.Members[0].SkillRef = null;
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(expectedFailure, StringComparison.Ordinal) &&
+            message.Contains("is required", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true, "ProfileId")]
+    [InlineData(false, "IntentId")]
+    public void Validate_ShouldRejectNoncanonicalIdentifier(bool profileIdentifier, string expectedFailure)
+    {
+        var options = EnabledOptions();
+        if (profileIdentifier)
+            options.Profile!.ProfileId = "not canonical";
+        else
+            options.Profile!.Members[0].IntentId = "not canonical";
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(expectedFailure, StringComparison.Ordinal) &&
+            message.Contains("invalid canonical form", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true, "RouteToolSetRef")]
+    [InlineData(false, "MaximumToolPolicy.ToolNames")]
+    public void Validate_ShouldRejectInvalidToolOrToolSetName(bool routeToolSet, string expectedFailure)
+    {
+        var options = EnabledOptions();
+        if (routeToolSet)
+            options.Profile!.RouteToolSetRef = "not a tool set";
+        else
+            options.Profile!.MaximumToolPolicy.ToolNames.Add("not a tool");
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(expectedFailure, StringComparison.Ordinal) &&
+            message.Contains("invalid tool or tool-set name", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("", "is required")]
+    [InlineData(" revision-1", "leading or trailing whitespace")]
+    [InlineData("revision-1 ", "leading or trailing whitespace")]
+    public void Validate_ShouldRejectMissingOrPaddedRequiredString(string policyRevision, string expectedFailure)
+    {
+        var options = EnabledOptions();
+        options.Profile!.PolicyRevision = policyRevision;
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(message =>
+            message.Contains(nameof(AgentProfileSnapshot.PolicyRevision), StringComparison.Ordinal) &&
+            message.Contains(expectedFailure, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void Validate_ShouldEnforceRequiredStringUtf8ByteBoundary(
+        bool appendAsciiByte,
+        bool expectedValid)
+    {
+        var options = EnabledOptions();
+        options.Profile!.PolicyRevision = new string('\u00e9', 64) + (appendAsciiByte ? "a" : string.Empty);
+
+        var result = CreateValidator(ReviewedBaseline()).Validate(null, options);
+
+        if (expectedValid)
+            result.Succeeded.Should().BeTrue(string.Join(Environment.NewLine, result.Failures ?? []));
+        else
+            result.Failures.Should().Contain(message =>
+                message.Contains(nameof(AgentProfileSnapshot.PolicyRevision), StringComparison.Ordinal) &&
+                message.Contains("cannot exceed 128 UTF-8 bytes", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData(0, false)]
     [InlineData(1, true)]
     [InlineData(32, true)]
@@ -557,6 +651,19 @@ public sealed class NyxIdChatAgentProfileOptionsTests
             .GetProperty(nameof(NyxIdChatAgentProfileValidationBaseline.RequiredRecoveryToolNames))
             .Should()
             .NotBeNull();
+    }
+
+    [Theory]
+    [InlineData("api_token", true)]
+    [InlineData("SkillPayload", true)]
+    [InlineData("ProfileVersion", false)]
+    public void ProductionSchemaScanner_ShouldDetectForbiddenIdentifierTokens(
+        string identifier,
+        bool expectedForbidden)
+    {
+        AgentProfileProductionSchemaScanner.IsForbiddenIdentifier(identifier)
+            .Should()
+            .Be(expectedForbidden);
     }
 
     [Fact]

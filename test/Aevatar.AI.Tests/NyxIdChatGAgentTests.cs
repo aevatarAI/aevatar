@@ -82,6 +82,39 @@ public class NyxIdChatGAgentTests
         runtime.CreateCalls.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CreateTargetResolver_ShouldRejectProfileRouteWithoutCompleteToolSetRef(
+        bool missingForwardToModel)
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileSnapshotSource(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var routeSnapshot = missingForwardToModel
+            ? null
+            : new ChatRoutePolicySnapshot(
+                new ChatRouteAction { ForwardToModel = new ForwardToModel() },
+                []);
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(routeSnapshot);
+        var routeResolver = missingForwardToModel
+            ? new ChatRouteResolver(new MissingForwardToModelFallbackProvider())
+            : NewChatRouteResolver();
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            routeQueryPort,
+            routeResolver,
+            source);
+        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        source.CallCount.Should().Be(1);
+        runtime.CreateCalls.Should().BeEmpty();
+        command.AgentProfile.Should().BeNull();
+    }
+
     [Fact]
     public async Task HandleCreateConversationAsync_ShouldBindProfileBeforeCreationAndRegistrationEvents()
     {
@@ -738,6 +771,17 @@ public class NyxIdChatGAgentTests
             {
                 ForwardToModel = new ForwardToModel { ModelName = modelName },
             },
+            MatchedRuleId = string.Empty,
+            UsedFallback = true,
+            ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+    }
+
+    private sealed class MissingForwardToModelFallbackProvider : IChatRouteFallbackProvider
+    {
+        public ChatRouteDecision GetFallbackDecision() => new()
+        {
+            Action = new ChatRouteAction(),
             MatchedRuleId = string.Empty,
             UsedFallback = true,
             ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
