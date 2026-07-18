@@ -436,9 +436,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             case RemoteToolApprovalStatus.Rejected:
             case RemoteToolApprovalStatus.Expired:
+            case RemoteToolApprovalStatus.Cancelled:
                 await PersistApprovalTerminalFailureThenClearPendingAsync(
                     pending,
-                    snapshot.Status == RemoteToolApprovalStatus.Expired ? "approval_timeout" : "approval_denied",
+                    snapshot.Status switch
+                    {
+                        RemoteToolApprovalStatus.Expired => "approval_timeout",
+                        RemoteToolApprovalStatus.Cancelled => "approval_cancelled",
+                        _ => "approval_denied",
+                    },
                     string.IsNullOrWhiteSpace(snapshot.Reason)
                         ? "Tool approval timed out or was denied remotely."
                         : snapshot.Reason);

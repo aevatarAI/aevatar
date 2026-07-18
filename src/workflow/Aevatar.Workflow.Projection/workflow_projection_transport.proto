@@ -5,6 +5,7 @@ option csharp_namespace = "Aevatar.Workflow.Projection.ReadModels";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/wrappers.proto";
 import "workflow_execution_messages.proto";
+import "workflow_external_action.proto";
 
 message WorkflowRunInsightReportDocument {
   string id = 1;
@@ -71,6 +72,7 @@ message WorkflowExecutionCurrentStateDocument {
   // Per-schedule correlation id carried from the committed WorkflowRunState. Observatory filter
   // dimension for "this schedule's runs"; empty for non-scheduled/legacy runs.
   string schedule_id = 32;
+  repeated aevatar.workflow.WorkflowExternalActionApprovalSnapshot connector_approval_entries = 33;
 }
 
 message WorkflowExternalApprovalContinuationDocument {

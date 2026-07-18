@@ -41,6 +41,8 @@ public sealed class StepDefinition
 
     public ExternalApprovalWaitOptionsDefinition? ExternalApprovalOptions { get; init; }
 
+    public ConnectorApprovalOptionsDefinition? ConnectorApprovalOptions { get; init; }
+
     /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>
@@ -103,6 +105,37 @@ public sealed class ExternalApprovalWaitOptionsDefinition
     public string? CallbackIdempotencyKey { get; init; }
 
     public string? RequestId { get; init; }
+}
+
+public sealed class ConnectorApprovalOptionsDefinition
+{
+    public const int DefaultStatusCheckIntervalSeconds = 2;
+
+    public string? ServiceRef { get; init; }
+
+    public string? NodeId { get; init; }
+
+    public string? HttpVerb { get; init; }
+
+    public string? Resource { get; init; }
+
+    public string? PermissionScope { get; init; }
+
+    public int ExpirationSeconds { get; init; }
+
+    public int StatusCheckIntervalSeconds { get; init; } = DefaultStatusCheckIntervalSeconds;
+
+    public bool Destructive { get; init; }
+
+    public string? TeamId { get; init; }
+
+    public string? MemberId { get; init; }
+
+    public string? WorkflowId { get; init; }
+
+    public string? PublishedServiceId { get; init; }
+
+    public string? PolicyReason { get; init; }
 }
 
 public sealed class StepRetryPolicy

@@ -679,6 +679,11 @@ steps:
 - 作用：调用外部 connector（HTTP/CLI/MCP 等），支持重试和降级策略。
 - 常用参数：`connector`、`operation`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
 - `connector_call` / `secure_connector_call` side effect 是 at-least-once。workflow actor 按 logical run id + step id + logical attempt 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 connector request。connector physical retry / pending replay 复用同一个 key；HTTP connector 会在 key 非空时发送 `Idempotency-Key` header，其他 connector 可按自身边界使用或忽略。该 key 不提供 engine-side dedup 或 exactly-once。
+- `approval.policy: required` enables actor-owned durable approval coordination before connector dispatch. The step must provide `approval.service_ref`, `approval.node_id`, `approval.http_verb`, `approval.resource`, `approval.permission_scope`, `approval.expiration_seconds`, and a stable `idempotency_key`. `approval.status_check_interval_seconds` defaults to 2.
+- The exact payload, input, parameters, and execution options are stored as protected Protobuf material and bound to the safe approval plan by SHA-256. They are absent from approval records, committed projections, logs, and public APIs.
+- Approval state survives restart through actor state plus durable self callbacks. NyxID submission or status uncertainty fails closed; an indeterminate submission is not retried because NyxID creates a unique request for each submission.
+- Approved execution revalidates the remote binding, action, digest, caller authority, scope, node, service, permission scope, and effective expiry immediately before dispatch. HTTP approvals also require the approved verb/resource to match the concrete connector method/path. Dispatch replay and connector retries reuse the same physical `idempotency_key`; approval success and connector success remain separate persisted facts.
+- The Actor persists a dispatch acknowledgement and keeps the exact pending `StepCompletedEvent` as protected Protobuf until publication succeeds. Restart recovery can therefore redispatch an unacknowledged invocation or republish an acknowledged external result without copying response content into audit facts or public read models.
 - Ergonomic 说明（统一归一化到 `connector_call`）：
   - `http_get`/`http_post`/`http_put`/`http_delete`：自动补 `method=GET/POST/PUT/DELETE`（若未显式提供）。
   - `mcp_call`：若只写 `tool` 且未写 `operation/action`，会自动补 `operation=<tool>`。
@@ -705,6 +710,28 @@ steps:
     parameters:
       connector: "internal_http"
       path: "/healthz"
+```
+
+```yaml
+steps:
+  - id: create_resource
+    type: connector_call
+    target_role: coordinator
+    idempotency_key: "${input.idempotency_key}"
+    parameters:
+      connector: "service_proxy"
+      operation: "create_resource"
+      method: "POST"
+      path: "/resources/alpha"
+      approval.policy: "required"
+      approval.service_ref: "service-alpha"
+      approval.node_id: "node-alpha"
+      approval.http_verb: "POST"
+      approval.resource: "/resources/alpha"
+      approval.permission_scope: "resources.write"
+      approval.expiration_seconds: "300"
+      approval.status_check_interval_seconds: "2"
+      approval.destructive: "true"
 ```
 
 ### `emit`（别名：`publish`）

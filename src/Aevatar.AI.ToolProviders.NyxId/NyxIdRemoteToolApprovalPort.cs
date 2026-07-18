@@ -89,6 +89,7 @@ public sealed class NyxIdRemoteToolApprovalPort : IRemoteToolApprovalPort
             "approved" => RemoteToolApprovalStatus.Approved,
             "rejected" or "denied" => RemoteToolApprovalStatus.Rejected,
             "expired" => RemoteToolApprovalStatus.Expired,
+            "cancelled" or "canceled" => RemoteToolApprovalStatus.Cancelled,
             "pending" => RemoteToolApprovalStatus.Pending,
             _ => RemoteToolApprovalStatus.Unknown,
         };

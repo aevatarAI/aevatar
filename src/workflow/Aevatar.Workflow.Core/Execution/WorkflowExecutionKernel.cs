@@ -1912,6 +1912,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ApplyTransformOperation(request, step.TransformOperation, state);
         ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
         ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
+        ApplyConnectorApprovalOptions(request, step.ConnectorApprovalOptions, state);
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
@@ -1995,6 +1996,36 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : _expressionEvaluator.Evaluate(value, state.Variables).Trim();
+
+    private void ApplyConnectorApprovalOptions(
+        StepRequestEvent request,
+        ConnectorApprovalOptionsDefinition? options,
+        WorkflowExecutionKernelState state)
+    {
+        if (options == null)
+            return;
+
+        (request.StepParameters ??= new WorkflowStepParameters()).ConnectorApproval =
+            new WorkflowConnectorApprovalOptions
+            {
+                Policy = WorkflowExternalActionApprovalPolicy.Required,
+                ServiceRef = EvaluateOption(options.ServiceRef, state),
+                NodeId = EvaluateOption(options.NodeId, state),
+                HttpVerb = EvaluateOption(options.HttpVerb, state),
+                Resource = EvaluateOption(options.Resource, state),
+                PermissionScope = EvaluateOption(options.PermissionScope, state),
+                ExpirationSeconds = options.ExpirationSeconds,
+                StatusCheckIntervalSeconds = options.StatusCheckIntervalSeconds,
+                Destructive = options.Destructive,
+                TeamId = EvaluateOption(options.TeamId, state),
+                MemberId = EvaluateOption(options.MemberId, state),
+                WorkflowId = EvaluateOption(options.WorkflowId, state),
+                PublishedServiceId = EvaluateOption(options.PublishedServiceId, state),
+                PolicyReason = string.IsNullOrWhiteSpace(options.PolicyReason)
+                    ? "workflow-step-required-approval"
+                    : EvaluateOption(options.PolicyReason, state),
+            };
+    }
 
     private static string NormalizeOptionToken(string? value) =>
         string.IsNullOrWhiteSpace(value)
