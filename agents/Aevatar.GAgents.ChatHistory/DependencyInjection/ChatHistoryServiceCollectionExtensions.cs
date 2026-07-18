@@ -12,9 +12,6 @@ public static class ChatHistoryServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(ChatConversationGAgent).Assembly));
-        services.TryAddSingleton<
-            IChatConversationContinuationAdmissionReader,
-            ChatConversationActorContinuationAdmissionReader>();
         services.TryAddSingleton<IWorkflowChatHistoryTerminalDeliveryPort, ChatTurnHistoryTerminalDeliveryPort>();
         return services;
     }

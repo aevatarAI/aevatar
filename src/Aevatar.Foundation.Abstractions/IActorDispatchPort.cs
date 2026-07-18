@@ -1,20 +1,6 @@
 namespace Aevatar.Foundation.Abstractions;
 
 /// <summary>
-/// Optional observation phase for dispatch admission follow-up events.
-/// </summary>
-/// <remarks>
-/// 为 iter96+ 预留.
-/// </remarks>
-internal enum DispatchAdmissionFollowUpStage
-{
-    Unspecified = 0,
-    Handled = 1,
-    Committed = 2,
-    ReadModelObserved = 3,
-}
-
-/// <summary>
 /// Runtime-neutral admission receipt for an envelope accepted by an actor runtime/inbox boundary.
 /// </summary>
 public sealed record DispatchAdmission(
@@ -59,20 +45,6 @@ public static class DispatchAdmissionFactory
 }
 
 /// <summary>
-/// Optional observation event for phases that happen after dispatch admission.
-/// </summary>
-/// <remarks>
-/// 为 iter96+ 预留.
-/// </remarks>
-internal sealed record DispatchAdmissionFollowUp(
-    string CommandId,
-    string ActorId,
-    DispatchAdmissionFollowUpStage Stage,
-    DateTimeOffset ObservedAt,
-    string? CorrelationId = null,
-    long? StateVersion = null);
-
-/// <summary>
 /// Actor envelope dispatch contract.
 /// </summary>
 // Refactor (iter149/issue1132): Old pattern: handled-dispatch side contract implied actor-turn completion.  New principle: IActorDispatchPort exposes accepted-only runtime/inbox admission.
@@ -84,16 +56,4 @@ public interface IActorDispatchPort
     /// committed, or observed by a read model.
     /// </summary>
     Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
-}
-
-/// <summary>
-/// Actor envelope dispatch contract for command paths that require handler completion.
-/// </summary>
-public interface IActorHandledDispatchPort
-{
-    /// <summary>
-    /// Dispatches an envelope to the specified actor and completes only after the target handler has run.
-    /// The contract returns no domain data; target validation failures are surfaced by handler exceptions.
-    /// </summary>
-    Task<DispatchAdmission> DispatchHandledAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
 }

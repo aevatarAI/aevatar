@@ -771,6 +771,47 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChatPost_ShouldAcceptWorkflowScopeClaimAsTrustedScope()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("workflow.scope_id", "workflow-claim-scope"),
+        ], "test"));
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            {
+              "prompt": "describe the release plan",
+              "workflow": "direct"
+            }
+            """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.ScopeId.Should().Be("workflow-claim-scope");
+    }
+
+    [Fact]
     public async Task HandleChatPost_ShouldRejectBodyScopeIdBeforeDispatchingWorkflowCommand()
     {
         var called = false;
@@ -889,6 +930,92 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
         body.Should().Contain("AUTHENTICATION_REQUIRED");
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldRejectDisabledAuthenticationBeforeDispatchingWorkflowCommand()
+    {
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.RequestServices = CreateRequestServices(
+            authenticationEnabled: "false",
+            environmentName: Environments.Development);
+        http.User = AuthenticatedScopePrincipal("trusted-scope");
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            {
+              "prompt": "describe the release plan"
+            }
+            """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        body.Should().Contain("Trusted scope context is required.");
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChatPost_ShouldRejectAuthenticatedUserWithoutScopeClaimBeforeDispatchingWorkflowCommand()
+    {
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.NameIdentifier, "user-1"),
+        ], "test"));
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            {
+              "prompt": "describe the release plan"
+            }
+            """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        body.Should().Contain("Authenticated scope is missing.");
         called.Should().BeFalse();
     }
 
@@ -2080,17 +2207,33 @@ public sealed class ChatEndpointsInternalTests
             // IHostEnvironment (always present in real HTTP hosting). Register both so the harness mirrors
             // production; with no authenticated user the guard yields no scope and the run falls back to the
             // body scopeId, preserving these tests' expectations.
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddOptions()
-                .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
-                .AddSingleton<IHostEnvironment>(new StubHostEnvironment())
-                .BuildServiceProvider(),
+            RequestServices = CreateRequestServices(),
         };
         if (!string.IsNullOrWhiteSpace(authorization))
             http.Request.Headers.Authorization = authorization;
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private static IServiceProvider CreateRequestServices(
+        string? authenticationEnabled = null,
+        string environmentName = "Production")
+    {
+        var configurationValues = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (authenticationEnabled != null)
+            configurationValues["Aevatar:Authentication:Enabled"] = authenticationEnabled;
+
+        return new ServiceCollection()
+            .AddLogging()
+            .AddOptions()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(configurationValues)
+                .Build())
+            .AddSingleton<IHostEnvironment>(new StubHostEnvironment
+            {
+                EnvironmentName = environmentName,
+            })
+            .BuildServiceProvider();
     }
 
     private static ClaimsPrincipal AuthenticatedScopePrincipal(string scopeId) =>
