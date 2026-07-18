@@ -26,9 +26,29 @@ public sealed class ChatConversationActorContinuationAdmissionReaderTests
         call.Envelope.Runtime.Should().NotBeNull();
         call.Envelope.Runtime!.Dispatch.Should().NotBeNull();
         call.Envelope.Runtime.Dispatch!.PropagateFailure.Should().BeTrue();
-        call.Envelope.Runtime.Deduplication.Should().NotBeNull();
-        call.Envelope.Runtime.Deduplication!.OperationId.Should()
-            .StartWith("chat-conversation-continuation-admission:");
+        call.Envelope.Runtime.Deduplication?.OperationId.Should().BeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task CanContinueAsync_ShouldUseFreshDedupOriginForEachAdmission()
+    {
+        var handledDispatch = new RecordingActorHandledDispatchPort();
+        var admissionReader = new ChatConversationActorContinuationAdmissionReader(handledDispatch);
+
+        await admissionReader.CanContinueAsync("scope-alpha", "conversation-alpha");
+        await admissionReader.CanContinueAsync("scope-alpha", "conversation-alpha");
+
+        handledDispatch.Calls.Should().HaveCount(2);
+        handledDispatch.Calls
+            .Select(static call => call.Envelope.Id)
+            .Should()
+            .OnlyHaveUniqueItems();
+        handledDispatch.Calls
+            .Select(static call => string.IsNullOrWhiteSpace(call.Envelope.Runtime?.Deduplication?.OperationId)
+                ? call.Envelope.Id
+                : call.Envelope.Runtime!.Deduplication!.OperationId)
+            .Should()
+            .OnlyHaveUniqueItems();
     }
 
     [Fact]

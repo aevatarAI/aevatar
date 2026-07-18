@@ -46,8 +46,6 @@ public sealed class ChatConversationActorContinuationAdmissionReader
             },
         };
         envelope.EnsureRuntime().EnsureDispatch().PropagateFailure = true;
-        envelope.EnsureRuntime().EnsureDeduplication().OperationId =
-            $"chat-conversation-continuation-admission:{actorId}:{normalizedConversationId}";
 
         try
         {
