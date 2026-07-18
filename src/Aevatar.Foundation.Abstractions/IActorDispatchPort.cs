@@ -57,3 +57,15 @@ public interface IActorDispatchPort
     /// </summary>
     Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Actor envelope dispatch contract for command paths that require handler completion.
+/// </summary>
+public interface IActorHandledDispatchPort
+{
+    /// <summary>
+    /// Dispatches an envelope to the specified actor and completes only after the target handler has run.
+    /// The contract returns no domain data; target validation failures are surfaced by handler exceptions.
+    /// </summary>
+    Task<DispatchAdmission> DispatchHandledAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
+}

@@ -34,6 +34,7 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton<IActorRuntime, OrleansActorRuntime>());
         services.Replace(ServiceDescriptor.Singleton<IActorDispatchPort, OrleansActorDispatchPort>());
+        services.Replace(ServiceDescriptor.Singleton<IActorHandledDispatchPort, OrleansActorHandledDispatchPort>());
         services.AddSerializer(serializerBuilder => serializerBuilder.AddProtobufSerializer());
         services.TryAddSingleton<EventSourcingRuntimeOptions>();
         services.RemoveAll(typeof(IStateStore<>));

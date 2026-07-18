@@ -1,5 +1,4 @@
 using Aevatar.GAgents.ChatHistory;
-using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -10,16 +9,17 @@ namespace Aevatar.Studio.Tests;
 public sealed class StudioInfrastructureServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddStudioInfrastructure_ShouldUseConversationProjectionAsContinuationAdmissionGate()
+    public void AddStudioInfrastructure_ShouldUseConversationActorAsContinuationAdmissionGate()
     {
         var services = new ServiceCollection();
 
         services.AddStudioInfrastructure(new ConfigurationBuilder().Build());
 
-        services.Where(x => x.ServiceType == typeof(IChatConversationContinuationAdmissionReader))
+        var descriptor = services.Where(x => x.ServiceType == typeof(IChatConversationContinuationAdmissionReader))
             .Should()
             .ContainSingle()
-            .Which.ImplementationType.Should()
-            .Be(typeof(ProjectionChatConversationContinuationAdmissionReader));
+            .Which;
+
+        descriptor.ImplementationType.Should().Be(typeof(ChatConversationActorContinuationAdmissionReader));
     }
 }
