@@ -72,14 +72,7 @@ public sealed record ExactRemotePackageBounds(
     int MaximumFileCount,
     int MaximumPathUtf8Bytes,
     long MaximumFileUtf8Bytes,
-    long MaximumTotalFileUtf8Bytes)
-{
-    public static ExactRemotePackageBounds AdapterMaximum { get; } = new(
-        MaximumFileCount: 1000,
-        MaximumPathUtf8Bytes: 512,
-        MaximumFileUtf8Bytes: 25L * 1024 * 1024,
-        MaximumTotalFileUtf8Bytes: 50L * 1024 * 1024);
-}
+    long MaximumTotalFileUtf8Bytes);
 
 public sealed record ExactRemoteSkillRelease(
     ExactRemoteSkillRef Reference,

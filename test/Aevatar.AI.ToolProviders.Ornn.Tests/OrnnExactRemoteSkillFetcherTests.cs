@@ -15,6 +15,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     private const string MemberBGuid = "44444444-4444-4444-4444-444444444444";
     private const string DependencyGuid = "55555555-5555-5555-5555-555555555555";
     private const int Megabyte = 1024 * 1024;
+    private const int MaximumExactPackageFileCount = 1000;
+    private const int MaximumExactPackageFileBytes = 25 * Megabyte;
     private static readonly string SkillHash = new('a', 64);
 
     [Fact]
@@ -1021,7 +1023,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     {
         "missing-files" => "null",
         "too-many-files" => JsonSerializer.Serialize(
-            Enumerable.Range(0, ExactRemotePackageBounds.AdapterMaximum.MaximumFileCount + 1)
+            Enumerable.Range(0, MaximumExactPackageFileCount + 1)
                 .ToDictionary(static index => $"files/{index}.txt", static _ => "x")),
         "duplicate-normalized-path" => """{"docs/readme.md":"a","docs//readme.md":"b"}""",
         "unix-absolute-path" => """{"/absolute.txt":"x"}""",
@@ -1032,7 +1034,7 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         "nul-path" => """{"bad\u0000path":"x"}""",
         "single-file-too-large" => JsonSerializer.Serialize(new Dictionary<string, string>
         {
-            ["large.txt"] = new('x', checked((int)ExactRemotePackageBounds.AdapterMaximum.MaximumFileUtf8Bytes + 1)),
+            ["large.txt"] = new('x', MaximumExactPackageFileBytes + 1),
         }),
         "total-files-too-large" => JsonSerializer.Serialize(new Dictionary<string, string>
         {

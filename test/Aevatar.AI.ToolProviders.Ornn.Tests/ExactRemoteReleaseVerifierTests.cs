@@ -9,6 +9,8 @@ public sealed class ExactRemoteReleaseVerifierTests
     private const string SkillGuid = "11111111-1111-1111-1111-111111111111";
     private const string SkillsetGuid = "22222222-2222-2222-2222-222222222222";
     private const string MemberGuid = "33333333-3333-3333-3333-333333333333";
+    private const string OtherSkillGuid = "44444444-4444-4444-4444-444444444444";
+    private const string OtherSkillsetGuid = "55555555-5555-5555-5555-555555555555";
     private static readonly DateTimeOffset PublishedAt = DateTimeOffset.Parse("2026-07-10T12:30:00Z");
     private readonly ExactRemoteReleaseVerifier _verifier = new();
 
@@ -38,6 +40,23 @@ public sealed class ExactRemoteReleaseVerifierTests
         referenceAct.Should().Throw<ExactRemoteFetchException>()
             .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
         nameAct.Should().Throw<ExactRemoteFetchException>();
+    }
+
+    [Fact]
+    public void VerifySkill_WhenReviewedGuidDiffers_RejectsReleaseWithReviewedReference()
+    {
+        var expectation = SkillExpectation() with
+        {
+            Reference = new ExactRemoteSkillRef { Guid = OtherSkillGuid, LiteralVersion = "1.2" },
+        };
+
+        Action act = () => _verifier.VerifySkill(SkillRelease(), expectation);
+
+        var exception = act.Should().Throw<ExactRemoteFetchException>().Which;
+        exception.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        exception.ResourceKind.Should().Be(ExactRemoteResourceKind.Skill);
+        exception.Guid.Should().Be(OtherSkillGuid);
+        exception.LiteralVersion.Should().Be("1.2");
     }
 
     [Theory]
@@ -84,31 +103,19 @@ public sealed class ExactRemoteReleaseVerifierTests
     }
 
     [Theory]
-    [InlineData("file-count", false)]
-    [InlineData("path-bytes", false)]
-    [InlineData("file-bytes", false)]
-    [InlineData("total-bytes", false)]
-    [InlineData("file-count", true)]
-    [InlineData("path-bytes", true)]
-    [InlineData("file-bytes", true)]
-    [InlineData("total-bytes", true)]
-    public void VerifySkill_WhenAnyReviewedBoundIsNonPositiveOrExpandsAdapterCeiling_RejectsRelease(
-        string dimension,
-        bool expandsCeiling)
+    [InlineData("file-count")]
+    [InlineData("path-bytes")]
+    [InlineData("file-bytes")]
+    [InlineData("total-bytes")]
+    public void VerifySkill_WhenAnyReviewedBoundIsNonPositive_RejectsRelease(string dimension)
     {
-        var bounds = expandsCeiling
-            ? ExactRemotePackageBounds.AdapterMaximum
-            : SkillExpectation().PackageBounds;
-        bounds = (dimension, expandsCeiling) switch
+        var bounds = SkillExpectation().PackageBounds;
+        bounds = dimension switch
         {
-            ("file-count", false) => bounds with { MaximumFileCount = 0 },
-            ("path-bytes", false) => bounds with { MaximumPathUtf8Bytes = 0 },
-            ("file-bytes", false) => bounds with { MaximumFileUtf8Bytes = 0 },
-            ("total-bytes", false) => bounds with { MaximumTotalFileUtf8Bytes = 0 },
-            ("file-count", true) => bounds with { MaximumFileCount = bounds.MaximumFileCount + 1 },
-            ("path-bytes", true) => bounds with { MaximumPathUtf8Bytes = bounds.MaximumPathUtf8Bytes + 1 },
-            ("file-bytes", true) => bounds with { MaximumFileUtf8Bytes = bounds.MaximumFileUtf8Bytes + 1 },
-            ("total-bytes", true) => bounds with { MaximumTotalFileUtf8Bytes = bounds.MaximumTotalFileUtf8Bytes + 1 },
+            "file-count" => bounds with { MaximumFileCount = 0 },
+            "path-bytes" => bounds with { MaximumPathUtf8Bytes = 0 },
+            "file-bytes" => bounds with { MaximumFileUtf8Bytes = 0 },
+            "total-bytes" => bounds with { MaximumTotalFileUtf8Bytes = 0 },
             _ => throw new ArgumentOutOfRangeException(nameof(dimension)),
         };
         var expectation = SkillExpectation() with { PackageBounds = bounds };
@@ -117,6 +124,22 @@ public sealed class ExactRemoteReleaseVerifierTests
 
         act.Should().Throw<ExactRemoteFetchException>()
             .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+    }
+
+    [Fact]
+    public void VerifySkill_WhenPositiveReviewedBoundsContainRelease_ReturnsFetchedRelease()
+    {
+        var release = SkillRelease();
+        var expectation = SkillExpectation() with
+        {
+            PackageBounds = new ExactRemotePackageBounds(
+                int.MaxValue,
+                int.MaxValue,
+                long.MaxValue,
+                long.MaxValue),
+        };
+
+        _verifier.VerifySkill(release, expectation).Should().BeSameAs(release);
     }
 
     [Fact]
@@ -200,6 +223,23 @@ public sealed class ExactRemoteReleaseVerifierTests
             .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
         nameAct.Should().Throw<ExactRemoteFetchException>()
             .Which.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+    }
+
+    [Fact]
+    public void VerifySkillset_WhenReviewedGuidDiffers_RejectsReleaseWithReviewedReference()
+    {
+        var expectation = SkillsetExpectation() with
+        {
+            Reference = new ExactRemoteSkillsetRef { Guid = OtherSkillsetGuid, LiteralVersion = "2.0" },
+        };
+
+        Action act = () => _verifier.VerifySkillset(SkillsetRelease(), expectation);
+
+        var exception = act.Should().Throw<ExactRemoteFetchException>().Which;
+        exception.FailureKind.Should().Be(ExactRemoteFetchFailureKind.IntegrityMismatch);
+        exception.ResourceKind.Should().Be(ExactRemoteResourceKind.Skillset);
+        exception.Guid.Should().Be(OtherSkillsetGuid);
+        exception.LiteralVersion.Should().Be("2.0");
     }
 
     [Theory]

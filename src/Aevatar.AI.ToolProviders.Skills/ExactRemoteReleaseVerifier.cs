@@ -127,26 +127,21 @@ public sealed class ExactRemoteReleaseVerifier
         ExactRemotePackageBounds bounds,
         ExactRemoteSkillRef reference)
     {
-        var maximum = ExactRemotePackageBounds.AdapterMaximum;
         var boundsArePositive = bounds.MaximumFileCount > 0 &&
                                 bounds.MaximumPathUtf8Bytes > 0 &&
                                 bounds.MaximumFileUtf8Bytes > 0 &&
                                 bounds.MaximumTotalFileUtf8Bytes > 0;
-        var boundsDoNotExpandAdapterCeilings = bounds.MaximumFileCount <= maximum.MaximumFileCount &&
-                                              bounds.MaximumPathUtf8Bytes <= maximum.MaximumPathUtf8Bytes &&
-                                              bounds.MaximumFileUtf8Bytes <= maximum.MaximumFileUtf8Bytes &&
-                                              bounds.MaximumTotalFileUtf8Bytes <= maximum.MaximumTotalFileUtf8Bytes;
         var shapeFits = shape.FileCount <= bounds.MaximumFileCount &&
                         shape.MaximumPathUtf8Bytes <= bounds.MaximumPathUtf8Bytes &&
                         shape.MaximumFileUtf8Bytes <= bounds.MaximumFileUtf8Bytes &&
                         shape.TotalFileUtf8Bytes <= bounds.MaximumTotalFileUtf8Bytes;
-        if (!boundsArePositive || !boundsDoNotExpandAdapterCeilings || !shapeFits)
+        if (!boundsArePositive || !shapeFits)
         {
             throw ExactRemoteFetchException.IntegrityMismatch(
                 ExactRemoteResourceKind.Skill,
                 reference.Guid,
                 reference.LiteralVersion,
-                "package shape exceeds the reviewed bounds or the reviewed bounds expand adapter ceilings");
+                "package shape exceeds the reviewed bounds or the reviewed bounds are not positive");
         }
     }
 

@@ -24,6 +24,11 @@ public sealed class OrnnSkillClient
     private const int MaximumDirectMembers = 100;
     private const int MaximumClosureNodes = 500;
     private const long EvidenceResponseMaximumBytes = NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes;
+    private static readonly ExactRemotePackageBounds ExactPackageMaximumBounds = new(
+        MaximumFileCount: 1000,
+        MaximumPathUtf8Bytes: 512,
+        MaximumFileUtf8Bytes: 25L * 1024 * 1024,
+        MaximumTotalFileUtf8Bytes: 50L * 1024 * 1024);
     private readonly NyxIdApiClient _nyxApi;
     private readonly OrnnOptions _options;
     private readonly ILogger _logger;
@@ -811,7 +816,7 @@ public sealed class OrnnSkillClient
                 "package files were missing");
         }
 
-        var maximum = ExactRemotePackageBounds.AdapterMaximum;
+        var maximum = ExactPackageMaximumBounds;
         if (files.Count > maximum.MaximumFileCount)
         {
             throw ExactRemoteFetchException.InvalidResponse(

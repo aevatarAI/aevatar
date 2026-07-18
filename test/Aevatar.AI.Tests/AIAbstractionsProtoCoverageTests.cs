@@ -87,6 +87,21 @@ public sealed class AIAbstractionsProtoCoverageTests
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {
+        var skillRef = RoundTrip(
+            new ExactRemoteSkillRef { Guid = "11111111-1111-1111-1111-111111111111", LiteralVersion = "1.2" },
+            ExactRemoteSkillRef.Parser);
+        var skillsetRef = RoundTrip(
+            new ExactRemoteSkillsetRef { Guid = "22222222-2222-2222-2222-222222222222", LiteralVersion = "3.4" },
+            ExactRemoteSkillsetRef.Parser);
+        (skillRef.Guid, skillRef.LiteralVersion).Should().Be(("11111111-1111-1111-1111-111111111111", "1.2"));
+        (skillsetRef.Guid, skillsetRef.LiteralVersion).Should().Be(("22222222-2222-2222-2222-222222222222", "3.4"));
+        foreach (var descriptor in new[] { ExactRemoteSkillRef.Descriptor, ExactRemoteSkillsetRef.Descriptor })
+        {
+            descriptor.Fields.InFieldNumberOrder().Select(static field => (field.FieldNumber, field.Name))
+                .Should().Equal((1, "guid"), (2, "literal_version"));
+            descriptor.Oneofs.Should().BeEmpty();
+        }
+
         var receipt = new AgentToolReceipt
         {
             CallId = "call-1",
