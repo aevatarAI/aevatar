@@ -111,6 +111,11 @@ message ConversationDeletedEvent {
   string scope_id = 2;
 }
 
+message ChatConversationContinuationAdmissionRequested {
+  string scope_id = 1;
+  string conversation_id = 2;
+}
+
 // ─── ChatTurnHistoryDeliveryGAgent State ───
 
 enum ChatTurnHistoryDeliveryStatus {

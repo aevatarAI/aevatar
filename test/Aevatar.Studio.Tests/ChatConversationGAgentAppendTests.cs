@@ -167,6 +167,48 @@ public sealed class ChatConversationGAgentAppendTests
         result.RejectionReason.Should().Be(ChatTurnAppendRejectionReason.MaxTurnsExceeded);
     }
 
+    [Fact]
+    public async Task ContinuationAdmissionRequested_ShouldReturn_WhenConversationStateMatchesRequest()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleEventAsync(Envelope(CreateAppend("turn-1", "hello", "hi", ChatTurnTerminalStatus.Completed)));
+
+        var act = () => agent.HandleEventAsync(Envelope(new ChatConversationContinuationAdmissionRequested
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+        }));
+
+        await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task ContinuationAdmissionRequested_ShouldThrowNotFound_WhenConversationStateIsNotContinuable()
+    {
+        var missingAgent = await CreateAgentAsync();
+        var wrongScopeAgent = await CreateAgentAsync();
+        var wrongConversationAgent = await CreateAgentAsync();
+        var deletedAgent = await CreateAgentAsync();
+        await wrongScopeAgent.HandleEventAsync(Envelope(CreateAppend("turn-1", "hello", "hi", ChatTurnTerminalStatus.Completed)));
+        await wrongConversationAgent.HandleEventAsync(Envelope(CreateAppend("turn-1", "hello", "hi", ChatTurnTerminalStatus.Completed)));
+        await deletedAgent.HandleEventAsync(Envelope(CreateAppend("turn-1", "hello", "hi", ChatTurnTerminalStatus.Completed)));
+        await deletedAgent.HandleEventAsync(Envelope(new ConversationDeletedEvent
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+        }));
+
+        var missingAct = () => missingAgent.HandleEventAsync(Envelope(ContinuationAdmission("scope-a", "conversation-a")));
+        var wrongScopeAct = () => wrongScopeAgent.HandleEventAsync(Envelope(ContinuationAdmission("scope-b", "conversation-a")));
+        var wrongConversationAct = () => wrongConversationAgent.HandleEventAsync(Envelope(ContinuationAdmission("scope-a", "conversation-b")));
+        var deletedAct = () => deletedAgent.HandleEventAsync(Envelope(ContinuationAdmission("scope-a", "conversation-a")));
+
+        await missingAct.Should().ThrowAsync<ChatConversationContinuationAdmissionNotFoundException>();
+        await wrongScopeAct.Should().ThrowAsync<ChatConversationContinuationAdmissionNotFoundException>();
+        await wrongConversationAct.Should().ThrowAsync<ChatConversationContinuationAdmissionNotFoundException>();
+        await deletedAct.Should().ThrowAsync<ChatConversationContinuationAdmissionNotFoundException>();
+    }
+
     private static AppendChatTurnCommand CreateAppend(
         string turnId,
         string userText,
@@ -186,6 +228,15 @@ public sealed class ChatConversationGAgentAppendTests
                 LlmRoute = "route-a",
                 LlmModel = "model-a",
             },
+        };
+
+    private static ChatConversationContinuationAdmissionRequested ContinuationAdmission(
+        string scopeId,
+        string conversationId) =>
+        new()
+        {
+            ScopeId = scopeId,
+            ConversationId = conversationId,
         };
 
     private static EventEnvelope Envelope(Google.Protobuf.IMessage payload) =>

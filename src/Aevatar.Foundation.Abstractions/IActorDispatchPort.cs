@@ -24,6 +24,17 @@ public sealed record DispatchAdmission(
     string ActorId,
     string CorrelationId);
 
+public sealed class ActorNotFoundException : InvalidOperationException
+{
+    public ActorNotFoundException(string actorId)
+        : base($"Actor '{actorId}' was not found.")
+    {
+        ActorId = actorId;
+    }
+
+    public string ActorId { get; }
+}
+
 public static class DispatchAdmissionFactory
 {
     public static DispatchAdmission Create(string actorId, EventEnvelope envelope)
@@ -73,4 +84,16 @@ public interface IActorDispatchPort
     /// committed, or observed by a read model.
     /// </summary>
     Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Actor envelope dispatch contract for command paths that require handler completion.
+/// </summary>
+public interface IActorHandledDispatchPort
+{
+    /// <summary>
+    /// Dispatches an envelope to the specified actor and completes only after the target handler has run.
+    /// The contract returns no domain data; target validation failures are surfaced by handler exceptions.
+    /// </summary>
+    Task<DispatchAdmission> DispatchHandledAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default);
 }
