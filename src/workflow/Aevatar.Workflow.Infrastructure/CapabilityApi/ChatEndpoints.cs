@@ -111,18 +111,33 @@ public static class WorkflowCapabilityEndpoints
             }
 
             var parsed = await ParseJsonHttpChatInputAsync(http.Request, ct);
-            if (parsed == null)
+            if (!parsed.Succeeded)
             {
-                await WriteJsonErrorResponseAsync(
-                    http,
-                    StatusCodes.Status400BadRequest,
-                    "INVALID_CHAT_INPUT",
-                    "Chat request body is invalid.",
-                    ct);
+                if (parsed.Failure == JsonHttpChatInputParseFailure.InvalidConversationInput)
+                {
+                    var (code, message) = ChatRunStartErrorMapper.ToCommandError(
+                        WorkflowChatRunStartError.InvalidConversationInput);
+                    await WriteJsonErrorResponseAsync(
+                        http,
+                        StatusCodes.Status400BadRequest,
+                        code,
+                        message,
+                        ct);
+                }
+                else
+                {
+                    await WriteJsonErrorResponseAsync(
+                        http,
+                        StatusCodes.Status400BadRequest,
+                        "INVALID_CHAT_INPUT",
+                        "Chat request body is invalid.",
+                        ct);
+                }
+
                 return;
             }
 
-            input = parsed;
+            input = parsed.Input!;
             var scopeResolution = ResolvePostTrustedScope(http);
             if (!scopeResolution.Succeeded)
             {
@@ -924,21 +939,53 @@ public static class WorkflowCapabilityEndpoints
             cancellationToken: ct);
     }
 
-    private static async ValueTask<HttpChatInput?> ParseJsonHttpChatInputAsync(
+    private static async ValueTask<JsonHttpChatInputParseResult> ParseJsonHttpChatInputAsync(
         HttpRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            return await JsonSerializer.DeserializeAsync<HttpChatInput>(
-                request.Body,
-                ChatWebSocketProtocol.JsonOptions,
-                cancellationToken);
+            var input = await JsonSerializer.DeserializeAsync<HttpChatInput>(
+                    request.Body,
+                    ChatWebSocketProtocol.JsonOptions,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return input == null
+                ? JsonHttpChatInputParseResult.Failed(JsonHttpChatInputParseFailure.InvalidChatInput)
+                : JsonHttpChatInputParseResult.Success(input);
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            return null;
+            return JsonHttpChatInputParseResult.Failed(
+                IsConversationInputJsonException(ex)
+                    ? JsonHttpChatInputParseFailure.InvalidConversationInput
+                    : JsonHttpChatInputParseFailure.InvalidChatInput);
         }
+    }
+
+    private static bool IsConversationInputJsonException(JsonException ex) =>
+        string.Equals(ex.Path, "$.conversation", StringComparison.OrdinalIgnoreCase) ||
+        ex.Path?.StartsWith("$.conversation.", StringComparison.OrdinalIgnoreCase) == true ||
+        ex.Path?.StartsWith("$.conversation[", StringComparison.OrdinalIgnoreCase) == true;
+
+    private enum JsonHttpChatInputParseFailure
+    {
+        None = 0,
+        InvalidChatInput = 1,
+        InvalidConversationInput = 2,
+    }
+
+    private readonly record struct JsonHttpChatInputParseResult(
+        HttpChatInput? Input,
+        JsonHttpChatInputParseFailure Failure)
+    {
+        public bool Succeeded => Failure == JsonHttpChatInputParseFailure.None && Input != null;
+
+        public static JsonHttpChatInputParseResult Success(HttpChatInput input) =>
+            new(input, JsonHttpChatInputParseFailure.None);
+
+        public static JsonHttpChatInputParseResult Failed(JsonHttpChatInputParseFailure failure) =>
+            new(null, failure);
     }
 
     private static PostTrustedScopeResolution ResolvePostTrustedScope(HttpContext http)

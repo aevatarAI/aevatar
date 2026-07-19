@@ -8,7 +8,6 @@ type JsonRecord = Record<string, unknown>;
 
 export type ChatStreamRequest = {
   prompt: string;
-  scopeId?: string;
   sessionId: string;
 };
 
@@ -232,7 +231,6 @@ export async function startChatStream(
     body: JSON.stringify(
       compactObject({
         prompt: request.prompt.trim(),
-        scopeId: request.scopeId?.trim() || undefined,
         sessionId: request.sessionId.trim(),
         workflow: "studio",
       })
