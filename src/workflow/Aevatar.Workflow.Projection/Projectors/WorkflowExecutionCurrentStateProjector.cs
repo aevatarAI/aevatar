@@ -85,6 +85,7 @@ public sealed class WorkflowExecutionCurrentStateProjector
                 x => MapStepIdempotency(x.Value),
                 StringComparer.Ordinal),
             InputFileRefs = seedSnapshot.InputFileRefs.Select(MapInputFileRef).ToList(),
+            ConnectorApprovals = MapConnectorApprovals(state),
         };
 
         // O2 (06-19-workflow-run-observatory): started_at is derived from the committed WorkflowRunState's
@@ -94,6 +95,24 @@ public sealed class WorkflowExecutionCurrentStateProjector
             document.StartedAtUtcValue = state.StartedAtUtc;
 
         return document;
+    }
+
+    private static IList<WorkflowExternalActionApprovalSnapshot> MapConnectorApprovals(WorkflowRunState state)
+    {
+        foreach (var executionState in state.ExecutionStates.Values)
+        {
+            if (!executionState.Is(ConnectorCallModuleState.Descriptor))
+                continue;
+
+            var connectorState = executionState.Unpack<ConnectorCallModuleState>();
+            return connectorState.ApprovalsByActionId.Values
+                .Where(static coordination => coordination.Snapshot?.Plan != null)
+                .OrderBy(static coordination => coordination.Snapshot.Plan.ActionId, StringComparer.Ordinal)
+                .Select(static coordination => coordination.Snapshot.Clone())
+                .ToList();
+        }
+
+        return [];
     }
 
     private static WorkflowStepIdempotencyReadModel MapStepIdempotency(

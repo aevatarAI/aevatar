@@ -6,6 +6,7 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "Credentials/credential_secret_references.proto";
 import "Interactions/interaction_spec.proto";
+import "workflow_external_action.proto";
 
 enum WorkflowChatInputPartKind {
   WORKFLOW_CHAT_INPUT_PART_KIND_UNSPECIFIED = 0;
@@ -483,6 +484,7 @@ message WorkflowStepParameters
   WorkflowAgentToolScope agent_tool_scope = 8;
   WorkflowHumanApprovalOptions human_approval = 9;
   WorkflowExternalApprovalWaitOptions external_approval = 10;
+  WorkflowConnectorApprovalOptions connector_approval = 11;
 }
 message StepRequestEvent
 {

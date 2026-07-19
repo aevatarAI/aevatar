@@ -206,6 +206,12 @@ public sealed partial class WorkflowExecutionCurrentStateDocument : IProjectionR
         get => InputFileRefEntries;
         set => WorkflowExecutionReadModelCollections.ReplaceCollection(InputFileRefEntries, value);
     }
+
+    public IList<WorkflowExternalActionApprovalSnapshot> ConnectorApprovals
+    {
+        get => ConnectorApprovalEntries;
+        set => WorkflowExecutionReadModelCollections.ReplaceCollection(ConnectorApprovalEntries, value);
+    }
 }
 
 public sealed partial class WorkflowExternalApprovalContinuationDocument

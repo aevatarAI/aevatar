@@ -83,7 +83,7 @@ llm-anthropic/claude-haiku-4-5
 
 Workflow 层只承载 provider-neutral 调用者凭据与路由偏好。`WorkflowCallerCredential.BearerToken` 保存的是已经规范化的 raw bearer token，不包含 HTTP `Authorization` scheme；`WorkflowLlmControl.RoutePreference` / workflow proto `route_preference` 表达的是 workflow 自身的路由偏好，不使用 NyxID 专有字段名。
 
-Host/Infrastructure 只负责从 HTTP header 提取 bearer scheme，并把 raw token 交给 workflow-owned `WorkflowCallerCredentialTokens.ParseOptional` 做一次规范化与 fail-closed 校验。进入 Workflow Application/Core 后，调用者凭据继续作为 typed workflow credential 在 command、actor state 与 LLM execution intent 中传递；不得在 workflow 中间层通过 headers、metadata 或 provider-specific 字段回填身份语义。
+Host/Infrastructure 在 HTTP 边界优先提取 NyxID proxy 注入的 `X-NyxID-Delegation-Token`，缺失时才回退到 `Authorization: Bearer`，然后把 raw token 交给 workflow-owned `WorkflowCallerCredentialTokens.ParseOptional` 做一次规范化与 fail-closed 校验。`X-NyxID-Identity-Token` 只用于 Host 认证和从 `sub` 派生 caller scope，绝不能作为 workflow caller credential 下传。进入 Workflow Application/Core 后，调用者凭据继续作为 typed workflow credential 在 command、actor state 与 LLM execution intent 中传递；不得在 workflow 中间层通过 headers、metadata 或 provider-specific 字段回填身份语义。浏览器代理配置必须保持 `inject_delegation_token: true`；CLI 和 server-to-server 调用仍可使用 Bearer fallback。
 
 定时 workflow 调度不把 fire-time 换出的短期 NyxID bearer 写入 `connector_http_authorization`、`llm_control` 或 run 级 runtime secret。Scheduled Dispatch 在可信 fire 链路中把短期 token 存入 durable vault，向 `ChatRequestEvent.caller_durable_credential` 只传 typed `DurableCallerCredentialRef`；NyxID source 的原始 subject + capability scope 作为独立 typed caller authority 随 handle 传入，禁止从 token、vault `subject_id` 或 Aevatar `scopeId` 解析。`WorkflowRunGAgent` 把 handle 与 authority 保存到 `WorkflowCallerCredentialState`，但 committed projection 会移除二者。LLM、tool 与 connector 外呼继续走统一 `TryGetCallerCredentialAsync` 漏斗，每次外呼前用 handle 现场解析 raw bearer。旧 run 若没有 handle，仍走原 runtime-secret / legacy bearer fallback，不做热替换。
 
@@ -103,13 +103,13 @@ Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴
 - `/model preset <preset-id>`：按 NyxID 返回的 setup preset 使用或创建 service
 - `/model reset`：清空用户偏好，回退到 bot 默认配置
 
-这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。`Aevatar:BackendConsole:OidcClientId` 配置的 OAuth client 与 `/oauth/authorize` 必须使用同一 canonical scope：
+这些命令不读取 Aevatar 内部密钥，也不使用独立的 `llm:status` scope。Aevatar 通过 per-user NyxID binding 做 broker token-exchange，请求 `proxy` scope 的短期 token，然后调用 NyxID LLM service catalog / route API。`Aevatar:BackendConsole:OidcClientId` 配置的 OAuth client 与 `/oauth/authorize` 必须使用同一 canonical interactive authorization scope：
 
 ```text
-openid profile email offline_access urn:nyxid:scope:broker_binding proxy llm:proxy
+openid profile email offline_access urn:nyxid:scope:broker_binding proxy
 ```
 
-如果旧 binding 对应的 OAuth client 未包含 `proxy` 或 `llm:proxy`，NyxID 会在 token-exchange 返回 `invalid_scope`。用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
+`llm:proxy` 是短期 capability token-exchange scope，不是 interactive OAuth scope；DCR、Console login 与 channel `/init` 都不得把它发送到 `/oauth/authorize`。managed execution 只有在请求短期 capability 时才使用它。如果旧 binding 缺少 canonical authorization scope，用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
 
 ---
 

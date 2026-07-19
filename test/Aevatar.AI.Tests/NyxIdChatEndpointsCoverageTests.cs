@@ -1027,6 +1027,7 @@ public class NyxIdChatEndpointsCoverageTests
                 .BuildServiceProvider(),
         };
         context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
         context.Request.Headers["X-Nyx-Refresh-Token"] = "refresh-token";
         context.Response.Body = new MemoryStream();
 
@@ -1062,7 +1063,7 @@ public class NyxIdChatEndpointsCoverageTests
         command.ActorId.Should().Be("actor-1");
         command.Prompt.Should().Be("hello there");
         command.ScopeId.Should().Be("scope-a");
-        command.AccessToken.Should().Be("valid-token");
+        command.AccessToken.Should().Be("delegation-token");
         command.Metadata.Should().NotBeNull();
         command.Metadata!.Should().NotContainKey(NyxRefreshTokenMetadataKey);
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.ModelOverride);
@@ -1070,14 +1071,13 @@ public class NyxIdChatEndpointsCoverageTests
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.MaxToolRoundsOverride);
         command.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.UserMemoryPrompt);
         command.LlmControl.Should().Be(new LLMControlContext(
-            NyxIdAccessToken: "valid-token",
+            NyxIdAccessToken: "delegation-token",
             NyxIdOrgToken: null,
             SenderNyxIdAccessToken: null,
             ModelOverride: "relay-model",
             NyxIdRoutePreference: "/relay-route",
             MaxToolRoundsOverride: 7,
             UserMemoryPrompt: "remember this"));
-
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
         body.Should().Contain("RUN_STARTED");
@@ -2562,10 +2562,10 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public void ExtractBearerToken_ShouldParseBearerHeaderAndIgnoreOthers()
+    public void ExtractNyxIdAccessToken_ShouldPreferDelegationHeaderAndFallbackToBearer()
     {
         var context = new DefaultHttpContext();
-        var method = EndpointsType.GetMethod("ExtractBearerToken", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var method = EndpointsType.GetMethod("ExtractNyxIdAccessToken", BindingFlags.NonPublic | BindingFlags.Static)!;
 
         context.Request.Headers.Authorization = "Basic abc";
         method.Invoke(null, [context]).Should().BeNull();

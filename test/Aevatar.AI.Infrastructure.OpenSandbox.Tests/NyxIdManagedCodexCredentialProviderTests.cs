@@ -55,7 +55,7 @@ public sealed class NyxIdManagedCodexCredentialProviderTests
     }
 
     [Fact]
-    public async Task IssueAsync_WhenBindingLacksScope_ReturnsTypedSetupFailure()
+    public async Task IssueAsync_WhenBrokerRejectsCapabilityScope_ReturnsTypedSetupFailure()
     {
         var broker = new RecordingBroker
         {

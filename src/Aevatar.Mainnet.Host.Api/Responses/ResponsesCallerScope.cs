@@ -8,14 +8,17 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
 {
     private readonly INyxIdCurrentUserResolver _currentUserResolver;
     private readonly NyxIdIdentityAssertionValidator _identityAssertionValidator;
+    private readonly IHttpContextAccessor? _httpContextAccessor;
 
     public NyxIdResponsesCallerScopeResolver(
         INyxIdCurrentUserResolver currentUserResolver,
-        NyxIdIdentityAssertionValidator identityAssertionValidator)
+        NyxIdIdentityAssertionValidator identityAssertionValidator,
+        IHttpContextAccessor? httpContextAccessor = null)
     {
         _currentUserResolver = currentUserResolver ?? throw new ArgumentNullException(nameof(currentUserResolver));
         _identityAssertionValidator = identityAssertionValidator ??
                                       throw new ArgumentNullException(nameof(identityAssertionValidator));
+        _httpContextAccessor = httpContextAccessor;
     }
 
     public async Task<ResponsesCallerScope> ResolveAsync(
@@ -26,6 +29,9 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
 
         if (!string.IsNullOrWhiteSpace(context.NyxIdIdentityToken))
         {
+            if (TryGetRequestValidatedSubject(out var requestValidatedSubject))
+                return ScopeForSubject(requestValidatedSubject);
+
             var validation = await _identityAssertionValidator.ValidateAsync(context.NyxIdIdentityToken, ct);
             if (!validation.Succeeded || string.IsNullOrWhiteSpace(validation.Subject))
             {
@@ -33,11 +39,7 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
                     $"NyxID identity assertion is invalid: {validation.ErrorCode ?? "identity_assertion_invalid"}.");
             }
 
-            var normalizedSubject = validation.Subject.Trim();
-            return new ResponsesCallerScope(
-                ScopeId: normalizedSubject,
-                OwnerSubject: normalizedSubject,
-                OriginKind: LlmSessionOriginKind.ApiKey);
+            return ScopeForSubject(validation.Subject);
         }
 
         var nyxIdAccessToken = context.InboundBearerToken;
@@ -55,6 +57,31 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
         return new ResponsesCallerScope(
             ScopeId: normalizedUserId,
             OwnerSubject: normalizedUserId,
+            OriginKind: LlmSessionOriginKind.ApiKey);
+    }
+
+    private bool TryGetRequestValidatedSubject(out string subject)
+    {
+        subject = string.Empty;
+        var items = _httpContextAccessor?.HttpContext?.Items;
+        if (items is null ||
+            !items.TryGetValue(NyxIdIdentityAssertionAuthentication.ValidatedSubjectItemKey, out var value) ||
+            value is not string validatedSubject ||
+            string.IsNullOrWhiteSpace(validatedSubject))
+        {
+            return false;
+        }
+
+        subject = validatedSubject.Trim();
+        return true;
+    }
+
+    private static ResponsesCallerScope ScopeForSubject(string subject)
+    {
+        var normalizedSubject = subject.Trim();
+        return new ResponsesCallerScope(
+            ScopeId: normalizedSubject,
+            OwnerSubject: normalizedSubject,
             OriginKind: LlmSessionOriginKind.ApiKey);
     }
 }

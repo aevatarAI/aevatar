@@ -149,7 +149,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var scope = query["scope"].Should().ContainSingle().Which;
         scope.Should().Be(AevatarOAuthClientScopes.AuthorizationScope);
         scope.Should().Contain(AevatarOAuthClientScopes.OfflineAccess);
-        scope.Should().Contain(AevatarOAuthClientScopes.LlmProxy);
+        scope.Should().NotContain("llm:proxy", "capability scopes are requested only during token exchange");
         query["resource"].Should().Equal(RequiredResources);
         query["prompt"].Should().ContainSingle().Which.Should().Be("consent");
         query.ContainsKey("binding_grant_id").Should().BeFalse();
@@ -319,6 +319,104 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task IssueShortLivedByBindingIdAsync_AcceptsAllServicesGrantFromAuthoritativeCatalog()
+    {
+        const string optionalResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/user-selected-service";
+        var accessToken = CreateAccessToken(new { sub = "owner-user", scope = "proxy" });
+        var handler = new SequenceHandler(
+            TokenExchangeResponse(accessToken),
+            UserServiceCatalogResponse(
+                ("svc-aevatar", RequiredAevatarResource),
+                ("svc-llm", RequiredLlmResource),
+                ("svc-ornn", RequiredOrnnResource),
+                ("svc-sandbox", RequiredSandboxResource),
+                ("svc-optional", optionalResource)));
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        var result = await broker.IssueShortLivedByBindingIdAsync(
+            SampleSubject(),
+            "bnd-all-services",
+            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
+
+        result.AccessToken.Should().Be(accessToken);
+        handler.Requests.Should().HaveCount(2);
+        handler.Requests[1].Uri.Should().Be($"{ResourceServerBaseUrl}/api/v1/user-services");
+        handler.Requests[1].Authorization.Should().Be($"Bearer {accessToken}");
+    }
+
+    [Fact]
+    public async Task IssueShortLivedByBindingIdAsync_PreservesExplicitOptionalServiceSelection()
+    {
+        const string optionalResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/user-selected-service";
+        var allowedServiceIds = new[]
+        {
+            "svc-aevatar",
+            "svc-llm",
+            "svc-ornn",
+            "svc-sandbox",
+            "svc-optional",
+        };
+        var accessToken = CreateAccessToken(new
+        {
+            resources = Array.Empty<string>(),
+            allowed_service_ids = allowedServiceIds,
+            allow_all_services = false,
+        });
+        var handler = new SequenceHandler(
+            TokenExchangeResponse(accessToken),
+            UserServiceCatalogResponse(
+                ("svc-aevatar", RequiredAevatarResource),
+                ("svc-llm", RequiredLlmResource),
+                ("svc-ornn", RequiredOrnnResource),
+                ("svc-sandbox", RequiredSandboxResource),
+                ("svc-optional", optionalResource),
+                ("svc-not-selected", $"{ResourceServerBaseUrl}/api/v1/proxy/s/not-selected")));
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        var result = await broker.IssueShortLivedByBindingIdAsync(
+            SampleSubject(),
+            "bnd-explicit-services",
+            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
+
+        result.AccessToken.Should().Be(accessToken);
+        var bindingExchangeForm = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
+        bindingExchangeForm.ContainsKey("resource").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IssueShortLivedByBindingIdAsync_RejectsUnselectedRequiredServiceFoundInCatalog()
+    {
+        var accessToken = CreateAccessToken(new
+        {
+            resources = Array.Empty<string>(),
+            allowed_service_ids = new[] { "svc-aevatar", "svc-llm", "svc-sandbox" },
+            allow_all_services = false,
+        });
+        var handler = new SequenceHandler(
+            TokenExchangeResponse(accessToken),
+            UserServiceCatalogResponse(
+                ("svc-aevatar", RequiredAevatarResource),
+                ("svc-llm", RequiredLlmResource),
+                ("svc-ornn", RequiredOrnnResource),
+                ("svc-sandbox", RequiredSandboxResource)));
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        var act = () => broker.IssueShortLivedByBindingIdAsync(
+            SampleSubject(),
+            "bnd-missing-ornn",
+            new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy });
+
+        var exception = await act.Should().ThrowAsync<BindingServiceAccessMismatchException>();
+        exception.Which.RequiredResources.Should().Equal(RequiredOrnnResource);
+    }
+
+    [Fact]
     public async Task IssueShortLivedByBindingIdAsync_RejectsBindingWithoutOrnnResource()
     {
         var broker = NewBroker(
@@ -403,7 +501,10 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         ExternalUserId = "ou_user_y",
     };
 
-    private static string CreateAccessToken(IReadOnlyList<string> resources)
+    private static string CreateAccessToken(IReadOnlyList<string> resources) =>
+        CreateAccessToken(new { resources });
+
+    private static string CreateAccessToken(object claims)
     {
         static string Encode(object value) => Convert.ToBase64String(
                 Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)))
@@ -411,8 +512,27 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             .Replace('+', '-')
             .Replace('/', '_');
 
-        return $"{Encode(new { alg = "none" })}.{Encode(new { resources })}.signature";
+        return $"{Encode(new { alg = "none" })}.{Encode(claims)}.signature";
     }
+
+    private static string TokenExchangeResponse(string accessToken) =>
+        JsonSerializer.Serialize(new
+        {
+            access_token = accessToken,
+            token_type = "Bearer",
+            expires_in = 300,
+            scope = "proxy",
+        });
+
+    private static string UserServiceCatalogResponse(params (string Id, string ResourceUri)[] services) =>
+        JsonSerializer.Serialize(new
+        {
+            services = services.Select(static service => new
+            {
+                id = service.Id,
+                resource_uri = service.ResourceUri,
+            }),
+        });
 
     private sealed class FakeOAuthClientProvider : IAevatarOAuthClientProvider
     {
@@ -483,7 +603,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     {
         private readonly Queue<string> _responseBodies = new(responseBodies);
 
-        public List<(string? Uri, string? Body)> Requests { get; } = [];
+        public List<(string? Uri, string? Body, string? Authorization)> Requests { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -492,7 +612,10 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             var body = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            Requests.Add((request.RequestUri?.ToString(), body));
+            Requests.Add((
+                request.RequestUri?.ToString(),
+                body,
+                request.Headers.Authorization?.ToString()));
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_responseBodies.Dequeue()),

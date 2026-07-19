@@ -152,6 +152,7 @@ public static class MainnetHostBuilderExtensions
         // Authentication: config-driven, provider-agnostic
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
+        builder.AddNyxIdIdentityAssertionAuthentication();
         builder.Services.AddNyxIdChat(builder.Configuration);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();

@@ -64,7 +64,10 @@ internal sealed class NyxIdManagedCodexCredentialProvider(
         }
         catch (BindingScopeMismatchException exception)
         {
-            throw Failure("llm_proxy_scope_missing", "The NyxID binding has not granted llm:proxy.", exception);
+            throw Failure(
+                "llm_proxy_scope_missing",
+                "The NyxID broker did not grant the llm:proxy capability.",
+                exception);
         }
         catch (BindingServiceAccessMismatchException exception)
         {

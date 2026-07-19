@@ -117,6 +117,49 @@ public sealed class RoleGAgentRemoteApprovalEscalationTests
                 x.ActorId == "role-timeout-lark-notify-fails");
     }
 
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_WhenCancelled_ShouldPersistTerminalFailureAndClearPending()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => Task.FromResult(new RemoteToolApprovalStatusSnapshot(
+                RemoteToolApprovalStatus.Cancelled,
+                "cancelled remotely")));
+        var notificationPort = new StubRemoteApprovalNotificationPort(
+            _ => throw new InvalidOperationException("support should not be checked"),
+            _ => throw new InvalidOperationException("notification should not be sent"));
+        var agent = CreateRoleAgent(
+            provider,
+            "role-status-cancelled",
+            remotePort,
+            notificationPort);
+        await agent.ActivateAsync();
+        agent.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "call-1",
+            ArgumentsJson = "{}",
+            RemoteApprovalId = "remote-1",
+            RemoteStatusCheckAttempt = 1,
+        };
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
+        agent.State.Sessions["session-a"].FinalContent.Should()
+            .Contain("approval_cancelled: cancelled remotely");
+    }
+
     private static ServiceProvider BuildServiceProvider()
     {
         return new ServiceCollection()
