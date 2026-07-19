@@ -84,6 +84,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             WorkflowCommandId = command.WorkflowCommandId.Trim(),
             WorkflowCorrelationId = command.WorkflowCorrelationId?.Trim() ?? string.Empty,
             ReservedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            CreateConversationIfMissing = command.CreateConversationIfMissing,
         });
     }
 
@@ -147,8 +148,22 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         var appendCommand = BuildAppendCommandFromState();
         var conversationActorId = ChatHistoryActorIds.Conversation(State.ScopeId, State.ConversationId);
         if (!await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false))
+        {
+            if (!State.CreateConversationIfMissing)
+            {
+                await PersistFailureAsync(
+                        State.DeliveryId,
+                        State.WorkflowActorId,
+                        State.WorkflowCommandId,
+                        "conversation_not_found",
+                        "Chat history conversation was not found.")
+                    .ConfigureAwait(false);
+                return;
+            }
+
             await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct)
                 .ConfigureAwait(false);
+        }
 
         var envelope = new EventEnvelope
         {
@@ -418,6 +433,7 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         next.WorkflowCorrelationId = evt.WorkflowCorrelationId;
         next.Status = ChatTurnHistoryDeliveryStatus.Reserved;
         next.ReservedAtUnixMs = evt.ReservedAtUnixMs;
+        next.CreateConversationIfMissing = evt.CreateConversationIfMissing;
         next.ErrorCode = string.Empty;
         next.ErrorSummary = string.Empty;
         return next;

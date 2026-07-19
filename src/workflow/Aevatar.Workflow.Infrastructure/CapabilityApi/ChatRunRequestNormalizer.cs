@@ -47,7 +47,30 @@ internal static class ChatRunRequestNormalizer
             NormalizeInputParts(input.InputParts),
             defaultMetadata,
             trustedCallerCredential,
-            trustedScopeId);
+            trustedScopeId,
+            chatConversation: null);
+    }
+
+    public static ChatRunRequestNormalizationResult Normalize(
+        HttpChatInput input,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        WorkflowCallerCredential? trustedCallerCredential = null,
+        string? trustedScopeId = null)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var conversationResult = NormalizeConversation(input.Conversation);
+        if (conversationResult.Error != WorkflowChatRunStartError.None)
+            return ChatRunRequestNormalizationResult.Failed(conversationResult.Error);
+
+        var chatInput = ToChatInput(input);
+        return NormalizeWithInputParts(
+            chatInput,
+            NormalizeInputParts(input.InputParts),
+            defaultMetadata,
+            trustedCallerCredential,
+            trustedScopeId,
+            conversationResult.Conversation);
     }
 
     private readonly record struct CallerCredentialNormalizationResult(
@@ -136,7 +159,34 @@ internal static class ChatRunRequestNormalizer
             normalizedInputParts,
             defaultMetadata,
             trustedCallerCredential,
-            trustedScopeId);
+            trustedScopeId,
+            chatConversation: null);
+    }
+
+    public static async ValueTask<ChatRunRequestNormalizationResult> NormalizeAsync(
+        HttpChatInput input,
+        IFileArtifactIngressPort? fileIngressPort,
+        IReadOnlyDictionary<string, string>? defaultMetadata = null,
+        WorkflowCallerCredential? trustedCallerCredential = null,
+        CancellationToken cancellationToken = default,
+        string? trustedScopeId = null)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var conversationResult = NormalizeConversation(input.Conversation);
+        if (conversationResult.Error != WorkflowChatRunStartError.None)
+            return ChatRunRequestNormalizationResult.Failed(conversationResult.Error);
+
+        var normalizedInputParts = fileIngressPort == null
+            ? NormalizeInputParts(input.InputParts)
+            : await NormalizeInputPartsAsync(input.InputParts, fileIngressPort, cancellationToken);
+        return NormalizeWithInputParts(
+            ToChatInput(input),
+            normalizedInputParts,
+            defaultMetadata,
+            trustedCallerCredential,
+            trustedScopeId,
+            conversationResult.Conversation);
     }
 
     private static ChatRunRequestNormalizationResult NormalizeWithInputParts(
@@ -144,7 +194,8 @@ internal static class ChatRunRequestNormalizer
         InputPartsNormalizationResult normalizedInputPartsResult,
         IReadOnlyDictionary<string, string>? defaultMetadata,
         WorkflowCallerCredential? trustedCallerCredential,
-        string? trustedScopeId)
+        string? trustedScopeId,
+        WorkflowChatConversationIntent? chatConversation)
     {
         if (normalizedInputPartsResult.Error != WorkflowChatRunStartError.None)
             return ChatRunRequestNormalizationResult.Failed(normalizedInputPartsResult.Error);
@@ -187,8 +238,48 @@ internal static class ChatRunRequestNormalizer
                 LlmControl: NormalizeLlmControl(input.LlmControl),
                 CallerCredential: callerCredentialResult.Credential,
                 Headers: normalizedContext.Headers,
-                ChatHistory: chatHistory));
+                ChatHistory: chatHistory,
+                ChatConversation: chatConversation));
     }
+
+    private readonly record struct ConversationNormalizationResult(
+        WorkflowChatConversationIntent? Conversation,
+        WorkflowChatRunStartError Error);
+
+    private static ConversationNormalizationResult NormalizeConversation(ChatConversationInput? source)
+    {
+        if (source == null)
+            return new ConversationNormalizationResult(null, WorkflowChatRunStartError.None);
+
+        if (source.ConversationId == null)
+            return new ConversationNormalizationResult(
+                WorkflowChatConversationIntent.Create(),
+                WorkflowChatRunStartError.None);
+
+        var conversationId = NormalizeOptional(source.ConversationId);
+        if (conversationId == null)
+            return new ConversationNormalizationResult(null, WorkflowChatRunStartError.InvalidConversationId);
+
+        return new ConversationNormalizationResult(
+            WorkflowChatConversationIntent.Continue(conversationId),
+            WorkflowChatRunStartError.None);
+    }
+
+    private static ChatInput ToChatInput(HttpChatInput input) =>
+        new()
+        {
+            Prompt = input.Prompt,
+            InputParts = input.InputParts,
+            Source = input.Source,
+            Workflow = input.Workflow,
+            SessionId = input.SessionId,
+            WorkflowYaml = input.WorkflowYaml,
+            WorkflowYamls = input.WorkflowYamls,
+            Metadata = input.Metadata,
+            Headers = input.Headers,
+            LlmControl = input.LlmControl,
+            ToolContext = input.ToolContext,
+        };
 
     private static WorkflowChatHistoryWriteIntent? NormalizeChatHistory(ChatHistoryWriteIntentInput? source)
     {

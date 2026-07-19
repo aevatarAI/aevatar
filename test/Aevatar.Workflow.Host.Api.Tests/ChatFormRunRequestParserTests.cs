@@ -44,11 +44,10 @@ public sealed class ChatFormRunRequestParserTests
             {
                 ["prompt"] = "describe this",
                 ["workflow"] = "direct",
-                ["scopeId"] = "scope-1",
             },
             [CreateFormFile("file", "cat.png", "image/png", "hello")]);
 
-        var result = await parser.ParseAsync(http, CancellationToken.None);
+        var result = await parser.ParseAsync(http, "scope-1", CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         ingressPort.Requests.Should().ContainSingle();
@@ -61,7 +60,6 @@ public sealed class ChatFormRunRequestParserTests
         result.Input.Should().NotBeNull();
         result.Input!.Prompt.Should().Be("describe this");
         result.Input.Workflow.Should().Be("direct");
-        result.Input.ScopeId.Should().Be("scope-1");
         var part = result.Input.InputParts.Should().ContainSingle().Which;
         part.Type.Should().Be("image");
         part.DataBase64.Should().BeNull();
@@ -70,6 +68,44 @@ public sealed class ChatFormRunRequestParserTests
         part.FileRef!.SourceKind.Should().Be("form_upload");
         part.FileRef.ArtifactId.Should().Be("workflow-file://file-1");
         part.FileRef.MediaType.Should().Be("image/png");
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldTrimOwnerScopeIdBeforeIngestingFile()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "describe this",
+            },
+            [CreateFormFile("file", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, "  scope-1  ", CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        ingressPort.Requests.Should().ContainSingle()
+            .Which.OwnerScopeId.Should().Be("scope-1");
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldLeaveOwnerScopeIdNull_WhenOwnerScopeIdIsBlank()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "describe this",
+            },
+            [CreateFormFile("file", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, "   ", CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        ingressPort.Requests.Should().ContainSingle()
+            .Which.OwnerScopeId.Should().BeNull();
     }
 
     [Fact]
@@ -85,7 +121,6 @@ public sealed class ChatFormRunRequestParserTests
                   "prompt": "payload prompt",
                   "workflow": "payload-workflow",
                   "sessionId": "payload-session",
-                  "scopeId": "payload-scope",
                   "workflowYaml": "payload-yaml",
                   "workflowYamls": ["payload-root-yaml"],
                   "inputParts": [
@@ -99,20 +134,18 @@ public sealed class ChatFormRunRequestParserTests
                 ["prompt"] = "form prompt",
                 ["workflow"] = "form-workflow",
                 ["sessionId"] = "form-session",
-                ["scopeId"] = "form-scope",
                 ["workflowYaml"] = "form-yaml",
                 ["workflowYamls"] = new StringValues(["form-root-yaml", "form-helper-yaml"]),
             },
             [CreateFormFile("file", "cat.png", "image/png", "hello")]);
 
-        var result = await parser.ParseAsync(http, CancellationToken.None);
+        var result = await parser.ParseAsync(http, "form-scope", CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
         result.Input.Should().NotBeNull();
         result.Input!.Prompt.Should().Be("form prompt");
         result.Input.Workflow.Should().Be("form-workflow");
         result.Input.SessionId.Should().Be("form-session");
-        result.Input.ScopeId.Should().Be("form-scope");
         result.Input.WorkflowYaml.Should().Be("form-yaml");
         result.Input.WorkflowYamls.Should().Equal("form-root-yaml", "form-helper-yaml");
         result.Input.InputParts.Should().HaveCount(2);
@@ -124,6 +157,55 @@ public sealed class ChatFormRunRequestParserTests
         uploadedPart.FileRef!.ArtifactId.Should().Be("workflow-file://file-1");
         ingressPort.Requests.Should().ContainSingle();
         ingressPort.Requests[0].OwnerScopeId.Should().Be("form-scope");
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldPreserveConversationPayload()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["payload"] = """
+                {
+                  "prompt": "continue",
+                  "conversation": {
+                    "conversationId": "conversation-existing"
+                  }
+                }
+                """,
+            },
+            [CreateFormFile("file", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, "scope-1", CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Input.Should().NotBeNull();
+        result.Input!.Conversation.Should().NotBeNull();
+        result.Input.Conversation!.ConversationId.Should().Be("conversation-existing");
+        ingressPort.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ParseAsync_ShouldRejectFormScopeIdBeforeIngestingFile()
+    {
+        var ingressPort = new RecordingWorkflowFileIngressPort();
+        var parser = CreateParser(ingressPort);
+        var http = CreateMultipartHttpContext(
+            new Dictionary<string, string>
+            {
+                ["prompt"] = "describe this",
+                ["scopeId"] = "scope-from-form",
+            },
+            [CreateFormFile("file", "cat.png", "image/png", "hello")]);
+
+        var result = await parser.ParseAsync(http, "trusted-scope", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        result.Code.Should().Be("INVALID_CHAT_INPUT");
+        ingressPort.Requests.Should().BeEmpty();
     }
 
     [Fact]

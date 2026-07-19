@@ -499,7 +499,7 @@ public sealed class ChannelWorkflowDraftRunTests
     {
         var workflow = new RecordingWorkflowChatRunInteractionPort
         {
-            Result = CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            Result = CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 .Failure(WorkflowChatRunStartError.WorkflowNotFound),
         };
         var dispatch = new RecordingActorDispatchPort();
@@ -532,7 +532,7 @@ public sealed class ChannelWorkflowDraftRunTests
         var workflow = new RecordingWorkflowChatRunInteractionPort
         {
             Result = missingFinalizeResult
-                ? new CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                ? new CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 {
                     Succeeded = true,
                     Error = WorkflowChatRunStartError.None,
@@ -541,7 +541,7 @@ public sealed class ChannelWorkflowDraftRunTests
                     Completed = false,
                     FinalizeResult = null,
                 }
-                : CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                : CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                     .Success(
                         receipt,
                         new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
@@ -1076,17 +1076,17 @@ public sealed class ChannelWorkflowDraftRunTests
 
         public Exception? Exception { get; init; }
 
-        public CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>? Result { get; init; }
+        public CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>? Result { get; init; }
 
         public bool HasRequest => _request.Task.IsCompletedSuccessfully;
 
         public async Task<WorkflowChatRunRequest> WaitForRequestAsync() =>
             await _request.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        public async Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public async Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
-            Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -1107,7 +1107,7 @@ public sealed class ChannelWorkflowDraftRunTests
                 request.Source.WorkflowName ?? "daily-greeting",
                 request.CommandIdSeed ?? "workflow-draft-run-1",
                 request.CorrelationIdSeed ?? "msg-1");
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 .Success(
                     receipt,
                     new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(

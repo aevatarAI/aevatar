@@ -66,7 +66,7 @@ internal static class ChatWebSocketRunCoordinator
         }
 
         if (executionResult.Receipt != null)
-            correlationId = executionResult.Receipt.CorrelationId;
+            correlationId = executionResult.Receipt.Run.CorrelationId;
         return;
 
         async ValueTask SendAguiEventAndRecordAsync(WorkflowRunEventEnvelope frame, CancellationToken token)
@@ -81,12 +81,12 @@ internal static class ChatWebSocketRunCoordinator
             scope.RecordFirstResponse();
         }
 
-        async ValueTask SendAckAndRecordAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
+        async ValueTask SendAckAndRecordAsync(WorkflowChatInteractionAcceptedReceipt receipt, CancellationToken token)
         {
-            correlationId = receipt.CorrelationId;
+            correlationId = receipt.Run.CorrelationId;
             await ChatWebSocketProtocol.SendAsync(
                 socket,
-                ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, receipt),
+                ChatWebSocketEnvelopeFactory.CreateCommandAck(command.RequestId, receipt.Run),
                 token,
                 responseMessageType);
             scope.RecordFirstResponse();

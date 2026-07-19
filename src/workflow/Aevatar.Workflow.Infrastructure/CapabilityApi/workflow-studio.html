@@ -602,7 +602,6 @@ function sessionTitleFrom(text){ const t=(text||"").trim().replace(/\s+/g," "); 
 async function streamChat(prompt, sessionId, onFrame, signal){
   const token = getToken(); if(!token) throw new Error("not-authenticated");
   const body = { prompt, sessionId, workflow: "studio" };
-  if(state.scopeId) body.scopeId = state.scopeId;
   const res = await fetch("/api/chat", {
     method:"POST",
     headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json", "Accept":"text/event-stream" },
