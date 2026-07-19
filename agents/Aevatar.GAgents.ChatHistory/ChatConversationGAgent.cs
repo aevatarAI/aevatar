@@ -83,17 +83,6 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         await PersistDomainEventAsync(evt);
     }
 
-    [EventHandler(EndpointName = "admitContinuation")]
-    public Task HandleContinuationAdmissionRequested(ChatConversationContinuationAdmissionRequested request)
-    {
-        if (!CanContinue(request))
-            throw new ChatConversationContinuationAdmissionNotFoundException(
-                request?.ScopeId ?? string.Empty,
-                request?.ConversationId ?? string.Empty);
-
-        return Task.CompletedTask;
-    }
-
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
@@ -128,22 +117,6 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
 
         rejectionReason = ChatTurnAppendRejectionReason.Unspecified;
         return true;
-    }
-
-    private bool CanContinue(ChatConversationContinuationAdmissionRequested request)
-    {
-        if (request is null ||
-            string.IsNullOrWhiteSpace(request.ScopeId) ||
-            string.IsNullOrWhiteSpace(request.ConversationId) ||
-            State.Deleted)
-        {
-            return false;
-        }
-
-        var scopeId = request.ScopeId.Trim();
-        var conversationId = request.ConversationId.Trim();
-        return string.Equals(State.ScopeId, scopeId, StringComparison.Ordinal) &&
-               string.Equals(State.ConversationId, conversationId, StringComparison.Ordinal);
     }
 
     private async Task PersistRejectionAsync(
