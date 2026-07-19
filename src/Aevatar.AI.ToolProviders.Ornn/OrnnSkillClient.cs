@@ -138,6 +138,72 @@ public sealed class OrnnSkillClient
         }
     }
 
+    public Task<OrnnExactSkillDetail?> GetExactSkillDetailAsync(
+        string accessToken,
+        string guid,
+        string literalVersion,
+        CancellationToken ct = default) =>
+        GetExactAsync<OrnnExactSkillDetail>(
+            accessToken,
+            $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}",
+            guid,
+            ct);
+
+    public Task<OrnnSkillJson?> GetExactSkillJsonAsync(
+        string accessToken,
+        string guid,
+        string literalVersion,
+        CancellationToken ct = default) =>
+        GetExactAsync<OrnnSkillJson>(
+            accessToken,
+            $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}",
+            guid,
+            ct);
+
+    private async Task<T?> GetExactAsync<T>(
+        string accessToken,
+        string path,
+        string guid,
+        CancellationToken ct)
+        where T : class
+    {
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        try
+        {
+            var response = await _nyxApi.ProxyRequestAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path,
+                method: "GET",
+                body: null,
+                extraHeaders: null,
+                ct: linkedCts.Token);
+            if (TryUnwrapNyxIdProxyError(response, out _))
+                return default;
+
+            var envelope = JsonSerializer.Deserialize<OrnnApiResponse<T>>(response, JsonOptions);
+            return envelope?.Data;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn exact skill read exceeded {TimeoutSeconds}s per-call budget for guid '{Guid}'",
+                (int)_perCallTimeout.TotalSeconds,
+                guid);
+            return default;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn exact skill read failed for guid '{Guid}'", guid);
+            return default;
+        }
+    }
+
     /// <summary>Fetch skill JSON including file contents.</summary>
     public async Task<OrnnSkillJson?> GetSkillJsonAsync(
         string accessToken,
@@ -487,6 +553,14 @@ public sealed class OrnnSkillSummary
     public OrnnSkillMetadata? Metadata { get; set; }
 }
 
+public sealed class OrnnExactSkillDetail
+{
+    public string? Guid { get; set; }
+    public string? Name { get; set; }
+    public string? SkillHash { get; set; }
+    public string? CreatedBy { get; set; }
+}
+
 public sealed class OrnnSkillMetadata
 {
     public string? Category { get; set; }
@@ -498,6 +572,7 @@ public sealed class OrnnSkillJson
 {
     public string? Name { get; set; }
     public string? Description { get; set; }
+    public string? Version { get; set; }
     public OrnnSkillMetadata? Metadata { get; set; }
     public Dictionary<string, string>? Files { get; set; }
 }

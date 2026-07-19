@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -77,7 +78,9 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
 
     // ─── Dynamic system prompt (inject environment, actions, memories) ───
 
-    protected override string DecorateSystemPrompt(string basePrompt)
+    protected override string DecorateSystemPrompt(
+        string basePrompt,
+        AgentProfileTurnCatalog? turnCatalog)
     {
         var sb = new StringBuilder(basePrompt);
 
@@ -273,7 +276,11 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
             //   Old pattern: household reasoning used the non-streaming chat shortcut as the main chain.
             //   New principle: household reasoning consumes the streaming chain and commits only its final text.
             var responseBuilder = new StringBuilder();
-            await foreach (var chunk in ChatStreamAsync(prompt, requestId: null, metadata))
+            await foreach (var chunk in ChatStreamAsync(
+                               prompt,
+                               requestId: null,
+                               turnCatalog: null,
+                               metadata: metadata))
             {
                 if (!string.IsNullOrEmpty(chunk.DeltaContent))
                     responseBuilder.Append(chunk.DeltaContent);

@@ -84,8 +84,8 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             history: new Aevatar.AI.Core.Chat.ChatHistory(),
             toolLoop: new ToolCallLoop(tools),
             hooks: null,
-            requestBuilder: static () => new LLMRequest { Messages = [] });
-        return runtime.CreateStepExecutor();
+            requestBuilder: static _ => new LLMRequest { Messages = [] });
+        return runtime.CreateStepExecutor(turnCatalog: null);
     }
 
     private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(bool relay)

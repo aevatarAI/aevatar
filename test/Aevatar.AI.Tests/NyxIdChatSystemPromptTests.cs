@@ -1,3 +1,6 @@
+using System.Reflection;
+using Aevatar.AI.Abstractions.Prompting;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Prompting;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
@@ -63,5 +66,40 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("successful mutating tool result or typed success receipt");
         prompt.Should().Contain("Read-only checks, searches, observation, trigger/rerun requests");
         prompt.Should().Contain("genuine successful mutating tool receipt");
+    }
+
+    [Fact]
+    public void DecorateSystemPrompt_ShouldUseCatalogSlotsWithoutShadowCandidateBody()
+    {
+        var agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider());
+        var profileLayer = new ProfileRoutingPromptLayer(
+            "profile routing layer",
+            new ProfileRoutingPromptProvenance("profile-test"),
+            new PromptLayerBounds(1_024, 256));
+        var selectedLayer = new SelectedSkillPromptLayer(
+            "selected skill body",
+            new SelectedSkillPromptProvenance("selected-test"),
+            new PromptLayerBounds(1_024, 256));
+        var enforced = new AgentProfileTurnCatalog(
+            [], profileLayer, selectedLayer, "intent-alpha", "intent-alpha");
+        var shadow = new AgentProfileTurnCatalog(
+            [], profileLayer, null, null, "intent-shadow");
+
+        var enforcedPrompt = Decorate(agent, enforced);
+        var shadowPrompt = Decorate(agent, shadow);
+
+        enforcedPrompt.Should().Contain("profile routing layer");
+        enforcedPrompt.Should().Contain("<selected-skill-procedure>\nselected skill body");
+        shadowPrompt.Should().Contain("profile routing layer");
+        shadowPrompt.Should().NotContain("selected skill body");
+        shadowPrompt.Should().NotContain("selected-skill-procedure");
+    }
+
+    private static string Decorate(NyxIdChatGAgent agent, AgentProfileTurnCatalog catalog)
+    {
+        var method = typeof(NyxIdChatGAgent).GetMethod(
+            "DecorateSystemPrompt",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return (string)method.Invoke(agent, ["kernel", catalog])!;
     }
 }

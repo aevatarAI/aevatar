@@ -14,6 +14,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -870,6 +871,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var useWorkflowFailureMarker = timeoutMs > 0;
         using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
         var streamCt = timeoutCts?.Token ?? CancellationToken.None;
+        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        var turnCatalog = await MaterializeAgentProfileTurnCatalogAsync(request, toolContext, streamCt);
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
@@ -881,7 +885,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         SessionReplayRecord replayRecord;
         try
         {
-            replayRecord = await ExecuteStreamingChatAsync(request, streamCt);
+            replayRecord = await ExecuteStreamingChatAsync(
+                request,
+                llmControl,
+                toolContext,
+                turnCatalog,
+                streamCt);
         }
         catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
         {
@@ -965,7 +974,18 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private static string SanitizeFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
 
-    private async Task<SessionReplayRecord> ExecuteStreamingChatAsync(ChatRequestEvent request, CancellationToken streamCt)
+    protected virtual Task<AgentProfileTurnCatalog?> MaterializeAgentProfileTurnCatalogAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct) =>
+        Task.FromResult<AgentProfileTurnCatalog?>(null);
+
+    private async Task<SessionReplayRecord> ExecuteStreamingChatAsync(
+        ChatRequestEvent request,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext toolContext,
+        AgentProfileTurnCatalog? turnCatalog,
+        CancellationToken streamCt)
     {
         // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
         var initialHistoryCount = History.Count;
@@ -980,14 +1000,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
             : null;
-        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
         // Stash this turn's token for chartered direct-chat subclasses (System Skill Overlay seam).
         // Kept in memory only for the turn; never persisted or logged.
         _currentTurnNyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken;
         var inputParts = ResolveRequestInputParts(request);
 
-        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
+        await foreach (var chunk in ChatStreamAsync(
+                           inputParts,
+                           request.SessionId,
+                           llmControl,
+                           toolContext,
+                           turnCatalog,
+                           metadata,
+                           streamCt))
         {
             if (chunk.Usage != null)
                 usage = chunk.Usage;

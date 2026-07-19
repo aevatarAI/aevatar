@@ -5,6 +5,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
 
@@ -22,7 +23,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
 
         var output = new StringBuilder();
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -63,7 +64,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaToolCall != null);
@@ -102,7 +103,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var captureMiddleware = new CaptureLLMResponseMiddleware();
         var runtime = CreateRuntime(provider, llmMiddlewares: [captureMiddleware]);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -130,7 +131,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking step");
@@ -154,7 +155,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(
             provider,
             tools,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [ChatMessage.System("system")],
                 RequestId = "base-request",
@@ -172,7 +173,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 ToolContext = baseToolContext,
                 Tools = [tool],
             });
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [LLMRequestMetadataKeys.CallId] = "strip-call",
@@ -246,6 +247,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                            requestId: "req-123",
                            llmControl,
                            toolContext: null,
+                           turnCatalog: null,
                            metadata,
                            CancellationToken.None))
         {
@@ -284,7 +286,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(provider);
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var messages = new List<ChatMessage>
         {
             ChatMessage.System("system"),
@@ -311,7 +313,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     {
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(provider);
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var messages = new List<ChatMessage>
         {
             ChatMessage.System("system"),
@@ -346,7 +348,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var tools = new ToolManager();
         tools.Register(tool);
         var runtime = CreateRuntime(provider, tools);
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
@@ -372,7 +374,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new RecordingStepProvider();
         var runtime = CreateRuntime(
             provider,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
                 RequestId = "base-request",
@@ -384,7 +386,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                     [LLMRequestMetadataKeys.ModelOverride] = "base-model",
                 },
             });
-        var executor = runtime.CreateStepExecutor();
+        var executor = runtime.CreateStepExecutor(turnCatalog: null);
 
         var request = executor.BuildBaseRequest(
             " request-1 ",
@@ -433,7 +435,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider, tools: tools);
         var output = new StringBuilder();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -478,7 +480,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
         {
         }
 
@@ -518,7 +520,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null))
         {
         }
 
@@ -572,7 +574,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider, tools: tools);
 
         var output = new StringBuilder();
-        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -627,7 +629,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -675,7 +677,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("write_config", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -713,7 +715,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}", isReadOnly: true));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -723,7 +725,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                               message.Content?.Contains("no successful mutating tool execution") == true)
             .Should().ContainSingle();
 
-        await foreach (var _ in runtime.ChatStreamAsync("next", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("next", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -758,7 +760,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         tools.Register(new DelegateTool("write_config", args => $"RESULT:{args}"));
         var runtime = CreateRuntime(provider, tools: tools);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
         {
         }
 
@@ -811,7 +813,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(
             provider,
             tools: tools,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
                 ToolContext = AgentToolExecutionContext.Empty with
@@ -822,7 +824,11 @@ public sealed class ChatRuntimeStreamingBufferTests
                 },
             });
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, requestId: "request-typed"))
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           "hello",
+                           maxToolRounds: 1,
+                           requestId: "request-typed",
+                           turnCatalog: null))
         {
         }
 
@@ -842,7 +848,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
             provider,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
                 RequestId = "base-request",
@@ -859,7 +865,11 @@ public sealed class ChatRuntimeStreamingBufferTests
             ["workflow.run_id"] = "run-1",
         };
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-42", providerMetadata))
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           "hello",
+                           "session-42",
+                           turnCatalog: null,
+                           metadata: providerMetadata))
         {
         }
 
@@ -883,7 +893,11 @@ public sealed class ChatRuntimeStreamingBufferTests
             [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
         };
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-metadata-only", metadata))
+        await foreach (var _ in runtime.ChatStreamAsync(
+                           "hello",
+                           "session-metadata-only",
+                           turnCatalog: null,
+                           metadata: metadata))
         {
         }
 
@@ -900,7 +914,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["A"]);
         var runtime = CreateRuntime(
             provider,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
                 RoutingContext = new LLMRequestRoutingContext(
@@ -918,7 +932,7 @@ public sealed class ChatRuntimeStreamingBufferTests
                 },
             });
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
         }
 
@@ -949,7 +963,8 @@ public sealed class ChatRuntimeStreamingBufferTests
                            maxToolRounds: 2,
                            requestId: "session-control",
                            llmControl: control,
-                           toolContext: null))
+                           toolContext: null,
+                           turnCatalog: null))
         {
         }
 
@@ -969,7 +984,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             provider,
             llmMiddlewares: [captureMiddleware]);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", "session-77", turnCatalog: null))
         {
         }
 
@@ -992,7 +1007,8 @@ public sealed class ChatRuntimeStreamingBufferTests
                 }),
             ]);
 
-        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(
+            runtime.ChatStreamAsync("hello", turnCatalog: null));
 
         result.Should().Be("short-circuit");
         provider.StreamCallCount.Should().Be(0);
@@ -1016,7 +1032,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var output = new StringBuilder();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
                 output.Append(chunk.DeltaContent);
@@ -1036,7 +1052,8 @@ public sealed class ChatRuntimeStreamingBufferTests
         var provider = new StreamingProvider(["stream-", "answer"]);
         var runtime = CreateRuntime(provider);
 
-        var result = await ChatStreamContentAggregator.AggregateContentAsync(runtime.ChatStreamAsync("hello"));
+        var result = await ChatStreamContentAggregator.AggregateContentAsync(
+            runtime.ChatStreamAsync("hello", turnCatalog: null));
 
         result.Should().Be("stream-answer");
         provider.StreamCallCount.Should().Be(1);
@@ -1128,7 +1145,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().ContainSingle();
@@ -1165,7 +1182,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaContent == "middleware-content");
@@ -1195,7 +1212,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             ]);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking-step");
@@ -1216,7 +1233,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().BeEmpty();
@@ -1227,7 +1244,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         ToolManager? tools = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
-        Func<LLMRequest>? requestBuilder = null)
+        Func<AgentProfileTurnCatalog?, LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
         var toolLoop = new ToolCallLoop(tools ?? new ToolManager());
@@ -1237,7 +1254,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             history: history,
             toolLoop: toolLoop,
             hooks: null,
-            requestBuilder: requestBuilder ?? (() => new LLMRequest { Messages = [] }),
+            requestBuilder: requestBuilder ?? (_ => new LLMRequest { Messages = [] }),
             agentMiddlewares: agentMiddlewares,
             llmMiddlewares: llmMiddlewares);
     }

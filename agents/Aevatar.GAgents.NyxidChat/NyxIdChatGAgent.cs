@@ -17,6 +17,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -45,6 +46,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly NyxIdRelayOptions? _relayOptions;
     private readonly TimeProvider _timeProvider;
+    private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
     private int _systemSkillOverlayPromptLogCounter;
 
     public NyxIdChatGAgent(
@@ -60,7 +62,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
         IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
         NyxIdRelayOptions? relayOptions = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
                remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
@@ -71,6 +74,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _turnCatalogMaterializer = turnCatalogMaterializer;
     }
 
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
@@ -291,7 +295,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         await base.OnActivateAsync(ct);
     }
 
-    protected override string DecorateSystemPrompt(string basePrompt)
+    protected override string DecorateSystemPrompt(
+        string basePrompt,
+        AgentProfileTurnCatalog? turnCatalog)
     {
         var runtimeFacts = new System.Text.StringBuilder();
         AppendRuntimeFact(
@@ -309,7 +315,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
 
         var decoratedKernel = new KernelPromptLayer(
-            base.DecorateSystemPrompt(basePrompt),
+            base.DecorateSystemPrompt(basePrompt, turnCatalog),
             NyxIdChatSystemPrompt.Value.Provenance);
         var builtInFloor = _builtInPromptFloorProvider.GetFloor();
         var global = _systemSkillOverlayProvider
@@ -323,8 +329,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             decoratedKernel,
             builtInFloor,
             global,
-            profile: null,
-            selectedSkill: null,
+            turnCatalog?.ProfilePromptLayer,
+            turnCatalog?.SelectedSkillPromptLayer,
             runtime,
             conversation: null);
 
@@ -340,6 +346,56 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
 
         return result.Prompt;
+    }
+
+    protected override async Task<AgentProfileTurnCatalog?> MaterializeAgentProfileTurnCatalogAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (State.AgentProfile is null)
+            return null;
+
+        if (_turnCatalogMaterializer is null)
+        {
+            return new AgentProfileTurnCatalog(
+                [],
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: null,
+                candidateIntentId: null,
+                [new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ProfileInvalid,
+                    "materializer_unavailable")]);
+        }
+
+        try
+        {
+            return await _turnCatalogMaterializer.MaterializeAsync(
+                State.AgentProfile,
+                request.Prompt ?? string.Empty,
+                toolContext.Credentials.NyxIdAccessToken,
+                Tools.GetAll(),
+                toolContext,
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Agent profile turn materialization failed closed.");
+            return new AgentProfileTurnCatalog(
+                [],
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: null,
+                candidateIntentId: null,
+                [new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ProfileInvalid,
+                    "materialization_exception")]);
+        }
     }
 
     public override async Task HandleChatRequest(ChatRequestEvent request)

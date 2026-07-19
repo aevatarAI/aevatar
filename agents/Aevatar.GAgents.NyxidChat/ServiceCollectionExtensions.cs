@@ -2,6 +2,8 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -47,6 +49,7 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(NyxIdChatGAgent).Assembly));
 
         services.AddCqrsCore();
+        services.AddToolSetRegistry();
         services.AddHttpClient();
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
@@ -55,6 +58,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
         services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
         services.TryAddSingleton<INyxIdChatAgentProfileSnapshotSource, DisabledNyxIdChatAgentProfileSnapshotSource>();
+        services.TryAddSingleton<SkillFrontmatterParser>();
+        services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
+        services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
+            sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
+        services.TryAddSingleton(sp => new AgentProfileTurnCatalogMaterializer(
+            sp.GetRequiredService<IToolSetRegistry>(),
+            sp.GetRequiredService<IAgentProfileTurnClassifier>(),
+            sp.GetService<IExactRemoteSkillFetcher>(),
+            sp.GetRequiredService<SkillFrontmatterParser>(),
+            sp.GetService<ILogger<AgentProfileTurnCatalogMaterializer>>()));
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();

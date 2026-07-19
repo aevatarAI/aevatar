@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -766,6 +767,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                                requestId,
                                llmControl,
                                toolContext,
+                               turnCatalog: null,
                                metadata,
                                ct))
             {
@@ -1202,8 +1204,10 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
         }
     }
 
-    protected override string DecorateSystemPrompt(string basePrompt) =>
-        _systemPromptOverride ?? base.DecorateSystemPrompt(basePrompt);
+    protected override string DecorateSystemPrompt(
+        string basePrompt,
+        AgentProfileTurnCatalog? turnCatalog) =>
+        _systemPromptOverride ?? base.DecorateSystemPrompt(basePrompt, turnCatalog);
 
     private async Task<SkillRunnerExecutionPlan> BuildExecutionPlanAsync(CancellationToken ct)
     {
@@ -1540,6 +1544,7 @@ public sealed class SkillRunnerGAgent : AIGAgentBase<SkillRunnerState>
                                {
                                    Request = toolContext.Request with { RequestId = $"{requestId}:lark-docx", CallId = null },
                                },
+                               turnCatalog: null,
                                metadata,
                                timeoutCts.Token))
             {
