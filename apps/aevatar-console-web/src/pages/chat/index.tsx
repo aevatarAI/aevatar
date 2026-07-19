@@ -651,6 +651,7 @@ const ChatPage: React.FC = () => {
         const response = await startChatStream(
           {
             prompt: promptWithHistory,
+            scopeId,
             sessionId: conversation.id,
           },
           controller.signal

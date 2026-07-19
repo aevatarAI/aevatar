@@ -175,13 +175,12 @@ describe("ChatPage MVP", () => {
       )
     );
     const request = (authFetch as jest.Mock).mock.calls[0][1];
-    const body = JSON.parse(request.body);
-    expect(body).toMatchObject({
+    expect(JSON.parse(request.body)).toMatchObject({
       prompt: "Create a support team",
+      scopeId: "scope-a",
       workflow: "studio",
     });
-    expect(body).not.toHaveProperty("scopeId");
-    expect(body.sessionId).toBeTruthy();
+    expect(JSON.parse(request.body).sessionId).toBeTruthy();
     expect(await screen.findByText("Request completed. I saved the conversation here.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open Workflow Studio" })).toBeNull();
     expect(await screen.findByText("12 tokens")).toBeTruthy();

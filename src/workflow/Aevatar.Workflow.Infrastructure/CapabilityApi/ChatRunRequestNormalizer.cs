@@ -205,9 +205,8 @@ internal static class ChatRunRequestNormalizer
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
         // 06-20-observatory-run-state-feed (R2d): when the ingress resolved a scope from the authenticated
-        // caller claim, that claim is authoritative for the run's scope_id — the body-supplied scopeId must
-        // NOT override it (closes a scope-spoofing hole and ensures the materialized current-state doc is
-        // attributed to the caller's observatory). Without a caller claim, fall back to the body scopeId.
+        // caller claim, that claim is authoritative for the run's scope_id. Without a trusted caller scope,
+        // preserve the explicit ChatInput scope for non-HTTP command/bridge paths.
         var effectiveScopeId = string.IsNullOrWhiteSpace(trustedScopeId) ? input.ScopeId : trustedScopeId;
         var normalizedContext = NormalizeContext(effectiveScopeId, input.Metadata, input.Headers, defaultMetadata);
         var normalizedMetadata = normalizedContext.Metadata;
@@ -223,10 +222,6 @@ internal static class ChatRunRequestNormalizer
         if (callerCredentialResult.Error != WorkflowChatRunStartError.None)
             return ChatRunRequestNormalizationResult.Failed(callerCredentialResult.Error);
 
-        var chatHistory = NormalizeChatHistory(input.ChatHistory);
-        if (input.ChatHistory is not null && chatHistory is null)
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.InvalidChatHistory);
-
         return ChatRunRequestNormalizationResult.Success(
             new WorkflowChatRunRequest(
                 Prompt: rawPrompt,
@@ -238,7 +233,6 @@ internal static class ChatRunRequestNormalizer
                 LlmControl: NormalizeLlmControl(input.LlmControl),
                 CallerCredential: callerCredentialResult.Credential,
                 Headers: normalizedContext.Headers,
-                ChatHistory: chatHistory,
                 ChatConversation: chatConversation));
     }
 
@@ -280,18 +274,6 @@ internal static class ChatRunRequestNormalizer
             LlmControl = input.LlmControl,
             ToolContext = input.ToolContext,
         };
-
-    private static WorkflowChatHistoryWriteIntent? NormalizeChatHistory(ChatHistoryWriteIntentInput? source)
-    {
-        var conversationId = NormalizeOptional(source?.ConversationId);
-        var turnId = NormalizeOptional(source?.TurnId);
-        var userText = NormalizeOptional(source?.UserText);
-        return string.IsNullOrWhiteSpace(conversationId) ||
-               string.IsNullOrWhiteSpace(turnId) ||
-               string.IsNullOrWhiteSpace(userText)
-            ? null
-            : new WorkflowChatHistoryWriteIntent(conversationId, turnId, userText);
-    }
 
     private static SourceNormalizationResult NormalizeSource(ChatInput input)
     {

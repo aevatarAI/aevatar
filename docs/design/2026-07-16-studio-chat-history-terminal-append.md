@@ -79,7 +79,7 @@ Query paths consume this document directly. They do not unpack `state_root`, rea
 
 Console no longer sends remote full-transcript saves to `/api/scopes/{scopeId}/chat-history/conversations/{conversationId}`. That public `PUT` surface was removed. Console still maintains local browser fallback state for responsive UI recovery.
 
-`POST /api/chat` is the generic Workflow Chat HTTP/SSE capability. Its public request body does not accept `scopeId` or `chatHistory`; the trusted scope comes from the authenticated principal. Chat History persistence is an explicit opt-in through `conversation`:
+`POST /api/chat` is the generic Workflow Chat HTTP/SSE capability. Its public request body treats legacy `scopeId` as ignored compatibility input; the trusted scope comes from the authenticated principal. It does not accept legacy `chatHistory`, and `chatHistory.conversationId` never selects a Conversation. Chat History persistence is an explicit opt-in through `conversation`:
 
 ```json
 {

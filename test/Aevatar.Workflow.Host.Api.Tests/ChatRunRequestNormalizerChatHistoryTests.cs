@@ -8,6 +8,38 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatRunRequestNormalizerChatHistoryTests
 {
     [Fact]
+    public void WorkflowChatRunRequest_ShouldNotExposeLegacyChatHistory()
+    {
+        typeof(WorkflowChatRunRequest)
+            .GetProperty("ChatHistory")
+            .Should()
+            .BeNull();
+        typeof(ChatInput)
+            .GetProperty("ChatHistory")
+            .Should()
+            .BeNull();
+        typeof(HttpChatInput)
+            .GetProperty("ChatHistory")
+            .Should()
+            .BeNull();
+    }
+
+    [Fact]
+    public void ChatInput_ShouldRejectLegacyChatHistoryWriteIntent()
+    {
+        var act = () => JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "prompt": "assistant prompt",
+              "chatHistory": "legacy payload should be ignored"
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
     public void HttpChatInput_ShouldRejectLegacyChatHistoryWriteIntent()
     {
         var act = () => JsonSerializer.Deserialize<HttpChatInput>(
@@ -27,18 +59,23 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
     }
 
     [Fact]
-    public void HttpChatInput_ShouldRejectBodyScopeId()
+    public void HttpChatInput_ShouldIgnoreBodyScopeId()
     {
-        var act = () => JsonSerializer.Deserialize<HttpChatInput>(
+        var input = JsonSerializer.Deserialize<HttpChatInput>(
             """
             {
               "prompt": "assistant prompt",
               "scopeId": "scope-from-body"
             }
             """,
-            ChatWebSocketProtocol.JsonOptions);
+            ChatWebSocketProtocol.JsonOptions)!;
 
-        act.Should().Throw<JsonException>();
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ScopeId.Should().Be("trusted-scope");
     }
 
     [Fact]
@@ -63,7 +100,6 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
         result.Request!.ScopeId.Should().Be("trusted-scope");
         result.Request.ChatConversation.Should().BeEquivalentTo(
             WorkflowChatConversationIntent.Create());
-        result.Request.ChatHistory.Should().BeNull();
     }
 
     [Fact]
@@ -87,7 +123,6 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
         result.Succeeded.Should().BeTrue();
         result.Request!.ChatConversation.Should().BeEquivalentTo(
             WorkflowChatConversationIntent.Continue("conversation-existing"));
-        result.Request.ChatHistory.Should().BeNull();
     }
 
     [Theory]

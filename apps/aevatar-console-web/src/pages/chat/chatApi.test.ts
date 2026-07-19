@@ -10,25 +10,27 @@ describe("chatApi", () => {
     jest.clearAllMocks();
   });
 
-  it("posts directly to /api/chat without body scope", async () => {
+  it("posts directly to /api/chat with the MVP request body", async () => {
     (authFetch as jest.Mock).mockResolvedValue({
       ok: true,
     } as Response);
 
     const controller = new AbortController();
-    const requestWithStaleScope = {
-      prompt: " Create a workflow ",
-      scopeId: " scope-a ",
-      sessionId: "session-a",
-    };
-
-    await startChatStream(requestWithStaleScope, controller.signal);
+    await startChatStream(
+      {
+        prompt: " Create a workflow ",
+        scopeId: " scope-a ",
+        sessionId: "session-a",
+      },
+      controller.signal
+    );
 
     expect(authFetch).toHaveBeenCalledWith(
       "/api/chat",
       expect.objectContaining({
         body: JSON.stringify({
           prompt: "Create a workflow",
+          scopeId: "scope-a",
           sessionId: "session-a",
           workflow: "studio",
         }),

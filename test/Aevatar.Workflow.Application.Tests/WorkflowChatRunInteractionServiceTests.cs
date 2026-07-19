@@ -242,49 +242,6 @@ public sealed class WorkflowChatRunInteractionServiceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShouldReserveAndBindChatHistoryDelivery_WhenLegacyChatHistoryIntentIsPresent()
-    {
-        var actorResolver = new RecordingActorResolver
-        {
-            Results =
-            {
-                new WorkflowActorResolutionResult(
-                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
-                    "direct",
-                    WorkflowChatRunStartError.None),
-            },
-        };
-        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
-        var inner = new RecordingInteractionService();
-        var service = CreateService(
-            actorResolver,
-            new RecordingProjectionPort(),
-            new RecordingRunProvisioningPort(),
-            inner,
-            chatHistoryTerminalDeliveryPort: deliveryPort);
-
-        var result = await service.ExecuteAsync(
-            new WorkflowChatRunRequest(
-                " next turn prompt ",
-                WorkflowChatSource.CatalogWorkflow("direct"),
-                ScopeId: "scope-a",
-                ChatHistory: new WorkflowChatHistoryWriteIntent(
-                    " conversation-legacy ",
-                    "legacy-turn",
-                    "legacy user text")),
-            static (_, _) => ValueTask.CompletedTask);
-
-        result.Succeeded.Should().BeTrue();
-        deliveryPort.Reservations.Should().ContainSingle();
-        var reservation = deliveryPort.Reservations[0];
-        reservation.Conversation.Intent.Should().Be(WorkflowChatConversationIntentKind.Continue);
-        reservation.Conversation.ConversationId.Should().Be("conversation-legacy");
-        reservation.UserText.Should().Be("next turn prompt");
-        result.Receipt!.ChatContext.Should().BeEquivalentTo(
-            new WorkflowChatContext("scope-a", "conversation-legacy", "generated-turn"));
-    }
-
-    [Fact]
     public async Task ExecuteAsync_ShouldNotReserveChatHistoryDelivery_WhenConversationIntentIsNone()
     {
         var actorResolver = new RecordingActorResolver

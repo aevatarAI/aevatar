@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -19,8 +20,6 @@ public sealed record ChatInput
 
     /// <summary>Structured multimodal input parts for this chat run.</summary>
     public IReadOnlyList<ChatInputContentPart>? InputParts { get; init; }
-
-    public ChatHistoryWriteIntentInput? ChatHistory { get; init; }
 
     public WorkflowChatSourceInput? Source { get; init; }
 
@@ -82,6 +81,9 @@ public sealed record HttpChatInput
 
     public ChatConversationInput? Conversation { get; init; }
 
+    /// <summary>Ignored legacy HTTP body field; trusted caller scope owns request scope.</summary>
+    public JsonElement? ScopeId { get; init; }
+
     public WorkflowChatSourceInput? Source { get; init; }
 
     /// <summary>Legacy workflow identifier lookup. Prefer <see cref="Source"/>.</summary>
@@ -124,14 +126,6 @@ public sealed record HttpChatInput
 public sealed record ChatConversationInput
 {
     public string? ConversationId { get; init; }
-}
-
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ChatHistoryWriteIntentInput
-{
-    public string? ConversationId { get; init; }
-    public string? TurnId { get; init; }
-    public string? UserText { get; init; }
 }
 
 public sealed record ChatLlmControlInput

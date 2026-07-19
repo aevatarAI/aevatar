@@ -812,14 +812,14 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
-    public async Task HandleChatPost_ShouldRejectBodyScopeIdBeforeDispatchingWorkflowCommand()
+    public async Task HandleChatPost_ShouldIgnoreBodyScopeIdAndUseTrustedScope()
     {
-        var called = false;
+        var capturedCommand = default(WorkflowChatRunRequest);
         var interactionService = new FakeCommandInteractionService
         {
-            ResultFactory = (_, _, _, _) =>
+            ResultFactory = (command, _, _, _) =>
             {
-                called = true;
+                capturedCommand = command;
                 return Task.FromResult(
                     CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
@@ -845,10 +845,8 @@ public sealed class ChatEndpointsInternalTests
             parser,
             CancellationToken.None);
 
-        var body = await ReadBodyAsync(http.Response);
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        body.Should().Contain("INVALID_CHAT_INPUT");
-        called.Should().BeFalse();
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.ScopeId.Should().Be("trusted-scope");
     }
 
     [Fact]

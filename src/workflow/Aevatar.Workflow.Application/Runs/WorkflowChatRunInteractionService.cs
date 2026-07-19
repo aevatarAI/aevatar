@@ -225,15 +225,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 : WorkflowChatConversationIntent.Continue(conversationId);
         }
 
-        if (request.ChatHistory is null)
-            return null;
-
-        var legacyConversationId = string.IsNullOrWhiteSpace(request.ChatHistory.ConversationId)
-            ? null
-            : request.ChatHistory.ConversationId.Trim();
-        return legacyConversationId == null
-            ? null
-            : WorkflowChatConversationIntent.Continue(legacyConversationId);
+        return null;
     }
 
     private static WorkflowChatRunStartError MapReservationFailure(
