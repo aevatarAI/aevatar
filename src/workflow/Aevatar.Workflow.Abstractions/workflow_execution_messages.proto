@@ -72,6 +72,15 @@ message WorkflowRunTerminalNotification {
   google.protobuf.Timestamp terminal_at = 9;
 }
 
+message WorkflowRunStartedNotification {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  google.protobuf.Timestamp started_at = 6;
+}
+
 message WorkflowRunCompletionNotificationTargetAdoptedEvent {
   WorkflowCompletionNotificationTarget completion_notification_target = 1;
   string workflow_run_id = 2;
@@ -252,6 +261,17 @@ message BindWorkflowRunDefinitionEvent
   // Per-schedule correlation id stamped at bind for provisioned (cron-fired) runs; empty for
   // non-scheduled runs. Carried from ServiceInvocationRequest.schedule_id via WorkflowDefinitionBinding.
   string schedule_id = 8;
+}
+
+// Idempotent provisioning command for a stable Run actor identity. The first
+// delivery binds an empty Run; subsequent identical deliveries are no-ops;
+// any conflicting binding is rejected without resetting execution state. When
+// execution_request is present, binding validation and first execution happen
+// in the same actor turn.
+message EnsureWorkflowRunDefinitionEvent
+{
+  BindWorkflowRunDefinitionEvent binding = 1;
+  WorkflowChatRequestEvent execution_request = 2;
 }
 message BindWorkflowDefinitionEvent
 {

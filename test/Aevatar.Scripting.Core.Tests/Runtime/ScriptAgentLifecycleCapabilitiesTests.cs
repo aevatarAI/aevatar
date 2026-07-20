@@ -830,13 +830,21 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
         public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
+            string commandId,
+            string correlationId,
             Any? inputPayload,
             string scriptRevision,
             string definitionActorId,
             string requestedEventType,
+            string? scopeId,
+            string? completionNotificationActorId,
             CancellationToken ct)
         {
             _ = inputPayload;
+            _ = commandId;
+            _ = correlationId;
+            _ = scopeId;
+            _ = completionNotificationActorId;
             ct.ThrowIfCancellationRequested();
             RunCalls.Add((runtimeActorId, runId, scriptRevision, definitionActorId, requestedEventType));
             return Task.CompletedTask;

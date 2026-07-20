@@ -41,6 +41,12 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         InitializeId();
     }
 
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct);
+        await DeliverLastRunOutcomeAsync(ct);
+    }
+
     [AllEventHandler(AllowSelfHandling = true)]
     public async Task HandleEnvelopeAsync(EventEnvelope envelope)
     {
@@ -63,6 +69,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             .On<ScriptBehaviorBoundEvent>(ApplyBound)
             .On<ScriptDomainFactCommitted>(ApplyCommittedFact)
             .On<ScriptRunOutcomeRecordedEvent>(ApplyOutcomeRecorded)
+            .On<ScriptRunOutcomeNotificationDispatchedEvent>(ApplyOutcomeNotificationDispatched)
             .OrCurrent();
 
     private async Task HandleBindRequestedAsync(
@@ -108,6 +115,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         EnsureBound();
 
         var run = ResolveRunRequest(envelope);
+        if (await ReplayRecordedRunOutcomeAsync(run, envelope, ct))
+            return;
+
         try
         {
             ValidateRunTarget(run);
@@ -115,8 +125,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         catch (Exception ex) when (run != null && ex is InvalidOperationException)
         {
             var failedScopeId = ResolveScopeId(envelope, State.ScopeId);
-            await PersistDomainEventAsync(
+            var outcome =
                 BuildOutcomeRecordedEvent(
+                    run,
                     ResolveRunId(envelope),
                     ResolveCommandId(envelope),
                     ResolveCorrelationId(envelope),
@@ -125,8 +136,11 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                     ex.Message,
                     null,
                     0,
-                    State.LastAppliedEventVersion + 1),
+                    State.LastAppliedEventVersion + 1);
+            await PersistDomainEventAsync(
+                outcome,
                 ct);
+            await DeliverLastRunOutcomeAsync(ct);
             throw;
         }
 
@@ -172,8 +186,9 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         }
         catch (Exception ex) when (run != null && ex is not OperationCanceledException)
         {
-            await PersistDomainEventAsync(
+            var outcome =
                 BuildOutcomeRecordedEvent(
+                    run,
                     runId,
                     commandId,
                     correlationId,
@@ -182,8 +197,11 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                     ex.Message,
                     null,
                     0,
-                    State.LastAppliedEventVersion + 1),
+                    State.LastAppliedEventVersion + 1);
+            await PersistDomainEventAsync(
+                outcome,
                 ct);
+            await DeliverLastRunOutcomeAsync(ct);
             throw;
         }
 
@@ -201,6 +219,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         var outcomeStateVersion = currentVersion + facts.Count + 1;
         var outcomeEvent =
             BuildOutcomeRecordedEvent(
+                run,
                 runId,
                 commandId,
                 correlationId,
@@ -211,6 +230,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 facts.Count,
                 outcomeStateVersion);
         await PersistDomainEventsAsync(facts.Concat<IMessage>([outcomeEvent]).ToList(), ct);
+        await DeliverLastRunOutcomeAsync(ct);
     }
 
     private void ValidateRunTarget(RunScriptRequestedEvent? run)
@@ -331,6 +351,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     }
 
     private ScriptRunOutcomeRecordedEvent BuildOutcomeRecordedEvent(
+        RunScriptRequestedEvent run,
         string runId,
         string commandId,
         string correlationId,
@@ -358,6 +379,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             CommittedFactCount = committedFactCount,
             StateVersion = stateVersion,
             OccurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            CompletionNotificationActorId = run.CompletionNotificationActorId ?? string.Empty,
         };
     }
 
@@ -369,6 +391,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         var next = state.Clone();
         next.LastRunId = evt.ScriptRunId ?? string.Empty;
         next.LastRunOutcome = evt.Clone();
+        next.LastRunOutcomeNotificationDispatched = false;
         next.LastAppliedEventVersion = evt.StateVersion <= 0
             ? state.LastAppliedEventVersion + 1
             : evt.StateVersion;
@@ -376,6 +399,87 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             next.ScopeId = evt.ScopeId;
         return next;
     }
+
+    private static ScriptBehaviorState ApplyOutcomeNotificationDispatched(
+        ScriptBehaviorState state,
+        ScriptRunOutcomeNotificationDispatchedEvent evt)
+    {
+        var next = state.Clone();
+        if (MatchesOutcomeNotification(next.LastRunOutcome, evt))
+            next.LastRunOutcomeNotificationDispatched = true;
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = $"{evt.ScriptRunId}:outcome-notification-dispatched";
+        return next;
+    }
+
+    private async Task<bool> ReplayRecordedRunOutcomeAsync(
+        RunScriptRequestedEvent? run,
+        EventEnvelope envelope,
+        CancellationToken ct)
+    {
+        var recorded = State.LastRunOutcome;
+        if (run == null || recorded == null ||
+            !string.Equals(recorded.ScriptRunId, ResolveRunId(envelope), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!string.Equals(recorded.CommandId, ResolveCommandId(envelope), StringComparison.Ordinal) ||
+            !string.Equals(recorded.CorrelationId, ResolveCorrelationId(envelope), StringComparison.Ordinal) ||
+            !string.Equals(
+                recorded.CompletionNotificationActorId,
+                run.CompletionNotificationActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script run '{recorded.ScriptRunId}' already completed with a different execution identity.");
+        }
+
+        await DeliverLastRunOutcomeAsync(ct);
+        return true;
+    }
+
+    private async Task DeliverLastRunOutcomeAsync(CancellationToken ct)
+    {
+        var outcome = State.LastRunOutcome?.Clone();
+        if (outcome == null ||
+            State.LastRunOutcomeNotificationDispatched ||
+            string.IsNullOrWhiteSpace(outcome.CompletionNotificationActorId))
+        {
+            return;
+        }
+
+        await SendToAsync(
+            outcome.CompletionNotificationActorId.Trim(),
+            outcome,
+            ct,
+            new EventEnvelopePublishOptions
+            {
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    DeduplicationOperationId =
+                        $"script-run-terminal:{outcome.ScriptRunId}:{outcome.CommandId}",
+                },
+            });
+        await PersistDomainEventAsync(new ScriptRunOutcomeNotificationDispatchedEvent
+        {
+            ScriptRunId = outcome.ScriptRunId,
+            CommandId = outcome.CommandId,
+            CompletionNotificationActorId = outcome.CompletionNotificationActorId,
+            DispatchedAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        }, ct);
+    }
+
+    private static bool MatchesOutcomeNotification(
+        ScriptRunOutcomeRecordedEvent? outcome,
+        ScriptRunOutcomeNotificationDispatchedEvent dispatched) =>
+        outcome != null &&
+        string.Equals(outcome.ScriptRunId, dispatched.ScriptRunId, StringComparison.Ordinal) &&
+        string.Equals(outcome.CommandId, dispatched.CommandId, StringComparison.Ordinal) &&
+        string.Equals(
+            outcome.CompletionNotificationActorId,
+            dispatched.CompletionNotificationActorId,
+            StringComparison.Ordinal);
 
     private bool IsSameBinding(BindScriptBehaviorRequestedEvent evt)
     {

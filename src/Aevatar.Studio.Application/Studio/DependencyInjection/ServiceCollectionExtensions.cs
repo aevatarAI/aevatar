@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
@@ -39,6 +40,9 @@ public static class ServiceCollectionExtensions
         // aevatar_provision_workflow_schedule agent tool can depend only on Aevatar.Studio.Application.Abstractions.
         services.TryAddSingleton<IWorkflowScheduleProvisioningPort, WorkflowScheduleProvisioningPort>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
+        services.TryAddSingleton<WorkOrderAssignmentValidator>();
+        services.TryAddSingleton<IWorkOrderExecutionPort, ValidatedWorkOrderExecutionPort>();
+        services.TryAddSingleton<IWorkOrderService, WorkOrderService>();
         services.TryAddSingleton<IStudioTeamProvisioningPort, StudioTeamProvisioningPort>();
         services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();
         services.TryAddSingleton<IStudioMemberWorkflowBindingPort, StudioMemberWorkflowBindingPort>();

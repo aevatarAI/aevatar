@@ -430,6 +430,64 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task CompletionNotification_ShouldReplayCommittedTerminalFactAfterRestart()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new CountingLlmProviderFactory("completed output");
+        var services = BuildServices(store);
+        var failingPublisher = new RecordingEventPublisher { FailSends = true };
+        var first = CreateAgent(services, "role-terminal-replay", provider);
+        first.EventPublisher = failingPublisher;
+        await first.ActivateAsync();
+        await first.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleId = "role-1",
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        var request = new ChatRequestEvent
+        {
+            Prompt = "complete work",
+            SessionId = "session-1",
+            RunContext = new RoleChatRunContext
+            {
+                RunId = "run-1",
+                CommandId = "cmd-1",
+                CorrelationId = "corr-1",
+                CompletionNotificationActorId = "service-run:tenant:svc:run-1",
+            },
+        };
+        await first.HandleChatRequest(request);
+        first.State.Sessions["session-1"].CompletionNotificationDispatched.Should().BeFalse();
+        var committed = (await store.GetEventsAsync("role-terminal-replay"))
+            .Single(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .EventData
+            .Unpack<RoleChatSessionCompletedEvent>();
+        committed.ActorId.Should().Be("role-terminal-replay");
+        committed.RunContext.Should().BeEquivalentTo(request.RunContext);
+        committed.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+        committed.Content.Should().Be("completed output");
+        committed.TerminalTime.Should().NotBeNull();
+
+        var recoveredPublisher = new RecordingEventPublisher();
+        var recovered = CreateAgent(services, "role-terminal-replay", provider);
+        recovered.EventPublisher = recoveredPublisher;
+
+        await recovered.ActivateAsync();
+
+        provider.StreamCallCount.Should().Be(1);
+        var sent = recoveredPublisher.Sends.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be("service-run:tenant:svc:run-1");
+        sent.Options!.Delivery!.DeduplicationOperationId.Should()
+            .Be("role-chat-terminal:run-1:cmd-1");
+        sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>()
+            .Which.Should().BeEquivalentTo(committed);
+        recovered.State.Sessions["session-1"].CompletionNotificationDispatched.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task StartedSessionReplay_ShouldResumeProviderCallAndPersistCompletion()
     {
         var store = new InMemoryEventStoreForTests();
@@ -1102,7 +1160,11 @@ public class RoleGAgentReplayContractTests
 
     private sealed class RecordingEventPublisher(List<string>? operationLog = null) : IEventPublisher
     {
+        public bool FailSends { get; init; }
+
         public List<IMessage> Published { get; } = [];
+
+        public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> Sends { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -1130,7 +1192,10 @@ public class RoleGAgentReplayContractTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = targetActorId;
+            Sends.Add((targetActorId, evt, options));
+            if (FailSends)
+                throw new InvalidOperationException("simulated completion notification failure");
+
             return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
 

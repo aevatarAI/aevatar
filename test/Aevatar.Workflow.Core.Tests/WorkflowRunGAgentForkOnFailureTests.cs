@@ -259,6 +259,29 @@ public sealed class WorkflowRunGAgentForkOnFailureTests
         fallback.Error.Should().NotContain("Bearer");
     }
 
+    [Fact]
+    public async Task ChatRequest_ReplayedWithSameCommandId_ShouldStartRunOnlyOnce()
+    {
+        var runId = "work-order-run-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId, WorkflowYaml(onFailure: false));
+        var envelope = EnvelopeFrom("work-order", new WorkflowChatRequestEvent
+        {
+            Prompt = "hello",
+            ScopeId = "scope-1",
+        });
+        envelope.Id = "work-order-dispatch-command-1";
+        envelope.Propagation.CorrelationId = "work-order-dispatch-command-1";
+
+        await harness.Agent.HandleEventAsync(envelope);
+        await harness.Agent.HandleEventAsync(envelope.Clone());
+
+        CommittedEvents<WorkflowRunExecutionStartedEvent>(harness.CommittedPublisher)
+            .Should().ContainSingle();
+        harness.Publisher.Published.Count(item => item.Event is StartWorkflowEvent)
+            .Should().Be(1);
+        harness.Agent.State.LastCommandId.Should().Be("work-order-dispatch-command-1");
+    }
+
     private static async Task<RunHarness> CreateStartedRunAsync(string workflowYaml, int attempt)
     {
         var runId = "run-1859-" + Guid.NewGuid().ToString("N");

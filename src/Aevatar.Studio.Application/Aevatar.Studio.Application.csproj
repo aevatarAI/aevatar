@@ -19,6 +19,7 @@
     <ProjectReference Include="..\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.WorkOrder\Aevatar.GAgents.WorkOrder.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -516,16 +516,6 @@ public sealed class ScriptServiceRunInteractionTests
         public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
-            Any? inputPayload,
-            string scriptRevision,
-            string definitionActorId,
-            string requestedEventType,
-            CancellationToken ct) =>
-            throw new NotSupportedException();
-
-        public Task RunRuntimeAsync(
-            string runtimeActorId,
-            string runId,
             string commandId,
             string correlationId,
             Any? inputPayload,
@@ -533,6 +523,7 @@ public sealed class ScriptServiceRunInteractionTests
             string definitionActorId,
             string requestedEventType,
             string? scopeId,
+            string? completionNotificationActorId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();

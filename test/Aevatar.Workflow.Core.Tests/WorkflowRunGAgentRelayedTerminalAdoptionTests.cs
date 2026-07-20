@@ -1374,4 +1374,39 @@ public sealed class WorkflowRunGAgentRelayedTerminalAdoptionTests
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
+
+    [Fact]
+    public async Task WorkflowStart_ShouldNotifyTargetAndReplayFromCommittedRunningState()
+    {
+        var runId = "run-started-notification-" + Guid.NewGuid().ToString("N");
+        var harness = await CreateRunAsync(runId);
+
+        await harness.Agent.HandleEventAsync(EnvelopeFrom(
+            "api",
+            CreateNotificationTargetRequest(),
+            envelopeId: "command-started-1",
+            correlationId: "correlation-started-1"));
+
+        var sent = harness.Publisher.SuccessfulSends
+            .Should().ContainSingle(published => published.Event is WorkflowRunStartedNotification)
+            .Subject;
+        sent.TargetActorId.Should().Be("delivery-actor-1");
+        var started = sent.Event.Should().BeOfType<WorkflowRunStartedNotification>().Subject;
+        started.DeliveryId.Should().Be("delivery-1");
+        started.WorkflowActorId.Should().Be(runId);
+        started.WorkflowRunId.Should().Be(runId);
+        started.WorkflowCommandId.Should().Be("command-started-1");
+        started.WorkflowCorrelationId.Should().Be("correlation-started-1");
+        started.StartedAt.Should().NotBeNull();
+        var deduplicationOperationId = sent.Options?.Delivery?.DeduplicationOperationId;
+        deduplicationOperationId.Should().NotBeNullOrWhiteSpace();
+
+        var reactivated = await CreateRunAsync(runId, harness.EventStore);
+        var replayed = reactivated.Publisher.SuccessfulSends
+            .Should().ContainSingle(published => published.Event is WorkflowRunStartedNotification)
+            .Subject;
+        replayed.TargetActorId.Should().Be("delivery-actor-1");
+        replayed.Event.Should().BeEquivalentTo(started);
+        replayed.Options?.Delivery?.DeduplicationOperationId.Should().Be(deduplicationOperationId);
+    }
 }

@@ -1454,10 +1454,14 @@ public sealed class WorkflowInfrastructureCoverageTests
         public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
+            string commandId,
+            string correlationId,
             Google.Protobuf.WellKnownTypes.Any? inputPayload,
             string scriptRevision,
             string definitionActorId,
             string requestedEventType,
+            string? scopeId,
+            string? completionNotificationActorId,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();

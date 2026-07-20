@@ -97,6 +97,43 @@ public sealed class WorkflowExecutionContextAdapterTests
     }
 
     [Fact]
+    public async Task EnsureWorkflowRunDefinition_ShouldBeIdempotentWithoutResettingState()
+    {
+        var (agent, runtime) = CreateBareWorkflowRunAgent("work-order-run-1");
+        var command = BuildEnsureWorkflowRunDefinition();
+
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(command);
+        var boundState = agent.State.Clone();
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(command.Clone());
+
+        agent.State.Equals(boundState).Should().BeTrue();
+        runtime.Links.Should().OnlyContain(link =>
+            link.ParentId == "definition-1" &&
+            link.ChildId == "work-order-run-1");
+    }
+
+    [Fact]
+    public async Task EnsureWorkflowRunDefinition_ShouldRejectConflictingBinding()
+    {
+        var (agent, runtime) = CreateBareWorkflowRunAgent("work-order-run-1");
+        await agent.HandleEnsureWorkflowRunDefinitionAsync(BuildEnsureWorkflowRunDefinition());
+        var linksBeforeConflict = runtime.Links.Count;
+        var conflicting = BuildEnsureWorkflowRunDefinition();
+        conflicting.Binding.WorkflowYaml = "name: changed\nroles: []\nsteps: []\n";
+        conflicting.ExecutionRequest = new WorkflowChatRequestEvent
+        {
+            Prompt = "must not execute against the existing definition",
+        };
+
+        var act = () => agent.HandleEnsureWorkflowRunDefinitionAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*already bound to a different definition or identity*");
+        runtime.Links.Should().HaveCount(linksBeforeConflict);
+        agent.State.LastCommandId.Should().BeEmpty();
+    }
+
+    [Fact]
     public void CallerNyxIdAuthority_ShouldExposeNormalizedSnapshotWithoutLeakingMutableState()
     {
         var host = new RecordingStateHost();
@@ -640,6 +677,36 @@ public sealed class WorkflowExecutionContextAdapterTests
         setIdMethod!.Invoke(agent, [agentId]);
     }
 
+    private static (WorkflowRunGAgent Agent, UnsupportedActorRuntime Runtime) CreateBareWorkflowRunAgent(
+        string actorId)
+    {
+        var runtime = new UnsupportedActorRuntime();
+        var agent = new WorkflowRunGAgent(
+            runtime,
+            runtime,
+            new EmptyEventModuleFactory(),
+            [])
+        {
+            EventSourcingBehaviorFactory = new InMemoryEventSourcingBehaviorFactory<WorkflowRunState>(),
+        };
+        SetAgentId(agent, actorId);
+        return (agent, runtime);
+    }
+
+    private static EnsureWorkflowRunDefinitionEvent BuildEnsureWorkflowRunDefinition() =>
+        new()
+        {
+            Binding = new BindWorkflowRunDefinitionEvent
+            {
+                DefinitionActorId = "definition-1",
+                WorkflowYaml = "name: direct\nroles: []\nsteps: []\n",
+                WorkflowName = "direct",
+                RunId = "work-order-run-1",
+                ScopeId = "scope-1",
+                RunOrigin = WorkflowRunOrigins.WorkOrder,
+            },
+        };
+
     private sealed class InMemoryEventSourcingBehaviorFactory<TState>
         : IEventSourcingBehaviorFactory<TState>
         where TState : class, IMessage<TState>, new()
@@ -717,6 +784,8 @@ public sealed class WorkflowExecutionContextAdapterTests
 
     private sealed class UnsupportedActorRuntime : IActorRuntime, IActorDispatchPort
     {
+        public List<(string ParentId, string ChildId)> Links { get; } = [];
+
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
             throw new NotSupportedException();
@@ -733,8 +802,12 @@ public sealed class WorkflowExecutionContextAdapterTests
         public Task<bool> ExistsAsync(string id) =>
             throw new NotSupportedException();
 
-        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Links.Add((parentId, childId));
+            return Task.CompletedTask;
+        }
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) =>
             throw new NotSupportedException();
