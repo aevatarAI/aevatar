@@ -3,10 +3,11 @@ namespace Aevatar.Studio.Application.Provisioning;
 /// <summary>
 /// Request to provision a runnable, Observatory-delivered workflow schedule.
 ///
-/// The caller supplies the workflow body inline (YAML) plus scheduling intent; the
-/// adapter composes member-create + bind + a <c>ScheduleKind=Workflow</c>
-/// scheduled-dispatch so the runs land in the Observatory. No serviceId / memberId
-/// / workflowId is accepted — those are minted internally and returned.
+/// The caller supplies the target <see cref="TeamId"/>, workflow body inline
+/// (YAML), and scheduling intent; the adapter composes Team-owned member-create
+/// + bind + a <c>ScheduleKind=Workflow</c> scheduled-dispatch so the runs land in
+/// the Observatory. No serviceId / memberId / workflowId is accepted — those are
+/// minted internally and returned.
 ///
 /// <see cref="ScopeId"/> and <see cref="CallerSubjectExternalUserId"/> /
 /// <see cref="CallerSubjectPlatform"/> identify the owning scope and the caller's
@@ -18,6 +19,7 @@ namespace Aevatar.Studio.Application.Provisioning;
 /// </summary>
 public sealed record WorkflowScheduleProvisioningRequest(
     string ScopeId,
+    string TeamId,
     string DisplayName,
     string WorkflowYaml)
 {
@@ -68,8 +70,10 @@ public sealed record WorkflowScheduleProvisioningRequest(
 public sealed record WorkflowScheduleProvisioningResult(
     string MemberId,
     string ScopeId,
+    string TeamId,
     string BindingStatus,
-    string ObservatoryUrl)
+    string ObservatoryUrl,
+    string StudioUrl)
 {
     public string? ScheduleId { get; init; }
 

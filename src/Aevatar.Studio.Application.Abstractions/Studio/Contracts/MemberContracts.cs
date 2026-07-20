@@ -206,8 +206,9 @@ public sealed record CreateStudioMemberRequest(
     string ImplementationKind,
     string? Description = null,
     string? MemberId = null,
-    // Optional initial team assignment (ADR-0017). Empty string is rejected
-    // at the application boundary; null / absent means "do not assign".
+    // Initial team assignment. Required for workflow members; optional for
+    // other member kinds. Empty string is rejected at the application boundary;
+    // null / absent means "do not assign" only for non-workflow members.
     string? TeamId = null,
     StudioMemberImplementationRefResponse? ImplementationRef = null);
 
