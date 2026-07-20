@@ -393,10 +393,19 @@ public sealed class ChatRuntime
                 yield return new LLMStreamChunk { DeltaContent = "\n\n" };
             }
 
+            var authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
             var streamingExecutor = new StreamingToolExecutor(
                 _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                toolContext: AgentToolExecutionContextMapper.FromRequest(baseRequest));
+                toolContext: authorizedToolContext);
             using var streamingToolState = streamingExecutor.CreateExecutionState();
+
+            void BindAuthorizedRequest(LLMRequest authorizedRequest)
+            {
+                authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(authorizedRequest);
+                streamingExecutor = new StreamingToolExecutor(
+                    _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                    toolContext: authorizedToolContext);
+            }
 
             List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
 
@@ -434,7 +443,8 @@ public sealed class ChatRuntime
                                            deferredToolCalls.Add(toolCall);
                                        else
                                            streamingExecutor.AddTool(streamingToolState, toolCall);
-                                   }))
+                                   },
+                                   BindAuthorizedRequest))
                 {
                     roundChunks.Add(chunk);
                 }
@@ -449,7 +459,7 @@ public sealed class ChatRuntime
 
                 if (!roundCallsTools &&
                     await skillRecovery.TryRecoverFinalAnswerAsync(
-                        roundRequest.ToolContext,
+                        authorizedToolContext,
                         messages,
                         pendingHistoryMessages,
                         roundResult.Content,
@@ -487,7 +497,8 @@ public sealed class ChatRuntime
                                            deferredToolCalls.Add(toolCall);
                                        else
                                            streamingExecutor.AddTool(streamingToolState, toolCall);
-                                   }))
+                                   },
+                                   BindAuthorizedRequest))
                 {
                     wroteOutput = true;
                     yield return chunk;
@@ -548,7 +559,7 @@ public sealed class ChatRuntime
 
                         var textToolExecutor = new StreamingToolExecutor(
                             _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
-                            toolContext: AgentToolExecutionContextMapper.FromRequest(roundRequest));
+                            toolContext: authorizedToolContext);
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
                             textToolExecutor.AddTool(textToolState, tc);
@@ -578,7 +589,7 @@ public sealed class ChatRuntime
                 }
 
                 if (await skillRecovery.TryRecoverFinalAnswerAsync(
-                        roundRequest.ToolContext,
+                        authorizedToolContext,
                         messages,
                         pendingHistoryMessages,
                         roundResult.Content,
@@ -830,7 +841,8 @@ public sealed class ChatRuntime
         LLMRequest request,
         StreamingRoundScope roundScope,
         [EnumeratorCancellation] CancellationToken ct,
-        Action<ToolCall>? onToolCallCompleted = null)
+        Action<ToolCall>? onToolCallCompleted = null,
+        Action<LLMRequest>? onRequestAuthorized = null)
     {
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
@@ -871,6 +883,7 @@ public sealed class ChatRuntime
         if (readyTask == coreTurnTask && !llmCallContext.Terminate)
         {
             llmCallContext.Request = authorizationFence.Apply(llmCallContext.Request);
+            onRequestAuthorized?.Invoke(llmCallContext.Request);
             var full = new StringBuilder();
             var fullReasoning = new StringBuilder();
             TokenUsage? usage = null;

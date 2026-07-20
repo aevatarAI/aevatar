@@ -124,7 +124,7 @@ public sealed partial class OrnnExactRemoteSkillFetcher : IExactRemoteSkillFetch
                 readResult.FailureDetail),
             null => null,
             _ => ExactRemoteSkillFetchResult.Failed(
-                ExactRemoteSkillFetchFailureCode.Failed,
+                ExactRemoteSkillFetchFailureCode.InvalidResponse,
                 readResult.FailureDetail),
         };
 

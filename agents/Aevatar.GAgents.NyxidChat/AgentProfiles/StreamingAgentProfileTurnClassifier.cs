@@ -66,7 +66,7 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
                 if (chunk.DeltaToolCall is not null)
                     return AgentProfileTurnClassificationResult.Failed("tool_call_not_allowed");
                 if (string.IsNullOrEmpty(chunk.DeltaContent))
-                    return AgentProfileTurnClassificationResult.Failed("empty_delta");
+                    continue;
 
                 outputBytes += Encoding.UTF8.GetByteCount(chunk.DeltaContent);
                 if (outputBytes > MaximumOutputUtf8Bytes)
@@ -80,7 +80,7 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
         }
         catch (JsonException)
         {
-            return AgentProfileTurnClassificationResult.Failed("provider_failure");
+            return AgentProfileTurnClassificationResult.Failed("malformed_output");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -113,7 +113,7 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
-                return AgentProfileTurnClassificationResult.Failed("unknown_intent");
+                return AgentProfileTurnClassificationResult.Failed("malformed_output");
 
             foreach (var property in root.EnumerateObject())
             {
@@ -142,7 +142,7 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
                 !root.TryGetProperty("intent_id", out var intentProperty) ||
                 intentProperty.ValueKind != JsonValueKind.String)
             {
-                return AgentProfileTurnClassificationResult.Failed("unknown_intent");
+                return AgentProfileTurnClassificationResult.Failed("malformed_output");
             }
 
             var intentId = intentProperty.GetString();
