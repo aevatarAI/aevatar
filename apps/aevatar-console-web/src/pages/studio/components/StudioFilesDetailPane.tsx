@@ -189,6 +189,11 @@ type Props = {
   readonly onOpenScriptInStudio: (scriptId: string) => void;
 };
 
+type ChatDeleteOperation = {
+  readonly conversationId: string;
+  readonly scopeId: string;
+};
+
 const detailScrollStyle: React.CSSProperties = {
   display: 'flex',
   flex: 1,
@@ -1041,6 +1046,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const queryClient = useQueryClient();
   const scopeIdRef = React.useRef(scopeId);
   scopeIdRef.current = scopeId;
+  const chatDeleteOperationRef = React.useRef<ChatDeleteOperation | null>(null);
+  const selectedConversationIdRef = React.useRef("");
 
   const settingsDocument = React.useMemo(
     () =>
@@ -1153,6 +1160,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const selectedConversationId = selectedFile.startsWith('chat-history:')
     ? selectedFile.slice('chat-history:'.length)
     : '';
+  selectedConversationIdRef.current = selectedConversationId;
   const selectedConversationMeta =
     chatConversations.data?.find(
       (conversation) => conversation.id === selectedConversationId,
@@ -1165,8 +1173,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
 
   React.useEffect(() => {
     setChatDeleteConfirmationOpen(false);
-    setChatDeletePending(false);
     setChatNotice(null);
+    if (chatDeleteOperationRef.current?.scopeId !== scopeId) {
+      chatDeleteOperationRef.current = null;
+      setChatDeletePending(false);
+    }
   }, [scopeId, selectedConversationId]);
 
   const handleSaveSettings = async () => {
@@ -1341,36 +1352,52 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   };
 
   const handleDeleteConversation = async () => {
-    if (!scopeId || !selectedConversationId) {
+    if (!scopeId || !selectedConversationId || chatDeleteOperationRef.current) {
       return;
     }
 
     setChatNotice(null);
     setChatDeletePending(true);
-    const operationScopeId = scopeId;
+    const operation: ChatDeleteOperation = {
+      conversationId: selectedConversationId,
+      scopeId,
+    };
+    chatDeleteOperationRef.current = operation;
 
     try {
-      await chatHistoryApi.deleteConversation(scopeId, selectedConversationId);
-      if (scopeIdRef.current !== operationScopeId) {
+      await chatHistoryApi.deleteConversation(
+        operation.scopeId,
+        operation.conversationId,
+      );
+      if (scopeIdRef.current !== operation.scopeId) {
         return;
       }
       await queryClient.cancelQueries({
-        queryKey: ['studio-files-chat-histories', scopeId],
+        queryKey: ['studio-files-chat-histories', operation.scopeId],
       });
-      onChatConversationDeleted(operationScopeId, selectedConversationId);
+      onChatConversationDeleted(operation.scopeId, operation.conversationId);
       await queryClient.invalidateQueries({
-        queryKey: ['studio-files-chat-histories', scopeId],
+        queryKey: ['studio-files-chat-histories', operation.scopeId],
       });
       queryClient.removeQueries({
-        queryKey: ['studio-files-chat-history', scopeId, selectedConversationId],
+        queryKey: [
+          'studio-files-chat-history',
+          operation.scopeId,
+          operation.conversationId,
+        ],
       });
-      setChatNotice({
-        type: 'success',
-        message: t("pages.studio.studiofilesdetailpane.conversation.deleted", "Conversation deleted."),
-      });
-      setChatDeleteConfirmationOpen(false);
+      if (selectedConversationIdRef.current === operation.conversationId) {
+        setChatNotice({
+          type: 'success',
+          message: t("pages.studio.studiofilesdetailpane.conversation.deleted", "Conversation deleted."),
+        });
+        setChatDeleteConfirmationOpen(false);
+      }
     } catch (error) {
-      if (scopeIdRef.current !== operationScopeId) {
+      if (
+        scopeIdRef.current !== operation.scopeId ||
+        selectedConversationIdRef.current !== operation.conversationId
+      ) {
         return;
       }
       setChatNotice({
@@ -1381,7 +1408,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             : t("pages.studio.studiofilesdetailpane.failed.to.delete.conversation", "Failed to delete conversation."),
       });
     } finally {
-      if (scopeIdRef.current === operationScopeId) {
+      if (chatDeleteOperationRef.current === operation) {
+        chatDeleteOperationRef.current = null;
         setChatDeletePending(false);
       }
     }

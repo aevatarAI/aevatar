@@ -137,11 +137,104 @@ export function hydrateStoredMessages(
 function resolveStoredConversationStatus(
   messages: readonly StoredChatMessage[]
 ): LocalChatStatus {
-  return messages.some(
-    (message) => message.status === "error" || Boolean(message.error?.trim())
-  )
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  const latestTerminalMessage = latestAssistantMessage ?? messages.at(-1);
+
+  return latestTerminalMessage?.status === "error" ||
+    Boolean(latestTerminalMessage?.error?.trim())
     ? "error"
     : "completed_text";
+}
+
+function ChatMessageEntry({ message }: { message: ChatMessage }): React.ReactElement {
+  const authorName = message.authorName?.trim() || "";
+  const isStandardRole = message.role === "user" || message.role === "assistant";
+
+  if (isStandardRole) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {authorName ? (
+          <Typography.Text
+            style={{
+              alignSelf: message.role === "user" ? "flex-end" : "flex-start",
+              color: "#6b7280",
+              fontSize: 11,
+              lineHeight: 1.3,
+              marginLeft: message.role === "assistant" ? 34 : 0,
+            }}
+          >
+            {authorName}
+          </Typography.Text>
+        ) : null}
+        <ChatMessageBubble message={message} />
+      </div>
+    );
+  }
+
+  const roleLabel =
+    message.role.trim() || t("pages.chat.index.unknownRole", "Message");
+  const displayName = authorName || roleLabel;
+
+  return (
+    <article
+      aria-label={`${displayName} ${roleLabel} message`}
+      style={{ display: "flex", gap: 10 }}
+    >
+      <MessageOutlined
+        style={{
+          background: "#f3f4f6",
+          border: "1px solid #e5e7eb",
+          borderRadius: 999,
+          color: "#4b5563",
+          flex: "0 0 auto",
+          fontSize: 12,
+          height: 24,
+          lineHeight: "22px",
+          marginTop: 3,
+          textAlign: "center",
+          width: 24,
+        }}
+      />
+      <div style={{ flex: 1, maxWidth: "82%", minWidth: 0 }}>
+        <Space align="center" size={6} wrap>
+          <Typography.Text strong style={{ fontSize: 12 }}>
+            {displayName}
+          </Typography.Text>
+          {authorName ? <Tag>{roleLabel}</Tag> : null}
+        </Space>
+        {message.thinking ? (
+          <Typography.Paragraph
+            style={{ color: "#6b7280", fontSize: 12, margin: "6px 0" }}
+          >
+            {message.thinking}
+          </Typography.Paragraph>
+        ) : null}
+        {message.content ? (
+          <div
+            style={{
+              color: "#1f2937",
+              fontSize: 14,
+              lineHeight: 1.65,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {message.content}
+          </div>
+        ) : null}
+        {message.status === "error" && message.error ? (
+          <Alert
+            description={message.error}
+            showIcon
+            style={{ marginTop: 8 }}
+            type="error"
+          />
+        ) : null}
+      </div>
+    </article>
+  );
 }
 
 function errorMessage(error: unknown): string {
@@ -454,7 +547,27 @@ const ChatPage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data]
   );
-  const scopeId = routeScopeId || resolvedScope?.scopeId || "";
+  const authenticatedScopeId = resolvedScope?.scopeId.trim() || "";
+  const scopeMismatch = Boolean(
+    authSessionQuery.isSuccess &&
+      routeScopeId &&
+      authenticatedScopeId &&
+      routeScopeId !== authenticatedScopeId
+  );
+  const scopeId =
+    authSessionQuery.isSuccess && !scopeMismatch ? authenticatedScopeId : "";
+  const canStartChat = Boolean(
+    authSessionQuery.isSuccess &&
+      authSessionQuery.data?.enabled === true &&
+      authSessionQuery.data.authenticated === true &&
+      scopeId
+  );
+  const chatCreationUnavailable = Boolean(
+    authSessionQuery.isSuccess &&
+      authSessionQuery.data?.enabled === false &&
+      scopeId
+  );
+  const scopeLabelId = scopeMismatch ? routeScopeId : scopeId;
   if (scopeIdentityRef.current !== scopeId) {
     scopeIdentityRef.current = scopeId;
     scopeEpochRef.current += 1;
@@ -863,7 +976,7 @@ const ChatPage: React.FC = () => {
 
   const runChat = useCallback(
     async (conversation: ConversationState, input: string) => {
-      if (!scopeId || isStreaming) {
+      if (!canStartChat || !scopeId || isStreaming) {
         return;
       }
 
@@ -1117,7 +1230,7 @@ const ChatPage: React.FC = () => {
         }
       }
     },
-    [isStreaming, reconcileConversation, scopeId]
+    [canStartChat, isStreaming, reconcileConversation, scopeId]
   );
 
   const handleSend = useCallback(() => {
@@ -1439,8 +1552,10 @@ const ChatPage: React.FC = () => {
                   marginTop: 3,
                 }}
               >
-                {scopeId
-                  ? t("pages.chat.index.scopeValue", "Scope {scopeId}", { scopeId })
+                {scopeLabelId
+                  ? t("pages.chat.index.scopeValue", "Scope {scopeId}", {
+                      scopeId: scopeLabelId,
+                    })
                   : t("pages.chat.index.resolvingScope", "Resolving scope")}
               </Typography.Text>
             </div>
@@ -1458,7 +1573,29 @@ const ChatPage: React.FC = () => {
             </Space>
           </div>
 
-          {!scopeId && !authSessionQuery.isLoading ? (
+          {scopeMismatch ? (
+            <Alert
+              banner
+              message={t(
+                "pages.chat.index.scopeMismatch",
+                "Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.",
+                {
+                  authenticatedScopeId,
+                  requestedScopeId: routeScopeId,
+                }
+              )}
+              type="error"
+            />
+          ) : chatCreationUnavailable ? (
+            <Alert
+              banner
+              message={t(
+                "pages.chat.index.chatRequiresAuthentication",
+                "Starting or continuing a chat requires a trusted authenticated scope. Existing chat history remains available to manage."
+              )}
+              type="info"
+            />
+          ) : !scopeId && !authSessionQuery.isLoading ? (
             <Alert
               banner
               message={t(
@@ -1564,7 +1701,7 @@ const ChatPage: React.FC = () => {
                 }}
               >
                 {activeConversation?.messages.map((message) => (
-                  <ChatMessageBubble key={message.id} message={message} />
+                  <ChatMessageEntry key={message.id} message={message} />
                 ))}
                 {activeConversation?.status === "needs_confirmation" ? (
                   <div
@@ -1630,7 +1767,7 @@ const ChatPage: React.FC = () => {
               </Space>
             ) : null}
             <ChatInput
-              disabled={!scopeId || detailLoadState.status === "loading"}
+              disabled={!canStartChat || detailLoadState.status === "loading"}
               isStreaming={isStreaming}
               onChange={setPrompt}
               onSend={handleSend}

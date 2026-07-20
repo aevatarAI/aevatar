@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { authFetch } from "@/shared/auth/fetch";
 import { history } from "@/shared/navigation/history";
+import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import { chatHistoryApi } from "./chatHistoryApi";
 import ChatPage, { hydrateStoredMessages } from "./index";
@@ -27,6 +28,7 @@ jest.mock("@/shared/navigation/history", () => ({
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
     getAuthSession: jest.fn(async () => ({
+      authenticated: true,
       enabled: true,
       scopeId: "scope-a",
       scopeSource: "nyxid",
@@ -230,6 +232,65 @@ describe("ChatPage server-backed history", () => {
     expect(screen.queryByRole("button", { name: /rename/i })).toBeNull();
   });
 
+  it("blocks reads and chat writes when the route scope differs from the authenticated scope", async () => {
+    window.history.replaceState({}, "", "/chat?scopeId=scope-b");
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValueOnce({
+      authenticated: true,
+      enabled: true,
+      scopeId: "scope-a",
+      scopeSource: "nyxid",
+    });
+
+    renderWithQueryClient(<ChatPage />);
+
+    expect(
+      await screen.findByText(
+        "Requested scope scope-b does not match authenticated scope scope-a. Open Chat from the active workspace or sign in again."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(chatHistoryApi.listConversationMetas).not.toHaveBeenCalled();
+    expect(authFetch).not.toHaveBeenCalled();
+  });
+
+  it("disables chat creation but keeps history management available when authentication is disabled", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValueOnce({
+      authenticated: false,
+      enabled: false,
+      scopeId: "scope-a",
+      scopeSource: "studio-host",
+    });
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+
+    renderWithQueryClient(<ChatPage />);
+
+    expect(
+      await screen.findByText(
+        "Starting or continuing a chat requires a trusted authenticated scope. Existing chat history remains available to manage."
+      )
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith("scope-a")
+    );
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(authFetch).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete Server conversation" })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
+        "scope-a",
+        "conversation-a"
+      )
+    );
+  });
+
   it("preserves open history roles, statuses, authors, and stopped errors", async () => {
     expect(
       hydrateStoredMessages([
@@ -275,6 +336,78 @@ describe("ChatPage server-backed history", () => {
         status: "error",
       }),
     ]);
+  });
+
+  it("shows the author or role for non-assistant history messages", async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([
+      {
+        authorName: "Release automation",
+        content: "Queued for review",
+        id: "turn-open:observer",
+        role: "observer",
+        status: "complete",
+        timestamp: 1784255700000,
+      },
+      {
+        content: "Review recorded",
+        id: "turn-open:auditor",
+        role: "auditor",
+        status: "complete",
+        timestamp: 1784255701000,
+      },
+    ]);
+
+    renderWithQueryClient(<ChatPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Server conversation" })
+    );
+
+    expect(await screen.findByText("Release automation")).toBeTruthy();
+    expect(screen.getByText("auditor")).toBeTruthy();
+    expect(screen.getByText("Queued for review")).toBeTruthy();
+    expect(screen.getByText("Review recorded")).toBeTruthy();
+  });
+
+  it("derives a restored conversation status from the latest assistant turn", async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([
+      ...serverMessages,
+      {
+        content: "The first attempt failed.",
+        error: "Dispatch failed.",
+        id: "turn-b:assistant",
+        role: "assistant",
+        status: "error",
+        timestamp: 1784255701000,
+      },
+      {
+        content: "Try again",
+        id: "turn-c:user",
+        role: "user",
+        status: "complete",
+        timestamp: 1784255702000,
+      },
+      {
+        content: "The retry succeeded.",
+        id: "turn-c:assistant",
+        role: "assistant",
+        status: "complete",
+        timestamp: 1784255703000,
+      },
+    ]);
+
+    renderWithQueryClient(<ChatPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Server conversation" })
+    );
+
+    expect(await screen.findByText("The retry succeeded.")).toBeTruthy();
+    expect(screen.getByText("Completed")).toBeTruthy();
   });
 
   it("sends a raw new-chat prompt with an explicit create intent", async () => {
@@ -505,8 +638,13 @@ describe("ChatPage server-backed history", () => {
     await screen.findByRole("button", { name: "Scope isolated prompt" });
 
     view.switchScope("scope-b");
-    await waitFor(() =>
-      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith("scope-b")
+    expect(
+      await screen.findByText(
+        "Requested scope scope-b does not match authenticated scope scope-a. Open Chat from the active workspace or sign in again."
+      )
+    ).toBeTruthy();
+    expect(chatHistoryApi.listConversationMetas).not.toHaveBeenCalledWith(
+      "scope-b"
     );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -759,16 +897,19 @@ describe("ChatPage server-backed history", () => {
     );
 
     view.switchScope("scope-b");
-    await waitFor(() =>
-      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith("scope-b")
-    );
     expect(
-      await screen.findByRole("button", { name: "Shared conversation" })
+      await screen.findByText(
+        "Requested scope scope-b does not match authenticated scope scope-a. Open Chat from the active workspace or sign in again."
+      )
     ).toBeTruthy();
+    expect(chatHistoryApi.listConversationMetas).not.toHaveBeenCalledWith(
+      "scope-b"
+    );
     await act(async () => resolveDelete());
+    view.switchScope("scope-a");
 
     expect(
-      screen.getByRole("button", { name: "Shared conversation" })
+      await screen.findByRole("button", { name: "Shared conversation" })
     ).toBeTruthy();
   });
 

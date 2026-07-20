@@ -58,6 +58,8 @@ const enUSMessages = {
   'pages.chat.index.failedToLoadHistory': 'Chat history could not be loaded',
   'pages.chat.index.historyStoredInWorkspace':
     'History is saved to this workspace.',
+  'pages.chat.index.chatRequiresAuthentication':
+    'Starting or continuing a chat requires a trusted authenticated scope. Existing chat history remains available to manage.',
   'pages.chat.index.historyTitle': 'Chat history',
   'pages.chat.index.loadingConversation': 'Loading conversation',
   'pages.chat.index.loadingHistory': 'Loading chat history',
@@ -75,6 +77,8 @@ const enUSMessages = {
   'pages.chat.index.retry': 'Retry',
   'pages.chat.index.retryHistory': 'Retry chat history',
   'pages.chat.index.reviewPlan': 'Review the plan before creating resources.',
+  'pages.chat.index.scopeMismatch':
+    'Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
   'pages.chat.index.status.completed': 'Completed',
   'pages.chat.index.status.creating': 'Creating',
@@ -90,6 +94,7 @@ const enUSMessages = {
   'pages.chat.index.title': 'Chat',
   'pages.chat.index.tokenSplit': '{input} in / {output} out',
   'pages.chat.index.totalTokens': '{count} tokens',
+  'pages.chat.index.unknownRole': 'Message',
   'pages.chat.index.turnCount': '{count} turns',
   'pages.gagents.index.teamMembersBreadcrumb': 'Team members',
   'pages.missioncontrol.index.missionControlBreadcrumb': 'Mission Control',

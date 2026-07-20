@@ -509,6 +509,61 @@ describe('StudioFilesPage', () => {
     expect(screen.getByText('Scope conversation')).toBeInTheDocument();
   });
 
+  it('keeps a delayed deletion bound to its original conversation', async () => {
+    let resolveDelete = (): void => undefined;
+    const deletePromise = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    (chatHistoryApi.deleteConversation as jest.Mock).mockReturnValue(deletePromise);
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      {
+        id: 'conversation-1',
+        title: 'Scope conversation',
+        serviceId: 'service-1',
+        serviceKind: 'nyxid-chat',
+        createdAt: '2026-03-18T00:00:00Z',
+        updatedAt: '2026-03-18T01:00:00Z',
+        messageCount: 2,
+      },
+      {
+        id: 'conversation-2',
+        title: 'Second conversation',
+        serviceId: 'service-1',
+        serviceKind: 'nyxid-chat',
+        createdAt: '2026-03-18T00:00:00Z',
+        updatedAt: '2026-03-18T02:00:00Z',
+        messageCount: 2,
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, createProps()));
+    fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
+    fireEvent.click(await screen.findByText('Scope conversation'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
+    await waitFor(() =>
+      expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
+        'scope-1',
+        'conversation-1',
+      ),
+    );
+
+    fireEvent.click(await screen.findByText('Second conversation'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled(),
+    );
+
+    await React.act(async () => resolveDelete());
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled(),
+    );
+    expect(screen.queryByText('Scope conversation')).toBeNull();
+    expect(screen.getAllByText('Second conversation').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Conversation deleted.')).toBeNull();
+    expect(chatHistoryApi.deleteConversation).toHaveBeenCalledTimes(1);
+  });
+
   it('switches to explorer and previews chrono-storage files', async () => {
     const props = createProps();
 

@@ -55,6 +55,8 @@ const zhCNMessages = {
   'pages.chat.index.failedToLoadConversation': '无法加载会话',
   'pages.chat.index.failedToLoadHistory': '无法加载会话历史',
   'pages.chat.index.historyStoredInWorkspace': '历史记录会保存到当前工作区。',
+  'pages.chat.index.chatRequiresAuthentication':
+    '新建或继续 Chat 需要带可信 scope 的认证身份。现有会话历史仍可查看和管理。',
   'pages.chat.index.historyTitle': '会话历史',
   'pages.chat.index.loadingConversation': '正在加载会话',
   'pages.chat.index.loadingHistory': '正在加载会话历史',
@@ -70,6 +72,8 @@ const zhCNMessages = {
   'pages.chat.index.retry': '重试',
   'pages.chat.index.retryHistory': '重新加载会话历史',
   'pages.chat.index.reviewPlan': '创建资源前请先确认计划。',
+  'pages.chat.index.scopeMismatch':
+    '请求的 scope {requestedScopeId} 与当前认证 scope {authenticatedScopeId} 不一致。请从当前工作区重新打开 Chat，或重新登录。',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
   'pages.chat.index.status.completed': '已完成',
   'pages.chat.index.status.creating': '创建中',
@@ -85,6 +89,7 @@ const zhCNMessages = {
   'pages.chat.index.title': 'Chat',
   'pages.chat.index.tokenSplit': '{input} 输入 / {output} 输出',
   'pages.chat.index.totalTokens': '{count} tokens',
+  'pages.chat.index.unknownRole': '消息',
   'pages.chat.index.turnCount': '{count} 轮',
   'pages.gagents.index.teamMembersBreadcrumb': '团队成员',
   'pages.missioncontrol.index.missionControlBreadcrumb': '任务控制',
