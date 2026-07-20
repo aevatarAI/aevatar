@@ -1,17 +1,21 @@
-using System.Text;
+using Aevatar.BackendConsole.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Mainnet.Host.Api.BackendConsole;
 
-// Mounts the single shared /auto/callback OIDC redirect target for the unified backend console suite
-// (observatory / studio / schedules / channels / voice). Served anonymously as a self-contained static
-// shell; the in-page JS performs the PKCE authorization-code exchange and redirects back to the
-// originating console page. No data endpoints are introduced here.
 internal static class AutoConsoleCallbackEndpoints
 {
     private const string CallbackRoute = "/auto/callback";
+
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "auto-callback",
+        Assembly: typeof(AutoConsoleCallbackEndpoints).Assembly,
+        ResourceSuffix: "BackendConsole.auto-callback.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
 
     public static IEndpointRouteBuilder MapAutoConsoleCallbackEndpoints(this IEndpointRouteBuilder app)
     {
@@ -26,9 +30,12 @@ internal static class AutoConsoleCallbackEndpoints
         return app;
     }
 
-    internal static IResult GetAutoConsoleCallbackPage(HttpContext http)
+    internal static IResult GetAutoConsoleCallbackPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(AutoConsoleCallbackPage.Html, "text/html", Encoding.UTF8);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 }

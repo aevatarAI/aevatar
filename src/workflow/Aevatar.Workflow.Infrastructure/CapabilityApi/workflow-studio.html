@@ -1,0 +1,1463 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Studio · Workflow Studio · aevatar</title>
+<style>
+  /* =========================================================================
+     aevatar 工作室 / Workflow Studio — 对话式编排页（高保真视觉交互稿）
+     设计令牌与组件观感与「运行观测台 observatory」完全一致（变量名一字不差）。
+     framework-agnostic：语义化 HTML + CSS 变量 + 少量 vanilla JS（仅用于状态切换/演示）。
+     ========================================================================= */
+
+  /* ---- Design tokens : 暗色（默认，与 observatory 一致）------------------- */
+  :root {
+    --bg:#0f1115;
+    --bg-grad:radial-gradient(1200px 600px at 78% -10%,#161b26 0%,#0f1115 60%);
+    --panel:#171a21; --panel-2:#1f232c; --panel-3:#252b36;
+    --border:#2a2f3a; --border-soft:#22272f;
+    --fg:#e6e9ef; --fg-strong:#f4f6fb; --muted:#9aa3b2; --muted-2:#6c7585;
+    --accent:#5b8cff; --accent-ink:#0b1020; --accent-soft:rgba(91,140,255,.14); --accent-line:rgba(91,140,255,.40);
+    --ok:#3fb950; --ok-soft:rgba(63,185,80,.14); --warn:#d29922; --warn-soft:rgba(210,153,34,.15);
+    --err:#f85149; --err-soft:rgba(248,81,73,.14); --run:#58a6ff; --run-soft:rgba(88,166,255,.16);
+    --neutral:#9aa3b2; --neutral-soft:rgba(154,163,178,.12);
+    --shadow:0 8px 30px rgba(0,0,0,.40); --shadow-sm:0 1px 2px rgba(0,0,0,.30);
+    --ring:0 0 0 2px var(--bg),0 0 0 4px var(--accent);
+    --r-sm:6px; --r:9px; --r-lg:13px; --r-pill:999px;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+    --list-w:300px; --topbar-h:56px; --ctx-w:460px; color-scheme:dark;
+
+    /* 节点类别配色（工作流图）—— 新增 token，统一管理，不散落硬编码 */
+    --cat-data:#48b3c7;        --cat-control:#d4a03a;
+    --cat-ai:#5b8cff;          --cat-composition:#9b7bff;
+    --cat-integration:#45b88f; --cat-human:#e0739b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      --bg:#f5f7fa;
+      --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+      --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
+      --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
+      --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+      --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+      --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+      --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
+      --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06);
+      --cat-data:#1c7d9b; --cat-control:#9a6a12; --cat-ai:#2f63e0; --cat-composition:#6d4ad6; --cat-integration:#1c8a63; --cat-human:#b03a66;
+      color-scheme:light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#f5f7fa;
+    --bg-grad:radial-gradient(1100px 560px at 80% -12%,#eef2f8 0%,#f5f7fa 58%);
+    --panel:#ffffff; --panel-2:#f3f5f9; --panel-3:#eaeef4; --border:#dde2ea; --border-soft:#e7ebf1;
+    --fg:#1c2128; --fg-strong:#0b0f14; --muted:#57606b; --muted-2:#828b97;
+    --accent:#2f63e0; --accent-ink:#ffffff; --accent-soft:rgba(47,99,224,.10); --accent-line:rgba(47,99,224,.34);
+    --ok:#1a7f37; --ok-soft:rgba(26,127,55,.12); --warn:#9a6700; --warn-soft:rgba(154,103,0,.12);
+    --err:#cf222e; --err-soft:rgba(207,34,46,.10); --run:#2f6fed; --run-soft:rgba(47,111,237,.12);
+    --neutral:#57606b; --neutral-soft:rgba(87,96,107,.10);
+    --shadow:0 10px 30px rgba(16,24,40,.10); --shadow-sm:0 1px 2px rgba(16,24,40,.06);
+    --cat-data:#1c7d9b; --cat-control:#9a6a12; --cat-ai:#2f63e0; --cat-composition:#6d4ad6; --cat-integration:#1c8a63; --cat-human:#b03a66;
+    color-scheme:light;
+  }
+
+  /* ---- base ------------------------------------------------------------- */
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; background:var(--bg); background-image:var(--bg-grad); background-attachment:fixed;
+    color:var(--fg); font:14px/1.55 var(--sans); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    overflow:hidden;
+  }
+  ::selection { background:var(--accent-soft); }
+  button { font:inherit; color:inherit; cursor:pointer; }
+  :focus-visible { outline:none; box-shadow:var(--ring); border-radius:var(--r-sm); }
+  .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .scroll::-webkit-scrollbar { width:10px; height:10px; }
+  .scroll::-webkit-scrollbar-thumb { background:var(--panel-3); border-radius:999px; border:2px solid transparent; background-clip:content-box; }
+  .scroll::-webkit-scrollbar-track { background:transparent; }
+
+  /* ---- status primitives (observatory) ---------------------------------- */
+  .dot { width:9px; height:9px; border-radius:50%; flex:0 0 auto; }
+  .dot.s-running   { background:var(--run); box-shadow:0 0 0 0 var(--run); animation:pulse 2.4s ease-out infinite; }
+  .dot.s-completed, .dot.s-bound, .dot.s-registered, .dot.s-done { background:var(--ok); }
+  .dot.s-failed { background:var(--err); }
+  .dot.s-stopped, .dot.s-pending { background:var(--warn); }
+  .dot.s-unknown { background:var(--neutral); }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 var(--run-soft);} 70%{box-shadow:0 0 0 7px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+
+  .badge { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:var(--r-pill); font-size:12px; font-weight:600; border:1px solid transparent; white-space:nowrap; }
+  .badge .dot { width:7px; height:7px; }
+  .b-running   { color:var(--run);  background:var(--run-soft);  border-color:color-mix(in oklab,var(--run) 30%,transparent); }
+  .b-completed, .b-bound, .b-registered { color:var(--ok); background:var(--ok-soft); border-color:color-mix(in oklab,var(--ok) 30%,transparent); }
+  .b-failed { color:var(--err); background:var(--err-soft); border-color:color-mix(in oklab,var(--err) 30%,transparent); }
+  .b-stopped, .b-pending { color:var(--warn); background:var(--warn-soft); border-color:color-mix(in oklab,var(--warn) 30%,transparent); }
+  .b-unknown { color:var(--muted); background:var(--neutral-soft); border-color:var(--border); }
+
+  /* =========================================================================
+     Top bar
+     ========================================================================= */
+  .topbar {
+    position:sticky; top:0; z-index:40; height:var(--topbar-h);
+    display:flex; align-items:center; gap:12px; padding:0 14px;
+    background:color-mix(in oklab,var(--panel) 88%,transparent);
+    backdrop-filter:saturate(140%) blur(12px); -webkit-backdrop-filter:saturate(140%) blur(12px);
+    border-bottom:1px solid var(--border);
+  }
+  /* Fixed-width brand region keeps the shared suite-nav's start position independent of the
+     active page title length, so the five entries don't shift when switching console pages. */
+  .brand { display:flex; align-items:center; gap:10px; flex:0 0 268px; width:268px; min-width:0; overflow:hidden; }
+  .brand-mark { width:26px; height:26px; border-radius:7px; flex:0 0 auto; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow-sm);
+    background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
+  .brand-name { font-weight:650; letter-spacing:-.01em; color:var(--fg-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .brand-sub { color:var(--muted-2); font-size:12px; white-space:nowrap; }
+  .scope-chip { display:inline-flex; align-items:center; gap:7px; padding:4px 10px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); font-size:12px; color:var(--muted); }
+  .scope-chip .sid { font-family:var(--mono); font-size:11.5px; color:var(--fg); }
+  .scope-chip svg { color:var(--ok); }
+  .spacer { flex:1 1 auto; }
+  /* ---- shared suite navigation (identical across the five console pages) -- */
+  .suite-nav { display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }
+  .suite-nav::-webkit-scrollbar { display:none; }
+  .suite-nav a { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border-radius:var(--r-pill); font-size:12.5px; font-weight:600; color:var(--muted); text-decoration:none; border:1px solid transparent; white-space:nowrap; transition:color .15s,background .15s,border-color .15s; }
+  .suite-nav a:hover { color:var(--fg); background:var(--panel-2); }
+  .suite-nav a[aria-current="page"] { color:var(--accent); background:var(--accent-soft); border-color:var(--accent-line); }
+  .suite-nav svg { width:14px; height:14px; flex:0 0 auto; }
+  @media (max-width:760px) { .suite-nav .nav-label { display:none; } .suite-nav a { padding:6px 8px; } }
+  .iconbtn { width:34px; height:34px; display:grid; place-items:center; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); transition:color .15s,border-color .15s; }
+  .iconbtn:hover { color:var(--fg); border-color:var(--muted-2); }
+  .account { display:inline-flex; align-items:center; gap:8px; padding:4px 6px 4px 4px; border-radius:var(--r-pill); background:var(--panel-2); border:1px solid var(--border); }
+  .avatar { width:24px; height:24px; border-radius:50%; flex:0 0 auto; display:grid; place-items:center; font-size:12px; font-weight:700; color:#fff; background:linear-gradient(140deg,#6f9bff,#9b6bff); }
+  .account .who { font-size:12.5px; color:var(--fg); max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* =========================================================================
+     Three-column shell
+     ========================================================================= */
+  .shell { display:grid; grid-template-columns:var(--list-w) minmax(0,1fr) var(--ctx-w); height:calc(100dvh - var(--topbar-h)); min-height:0; }
+  body.ctx-collapsed .shell { grid-template-columns:var(--list-w) minmax(0,1fr) 0; }
+
+  /* ---- Left : session list --------------------------------------------- */
+  .sess-pane { border-right:1px solid var(--border); display:flex; flex-direction:column; min-height:0; background:color-mix(in oklab,var(--panel) 40%,transparent); }
+  .sess-head { padding:12px; border-bottom:1px solid var(--border-soft); }
+  .new-sess { width:100%; display:flex; align-items:center; justify-content:center; gap:8px; padding:9px 12px; border-radius:var(--r); border:1px dashed var(--muted-2); background:transparent; color:var(--fg); font-weight:600; font-size:13px; transition:border-color .15s,background .15s; }
+  .new-sess:hover { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); }
+  .sess-list { overflow-y:auto; flex:1 1 auto; padding:8px; min-height:0; }
+  .sess-row { position:relative; display:grid; grid-template-columns:auto 1fr; gap:3px 11px; width:100%; text-align:left; padding:11px 12px; border-radius:var(--r); border:1px solid transparent; background:transparent; color:inherit; margin-bottom:2px; transition:background .12s,border-color .12s; }
+  .sess-row:hover { background:var(--panel-2); }
+  .sess-row .dot { margin-top:6px; }
+  .sess-row .st { font-weight:640; color:var(--fg-strong); letter-spacing:-.005em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:18px; }
+  .sess-row .sm { grid-column:2; font-size:12px; color:var(--muted); }
+  .sess-badges { grid-column:2; display:flex; gap:5px; flex-wrap:wrap; margin-top:5px; }
+  .pbadge { font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.02em; padding:1px 6px; border-radius:5px; background:var(--panel-3); color:var(--muted); border:1px solid var(--border-soft); display:inline-flex; align-items:center; gap:3px; }
+  .pbadge.wf  { color:var(--cat-ai); border-color:color-mix(in oklab,var(--cat-ai) 30%,transparent); background:color-mix(in oklab,var(--cat-ai) 12%,transparent); }
+  .pbadge.team{ color:var(--cat-composition); border-color:color-mix(in oklab,var(--cat-composition) 30%,transparent); background:color-mix(in oklab,var(--cat-composition) 12%,transparent); }
+  .pbadge.svc { color:var(--cat-integration); border-color:color-mix(in oklab,var(--cat-integration) 30%,transparent); background:color-mix(in oklab,var(--cat-integration) 12%,transparent); }
+  .pbadge.cron{ color:var(--warn); border-color:color-mix(in oklab,var(--warn) 30%,transparent); background:var(--warn-soft); }
+  .sess-row[aria-current="true"] { background:var(--accent-soft); border-color:var(--accent-line); box-shadow:inset 3px 0 0 var(--accent); }
+  .sess-actions { position:absolute; right:8px; top:9px; display:none; gap:2px; }
+  .sess-row:hover .sess-actions, .sess-row[aria-current="true"] .sess-actions { display:flex; }
+  .sess-actions button { width:24px; height:24px; display:grid; place-items:center; background:var(--panel); border:1px solid var(--border); border-radius:6px; color:var(--muted); }
+  .sess-actions button:hover { color:var(--fg); border-color:var(--muted-2); }
+  .sess-actions button.del:hover { color:var(--err); border-color:color-mix(in oklab,var(--err) 40%,transparent); }
+
+  .empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; text-align:center; color:var(--muted); padding:44px 22px; height:100%; }
+  .empty .ic { width:40px; height:40px; color:var(--muted-2); opacity:.8; }
+  .empty .et { font-weight:600; color:var(--fg); font-size:14px; }
+  .empty .es { font-size:12.5px; max-width:220px; }
+
+  /* ---- Center : chat ---------------------------------------------------- */
+  .chat-pane { display:flex; flex-direction:column; min-height:0; min-width:0; position:relative; }
+  .chat-scroll { flex:1 1 auto; overflow-y:auto; min-height:0; padding:28px 0 12px; }
+  .chat-inner { max-width:768px; margin:0 auto; padding:0 32px; }
+
+  .welcome { max-width:560px; margin:6vh auto 0; text-align:center; padding:0 24px; }
+  .welcome .wmark { width:54px; height:54px; border-radius:15px; margin:0 auto 18px; display:grid; place-items:center; color:#fff; box-shadow:var(--shadow);
+    background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
+  .welcome h1 { font-size:20px; font-weight:700; letter-spacing:-.01em; color:var(--fg-strong); margin:0 0 8px; }
+  .welcome p { color:var(--muted); font-size:14px; line-height:1.7; margin:0 auto 24px; max-width:42ch; }
+  .prompt-chips { display:flex; flex-direction:column; gap:8px; max-width:440px; margin:0 auto; }
+  .prompt-chip { text-align:left; padding:13px 16px; border-radius:var(--r); border:1px solid var(--border); background:var(--panel); color:var(--fg); font-size:13.5px; line-height:1.5; display:flex; gap:11px; align-items:center; transition:border-color .15s,background .15s; }
+  .prompt-chip:hover { border-color:var(--accent-line); background:var(--accent-soft); }
+  .prompt-chip svg { color:var(--muted-2); flex:0 0 auto; }
+
+  .msg { display:flex; gap:14px; margin-bottom:28px; }
+  .msg .m-avatar { width:30px; height:30px; border-radius:9px; flex:0 0 auto; display:grid; place-items:center; font-size:12px; font-weight:700; margin-top:2px; }
+  .msg.user .m-avatar { background:var(--panel-3); color:var(--muted); }
+  .msg.agent .m-avatar { color:#fff; background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff)); }
+  .m-body { min-width:0; flex:1 1 auto; }
+  .m-name { font-size:12.5px; color:var(--muted-2); margin-bottom:7px; display:flex; align-items:center; gap:8px; }
+  .m-name b { color:var(--fg); font-weight:600; }
+  .msg.user .m-body { display:flex; flex-direction:column; align-items:flex-end; }
+  .msg.user .m-name { align-self:flex-end; }
+  .bubble-user { background:var(--accent-soft); border:1px solid var(--accent-line); color:var(--fg); padding:12px 16px; border-radius:14px 5px 14px 14px; font-size:14.5px; line-height:1.68; max-width:92%; }
+  .bubble-agent { color:var(--fg); font-size:14.5px; line-height:1.78; }
+  .bubble-agent p { margin:0 0 13px; }
+  .bubble-agent p:last-child { margin-bottom:0; }
+  .bubble-agent code { font-family:var(--mono); font-size:12.5px; background:var(--panel-2); border:1px solid var(--border-soft); border-radius:5px; padding:1px 5px; }
+  .stream-cursor { display:inline-block; width:7px; height:15px; vertical-align:-2px; margin-left:2px; background:var(--accent); animation:blink 1s steps(2) infinite; border-radius:1px; }
+  @keyframes blink { 50% { opacity:0; } }
+  .agent-working { margin:0; }
+
+  /* in-flight step / status activity (live chat run) */
+  .step-activity { display:flex; flex-direction:column; gap:6px; margin:4px 0 13px; }
+  .step-activity .sa-row { display:inline-flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); }
+  .step-activity .sa-label { font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+  .step-activity .spin { width:11px; height:11px; border-radius:50%; border:1.6px solid color-mix(in oklab,var(--run) 35%,transparent); border-top-color:var(--run); animation:spin .7s linear infinite; flex:0 0 auto; }
+  .step-activity .sa-ok { color:var(--ok); display:inline-flex; flex:0 0 auto; }
+
+  /* tool-call block (observatory) */
+  .toolcall { margin:13px 0; border:1px solid var(--border); border-radius:var(--r); background:var(--panel); overflow:hidden; }
+  .tc-head { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:9px 12px; background:var(--panel); border:0; color:inherit; }
+  .tc-head:hover { background:var(--panel-2); }
+  .tc-chevron { color:var(--muted); transition:transform .18s ease; flex:0 0 auto; }
+  .toolcall[data-open="true"] .tc-chevron { transform:rotate(90deg); }
+  .tc-name { font-family:var(--mono); font-size:13px; color:var(--fg-strong); font-weight:600; }
+  .tc-callid { font-family:var(--mono); font-size:11px; color:var(--muted-2); }
+  .tc-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; }
+  .tc-status.ok { color:var(--ok); } .tc-status.bad { color:var(--err); } .tc-status.run { color:var(--run); }
+  .tc-status.run .spin { width:11px; height:11px; border-radius:50%; border:1.6px solid color-mix(in oklab,var(--run) 35%,transparent); border-top-color:var(--run); animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .tc-body { display:grid; gap:12px; padding:0 12px 12px; }
+  .toolcall[data-open="false"] .tc-body { display:none; }
+  .tc-field-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:5px; }
+  .tc-field-label { font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted-2); font-weight:600; }
+  .copybtn { display:inline-flex; align-items:center; gap:5px; font-size:11px; color:var(--muted); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:2px 8px; }
+  .copybtn:hover { color:var(--fg); border-color:var(--muted-2); }
+  .copybtn.done { color:var(--ok); border-color:color-mix(in oklab,var(--ok) 40%,transparent); }
+  pre.json { margin:0; padding:11px 12px; max-height:200px; overflow:auto; background:var(--bg); border:1px solid var(--border-soft); border-radius:var(--r-sm); font-family:var(--mono); font-size:12px; line-height:1.55; color:var(--fg); white-space:pre; tab-size:2; }
+  .tc-error { color:var(--err); font-family:var(--mono); font-size:12px; }
+  .j-key{color:var(--accent);} .j-str{color:var(--ok);} .j-num{color:var(--warn);} .j-bool{color:var(--run);} .j-null{color:var(--muted);}
+
+  /* run-error / chat error */
+  .chat-error { display:flex; gap:11px; align-items:flex-start; padding:12px 14px; border-radius:var(--r); background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 38%,transparent); margin-bottom:22px; }
+  .chat-error svg { color:var(--err); flex:0 0 auto; margin-top:1px; }
+  .chat-error .ce-l { font-weight:650; color:var(--err); font-size:13px; }
+  .chat-error .ce-m { color:var(--muted); font-size:12.5px; margin-top:2px; }
+  .chat-error .ce-retry { margin-top:8px; display:inline-flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--accent); background:transparent; border:1px solid var(--accent-line); border-radius:var(--r-sm); padding:4px 10px; }
+  .chat-error .ce-retry:hover { background:var(--accent-soft); }
+
+  /* usage line */
+  .usage-line { margin:15px 0 2px; padding-top:11px; border-top:1px dashed var(--border-soft); font-family:var(--mono); font-size:11px; color:var(--muted-2); display:flex; gap:16px; flex-wrap:wrap; }
+  .usage-line b { color:var(--muted); font-weight:600; }
+
+  /* composer */
+  .composer-wrap { border-top:1px solid var(--border); background:color-mix(in oklab,var(--panel) 70%,transparent); padding:16px 0 18px; }
+  .composer { max-width:768px; margin:0 auto; padding:0 32px; }
+  .composer-box { display:flex; align-items:flex-end; gap:10px; background:var(--panel); border:1px solid var(--border); border-radius:var(--r-lg); padding:10px 10px 10px 16px; transition:border-color .15s,box-shadow .15s; }
+  .composer-box:focus-within { border-color:var(--accent-line); box-shadow:0 0 0 3px var(--accent-soft); }
+  .composer textarea { flex:1 1 auto; resize:none; border:0; background:transparent; color:var(--fg); font:14.5px/1.6 var(--sans); padding:7px 0; max-height:140px; min-height:26px; outline:none; }
+  .composer textarea::placeholder { color:var(--muted-2); }
+  .send-btn { width:34px; height:34px; flex:0 0 auto; display:grid; place-items:center; border:0; border-radius:9px; background:var(--accent); color:var(--accent-ink); transition:filter .15s,opacity .15s; }
+  .send-btn:hover { filter:brightness(1.08); }
+  .send-btn:disabled { opacity:.4; cursor:default; }
+  .stop-btn { display:inline-flex; align-items:center; gap:7px; flex:0 0 auto; height:34px; padding:0 12px; border-radius:9px; background:var(--panel-2); border:1px solid var(--border); color:var(--fg); font-size:12.5px; font-weight:600; }
+  .stop-btn:hover { border-color:var(--err); color:var(--err); }
+  .composer-hint { max-width:768px; margin:10px auto 0; padding:0 32px; font-size:11px; color:var(--muted-2); display:flex; align-items:center; gap:6px; }
+  .kbd { font-family:var(--mono); font-size:10.5px; padding:1px 5px; border-radius:4px; background:var(--panel-2); border:1px solid var(--border); color:var(--muted); }
+
+  /* =========================================================================
+     Right : context (graph + artifact cards)
+     ========================================================================= */
+  .ctx-pane { position:relative; border-left:1px solid var(--border); display:flex; flex-direction:column; min-height:0; min-width:0; background:color-mix(in oklab,var(--panel) 40%,transparent); overflow:hidden; }
+  body.ctx-collapsed .ctx-pane { display:none; }
+
+  /* draggable width handle on the panel's left edge */
+  .ctx-resizer { position:absolute; left:0; top:0; bottom:0; width:9px; transform:translateX(-4px); cursor:col-resize; z-index:25; touch-action:none; }
+  .ctx-resizer::after { content:""; position:absolute; left:4px; top:0; bottom:0; width:2px; background:transparent; transition:background .15s; }
+  .ctx-resizer:hover::after, .ctx-resizer.dragging::after { background:var(--accent); }
+  body.resizing { cursor:col-resize; user-select:none; }
+  body.resizing .graph-viewport { cursor:col-resize; }
+
+  /* underline multi-tabs (图 / Workflow / Team / Service / Schedules) */
+  .ctx-head { display:flex; align-items:stretch; padding:0 6px; border-bottom:1px solid var(--border-soft); }
+  .ctx-tabs { display:flex; gap:1px; overflow-x:auto; flex:1 1 auto; scrollbar-width:none; }
+  .ctx-tabs::-webkit-scrollbar { display:none; }
+  .ctx-tab { position:relative; display:inline-flex; align-items:center; gap:7px; padding:12px 13px 10px; border:0; background:transparent; color:var(--muted); font-size:12.5px; font-weight:600; white-space:nowrap; border-bottom:2px solid transparent; transition:color .15s; }
+  .ctx-tab svg { width:14px; height:14px; opacity:.85; }
+  .ctx-tab:hover { color:var(--fg); }
+  .ctx-tab[aria-selected="true"] { color:var(--fg-strong); border-bottom-color:var(--accent); }
+  .ctx-tab .tdot { width:6px; height:6px; }
+
+  .ctx-body { position:relative; flex:1 1 auto; min-height:0; overflow:hidden; }
+  .ctx-panel { position:absolute; inset:0; overflow-y:auto; padding:16px; }
+  .panel-head { display:flex; align-items:center; gap:11px; margin-bottom:15px; }
+  .panel-head .ph-ic { width:32px; height:32px; border-radius:9px; display:grid; place-items:center; flex:0 0 auto; }
+  .panel-head .ph-title { font-weight:680; color:var(--fg-strong); font-size:15px; letter-spacing:-.01em; }
+  .panel-head .ph-meta { margin-left:auto; }
+  .panel-card { border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel); padding:4px 14px; }
+  .panel-sub { font-size:11px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--muted-2); margin:16px 2px 8px; }
+  .graph-viewport { position:absolute; inset:0; overflow:hidden; cursor:grab;
+    background:
+      linear-gradient(0deg,transparent 23px,var(--border-soft) 23px,var(--border-soft) 24px,transparent 24px),
+      linear-gradient(90deg,transparent 23px,var(--border-soft) 23px,var(--border-soft) 24px,transparent 24px);
+    background-size:24px 24px; }
+  .graph-viewport:active { cursor:grabbing; }
+  .graph-layer { position:absolute; left:0; top:0; transform-origin:0 0; }
+  .graph-layer svg { position:absolute; inset:0; overflow:visible; pointer-events:none; }
+
+  .gnode { position:absolute; width:244px; height:96px; box-sizing:border-box; background:var(--panel-2); border:1.5px solid var(--border); border-radius:var(--r); padding:11px 13px; box-shadow:var(--shadow-sm); }
+  .gnode .gn-top { display:flex; align-items:center; gap:10px; }
+  .gnode .gn-ic { width:30px; height:30px; border-radius:8px; display:grid; place-items:center; flex:0 0 auto; color:var(--cat); background:color-mix(in oklab,var(--cat) 16%,transparent); border:1px solid color-mix(in oklab,var(--cat) 35%,transparent); }
+  .gnode .gn-label { font-size:14px; font-weight:640; color:var(--fg-strong); letter-spacing:-.005em; }
+  .gnode .gn-id { font-family:var(--mono); font-size:11px; color:var(--muted-2); margin-top:1px; }
+  .gnode .gn-foot { position:absolute; left:13px; right:13px; bottom:10px; display:flex; align-items:center; justify-content:space-between; }
+  .gnode .gn-type { font-family:var(--mono); font-size:10.5px; color:var(--muted); padding:1px 7px; border-radius:5px; background:var(--panel-3); border:1px solid var(--border-soft); }
+  .gn-state { font-size:11px; font-weight:600; display:inline-flex; align-items:center; gap:5px; }
+  .gnode.st-ready { }
+  .gnode.st-done    { border-color:color-mix(in oklab,var(--ok) 50%,var(--border)); }
+  .gnode.st-done .gn-state { color:var(--ok); }
+  .gnode.st-current { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft); }
+  .gnode.st-current .gn-state { color:var(--accent); }
+  .gnode.st-failed  { border-color:color-mix(in oklab,var(--err) 55%,var(--border)); }
+  .gnode.st-failed .gn-state { color:var(--err); }
+  .gnode.st-stopped { border-color:color-mix(in oklab,var(--warn) 55%,var(--border)); }
+  .gnode.st-stopped .gn-state { color:var(--warn); }
+  .gnode.st-pending { opacity:.7; border-style:dashed; }
+  .gnode.st-pending .gn-state { color:var(--muted-2); }
+  .edge-label { position:absolute; transform:translate(-50%,-50%); font-family:var(--mono); font-size:10px; color:var(--muted); background:var(--panel); border:1px solid var(--border); border-radius:var(--r-pill); padding:1px 7px; white-space:nowrap; }
+
+  .graph-ctrls { position:absolute; right:10px; bottom:10px; display:flex; gap:4px; background:var(--panel); border:1px solid var(--border); border-radius:var(--r-pill); padding:3px; box-shadow:var(--shadow-sm); z-index:3; }
+  .graph-ctrls button { width:28px; height:28px; display:grid; place-items:center; background:transparent; border:0; border-radius:50%; color:var(--muted); font-size:13px; }
+  .graph-ctrls button:hover { color:var(--fg); background:var(--panel-2); }
+  .graph-ctrls .zlabel { min-width:42px; display:grid; place-items:center; font-family:var(--mono); font-size:11px; color:var(--muted); }
+  .graph-legend { position:absolute; left:10px; top:10px; display:flex; flex-wrap:wrap; gap:4px 9px; max-width:60%; z-index:2; }
+  .graph-legend .lg { display:inline-flex; align-items:center; gap:5px; font-size:10.5px; color:var(--muted); background:color-mix(in oklab,var(--panel) 80%,transparent); padding:1px 6px; border-radius:var(--r-pill); }
+  .graph-legend .sw { width:9px; height:9px; border-radius:3px; background:color-mix(in oklab,var(--cat) 22%,transparent); border:1px solid var(--cat); }
+
+  /* artifact panels render flat inside .ctx-panel (one per tab) */
+
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:5px 0; font-size:12.5px; border-bottom:1px solid var(--border-soft); }
+  .kv:last-child { border-bottom:0; }
+  .kv .k { color:var(--muted); flex:0 0 auto; }
+  .kv .v { color:var(--fg); font-family:var(--mono); font-size:12px; text-align:right; word-break:break-all; }
+  .kv .v.plain { font-family:var(--sans); }
+
+  .deeplink { display:inline-flex; align-items:center; gap:6px; margin-top:10px; font-size:12px; font-weight:600; color:var(--accent); text-decoration:none; padding:6px 10px; border:1px solid var(--accent-line); border-radius:var(--r-sm); background:var(--accent-soft); }
+  .deeplink:hover { background:color-mix(in oklab,var(--accent) 18%,transparent); }
+  .deeplink svg { flex:0 0 auto; }
+
+  .member { display:flex; align-items:center; gap:9px; padding:8px 0; border-bottom:1px solid var(--border-soft); }
+  .member:last-child { border-bottom:0; }
+  .member .mi { width:26px; height:26px; border-radius:7px; display:grid; place-items:center; background:var(--panel-3); color:var(--muted); flex:0 0 auto; }
+  .member .mname { font-weight:600; color:var(--fg-strong); font-size:13px; }
+  .member .mkind { font-family:var(--mono); font-size:10.5px; color:var(--muted-2); }
+  .member .entry { font-size:10px; font-weight:700; letter-spacing:.04em; color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line); border-radius:5px; padding:1px 5px; }
+
+  .sched { padding:11px; border:1px solid var(--border-soft); border-radius:var(--r); background:var(--panel-2); margin-bottom:9px; }
+  .sched:last-child { margin-bottom:0; }
+  .sched-top { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .sched-top .sname { font-weight:640; color:var(--fg-strong); font-size:13px; }
+  .sched-cron { font-family:var(--mono); font-size:11px; color:var(--muted); background:var(--panel-3); padding:1px 6px; border-radius:5px; }
+  .sched-grid { display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; }
+  .sched-grid .sg { display:flex; justify-content:space-between; gap:6px; font-size:11.5px; padding:2px 0; }
+  .sched-grid .sg .gk { color:var(--muted-2); } .sched-grid .sg .gv { font-family:var(--mono); color:var(--fg); }
+  .sched-grid .sg .gv.bad { color:var(--err); }
+  .sched-err { margin-top:8px; font-family:var(--mono); font-size:11px; color:var(--err); background:var(--err-soft); border:1px solid color-mix(in oklab,var(--err) 30%,transparent); border-radius:var(--r-sm); padding:6px 8px; word-break:break-word; }
+  .poll-tag { font-size:10.5px; color:var(--muted-2); display:inline-flex; align-items:center; gap:5px; }
+  .poll-tag .dot { width:6px; height:6px; background:var(--run); animation:pulse 2.4s ease-out infinite; }
+  /* standalone /schedules full-screen page (reuses the .sched cards above) */
+  .sched-page { max-width:760px; margin:0 auto; padding:28px 20px 48px; overflow-y:auto; height:calc(100dvh - var(--topbar-h)); }
+  .sched-page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:20px; }
+  .sched-page-title { font-size:20px; font-weight:680; color:var(--fg-strong); margin:0; letter-spacing:-.01em; }
+  .sched-page-sub { font-size:12.5px; color:var(--muted); margin:6px 0 0; line-height:1.55; max-width:52ch; }
+  .sched-page-empty { display:grid; place-items:center; padding:64px 0; }
+
+  .ctx-empty { flex:1 1 auto; display:grid; place-items:center; }
+
+  /* skeleton */
+  .sk { background:linear-gradient(100deg,var(--panel-2) 30%,var(--panel-3) 50%,var(--panel-2) 70%); background-size:200% 100%; animation:shimmer 1.3s linear infinite; border-radius:5px; }
+  @keyframes shimmer { to { background-position:-200% 0; } }
+
+  /* drawer / collapse toggle */
+  .ctx-toggle { position:fixed; right:14px; bottom:64px; z-index:55; width:40px; height:40px; display:none; place-items:center; border-radius:50%; background:var(--panel); border:1px solid var(--border); color:var(--muted); box-shadow:var(--shadow); }
+  @media (max-width:1180px) {
+    :root { --ctx-w:400px; }
+  }
+
+  /* =========================================================================
+     Responsive — < 760 : master/detail like observatory, chat first
+     ========================================================================= */
+  @media (max-width:760px) {
+    .shell { grid-template-columns:1fr; }
+    .sess-pane, .ctx-pane { position:fixed; top:var(--topbar-h); bottom:0; width:min(86vw,340px); z-index:50; box-shadow:var(--shadow); transition:transform .22s ease; }
+    .sess-pane { left:0; transform:translateX(-102%); border-right:1px solid var(--border); }
+    .ctx-pane { right:0; width:min(94vw,460px); transform:translateX(102%); border-left:1px solid var(--border); display:flex; }
+    body.nav-open .sess-pane { transform:none; }
+    body.ctx-open .ctx-pane { transform:none; }
+    body.ctx-collapsed .ctx-pane { display:flex; }
+    .ctx-toggle { display:grid; }
+    .brand-sub, .scope-chip { display:none; }
+    .brand { flex:0 0 auto; width:auto; } .brand-name { display:none; }
+    .scrim { position:fixed; inset:var(--topbar-h) 0 0; background:rgba(0,0,0,.45); z-index:45; }
+    .ctx-resizer { display:none; }
+  }
+  @media (min-width:761px) { .scrim, .mobnav { display:none !important; } }
+  .mobnav { display:none; }
+  @media (max-width:760px) {
+    .mobnav { display:inline-grid; place-items:center; width:34px; height:34px; background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r); color:var(--muted); }
+  }
+
+
+
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+    .dot.s-running,.poll-tag .dot { animation:none; box-shadow:0 0 0 3px var(--run-soft); }
+    .stream-cursor { animation:none; }
+  }
+
+  /* =========================================================================
+     Login screen (mirrors observatory: OIDC bearer-token gate)
+     ========================================================================= */
+  .login {
+    min-height: calc(100dvh - var(--topbar-h));
+    display: grid; place-items: center; padding: 24px;
+  }
+  .login-card {
+    width: min(420px, 100%); background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--r-lg); padding: 32px 30px; box-shadow: var(--shadow); text-align: center;
+  }
+  .login-mark {
+    width: 52px; height: 52px; border-radius: 14px; margin: 0 auto 18px;
+    background: linear-gradient(150deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #7c4dff));
+    display: grid; place-items: center; color: #fff; box-shadow: var(--shadow);
+  }
+  .login h1 { font-size: 19px; font-weight: 700; letter-spacing: -.01em; color: var(--fg-strong); margin: 0 0 8px; }
+  .login p { color: var(--muted); font-size: 13.5px; margin: 0 auto 22px; max-width: 30ch; }
+  .btn-primary {
+    width: 100%; padding: 11px 16px; border-radius: var(--r); border: 1px solid transparent;
+    background: var(--accent); color: var(--accent-ink); font-weight: 650; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    transition: filter .15s;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .login-foot { margin-top: 16px; font-size: 11.5px; color: var(--muted-2); display: inline-flex; align-items: center; gap: 6px; }
+  .linkbtn {
+    background: transparent; border: 0; color: var(--accent); font-size: 12.5px; font-weight: 600;
+    padding: 4px 6px; border-radius: var(--r-sm);
+  }
+  .linkbtn:hover { text-decoration: underline; }
+</style>
+</head>
+<body data-mobile="chat">
+  <div id="app"></div>
+
+<script>
+/* ===========================================================================
+   数据契约（Increment 2a，已接真实后端）：
+     - chat 走 SSE：POST /api/chat（runFinished / usage / aevatar.run.context /
+       aevatar.step.* / aevatar.raw.observed[RoleChatSessionCompleted|RoleReplyRecorded]）
+     - GET /api/studio/context → {scopeId, scopeResolved, scopeSource}（scope chip）
+     - GET /api/schedules → {items:[...]}（Schedules 卡，~3s 轮询）
+     - 会话↔产物关联由前端在 localStorage 本地维护（aevatar-studio:sessions）
+   右侧 workflow 图 / Team / Service 卡为 Increment 2b 待接，本增量显示诚实空态。
+   动作（写 workflow / 发布 / 建 team / draft-run / 配 cron）全部由 agent 在对话里用工具完成，
+   UI 仅以只读卡片/面板反映状态——本页不出现这些动作按钮。
+   =========================================================================== */
+
+/* ===========================================================================
+   Auth layer (production wiring) — mirrors the observatory OIDC PKCE gate.
+   Browser OIDC Authorization Code + PKCE against nyxid (same console-web client
+   as observatory; authority/clientId/scope identical). No server-side cookie/
+   session, no NyxID change. This increment gates the page behind login only; the
+   chat/cards below still render from the mock constants until live data is wired.
+   =========================================================================== */
+const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
+const CFG = {
+  authority: BACKEND_CONSOLE_CONFIG.authority || "",
+  clientId: BACKEND_CONSOLE_CONFIG.clientId || "",
+  scope: BACKEND_CONSOLE_CONFIG.scope || "",
+  resources: Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [],
+  redirectUri: location.origin + "/auto/callback",
+  storageKey: BACKEND_CONSOLE_CONFIG.storageKey || ""
+};
+const TOKEN_KEY = CFG.storageKey + ":token";
+const PKCE_KEY  = CFG.storageKey + ":pkce";
+
+function b64url(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+async function sha256(text){ return b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))); }
+function randomString(len){ const a=new Uint8Array(len); crypto.getRandomValues(a); return b64url(a.buffer).slice(0, len); }
+
+function getToken(){ const raw=localStorage.getItem(TOKEN_KEY); if(!raw) return null; try { return JSON.parse(raw); } catch(e){ console.warn("studio: token parse failed", e); } return null; }
+function setToken(t){ localStorage.setItem(TOKEN_KEY, JSON.stringify(t)); }
+function clearToken(){ localStorage.removeItem(TOKEN_KEY); }
+function isEmbeddedInAdmin(){ try { return window.parent && window.parent !== window && window.frameElement && window.frameElement.getAttribute("data-console-frame") === "1"; } catch(e){ return false; } }
+function notifyAdminShellAuth(type, reason){
+  if(!isEmbeddedInAdmin()) return false;
+  window.parent.postMessage({ source:"aevatar-backend-console-suite", type, reason: reason || "" }, location.origin);
+  return true;
+}
+
+async function beginLogin(){
+  if(notifyAdminShellAuth("login-request")) return;
+  const verifier = randomString(64);
+  const st = randomString(32);
+  const challenge = await sha256(verifier);
+  sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier, state: st, returnTo: location.pathname }));
+  const u = new URL(CFG.authority + "/oauth/authorize");
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("client_id", CFG.clientId);
+  u.searchParams.set("redirect_uri", CFG.redirectUri);
+  u.searchParams.set("scope", CFG.scope);
+  CFG.resources.forEach(resource => u.searchParams.append("resource", resource));
+  u.searchParams.set("state", st);
+  u.searchParams.set("code_challenge", challenge);
+  u.searchParams.set("code_challenge_method", "S256");
+  location.assign(u.toString());
+}
+
+async function completeLoginIfCallback(){
+  const params = new URLSearchParams(location.search);
+  const code = params.get("code");
+  if(!code) return false;
+  const returnedState = params.get("state");
+  const pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null");
+  history.replaceState({}, "", (pending && pending.returnTo) || "/workflow/studio");
+  if(!pending || pending.state !== returnedState){ console.warn("studio: login state mismatch"); return false; }
+  const form = new URLSearchParams();
+  form.set("grant_type", "authorization_code");
+  form.set("code", code);
+  form.set("redirect_uri", CFG.redirectUri);
+  form.set("client_id", CFG.clientId);
+  form.set("code_verifier", pending.verifier);
+  CFG.resources.forEach(resource => form.append("resource", resource));
+  const res = await fetch(CFG.authority + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() });
+  sessionStorage.removeItem(PKCE_KEY);
+  if(!res.ok){ console.warn("studio: token exchange failed", res.status); return false; }
+  const token = await res.json();
+  token.obtained_at = Date.now();
+  setToken(token);
+  return true;
+}
+
+async function fetchUserInfo(){
+  const token = getToken(); if(!token) return null;
+  try { const res = await fetch(CFG.authority + "/oauth/userinfo", { headers:{ Authorization:"Bearer " + token.access_token } }); return res.ok ? await res.json() : null; }
+  catch(e){ console.warn("studio: userinfo fetch failed", e); }
+  return null;
+}
+function toAccount(info){ return info ? { label: info.email || info.preferred_username || info.sub || "已登录" } : null; }
+
+// Reserved for the live-data increment: scope-gated bearer fetch helper, identical to observatory.
+async function api(path){
+  const token = getToken(); if(!token) throw new Error("not-authenticated");
+  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
+  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  if(res.status === 404) return null;
+  if(!res.ok) throw new Error("api-error-" + res.status);
+  return await res.json();
+}
+
+function signOut(){ clearToken(); if(notifyAdminShellAuth("auth-required", "已登出 NyxID，请重新登录。")) return; beginLogin(); }
+function signOutSilent(){ clearToken(); state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); }
+
+const OBS = "/workflow/observatory";   // 运行观测台路由
+
+/* Account label shown in the top-bar chip: decoded from the signed-in identity once
+   available; until then we show a neutral placeholder. */
+let accountLabel = "已登录";
+
+/* ===========================================================================
+   Live data layer (Increment 2a) — replaces the in-page mock constants.
+     - Scope chip   ← GET /api/studio/context
+     - Chat (core)  ← POST /api/chat (SSE), streamed per-frame below
+     - Sessions     ← localStorage (this page owns conversation↔artifact correlation)
+     - Schedules    ← GET /api/schedules (polled while signed in)
+   The right-pane workflow graph / Team / Service cards are deferred (Increment 2b)
+   and render honest empty states for now — no fake data.
+   =========================================================================== */
+
+/* ---- Session persistence (localStorage) -------------------------------- */
+const SESSIONS_KEY = "aevatar-studio:sessions";
+/* Session schema:
+   { id, title, createdAt(ms), updatedAt(ms),
+     messages: [
+       { role:"user", text },
+       { role:"agent", text, status:"working"|"done"|"error",
+         actorId?, error?, usage?:{promptTokens,completionTokens,totalTokens,model,cost,latencyMs},
+         steps:[{stepId,stepType,status:"running"|"done",output?}],
+         toolCalls:[{toolName,callId,argumentsJson}] }
+     ] } */
+
+function loadSessions(){
+  try {
+    const raw = localStorage.getItem(SESSIONS_KEY);
+    if(!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch(e){ console.warn("studio: sessions parse failed", e); return []; }
+}
+function saveSessions(){
+  try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(state.sessions)); }
+  catch(e){ console.warn("studio: sessions save failed", e); }
+}
+function newSessionId(){ return "s_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,7); }
+function makeSession(){ const now=Date.now(); return { id:newSessionId(), title:"新会话", createdAt:now, updatedAt:now, messages:[] }; }
+function activeSession(){ return state.sessions.find(s=>s.id===state.selectedSession) || null; }
+function sessionTitleFrom(text){ const t=(text||"").trim().replace(/\s+/g," "); if(!t) return "新会话"; return t.length>26 ? t.slice(0,26)+"…" : t; }
+
+/* ---- Chat streaming (POST /api/chat, SSE) ------------------------------ */
+// Reads the response body as a stream, buffers, splits on the SSE record
+// separator (\n\n), and invokes onFrame(parsedJson) per `data:` line.
+async function streamChat(prompt, sessionId, onFrame, signal){
+  const token = getToken(); if(!token) throw new Error("not-authenticated");
+  const body = { prompt, sessionId, workflow: "studio" };
+  const res = await fetch("/api/chat", {
+    method:"POST",
+    headers:{ Authorization:"Bearer " + token.access_token, "Content-Type":"application/json", "Accept":"text/event-stream" },
+    body: JSON.stringify(body),
+    signal
+  });
+  if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
+  if(!res.ok || !res.body) throw new Error("chat-http-" + res.status);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for(;;){
+    const { value, done } = await reader.read();
+    if(done) break;
+    buf += decoder.decode(value, { stream:true });
+    let sep;
+    while((sep = buf.indexOf("\n\n")) >= 0){
+      const chunk = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      emitSseChunk(chunk, onFrame);
+    }
+  }
+  buf += decoder.decode();
+  if(buf.trim()) emitSseChunk(buf, onFrame);
+}
+function emitSseChunk(chunk, onFrame){
+  // A chunk may contain multiple `data:` lines; join continuation lines per SSE spec.
+  const dataLines = [];
+  for(const line of chunk.split("\n")){
+    if(line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  }
+  if(!dataLines.length) return;
+  const payload = dataLines.join("\n");
+  if(payload === "[DONE]") return;
+  let frame;
+  try { frame = JSON.parse(payload); } catch(e){ return; }
+  onFrame(frame);
+}
+
+// Apply one SSE frame to an agent message object (mutates msg in place).
+// Returns true when the run reached a terminal state (finished or errored).
+function applyFrameToMessage(frame, msg){
+  // top-level run completion → final assistant text
+  if(frame.runFinished){
+    const out = frame.runFinished.result && frame.runFinished.result.output;
+    if(typeof out === "string" && out.length) msg.text = out;
+    msg.status = "error" === msg.status ? "error" : "done";
+    return true;
+  }
+  // explicit run error variants
+  if(frame.runError || frame.run_error){
+    const e = frame.runError || frame.run_error;
+    msg.status = "error";
+    msg.error = (e && (e.message || e.error || e.reason)) || "run_error";
+    return true;
+  }
+  // top-level usage frame (often empty {})
+  if(frame.usage && typeof frame.usage === "object"){
+    const u = frame.usage;
+    if(u.totalTokens != null || u.promptTokens != null || u.model || u.cost != null || u.latencyMs != null){
+      msg.usage = {
+        promptTokens: u.promptTokens || 0,
+        completionTokens: u.completionTokens || 0,
+        totalTokens: u.totalTokens || 0,
+        model: u.model || "",
+        cost: u.cost || 0,
+        latencyMs: u.latencyMs || 0
+      };
+    }
+  }
+  // step lifecycle
+  if(frame.stepStarted && frame.stepStarted.stepName){ upsertStep(msg, frame.stepStarted.stepName, "running"); }
+  if(frame.stepFinished && frame.stepFinished.stepName){ upsertStep(msg, frame.stepFinished.stepName, "done"); }
+  // custom frames
+  const custom = frame.custom;
+  if(custom && custom.name){
+    const p = custom.payload || {};
+    if(custom.name === "aevatar.run.context"){ if(p.actorId) msg.actorId = p.actorId; }
+    else if(custom.name === "aevatar.step.request"){ upsertStep(msg, p.stepId || p.stepType || "step", "running", p.stepType); }
+    else if(custom.name === "aevatar.step.completed"){ upsertStep(msg, p.stepId || "step", "done", null, p.output); }
+    else if(custom.name === "aevatar.raw.observed"){
+      const inner = p.payload || {};
+      const url = p.payloadTypeUrl || (inner["@type"] || "");
+      // assistant reply + tool usage live on RoleChatSessionCompleted / RoleReplyRecorded
+      if(url.indexOf("RoleChatSessionCompletedEvent") >= 0 || url.indexOf("WorkflowRoleReplyRecordedEvent") >= 0){
+        if(typeof inner.content === "string" && inner.content.length) msg.text = inner.content;
+        if(Array.isArray(inner.toolCalls)) mergeToolCalls(msg, inner.toolCalls);
+        if(inner.usage && (inner.usage.totalTokens != null)){
+          msg.usage = Object.assign({ promptTokens:0, completionTokens:0, totalTokens:0, model:"", cost:0, latencyMs:0 }, msg.usage || {}, {
+            promptTokens: inner.usage.promptTokens || 0,
+            completionTokens: inner.usage.completionTokens || 0,
+            totalTokens: inner.usage.totalTokens || 0
+          });
+        }
+      }
+    }
+  }
+  return false;
+}
+function upsertStep(msg, stepId, status, stepType, output){
+  msg.steps = msg.steps || [];
+  let s = msg.steps.find(x=>x.stepId===stepId);
+  if(!s){ s = { stepId, status, stepType: stepType||"" }; msg.steps.push(s); }
+  if(status) s.status = status;
+  if(stepType) s.stepType = stepType;
+  if(output != null) s.output = output;
+}
+function mergeToolCalls(msg, calls){
+  msg.toolCalls = msg.toolCalls || [];
+  for(const c of calls){
+    if(!c || !c.toolName) continue;
+    const id = c.callId || (c.toolName + ":" + (msg.toolCalls.length));
+    if(msg.toolCalls.some(x=>x.callId===id)) continue;
+    msg.toolCalls.push({ toolName:c.toolName, callId:id, argumentsJson:c.argumentsJson || c.arguments || "" });
+  }
+}
+
+/* ---- Schedules (GET /api/schedules) ------------------------------------ */
+const TARGET_KIND_LABEL = { 0:"Envelope", 1:"ServiceInvocation" };
+const SCHEDULE_KIND_LABEL = { 0:"Generic", 1:"Workflow" };
+function targetKindLabel(k){ return TARGET_KIND_LABEL[k] != null ? TARGET_KIND_LABEL[k] : ("kind " + k); }
+function scheduleKindLabel(k){ return SCHEDULE_KIND_LABEL[k] != null ? SCHEDULE_KIND_LABEL[k] : ("kind " + k); }
+
+async function loadSchedules(){
+  try {
+    const data = await api("/api/schedules?take=50");
+    const items = (data && Array.isArray(data.items)) ? data.items.filter(s=>!s.deleted) : [];
+    const sig = JSON.stringify(items);
+    const wantsRender = ()=> state.signedIn && (isSchedulesPage() || state.ctxTab==="schedules");
+    if(sig !== state.schedulesSig){
+      state.schedules = items;
+      state.schedulesSig = sig;
+      state.schedulesLoaded = true;
+      if(wantsRender()) render();
+    } else if(!state.schedulesLoaded){
+      state.schedulesLoaded = true;
+      if(wantsRender()) render();
+    }
+  } catch(e){ /* leave last-known schedules; chip stays as-is */ }
+}
+function startSchedulePolling(){
+  if(state.schedTimer) return;
+  loadSchedules();
+  state.schedTimer = setInterval(()=>{ if(state.signedIn) loadSchedules(); }, 3000);
+}
+
+async function loadContext(){
+  try {
+    const ctx = await api("/api/studio/context");
+    if(ctx){ state.scopeId = ctx.scopeId || ""; state.scopeResolved = !!ctx.scopeResolved; state.scopeSource = ctx.scopeSource || ""; render(); }
+  } catch(e){ /* scope chip falls back to a neutral state */ }
+}
+
+/* ===========================================================================
+   工具函数
+   =========================================================================== */
+const $ = (s,r=document)=>r.querySelector(s);
+const el=(t,a={},h)=>{const n=document.createElement(t);for(const k in a){if(k==="class")n.className=a[k];else if(k.startsWith("on")&&typeof a[k]==="function")n.addEventListener(k.slice(2),a[k]);else if(a[k]!=null)n.setAttribute(k,a[k]);}if(h!=null)n.innerHTML=h;return n;};
+const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const parseT=(iso)=>typeof iso==="number"?iso:Date.parse(iso);
+function nowMs(){ return Date.now(); }
+function relPast(iso){ const t=parseT(iso); if(!t&&t!==0||isNaN(t))return"—"; let d=Math.max(0,Math.round((nowMs()-t)/1000)); if(d<=1)return"刚刚"; if(d<60)return d+" 秒前"; if(d<3600)return Math.floor(d/60)+" 分钟前"; if(d<86400)return Math.floor(d/3600)+" 小时前"; return Math.floor(d/86400)+" 天前"; }
+function relFuture(iso){ const t=parseT(iso); if(isNaN(t))return"—"; let d=Math.max(0,Math.round((t-nowMs())/1000)); if(d<60)return"即将"; if(d<3600)return"约 "+Math.floor(d/60)+" 分钟后"; if(d<86400)return"约 "+Math.floor(d/3600)+" 小时后"; return"约 "+Math.floor(d/86400)+" 天后"; }
+function clockUTC(iso){ const m=/T(\d{2}:\d{2})/.exec(iso); return m?m[1]:iso; }
+function initials(s){ return (s||"?").trim().charAt(0).toUpperCase(); }
+
+function colorJSON(str){
+  if(!str) return '<span class="j-null">—</span>';
+  let s=esc(str);
+  s=s.replace(/(&quot;.*?&quot;)(\s*:)?/g,(m,tok,colon)=>colon?`<span class="j-key">${tok}</span>${colon}`:`<span class="j-str">${tok}</span>`);
+  s=s.replace(/(^|[\s:\[,])(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?=[\s,\]\}]|$)/g,(m,pre,num)=>`${pre}<span class="j-num">${num}</span>`);
+  s=s.replace(/\b(true|false)\b/g,'<span class="j-bool">$1</span>');
+  s=s.replace(/\bnull\b/g,'<span class="j-null">null</span>');
+  return s;
+}
+function mdInline(t){ return esc(t).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b style="color:var(--fg-strong)">$1</b>'); }
+
+const ICON={
+  lock:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  sun:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
+  moon:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8Z"/></svg>',
+  check:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.2 4.2L19 7"/></svg>',
+  x:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>',
+  chevron:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>',
+  copy:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h9"/></svg>',
+  send:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12 20 4l-7 16-2.5-6.5L4 12Z"/></svg>',
+  stop:'<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  plus:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  edit:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4 18.5 8.5 8 19l-4.5 1 1-4.5L14 4Z"/></svg>',
+  trash:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  ext:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  alert:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 8.5v4.5M12 16.2v.2"/><path d="M10.3 3.9 2.5 17.5A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
+  retry:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>',
+  graph:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="6" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="12" r="2.2"/><path d="M7 6.6 17 11M7 17.4 17 13"/></svg>',
+  chat:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M4 5h16v11H9l-4 3.5V16H4Z"/></svg>',
+  tool:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6a3.5 3.5 0 0 0-4.6 4.4L4 16.3 6.7 19l5.9-5.9A3.5 3.5 0 1 0 14.5 6Z"/></svg>',
+  foreach:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a8 8 0 0 1 13-3l3 3M20 15a8 8 0 0 1-13 3l-3-3"/><path d="M20 4v5h-5M4 20v-5h5"/></svg>',
+  cond:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 21 12 12 21 3 12 12 3Z"/></svg>',
+  human:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="3.4"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/></svg>',
+  svc:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>',
+  team:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 6a3 3 0 0 1 0 5.6M18 13.5a5.5 5.5 0 0 1 3 5"/></svg>',
+  clock:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+  spark:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/></svg>',
+  studio:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>',
+  menu:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+  ctx:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>'
+};
+function catIcon(t){ return t==="llm"?ICON.chat : t==="tool"?ICON.tool : t==="foreach"?ICON.foreach : t==="conditional"?ICON.cond : t==="human"?ICON.human : ICON.tool; }
+
+/* shared suite navigation — identical markup/behaviour across the five console pages */
+const SUITE_NAV=[
+  {k:"observatory",href:"/workflow/observatory",label:"观测台",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'},
+  {k:"studio",href:"/workflow/studio",label:"Studio",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="12" r="2.4"/><path d="M8.2 7.2 15.8 11M8.2 16.8 15.8 13"/></svg>'},
+  {k:"schedules",href:"/schedules",label:"定时任务",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>'},
+  {k:"channels",href:"/channels",label:"渠道",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"/><path d="M12 4.5v4.9M12 14.6v4.9M4.5 12h4.9M14.6 12h4.9"/></svg>'},
+  {k:"voice",href:"/voice",label:"语音",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>'},
+  {k:"cqrs",href:"/cqrs",label:"投影",svg:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6M4.5 11.5v6c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-6"/></svg>'}
+];
+function suiteNavHtml(active){return '<nav class="suite-nav" aria-label="控制台导航">'+SUITE_NAV.map(function(n){return '<a href="'+n.href+'"'+(n.k===active?' aria-current="page"':'')+' title="'+n.label+'">'+n.svg+'<span class="nav-label">'+n.label+'</span></a>';}).join('')+'</nav>';}
+
+/* ===========================================================================
+   App state
+   =========================================================================== */
+const state = {
+  signedIn:false,
+  theme: localStorage.getItem("studio-theme") || null,
+  expanded:new Set(),       // 展开的 tool-call / card
+  sessions:[],              // localStorage-backed conversation list (loaded in init)
+  selectedSession:null,     // active session id
+  streaming:false,          // a chat run is in flight
+  abort:null,               // AbortController for the in-flight run
+  scopeId:"",               // live scope (GET /api/studio/context)
+  scopeResolved:false,
+  scopeSource:"",
+  schedules:[],             // live schedules (GET /api/schedules)
+  schedulesSig:"",
+  schedulesLoaded:false,
+  schedTimer:null,
+  ctxTab:"graph",           // graph | workflow | team | service | schedules
+  ctxW: (parseInt(localStorage.getItem("studio-ctxw"),10) || null),  // 用户拖拽过的右栏宽度（px）
+  zoom:1, panX:0, panY:0
+};
+function applyTheme(){ if(state.theme==="light"||state.theme==="dark")document.documentElement.setAttribute("data-theme",state.theme); else document.documentElement.removeAttribute("data-theme"); }
+function effDark(){ if(state.theme)return state.theme==="dark"; return !window.matchMedia||!window.matchMedia("(prefers-color-scheme: light)").matches; }
+
+/* ===========================================================================
+   Topbar
+   =========================================================================== */
+function scopeChipHtml(){
+  if(state.scopeId){
+    return `<div class="scope-chip" title="scope 已解析（来源：${esc(state.scopeSource||"")}）">${ICON.check}<span>scope</span><span class="sid">${esc(state.scopeId)}</span></div>`;
+  }
+  return `<div class="scope-chip" title="正在解析 scope">${ICON.spark}<span>scope</span><span class="sid">解析中…</span></div>`;
+}
+function renderTopbar(){
+  const bar=el("header",{class:"topbar",role:"banner"});
+  bar.innerHTML=`
+    <button class="mobnav" id="navBtn" aria-label="会话列表">${ICON.menu}</button>
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">${ICON.studio}</div>
+      <div><div class="brand-name">Aevatar Backend Console</div></div>
+    </div>
+    ${suiteNavHtml(isSchedulesPage()?"schedules":"studio")}
+    ${state.signedIn?scopeChipHtml():""}
+    <div class="spacer"></div>`;
+  const tbtn=el("button",{class:"iconbtn",id:"themeBtn","aria-label":"切换主题",title:"切换主题"});
+  tbtn.innerHTML=effDark()?ICON.sun:ICON.moon;
+  tbtn.addEventListener("click",()=>{ state.theme=effDark()?"light":"dark"; localStorage.setItem("studio-theme",state.theme); applyTheme(); render(); });
+  bar.appendChild(tbtn);
+  if(state.signedIn){
+    const acct=el("div",{class:"account"});
+    acct.innerHTML=`<span class="avatar" aria-hidden="true">${initials(accountLabel)}</span><span class="who" title="${esc(accountLabel)}">${esc(accountLabel)}</span>`;
+    const sw=el("button",{class:"linkbtn","aria-label":"切换账户"},"切换账户");
+    sw.addEventListener("click",()=>{ signOut(); });
+    acct.appendChild(sw);
+    bar.appendChild(acct);
+  }
+  return bar;
+}
+
+/* ===========================================================================
+   Left — sessions
+   =========================================================================== */
+function sessionStatus(se){
+  const last = se.messages && se.messages.length ? se.messages[se.messages.length-1] : null;
+  if(!last) return "unknown";
+  if(last.role==="agent"){
+    if(last.status==="working") return "running";
+    if(last.status==="error") return "failed";
+    return "completed";
+  }
+  return "running";
+}
+function renderSessions(){
+  const pane=el("aside",{class:"sess-pane","aria-label":"会话列表"});
+  const head=el("div",{class:"sess-head"});
+  const nb=el("button",{class:"new-sess"},`${ICON.plus}<span>新建会话</span>`);
+  nb.addEventListener("click",()=>{ createSession(); });
+  head.appendChild(nb);
+  pane.appendChild(head);
+
+  const list=el("div",{class:"sess-list scroll",role:"list"});
+  if(!state.sessions.length){
+    list.appendChild(el("div",{class:"empty"},`<div class="ic" aria-hidden="true">${ICON.chat}</div><div class="et">还没有会话</div><div class="es">开始对话来创建你的第一个工作流。</div>`));
+    pane.appendChild(list); return pane;
+  }
+  const rows = state.sessions.slice().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
+  rows.forEach(se=>{
+    const cur = se.id===state.selectedSession;
+    const row=el("button",{class:"sess-row",role:"listitem","aria-current":String(cur)});
+    row.innerHTML=`
+      <span class="dot s-${sessionStatus(se)}" aria-hidden="true"></span>
+      <span class="st">${esc(se.title||"新会话")}</span>
+      <span class="sm">${relPast(se.updatedAt)}</span>
+      <span class="sess-actions"><button class="ren" title="重命名" aria-label="重命名会话">${ICON.edit}</button><button class="del" title="删除" aria-label="删除会话">${ICON.trash}</button></span>`;
+    row.addEventListener("click",(e)=>{
+      if(e.target.closest(".sess-actions")) return;
+      if(state.streaming) return;
+      state.selectedSession = se.id;
+      document.body.classList.remove("nav-open");
+      render();
+    });
+    const ren=row.querySelector(".ren");
+    if(ren) ren.addEventListener("click",(e)=>{ e.stopPropagation(); renameSession(se.id); });
+    const del=row.querySelector(".del");
+    if(del) del.addEventListener("click",(e)=>{ e.stopPropagation(); deleteSession(se.id); });
+    list.appendChild(row);
+  });
+  pane.appendChild(list);
+  return pane;
+}
+
+function createSession(){
+  if(state.streaming) return;
+  const s = makeSession();
+  state.sessions.push(s);
+  state.selectedSession = s.id;
+  saveSessions();
+  document.body.classList.remove("nav-open");
+  render();
+  const ta=$("#composerInput"); if(ta) ta.focus();
+}
+function renameSession(id){
+  const s = state.sessions.find(x=>x.id===id); if(!s) return;
+  const next = window.prompt("重命名会话", s.title||"新会话");
+  if(next==null) return;
+  s.title = next.trim() || s.title;
+  s.updatedAt = Date.now();
+  saveSessions();
+  render();
+}
+function deleteSession(id){
+  if(state.streaming) return;
+  const s = state.sessions.find(x=>x.id===id); if(!s) return;
+  if(!window.confirm("删除会话「" + (s.title||"新会话") + "」？此操作无法撤销。")) return;
+  state.sessions = state.sessions.filter(x=>x.id!==id);
+  if(state.selectedSession===id) state.selectedSession = state.sessions.length ? state.sessions[0].id : null;
+  saveSessions();
+  render();
+}
+
+/* ===========================================================================
+   Center — chat
+   =========================================================================== */
+function renderChat(){
+  const pane=el("section",{class:"chat-pane","aria-label":"对话"});
+  const scrollArea=el("div",{class:"chat-scroll scroll",id:"chatScroll"});
+  const inner=el("div",{class:"chat-inner"});
+  const sess=activeSession();
+
+  if(!sess || !sess.messages.length){
+    inner.appendChild(renderWelcome());
+  } else {
+    sess.messages.forEach((m)=>{ inner.appendChild(renderMessage(m)); });
+  }
+  scrollArea.appendChild(inner);
+  pane.appendChild(scrollArea);
+  pane.appendChild(renderComposer());
+  return pane;
+}
+
+function renderWelcome(){
+  const w=el("div",{class:"welcome"});
+  w.innerHTML=`
+    <div class="wmark" aria-hidden="true">${ICON.spark}</div>
+    <h1>跟 aevatar agent 对话，编排你的工作流</h1>
+    <p>这个 agent 已装载 <code>aevatar-platform</code> 技能集——你只需用自然语言描述需求，它会在对话里完成写 workflow、发布 service、建 team、配定时任务。运行结果到「运行观测台」只读查看。</p>`;
+  const chips=el("div",{class:"prompt-chips"});
+  ["帮我做个每天汇总科技新闻的 workflow","把一个 PDF 发票录入流程发布成可调用的 service","给现有 workflow 配一个每周一早上的定时任务"].forEach(t=>{
+    const c=el("button",{class:"prompt-chip"},`${ICON.spark}<span>${esc(t)}</span>`);
+    c.addEventListener("click",()=>{ const ta=$("#composerInput"); if(ta){ ta.value=t; ta.focus(); ta.dispatchEvent(new Event("input",{bubbles:true})); } });
+    chips.appendChild(c);
+  });
+  w.appendChild(chips);
+  return w;
+}
+
+function renderMessage(m){
+  const wrap=el("div",{class:"msg "+(m.role==="user"?"user":"agent")});
+  wrap.innerHTML=`<div class="m-avatar" aria-hidden="true">${m.role==="user"?initials(accountLabel):ICON.studio}</div>`;
+  const body=el("div",{class:"m-body"});
+  body.appendChild(el("div",{class:"m-name"}, m.role==="user"?`<b>你</b>`:`<b>aevatar</b> · Studio agent`));
+  if(m.role==="user"){
+    body.appendChild(el("div",{class:"bubble-user"}, esc(m.text)));
+  } else {
+    const working = m.status==="working";
+    const agentBox=el("div",{class:"bubble-agent"});
+    // tool calls observed during the run (reuse the observatory .toolcall component)
+    (m.toolCalls||[]).forEach(tc=>{ agentBox.appendChild(renderToolCall({ toolName:tc.toolName, callId:tc.callId, status:working?"running":"ok", args:tc.argumentsJson||"", result:"" })); });
+    // in-flight step/status activity
+    if(working) agentBox.appendChild(renderStepActivity(m));
+    // assistant text (whole output; arrives via runFinished / RoleReplyRecorded)
+    if(m.text){
+      mdBlocks(m.text).forEach(p=>agentBox.appendChild(p));
+    } else if(working && !(m.toolCalls||[]).length){
+      agentBox.appendChild(el("p",{class:"agent-working"},`<span class="stream-cursor"></span>`));
+    }
+    body.appendChild(agentBox);
+    if(m.status==="error"){ body.appendChild(renderChatError(m)); }
+    if(m.usage){
+      const u=m.usage;
+      const parts=[`<span><b>${(u.totalTokens||0).toLocaleString()}</b> tokens</span>`];
+      if(u.promptTokens||u.completionTokens) parts.push(`<span>${(u.promptTokens||0).toLocaleString()} in · ${(u.completionTokens||0).toLocaleString()} out</span>`);
+      if(u.cost) parts.push(`<span>$${Number(u.cost).toFixed(3)}</span>`);
+      if(u.model) parts.push(`<span>${esc(u.model)}</span>`);
+      if(u.latencyMs) parts.push(`<span>${u.latencyMs} ms</span>`);
+      body.appendChild(el("div",{class:"usage-line"}, parts.join("")));
+    }
+    if(m.actorId && m.status!=="working"){
+      body.appendChild(el("a",{class:"deeplink",style:"margin-top:6px",href:OBS,title:"到运行观测台查看本次运行（run: "+esc(m.actorId)+"）"},`${ICON.ext}<span>到运行观测台查看本次运行</span>`));
+    }
+  }
+  wrap.appendChild(body);
+  return wrap;
+}
+
+// 渲染助手段落（按空行分段；行内支持 `code` 与 **bold**）
+function mdBlocks(text){
+  return String(text).split(/\n{2,}/).filter(s=>s.trim().length).map(seg=>{
+    const p=el("p",{}); p.innerHTML=mdInline(seg).replace(/\n/g,"<br>"); return p;
+  });
+}
+
+// 运行中的轻量步骤/状态活动条
+function renderStepActivity(m){
+  const box=el("div",{class:"step-activity"});
+  const steps=m.steps||[];
+  if(!steps.length){
+    box.innerHTML=`<span class="sa-row"><span class="spin"></span><span class="sa-label">正在处理…</span></span>`;
+    return box;
+  }
+  box.innerHTML = steps.map(s=>{
+    const running = s.status!=="done";
+    const ic = running ? `<span class="spin"></span>` : `<span class="sa-ok">${ICON.check}</span>`;
+    const label = (s.stepType?esc(s.stepType)+" · ":"") + esc(s.stepId);
+    return `<span class="sa-row">${ic}<span class="sa-label">${label}</span></span>`;
+  }).join("");
+  return box;
+}
+
+function renderToolCall(tc, forceRunning){
+  const status = forceRunning ? "running" : tc.status;
+  const open = state.expanded.has(tc.callId) || status==="failed";
+  const box=el("div",{class:"toolcall","data-open":String(open),"data-callid":tc.callId});
+  const statusHtml = status==="running"
+    ? `<span class="tc-status run"><span class="spin"></span>进行中</span>`
+    : status==="failed"
+      ? `<span class="tc-status bad">${ICON.x}失败</span>`
+      : `<span class="tc-status ok">${ICON.check}成功</span>`;
+  const head=el("button",{class:"tc-head","aria-expanded":String(open)});
+  head.innerHTML=`<span class="tc-chevron" aria-hidden="true">${ICON.chevron}</span>
+    <span class="tc-name">${esc(tc.toolName)}</span><span class="tc-callid">${esc(tc.callId)}</span>${statusHtml}`;
+  head.addEventListener("click",()=>{ if(state.expanded.has(tc.callId))state.expanded.delete(tc.callId);else state.expanded.add(tc.callId); const o=state.expanded.has(tc.callId); box.setAttribute("data-open",String(o)); head.setAttribute("aria-expanded",String(o)); });
+  box.appendChild(head);
+  const body=el("div",{class:"tc-body"});
+  body.appendChild(jsonField("arguments", tc.args));
+  if(status==="failed"){
+    const f=el("div",{}); f.innerHTML=`<div class="tc-field-head"><span class="tc-field-label">error</span></div>`;
+    f.appendChild(el("pre",{class:"json scroll"},`<span class="tc-error">${esc(tc.error||"unknown error")}</span>`));
+    body.appendChild(f);
+  } else if(status==="running"){
+    const f=el("div",{}); f.innerHTML=`<div class="tc-field-head"><span class="tc-field-label">result</span></div>`;
+    f.appendChild(el("pre",{class:"json"},`<span class="j-null">… 等待返回</span>`));
+    body.appendChild(f);
+  } else if(tc.result){
+    body.appendChild(jsonField("result", tc.result));
+  }
+  box.appendChild(body);
+  return box;
+}
+function jsonField(label,raw){
+  const f=el("div",{});
+  const head=el("div",{class:"tc-field-head"});
+  head.innerHTML=`<span class="tc-field-label">${esc(label)}</span>`;
+  const copy=el("button",{class:"copybtn","aria-label":"复制 "+label},`${ICON.copy}<span>复制</span>`);
+  copy.addEventListener("click",async()=>{ try{await navigator.clipboard.writeText(raw||"");}catch(e){const ta=document.createElement("textarea");ta.value=raw||"";document.body.appendChild(ta);ta.select();try{document.execCommand("copy");}catch(_){}ta.remove();} copy.classList.add("done");copy.querySelector("span").textContent="已复制";setTimeout(()=>{copy.classList.remove("done");copy.querySelector("span").textContent="复制";},1400); });
+  head.appendChild(copy); f.appendChild(head);
+  const pre=el("pre",{class:"json scroll",tabindex:"0"}); pre.innerHTML=colorJSON(raw); f.appendChild(pre);
+  return f;
+}
+
+function renderChatError(m){
+  const e=el("div",{class:"chat-error",role:"alert"});
+  const detail = (m && m.error) ? esc(m.error) : "与 agent 的连接中断。已收到的内容已保留，可重试这条消息。";
+  e.innerHTML=`${ICON.alert}<div><div class="ce-l">生成出错 · run_error</div><div class="ce-m">${detail}</div></div>`;
+  if(!state.streaming){
+    const r=el("button",{class:"ce-retry"},`${ICON.retry}<span>重试</span>`);
+    r.addEventListener("click",()=>{ retryLastRun(); });
+    e.querySelector("div").appendChild(r);
+  }
+  return e;
+}
+
+function renderComposer(){
+  const wrap=el("div",{class:"composer-wrap"});
+  const c=el("div",{class:"composer"});
+  const box=el("div",{class:"composer-box"});
+  const ta=el("textarea",{id:"composerInput",rows:"1",placeholder:"描述你想要的工作流，或问问当前编排状态…","aria-label":"消息输入框"});
+  if(state.streaming) ta.setAttribute("disabled","true");
+  ta.addEventListener("input",()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,140)+"px"; const sb=$("#sendBtn"); if(sb)sb.disabled=!ta.value.trim(); });
+  ta.addEventListener("keydown",(e)=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); if(!state.streaming) sendComposer(); } });
+  box.appendChild(ta);
+  if(state.streaming){
+    const stop=el("button",{class:"stop-btn",type:"button"},`${ICON.stop}<span>停止生成</span>`);
+    stop.addEventListener("click",()=>{ stopRun(); });
+    box.appendChild(stop);
+  } else {
+    box.appendChild(makeSend(ta));
+  }
+  c.appendChild(box);
+  wrap.appendChild(c);
+  wrap.appendChild(el("div",{class:"composer-hint"},`<span class="kbd">Enter</span> 发送 · <span class="kbd">Shift+Enter</span> 换行 · agent 用工具完成所有编排动作，UI 只读呈现`));
+  return wrap;
+}
+function makeSend(ta){
+  const sb=el("button",{class:"send-btn",id:"sendBtn",type:"button","aria-label":"发送",disabled:"true"},ICON.send);
+  sb.addEventListener("click",()=>{ sendComposer(); });
+  return sb;
+}
+
+/* ---- conversation continuity ------------------------------------------- */
+// The /api/chat run is stateless: one prompt per call, and SessionId is a
+// correlation tag only (the backend never rehydrates prior turns from it). This
+// page already owns the full transcript in localStorage, so to give the agent
+// memory we fold a bounded slice of prior turns into the prompt. The first turn
+// (no prior context) sends the bare prompt — identical to the previous behavior.
+const HISTORY_TURN_CAP = 10;     // most recent prior messages to include
+const HISTORY_CHAR_CAP = 6000;   // hard ceiling on the injected transcript length
+function composePromptWithHistory(sess, currentPrompt){
+  const msgs = (sess && Array.isArray(sess.messages)) ? sess.messages : [];
+  // The current user turn is the last user message; history is everything before it.
+  let lastUserIdx = -1;
+  for(let i=msgs.length-1;i>=0;i--){ if(msgs[i].role==="user"){ lastUserIdx=i; break; } }
+  const prior = (lastUserIdx>=0 ? msgs.slice(0,lastUserIdx) : msgs)
+    .filter(m => m && (m.role==="user"||m.role==="agent") && m.text && m.text.trim());
+  if(!prior.length) return currentPrompt;
+  const recent = prior.slice(-HISTORY_TURN_CAP);
+  const lines = recent.map(m => (m.role==="user" ? "用户" : "助手") + "：" + m.text.trim());
+  let transcript = lines.join("\n");
+  if(transcript.length > HISTORY_CHAR_CAP) transcript = "…（更早内容已省略）\n" + transcript.slice(-HISTORY_CHAR_CAP);
+  return "以下是本次对话的前序记录，仅供你保持上下文连续，请勿复述：\n"
+    + "<对话历史>\n" + transcript + "\n</对话历史>\n\n"
+    + "用户最新消息：\n" + currentPrompt;
+}
+
+/* ---- send / stop / retry (live chat) ----------------------------------- */
+function sendComposer(){
+  const ta=$("#composerInput");
+  const text = ta ? ta.value.trim() : "";
+  if(!text || state.streaming) return;
+  let sess = activeSession();
+  if(!sess){ sess = makeSession(); state.sessions.push(sess); state.selectedSession = sess.id; }
+  sess.messages.push({ role:"user", text });
+  if(!sess.title || sess.title==="新会话") sess.title = sessionTitleFrom(text);
+  sess.updatedAt = Date.now();
+  saveSessions();
+  runChat(sess, text);
+}
+function retryLastRun(){
+  const sess = activeSession(); if(!sess || state.streaming) return;
+  // drop the failed agent message, re-run from the preceding user prompt
+  if(sess.messages.length && sess.messages[sess.messages.length-1].role==="agent") sess.messages.pop();
+  const lastUser = [...sess.messages].reverse().find(x=>x.role==="user");
+  if(!lastUser){ render(); return; }
+  saveSessions();
+  runChat(sess, lastUser.text);
+}
+function runChat(sess, prompt){
+  // Build the history-augmented prompt BEFORE pushing the in-flight agent
+  // placeholder, so the placeholder (empty text) is never part of the transcript.
+  const promptWithHistory = composePromptWithHistory(sess, prompt);
+  const agent = { role:"agent", text:"", status:"working", steps:[], toolCalls:[] };
+  sess.messages.push(agent);
+  state.streaming = true;
+  state.abort = new AbortController();
+  render();
+  scrollChatToBottom();
+  let rafPending = false;
+  const scheduleRender = ()=>{ if(rafPending) return; rafPending = true; requestAnimationFrame(()=>{ rafPending=false; if(state.streaming){ patchActiveAgent(agent); scrollChatToBottom(); } }); };
+  streamChat(promptWithHistory, sess.id, (frame)=>{
+    const terminal = applyFrameToMessage(frame, agent);
+    sess.updatedAt = Date.now();
+    if(terminal){ finishRun(sess, agent); } else { scheduleRender(); }
+  }, state.abort.signal)
+    .then(()=>{ if(state.streaming){ if(agent.status==="working") agent.status = agent.text ? "done" : "error"; if(agent.status==="error" && !agent.error) agent.error="连接结束但未收到完整结果。"; finishRun(sess, agent); } })
+    .catch((err)=>{
+      if(err && err.name==="AbortError"){ agent.status="done"; if(!agent.text) agent.text="（已停止生成）"; }
+      else { agent.status="error"; agent.error=(err&&err.message)?String(err.message):"请求失败"; }
+      finishRun(sess, agent);
+    });
+}
+function finishRun(sess, agent){
+  if(!state.streaming) return;
+  state.streaming = false;
+  state.abort = null;
+  sess.updatedAt = Date.now();
+  saveSessions();
+  render();
+  scrollChatToBottom();
+}
+function stopRun(){
+  if(state.abort){ try{ state.abort.abort(); }catch(_){ } }
+}
+// In-place DOM patch of the in-flight agent message (avoids full re-render churn while streaming).
+function patchActiveAgent(agent){
+  const sess = activeSession(); if(!sess) return;
+  if(sess.messages[sess.messages.length-1] !== agent) return;
+  const scroll = $("#chatScroll"); if(!scroll) return;
+  const msgs = scroll.querySelectorAll(".msg.agent");
+  const node = msgs[msgs.length-1];
+  if(!node) return;
+  const fresh = renderMessage(agent);
+  node.replaceWith(fresh);
+}
+function scrollChatToBottom(){ const sc=$("#chatScroll"); if(sc) sc.scrollTop=sc.scrollHeight; }
+
+/* ===========================================================================
+   Right — context (graph + artifact cards)
+   =========================================================================== */
+function renderContext(){
+  const pane=el("aside",{class:"ctx-pane","aria-label":"当前会话上下文"});
+  const rez=el("div",{class:"ctx-resizer",title:"拖动调整宽度","aria-hidden":"true"});
+  attachResizer(rez);
+  pane.appendChild(rez);
+
+  // Increment 2a: workflow graph / Team / Service are deferred (2b) — honest empty
+  // states until those artifacts are wired from agent tool-call results.
+  // Schedules are LIVE (GET /api/schedules); show its dot when schedules exist.
+  const hasSchedules = state.schedules.length>0;
+  const dot={ workflow:null, team:null, service:null, schedules: hasSchedules ? "running" : null };
+
+  // 多 tab：图 / Workflow / Team / Service / Schedules
+  const head=el("div",{class:"ctx-head"});
+  const tabs=el("div",{class:"ctx-tabs",role:"tablist","aria-label":"当前会话上下文视图"});
+  [["graph","图",ICON.graph,null],
+   ["workflow","Workflow",ICON.graph,dot.workflow],
+   ["team","Team",ICON.team,dot.team],
+   ["service","Service",ICON.svc,dot.service],
+   ["schedules","Schedules",ICON.clock,dot.schedules]
+  ].forEach(([id,lab,icon,d])=>{
+    const t=el("button",{class:"ctx-tab",role:"tab","aria-selected":String(state.ctxTab===id),"aria-label":lab},
+      `${icon}<span>${lab}</span>${d?`<span class="tdot dot s-${d}"></span>`:""}`);
+    t.addEventListener("click",()=>{ state.ctxTab=id; render(); });
+    tabs.appendChild(t);
+  });
+  head.appendChild(tabs);
+  pane.appendChild(head);
+
+  const body=el("div",{class:"ctx-body"});
+  const tab=state.ctxTab;
+  if(tab==="graph"){
+    body.appendChild(el("div",{style:"position:absolute;inset:0;display:grid;place-items:center"},`<div class="empty"><div class="ic" aria-hidden="true">${ICON.graph}</div><div class="et">workflow 出现后在此显示</div><div class="es">在左侧对话中描述需求，agent 用工具生成 workflow 后，拓扑图会在这里呈现。</div></div>`));
+  } else if(tab==="workflow"){
+    body.appendChild(panelEmpty(ICON.graph,"workflow 出现后在此显示","agent 用工具生成 workflow 后，详情会出现在这里，拓扑见「图」标签。"));
+  } else if(tab==="team"){
+    body.appendChild(panelEmpty(ICON.team,"team 出现后在此显示","agent 建好 team / member 后会出现在这里。"));
+  } else if(tab==="service"){
+    body.appendChild(panelEmpty(ICON.svc,"service 出现后在此显示","workflow 发布成 service 后会出现在这里。"));
+  } else {
+    body.appendChild(renderSchedulesPanel());
+  }
+  pane.appendChild(body);
+  return pane;
+}
+function panelEmpty(icon,t,sub){ const p=el("div",{class:"ctx-panel"}); p.appendChild(el("div",{class:"empty"},`<div class="ic" aria-hidden="true">${icon}</div><div class="et">${t}</div><div class="es">${sub}</div>`)); return p; }
+
+/* ---- artifact cards ---- */
+// Increment 2b will reintroduce the live workflow DAG renderer driven by the run
+// graph projection; for now the graph tab shows an honest empty state.
+
+/* 右栏宽度拖拽 */
+function attachResizer(handle){
+  let startX, startW, dragging=false;
+  const onMove=(e)=>{ if(!dragging)return; const dx=startX-e.clientX; const max=Math.min(680,Math.round(window.innerWidth*0.5)); const w=Math.max(340,Math.min(max,startW+dx)); state.ctxW=w; document.documentElement.style.setProperty("--ctx-w",w+"px"); };
+  const onUp=()=>{ if(!dragging)return; dragging=false; handle.classList.remove("dragging"); document.body.classList.remove("resizing"); try{ localStorage.setItem("studio-ctxw",String(state.ctxW)); }catch(_){ } window.removeEventListener("pointermove",onMove); window.removeEventListener("pointerup",onUp); };
+  handle.addEventListener("pointerdown",(e)=>{ e.preventDefault(); dragging=true; startX=e.clientX;
+    startW=state.ctxW || parseInt(getComputedStyle(document.documentElement).getPropertyValue("--ctx-w"),10) || 460;
+    handle.classList.add("dragging"); document.body.classList.add("resizing");
+    window.addEventListener("pointermove",onMove); window.addEventListener("pointerup",onUp); });
+}
+
+/* 扁平产物面板（每个 tab 一个） */
+function ctxPanel(icon,color,title,metaHtml,bodyNode){
+  const p=el("div",{class:"ctx-panel scroll"});
+  const head=el("div",{class:"panel-head"});
+  head.innerHTML=`<span class="ph-ic" style="color:${color};background:color-mix(in oklab,${color} 15%,transparent);border:1px solid color-mix(in oklab,${color} 30%,transparent)">${icon}</span><span class="ph-title">${title}</span><span class="ph-meta">${metaHtml||""}</span>`;
+  p.appendChild(head);
+  if(bodyNode) p.appendChild(bodyNode);
+  return p;
+}
+
+// Live schedules (GET /api/schedules) — reuses the existing .sched component.
+// Deep-link to the observatory filtered to THIS schedule's runs (read-only view).
+// schedule rides the query string (?schedule=<id>); scope rides the hash (#scope=<id>),
+// matching how WorkflowRunObservatoryPage parses each. The observatory ignores an
+// unknown ?schedule= until the per-schedule filter is wired, so this href is forward-safe.
+function observatoryRunsHref(s){
+  const q = `?schedule=${encodeURIComponent(s.scheduleId||"")}`;
+  const hash = state.scopeId ? `#scope=${encodeURIComponent(state.scopeId)}` : "";
+  return `${OBS}${q}${hash}`;
+}
+function schedulesSkeleton(){
+  return el("div",{class:"sched"},`<div class="sched-top"><span class="sk" style="width:9px;height:9px;border-radius:50%"></span><span class="sk" style="height:13px;width:160px"></span></div><div class="sched-grid" style="margin-top:8px"><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span><span class="sk" style="height:12px"></span></div>`);
+}
+// Single schedule card — shared by the studio right-pane panel and the standalone /schedules page.
+function renderScheduleCard(s){
+  const sc=el("div",{class:"sched"});
+  const hasFail = (s.failureCount||0)>0;
+  sc.innerHTML=`
+    <div class="sched-top"><span class="dot s-${s.enabled?(hasFail?"failed":"completed"):"stopped"}"></span><span class="sname">${esc(s.displayName||s.scheduleId)}</span><span class="sched-cron">${esc(s.cronExpression||"")}</span></div>
+    <div class="sched-grid">
+      <div class="sg"><span class="gk">timezone</span><span class="gv">${esc(s.timezone||"—")}</span></div>
+      <div class="sg"><span class="gk">enabled</span><span class="gv">${s.enabled?"true":"false"}</span></div>
+      <div class="sg"><span class="gk">下次触发</span><span class="gv">${s.nextFireAt?relFuture(s.nextFireAt):"—"}</span></div>
+      <div class="sg"><span class="gk">上次触发</span><span class="gv">${s.lastFireAt?relPast(s.lastFireAt):"—"}</span></div>
+      <div class="sg"><span class="gk">fireCount</span><span class="gv">${s.fireCount||0}</span></div>
+      <div class="sg"><span class="gk">failureCount</span><span class="gv ${hasFail?"bad":""}">${s.failureCount||0}</span></div>
+      <div class="sg"><span class="gk">kind</span><span class="gv">${esc(scheduleKindLabel(s.scheduleKind))}</span></div>
+      <div class="sg"><span class="gk">target</span><span class="gv">${esc(targetKindLabel(s.targetKind))}</span></div>
+    </div>
+    ${s.lastError?`<div class="sched-err">lastError: ${esc(s.lastError)}</div>`:""}
+    <a class="deeplink" style="margin-top:9px" href="${observatoryRunsHref(s)}">${ICON.ext}<span>到观测台查看运行</span></a>`;
+  return sc;
+}
+function renderSchedulesPanel(){
+  if(!state.schedulesLoaded){
+    const p=el("div",{class:"ctx-panel scroll"});
+    p.appendChild(schedulesSkeleton());
+    return p;
+  }
+  if(!state.schedules.length){
+    return panelEmpty(ICON.clock,"还没有定时任务","为 service 配置 cron 后会出现在这里。");
+  }
+  const b=el("div",{});
+  state.schedules.forEach(s=>{ b.appendChild(renderScheduleCard(s)); });
+  return ctxPanel(ICON.clock,"var(--warn)","Schedules",`<span class="poll-tag"><span class="dot"></span>实时</span>`,b);
+}
+// Standalone full-screen schedules view (served at /schedules; same shell + login gate
+// as the studio app, renders the live schedule cards full-width instead of the 3-pane app).
+function isSchedulesPage(){ return location.pathname.replace(/\/+$/,"")==="/schedules"; }
+function renderSchedulesPage(){
+  const main=el("main",{class:"sched-page"});
+  const head=el("div",{class:"sched-page-head"});
+  head.innerHTML=`<div><h1 class="sched-page-title">定时任务</h1><p class="sched-page-sub">当前 scope 的全部定时任务（cron 调度）。点任一卡片的「到观测台查看运行」可精准查看它触发的运行。</p></div><span class="poll-tag"><span class="dot"></span>实时</span>`;
+  main.appendChild(head);
+  if(!state.schedulesLoaded){
+    const list=el("div",{class:"sched-page-list"});
+    list.appendChild(schedulesSkeleton()); list.appendChild(schedulesSkeleton());
+    main.appendChild(list);
+    return main;
+  }
+  if(!state.schedules.length){
+    main.appendChild(el("div",{class:"sched-page-empty"},`<div class="empty"><div class="ic" aria-hidden="true">${ICON.clock}</div><div class="et">还没有定时任务</div><div class="es">为 service 配置 cron 后会出现在这里。</div></div>`));
+    return main;
+  }
+  const list=el("div",{class:"sched-page-list"});
+  state.schedules.forEach(s=>{ list.appendChild(renderScheduleCard(s)); });
+  main.appendChild(list);
+  return main;
+}
+
+/* ===========================================================================
+   Compose / render
+   =========================================================================== */
+/* ===========================================================================
+   Login screen (mirrors observatory)
+   =========================================================================== */
+function renderLogin(){
+  const wrap = el("main", { class:"login" });
+  const card = el("section", { class:"login-card", role:"region", "aria-label":"登录" });
+  card.innerHTML = `
+    <div class="login-mark" aria-hidden="true">${ICON.lock}</div>
+    <h1>登录以进入 Studio</h1>
+    <p>通过对话装配、发布与编排工作流 —— 登录后即可开始。</p>`;
+  const btn = el("button", { class:"btn-primary", id:"signinBtn" }, "使用 nyxid 登录");
+  btn.addEventListener("click", () => { beginLogin(); });
+  card.appendChild(btn);
+  card.appendChild(el("div", { class:"login-foot" }, `${ICON.lock.replace('width="24" height="24"','width="12" height="12"')}<span>采用 OIDC bearer-token 鉴权 · 通过 nyxid 账户登录</span>`));
+  wrap.appendChild(card);
+  return wrap;
+}
+
+function render(){
+  const app=$("#app"); app.innerHTML="";
+  if(!state.signedIn){ app.appendChild(renderTopbar()); app.appendChild(renderLogin()); return; }
+  if(isSchedulesPage()){ app.appendChild(renderTopbar()); app.appendChild(renderSchedulesPage()); return; }
+  if(state.ctxW) document.documentElement.style.setProperty("--ctx-w", state.ctxW+"px");
+  app.appendChild(renderTopbar());
+  const shell=el("div",{class:"shell"});
+  shell.appendChild(renderSessions());
+  shell.appendChild(renderChat());
+  shell.appendChild(renderContext());
+  app.appendChild(shell);
+
+  // mobile scrims + toggles
+  const navBtn=$("#navBtn"); if(navBtn) navBtn.addEventListener("click",()=>{ document.body.classList.toggle("nav-open"); ensureScrim(); });
+
+  // restore textarea height + initial enable state
+  const ta=$("#composerInput"); if(ta){ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,140)+"px"; const sb=$("#sendBtn"); if(sb)sb.disabled=!ta.value.trim(); }
+
+  // scroll chat to bottom on populated states
+  const sc=$("#chatScroll"); if(sc) sc.scrollTop=sc.scrollHeight;
+}
+function ensureScrim(){
+  let sc=$(".scrim");
+  if(document.body.classList.contains("nav-open")||document.body.classList.contains("ctx-open")){
+    if(!sc){ sc=el("div",{class:"scrim"}); sc.addEventListener("click",()=>{document.body.classList.remove("nav-open","ctx-open"); sc.remove();}); document.body.appendChild(sc); }
+  } else if(sc) sc.remove();
+}
+
+/* init */
+applyTheme();
+if(state.ctxW) document.documentElement.style.setProperty("--ctx-w", state.ctxW+"px");
+// 窄屏打开右栏上下文的浮动按钮（桌面端隐藏，CSS 控制）
+const ctxToggleBtn=el("button",{class:"ctx-toggle","aria-label":"打开当前会话上下文"},ICON.ctx);
+ctxToggleBtn.addEventListener("click",()=>{ document.body.classList.toggle("ctx-open"); ensureScrim(); });
+document.body.appendChild(ctxToggleBtn);
+(async function init(){
+  try { await completeLoginIfCallback(); }
+  catch(e){ console.warn("studio: login callback failed", e); }
+  if(!getToken()){ state.signedIn = false; if(notifyAdminShellAuth("auth-required", "登录已过期，请重新使用 NyxID 登录。")) return; render(); return; }
+  state.signedIn = true;
+  // Sessions are owned by this page (localStorage); restore + pick the most recent.
+  state.sessions = loadSessions();
+  if(state.sessions.length){
+    const recent = state.sessions.slice().sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))[0];
+    state.selectedSession = recent.id;
+  }
+  render();
+  // Live: scope chip + schedules poll; account label from the signed-in identity.
+  loadContext();
+  startSchedulePolling();
+  const acct = toAccount(await fetchUserInfo());
+  if(acct){ accountLabel = acct.label; render(); }
+})();
+if(window.matchMedia){ window.matchMedia("(prefers-color-scheme: light)").addEventListener?.("change",()=>{ if(!state.theme)render(); }); }
+</script>
+</body>
+</html>

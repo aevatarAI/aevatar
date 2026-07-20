@@ -1,5 +1,7 @@
-using System.Text;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Microsoft.AspNetCore.Builder;
@@ -13,10 +15,13 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 // 06-19-workflow-run-observatory (C2) + 06-20-observatory-admin-cross-scope: read-only run viewer surface.
 //   - ALL data endpoints are GET-only + bearer (RequireAuthorization). For a normal caller, scope is implicit =
 //     their own scope_id claim, so they can only ever see their own runs; a cross-scope runId -> 404.
-//   - A NyxID platform admin/operator (verified server-side via IPlatformAdminAuthorizer -> /users/me) may pass
+//   - A caller with aevatar admin access may pass
 //     `scope=<id>` or `scope=__all__` to view another scope / all scopes (G2 auth matrix). Admin status is never
 //     self-asserted by a query param; a non-admin cross-scope request is denied BEFORE any cross-scope query runs.
-//   - Every cross-scope attempt is audited (allowed/denied), never logging the bearer (G5).
+//   - A caller with aevatar admin access may also use /admin/runs/{runId} when they know only the run id and need
+//     the service to resolve the owning scope from the workflow current-state read model.
+//   - Endpoint audit metadata marks these read surfaces; the host audit middleware writes sanitized request/outcome
+//     artifacts and never stores the bearer (G5).
 //   - The read-only guard (GET-only + query-ports-only) and inline-page guard still hold; the NyxID authorizer
 //     lives here in the endpoint layer, never in the query service.
 public static class WorkflowRunObservatoryEndpoints
@@ -25,9 +30,15 @@ public static class WorkflowRunObservatoryEndpoints
     private const string CallbackRoute = "/workflow/observatory/callback";
     private const string DataRoutePrefix = "/api/workflow/observatory";
 
+    private static readonly BackendConsoleAsset PageAsset = new(
+        LogicalName: "workflow-observatory",
+        Assembly: typeof(WorkflowRunObservatoryEndpoints).Assembly,
+        ResourceSuffix: "CapabilityApi.workflow-observatory.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
+
     // Sentinel scope meaning "all scopes" (admin overview). Not a real scope id.
     internal const string AllScopesToken = "__all__";
-    private const string AuditLoggerCategory = "Aevatar.Workflow.Observatory.AdminCrossScope";
 
     public static IEndpointRouteBuilder MapWorkflowRunObservatory(this IEndpointRouteBuilder app)
     {
@@ -36,7 +47,7 @@ public static class WorkflowRunObservatoryEndpoints
         app.MapGet(PageRoute, GetObservatoryPage)
             .WithTags("WorkflowObservatory")
             .WithName("GetWorkflowObservatoryPage")
-            .WithSummary("Read-only workflow run observatory (inline self-contained page).")
+            .WithSummary("Read-only workflow run observatory served from an embedded static asset.")
             .AllowAnonymous();
 
         app.MapGet(CallbackRoute, GetObservatoryPage)
@@ -49,36 +60,90 @@ public static class WorkflowRunObservatoryEndpoints
 
         data.MapGet("/me", GetMe)
             .WithName("GetWorkflowObservatoryCaller")
-            .WithSummary("Caller identity + whether they are a platform admin/operator (drives the admin UI).")
+            .WithSummary("Caller identity + whether they have aevatar admin access (drives the admin UI).")
+            .WithEndpointAudit(
+                "workflow.observatory.get-caller",
+                AuditSensitivityLevel.Internal,
+                "workflow-observatory-caller",
+                EndpointAuditTargetResolvers.Static("workflow-observatory-caller", "me"))
             .RequireAuthorization();
 
         data.MapGet("/runs", ListRuns)
             .WithName("ListWorkflowObservatoryRuns")
             .WithSummary("List runs. Default = caller scope; admins may pass scope=<id> or scope=__all__.")
+            .WithEndpointAudit(
+                "workflow.observatory.list-runs",
+                AuditSensitivityLevel.Confidential,
+                "workflow-observatory-runs",
+                ResolveWorkflowObservatoryTarget("workflow-observatory-runs"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         data.MapGet("/runs/{runId}", GetRun)
             .WithName("GetWorkflowObservatoryRun")
             .WithSummary("Run timeline + summary + usage. Admins may pass scope=<id> for another scope's run.")
+            .WithEndpointAudit(
+                "workflow.observatory.get-run",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         data.MapGet("/runs/{runId}/graph", GetRunGraph)
             .WithName("GetWorkflowObservatoryRunGraph")
             .WithSummary("Run topology. Admins may pass scope=<id> for another scope's run.")
+            .WithEndpointAudit(
+                "workflow.observatory.get-run-graph",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
+            .RequireAuthorization();
+
+        data.MapGet("/admin/runs/{runId}", GetAdminRun)
+            .WithName("GetWorkflowObservatoryAdminRun")
+            .WithSummary("Admin-only run timeline + summary + usage, resolved by run id across all scopes.")
+            .WithEndpointAudit(
+                "workflow.observatory.admin.get-run",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
+            .RequireAuthorization();
+
+        data.MapGet("/admin/runs/{runId}/graph", GetAdminRunGraph)
+            .WithName("GetWorkflowObservatoryAdminRunGraph")
+            .WithSummary("Admin-only run topology, resolved by run id across all scopes.")
+            .WithEndpointAudit(
+                "workflow.observatory.admin.get-run-graph",
+                AuditSensitivityLevel.Confidential,
+                "workflow-run",
+                ResolveWorkflowObservatoryTarget("workflow-run"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         data.MapGet("/resolve-scope", ResolveScope)
             .WithName("ResolveWorkflowObservatoryScope")
             .WithSummary("Admin-only: resolve a NyxID email to candidate scope id(s).")
+            .WithEndpointAudit(
+                "workflow.observatory.resolve-scope",
+                AuditSensitivityLevel.Restricted,
+                "workflow-observatory-scope-resolution",
+                EndpointAuditTargetResolvers.Static("workflow-observatory-scope-resolution", "email-lookup"),
+                WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
         return app;
     }
 
-    internal static IResult GetObservatoryPage(HttpContext http)
+    internal static IResult GetObservatoryPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
     {
         ArgumentNullException.ThrowIfNull(http);
-        return Results.Text(WorkflowRunObservatoryPage.Html, "text/html", Encoding.UTF8);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(PageAsset);
     }
 
     internal static async Task<IResult> GetMe(
@@ -98,6 +163,7 @@ public static class WorkflowRunObservatoryEndpoints
             isAdmin = caller.IsElevated,
             role = caller.Role,
             email = caller.Email,
+            grantSource = caller.GrantSource,
             scopeId,
         });
     }
@@ -105,7 +171,7 @@ public static class WorkflowRunObservatoryEndpoints
     internal static async Task<IResult> ListRuns(
         HttpContext http,
         [FromServices] IWorkflowRunObservatoryQueryService observatory,
-        [FromServices] IWorkflowRunAdminOverviewQueryService adminOverview,
+        [FromServices] IWorkflowRunAdminQueryService adminQuery,
         [FromServices] IPlatformAdminAuthorizer authorizer,
         [FromServices] ILoggerFactory loggerFactory,
         string? scope = null,
@@ -142,7 +208,7 @@ public static class WorkflowRunObservatoryEndpoints
             return denied;
 
         var runs = string.Equals(scope, AllScopesToken, StringComparison.Ordinal)
-            ? await adminOverview.ListAllRunsAsync(filter, ct)
+            ? await adminQuery.ListAllRunsAsync(filter, ct)
             : await observatory.ListRunsForScopeAsync(scope!, filter, ct);
         return Results.Json(runs);
     }
@@ -199,6 +265,40 @@ public static class WorkflowRunObservatoryEndpoints
         return graph == null ? Results.NotFound() : Results.Json(graph);
     }
 
+    internal static async Task<IResult> GetAdminRun(
+        HttpContext http,
+        string runId,
+        [FromServices] IWorkflowRunAdminQueryService adminQuery,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
+    {
+        var denied = await AuthorizeAdminReadAsync(
+            http, runId, action: "admin-detail", authorizer, loggerFactory, ct);
+        if (denied is not null)
+            return denied;
+
+        var detail = await adminQuery.GetRunAsync(runId, ct);
+        return detail == null ? Results.NotFound() : Results.Json(detail);
+    }
+
+    internal static async Task<IResult> GetAdminRunGraph(
+        HttpContext http,
+        string runId,
+        [FromServices] IWorkflowRunAdminQueryService adminQuery,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
+    {
+        var denied = await AuthorizeAdminReadAsync(
+            http, runId, action: "admin-graph", authorizer, loggerFactory, ct);
+        if (denied is not null)
+            return denied;
+
+        var graph = await adminQuery.GetRunGraphAsync(runId, ct);
+        return graph == null ? Results.NotFound() : Results.Json(graph);
+    }
+
     internal static async Task<IResult> ResolveScope(
         HttpContext http,
         [FromServices] IPlatformAdminAuthorizer authorizer,
@@ -240,7 +340,7 @@ public static class WorkflowRunObservatoryEndpoints
         DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     // The single cross-scope authorization gate (G2). Fails closed: missing bearer -> 401; non-elevated -> 403.
-    // The cross-scope query is reached only after this returns no denial. Audits every outcome (G5).
+    // The cross-scope query is reached only after this returns no denial.
     private static async Task<(IResult? Denied, PlatformCaller Caller, string Token)> AuthorizeCrossScopeAsync(
         HttpContext http,
         string ownScopeId,
@@ -251,28 +351,46 @@ public static class WorkflowRunObservatoryEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
-
         if (!TryGetBearer(http, out var token))
         {
-            Audit(logger, http, "denied", action, ownScopeId, PlatformCaller.NotElevated, targetScope, runId, "missing_bearer");
             return (Results.Unauthorized(), PlatformCaller.NotElevated, string.Empty);
         }
 
         var caller = await authorizer.ResolveCallerAsync(token, ct);
         if (!caller.IsElevated)
         {
-            Audit(logger, http, "denied", action, ownScopeId, caller, targetScope, runId, "not_admin_or_disabled");
             return (DeniedResult(), caller, token);
         }
 
-        Audit(logger, http, "allowed", action, ownScopeId, caller, targetScope, runId, reason: null);
         return (null, caller, token);
+    }
+
+    private static async Task<IResult?> AuthorizeAdminReadAsync(
+        HttpContext http,
+        string runId,
+        string action,
+        IPlatformAdminAuthorizer authorizer,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var ownScopeId))
+            return Results.Unauthorized();
+
+        var (denied, _, _) = await AuthorizeCrossScopeAsync(
+            http,
+            ownScopeId,
+            targetScope: AllScopesToken,
+            runId,
+            action,
+            authorizer,
+            loggerFactory,
+            ct);
+        return denied;
     }
 
     private static IResult DeniedResult() =>
         Results.Json(
-            new { code = "SCOPE_ACCESS_DENIED", message = "Platform admin role required for cross-scope viewing." },
+            new { code = "SCOPE_ACCESS_DENIED", message = "Aevatar admin access required for cross-scope viewing." },
             statusCode: StatusCodes.Status403Forbidden);
 
     private static bool TryGetBearer(HttpContext http, out string token)
@@ -291,21 +409,46 @@ public static class WorkflowRunObservatoryEndpoints
         return true;
     }
 
-    // Structured audit for cross-scope access. NEVER logs the bearer token (G5).
-    private static void Audit(
-        ILogger logger,
-        HttpContext http,
-        string outcome,
-        string action,
-        string callerScope,
-        PlatformCaller admin,
-        string targetScope,
-        string? runId,
-        string? reason) =>
-        logger.LogInformation(
-            "observatory_admin_cross_scope_view outcome={Outcome} action={Action} adminUserId={AdminUserId} " +
-            "adminEmail={AdminEmail} role={Role} callerScope={CallerScope} targetScope={TargetScope} runId={RunId} " +
-            "reason={Reason} correlationId={CorrelationId}",
-            outcome, action, admin.UserId, admin.Email, admin.Role, callerScope, targetScope,
-            runId ?? string.Empty, reason ?? string.Empty, http.TraceIdentifier);
+    private static EndpointAuditTargetResolver ResolveWorkflowObservatoryTarget(string targetKind)
+    {
+        return http =>
+        {
+            var targetScope = ResolveSafeScopeQuery(http);
+            var runId = EndpointAuditSanitizers.SanitizeValue(http.Request.RouteValues["runId"]?.ToString());
+            var id = string.IsNullOrWhiteSpace(runId)
+                ? targetScope
+                : string.IsNullOrWhiteSpace(targetScope)
+                    ? runId
+                    : $"{targetScope}/{runId}";
+            return ValueTask.FromResult<EndpointAuditTarget?>(new EndpointAuditTarget(targetKind, id));
+        };
+    }
+
+    private static ValueTask<string> WorkflowObservatoryRequestSummary(EndpointAuditSanitizationContext context)
+    {
+        var parts = new List<string>
+        {
+            $"{context.HttpContext.Request.Method} {EndpointAuditSanitizers.ResolveRoutePattern(context.HttpContext)}",
+        };
+
+        var scope = ResolveSafeScopeQuery(context.HttpContext);
+        if (!string.IsNullOrWhiteSpace(scope))
+        {
+            parts.Add($"scope={scope}");
+        }
+
+        var runId = EndpointAuditSanitizers.SanitizeValue(
+            context.HttpContext.Request.RouteValues["runId"]?.ToString());
+        if (!string.IsNullOrWhiteSpace(runId))
+        {
+            parts.Add($"runId={runId}");
+        }
+
+        return ValueTask.FromResult(string.Join(' ', parts));
+    }
+
+    private static string ResolveSafeScopeQuery(HttpContext http)
+    {
+        return EndpointAuditSanitizers.SanitizeValue(http.Request.Query["scope"].ToString());
+    }
 }

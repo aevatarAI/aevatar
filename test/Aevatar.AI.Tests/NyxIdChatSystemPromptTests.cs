@@ -57,4 +57,15 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("Read-only checks, searches, observation, trigger/rerun requests");
         prompt.Should().Contain("genuine successful mutating tool receipt");
     }
+
+    [Fact]
+    public void Value_ShouldRequireTypedMissingServiceBlocker()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value;
+
+        prompt.Should().Contain("`nyxid_require_service`");
+        prompt.Should().Contain("not listed in `<connected-services>`");
+        prompt.Should().Contain("Do not substitute a natural-language authorization explanation");
+        prompt.Should().Contain("does not create a pending approval");
+    }
 }

@@ -14,14 +14,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.NyxidChat;
 
-// Refactor (iter343/cluster-001-chat-session-command-identity):
-//   Old pattern: Chat interaction commands reuse SessionId as CommandId and CorrelationId.
-//   New principle: Generate or carry distinct command/correlation identifiers while keeping SessionId only as conversation/projection session identity.
 public sealed record NyxIdChatCommand(
     string ActorId,
     string ScopeId,
     string Prompt,
-    string SessionId,
+    string TurnId,
     string AccessToken,
     IReadOnlyList<NyxIdChatEndpoints.ContentPartDto>? InputParts,
     IReadOnlyDictionary<string, string>? Metadata,
@@ -33,15 +30,12 @@ public sealed record NyxIdChatCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
-// Refactor (iter343/cluster-001-chat-session-command-identity):
-//   Old pattern: Chat interaction commands reuse SessionId as CommandId and CorrelationId.
-//   New principle: Generate or carry distinct command/correlation identifiers while keeping SessionId only as conversation/projection session identity.
 public sealed record NyxIdApprovalCommand(
     string ActorId,
     string RequestId,
     bool Approved,
     string Reason,
-    string SessionId,
+    string TurnId,
     string? CommandId = null,
     string? CorrelationId = null)
     : ICommandContextSeed
@@ -56,7 +50,7 @@ public sealed record NyxIdChatAcceptedReceipt(
     string ActorId,
     string CommandId,
     string CorrelationId,
-    string SessionId);
+    string TurnId);
 
 public enum NyxIdChatStartError
 {
@@ -94,7 +88,7 @@ internal sealed class NyxIdChatCommandTarget
     public IActor Actor { get; }
     public string TargetId => Actor.Id;
     public string ActorId => Actor.Id;
-    public string SessionId { get; private set; } = string.Empty;
+    public string TurnId { get; private set; } = string.Empty;
     public INyxIdChatSessionProjectionLease? ProjectionLease { get; private set; }
     public IAsyncDisposable? LiveSinkLease { get; private set; }
     public IEventSink<AGUIEvent>? LiveSink { get; private set; }
@@ -103,7 +97,7 @@ internal sealed class NyxIdChatCommandTarget
         INyxIdChatSessionProjectionLease projectionLease,
         IAsyncDisposable? liveSinkLease,
         IEventSink<AGUIEvent> sink,
-        string sessionId)
+        string turnId)
     {
         // Refactor (iter37/cluster-037-agent-session-observation-attach-only):
         //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
@@ -111,9 +105,9 @@ internal sealed class NyxIdChatCommandTarget
         ProjectionLease = projectionLease ?? throw new ArgumentNullException(nameof(projectionLease));
         LiveSinkLease = liveSinkLease;
         LiveSink = sink ?? throw new ArgumentNullException(nameof(sink));
-        SessionId = string.IsNullOrWhiteSpace(sessionId)
-            ? throw new ArgumentException("Session id is required.", nameof(sessionId))
-            : sessionId;
+        TurnId = string.IsNullOrWhiteSpace(turnId)
+            ? throw new ArgumentException("Turn id is required.", nameof(turnId))
+            : turnId;
     }
 
     public IEventSink<AGUIEvent> RequireLiveSink() =>
@@ -219,14 +213,14 @@ internal sealed class NyxIdChatObservationLifecycle<TCommand>
     //   Old pattern: Agent session observation binders 同步 prime projection lease before dispatch(NyxID/StreamingProxy session paths)。
     //   New principle: Attach-existing NyxID/StreamingProxy observation ports;cold sessions return ProjectionUnavailable before dispatch;projection activation 移到 projection-owned lifecycle;不引入新 actor / 新 envelope / CLAUDE 例外。
     private readonly INyxIdChatSessionProjectionPort _projectionPort;
-    private readonly Func<TCommand, string> _sessionIdResolver;
+    private readonly Func<TCommand, string> _turnIdResolver;
 
     public NyxIdChatObservationLifecycle(
         INyxIdChatSessionProjectionPort projectionPort,
-        Func<TCommand, string> sessionIdResolver)
+        Func<TCommand, string> turnIdResolver)
     {
         _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
-        _sessionIdResolver = sessionIdResolver ?? throw new ArgumentNullException(nameof(sessionIdResolver));
+        _turnIdResolver = turnIdResolver ?? throw new ArgumentNullException(nameof(turnIdResolver));
     }
 
     public async Task<CommandObservationBindingResult<NyxIdChatStartError>> BindAsync(
@@ -241,13 +235,13 @@ internal sealed class NyxIdChatObservationLifecycle<TCommand>
         ArgumentNullException.ThrowIfNull(execution);
 
         var target = execution.Target;
-        var sessionId = _sessionIdResolver(command);
+        var turnId = _turnIdResolver(command);
         var sink = new EventChannel<AGUIEvent>();
         try
         {
             var attachment = await _projectionPort.AttachExistingChatProjectionAsync(
                 target.ActorId,
-                sessionId,
+                turnId,
                 sink,
                 ct);
             if (attachment == null)
@@ -257,7 +251,7 @@ internal sealed class NyxIdChatObservationLifecycle<TCommand>
                 return CommandObservationBindingResult<NyxIdChatStartError>.Failure(NyxIdChatStartError.ProjectionUnavailable);
             }
 
-            target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink, sessionId);
+            target.BindLiveObservation(attachment.ProjectionLease, attachment.LiveSinkLease, sink, turnId);
             return CommandObservationBindingResult<NyxIdChatStartError>.Success();
         }
         catch
@@ -273,16 +267,13 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
 {
     public EventEnvelope CreateEnvelope(NyxIdChatCommand command, CommandContext context)
     {
-        // Refactor (iter343/cluster-001-chat-session-command-identity):
-        //   Old pattern: Chat interaction commands reuse SessionId as CommandId and CorrelationId.
-        //   New principle: Generate or carry distinct command/correlation identifiers while keeping SessionId only as conversation/projection session identity.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
         var chatRequest = new ChatRequestEvent
         {
             Prompt = command.Prompt,
-            SessionId = command.SessionId,
+            SessionId = command.TurnId,
             ScopeId = command.ScopeId,
         };
         if (command.InputParts is { Count: > 0 })
@@ -312,9 +303,9 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
             : AgentSkillRecoveryContext.Empty;
         var toolContext = AgentToolExecutionContext.Empty with
         {
-            Request = new AgentToolRequestIdentity(command.SessionId, null),
+            Request = new AgentToolRequestIdentity(command.TurnId, null),
             Credentials = new AgentToolCredentials(command.AccessToken, null, null),
-            Caller = new AgentToolCallerContext(command.ScopeId, command.ScopeId, command.SessionId),
+            Caller = new AgentToolCallerContext(command.ScopeId, command.ScopeId, command.TurnId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, command.ScopeId, null, null),
             SkillRecovery = skillRecovery,
         };
@@ -350,9 +341,6 @@ internal sealed class NyxIdApprovalCommandEnvelopeFactory : ICommandEnvelopeFact
 {
     public EventEnvelope CreateEnvelope(NyxIdApprovalCommand command, CommandContext context)
     {
-        // Refactor (iter343/cluster-001-chat-session-command-identity):
-        //   Old pattern: Chat interaction commands reuse SessionId as CommandId and CorrelationId.
-        //   New principle: Generate or carry distinct command/correlation identifiers while keeping SessionId only as conversation/projection session identity.
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
@@ -363,7 +351,7 @@ internal sealed class NyxIdApprovalCommandEnvelopeFactory : ICommandEnvelopeFact
             Payload = Any.Pack(new ToolApprovalDecisionEvent
             {
                 RequestId = command.RequestId,
-                SessionId = command.SessionId,
+                ContinuationTurnId = command.TurnId,
                 Approved = command.Approved,
                 Reason = command.Reason,
             }),
@@ -387,7 +375,7 @@ internal sealed class NyxIdChatAcceptedReceiptFactory
             target.ActorId,
             context.CommandId,
             context.CorrelationId,
-            target.SessionId);
+            target.TurnId);
     }
 }
 
@@ -475,11 +463,11 @@ internal static class NyxIdChatInteractionFactories
         IServiceProvider sp) =>
         new NyxIdChatObservationLifecycle<NyxIdChatCommand>(
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
-            static command => command.SessionId);
+            static command => command.TurnId);
 
     public static ICommandObservationLifecycle<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError> CreateApprovalObservationLifecycle(
         IServiceProvider sp) =>
         new NyxIdChatObservationLifecycle<NyxIdApprovalCommand>(
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
-            static command => command.SessionId);
+            static command => command.TurnId);
 }

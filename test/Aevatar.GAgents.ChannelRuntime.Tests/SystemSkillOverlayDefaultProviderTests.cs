@@ -41,7 +41,7 @@ public sealed class SystemSkillOverlayDefaultProviderTests
     [InlineData("api-github-pat")]
     [InlineData("/sendMessage")]
     // Aevatar-specific channel + scheduling + workflow how-to.
-    [InlineData("register_lark_via_nyx")]
+    [InlineData("register_channel_via_nyx")]
     [InlineData("agent_delivery_targets")]
     [InlineData("scheduled_agent_creator")]
     [InlineData("one_shot")]

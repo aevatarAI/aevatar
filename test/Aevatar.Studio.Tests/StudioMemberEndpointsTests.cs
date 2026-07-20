@@ -340,6 +340,63 @@ public sealed class StudioMemberEndpointsTests
     }
 
     [Fact]
+    public async Task HandleDeleteAsync_ShouldReturnAccepted_OnSuccess()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleDeleteAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-alpha",
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<StudioMemberCommandResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/m-alpha");
+        accepted.Value!.Status.Should().Be(StudioMemberCommandStatusNames.DeleteAccepted);
+        service.DeleteInvoked.Should().BeTrue();
+        service.DeleteScopeId.Should().Be(ScopeId);
+        service.DeleteMemberId.Should().Be("m-alpha");
+    }
+
+    [Fact]
+    public async Task HandleDeleteAsync_ShouldReturnTyped404_WhenMemberMissing()
+    {
+        var service = new RecordingMemberService
+        {
+            DeleteException = new StudioMemberNotFoundException(ScopeId, "m-missing"),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            "HandleDeleteAsync",
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            "m-missing",
+            service,
+            CancellationToken.None);
+
+        AssertNotFoundResult(result, "STUDIO_MEMBER_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task HandleDeleteAsync_ShouldReturnForbidden_WhenScopeAccessDenied()
+    {
+        var service = new RecordingMemberService();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleDeleteAsync",
+            CreateAuthenticatedContext("other-scope"),
+            ScopeId,
+            "m-alpha",
+            service,
+            CancellationToken.None);
+
+        service.DeleteInvoked.Should().BeFalse();
+        AssertIsJsonStatus(result, expectedStatus: StatusCodes.Status403Forbidden);
+    }
+
+    [Fact]
     public async Task HandleBindAsync_ShouldReturnAccepted_OnSuccess()
     {
         var binding = new StudioMemberBindingAcceptedResponse(
@@ -1019,6 +1076,25 @@ public sealed class StudioMemberEndpointsTests
         public UpdateStudioMemberRequest? UpdateRequest { get; set; }
         public StudioMemberCommandResponse? UpdateResponse { get; set; }
         public Exception? UpdateException { get; set; }
+
+        public bool DeleteInvoked { get; set; }
+        public string? DeleteScopeId { get; set; }
+        public string? DeleteMemberId { get; set; }
+        public Exception? DeleteException { get; set; }
+
+        public Task<StudioMemberCommandResponse> DeleteAsync(
+            string scopeId, string memberId, CancellationToken ct = default)
+        {
+            DeleteInvoked = true;
+            DeleteScopeId = scopeId;
+            DeleteMemberId = memberId;
+            if (DeleteException != null) throw DeleteException;
+            return Task.FromResult(new StudioMemberCommandResponse(
+                StudioMemberCommandStatusNames.DeleteAccepted,
+                scopeId,
+                memberId,
+                DateTimeOffset.UtcNow));
+        }
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

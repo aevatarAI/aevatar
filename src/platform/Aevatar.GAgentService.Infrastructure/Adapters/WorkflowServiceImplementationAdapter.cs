@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
@@ -40,6 +42,8 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
             throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
         }
 
+        var authorizationEvidence = MapAuthorizationEvidence(parse.AuthorizationDependencies);
+
         return new PreparedServiceRevisionArtifact
         {
             Identity = request.Spec.Identity.Clone(),
@@ -65,9 +69,36 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                     WorkflowYaml = spec.WorkflowYaml,
                     DefinitionActorId = spec.DefinitionActorId ?? string.Empty,
                     InlineWorkflowYamls = { spec.InlineWorkflowYamls },
+                    AuthorizationEvidence = authorizationEvidence,
                 },
             },
         };
+    }
+
+    private static WorkflowRevisionAuthorizationEvidence MapAuthorizationEvidence(
+        WorkflowAuthorizationDependencies? dependencies)
+    {
+        if (dependencies == null ||
+            dependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Unspecified ||
+            !Enum.IsDefined(dependencies.ServiceGrantPolicy))
+        {
+            throw new InvalidOperationException("workflow authorization dependencies are required.");
+        }
+
+        var evidence = new WorkflowRevisionAuthorizationEvidence
+        {
+            OwnerLlmRouteRequired = dependencies.OwnerLlmRouteRequired,
+            ServiceGrantRequirement = dependencies.ServiceGrantPolicy switch
+            {
+                WorkflowServiceGrantPolicy.Required => AuthorizationGrantRequirement.Required,
+                WorkflowServiceGrantPolicy.NotRequiredNoExternalService => AuthorizationGrantRequirement.NotRequired,
+                _ => AuthorizationGrantRequirement.Unspecified,
+            },
+        };
+        evidence.ConnectorCapabilityRefs.Add(dependencies.ConnectorCapabilityRefs);
+        evidence.NyxIdServiceIds.Add(dependencies.NyxIdServiceIds);
+        evidence.NyxIdServiceSlugs.Add(dependencies.NyxIdServiceSlugs);
+        return evidence;
     }
 
     private static string GetTypeUrl(Google.Protobuf.Reflection.MessageDescriptor descriptor) =>

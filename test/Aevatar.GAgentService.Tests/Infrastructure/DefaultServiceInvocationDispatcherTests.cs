@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
@@ -126,6 +127,103 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldMapTypedWorkflowCompletionNotificationTarget()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-workflow-carrier",
+            CorrelationId = "corr-workflow-carrier",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            WorkflowCompletionNotificationTarget = new WorkflowServiceCompletionNotificationTarget
+            {
+                ActorId = "delivery-actor-alpha",
+                DeliveryId = "delivery-alpha",
+                ExpiresAtUnixMs = 1_770_000_000_000,
+            },
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CompletionNotificationTarget.ActorId.Should().Be("delivery-actor-alpha");
+        workflowRequest.CompletionNotificationTarget.DeliveryId.Should().Be("delivery-alpha");
+        workflowRequest.CompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(1_770_000_000_000);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WhenWorkflowAdmissionIsRejected_ShouldDestroyRunAndNotReturnReceipt()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort
+        {
+            Admission = new DispatchAdmission(
+                false,
+                "cmd-workflow-rejected",
+                DateTimeOffset.UtcNow,
+                "workflow-run",
+                "corr-workflow-rejected"),
+        };
+        var registry = new RecordingServiceRunRegistrationPort
+        {
+            RegistrationResult = new ServiceRunRegistrationResult(
+                "service-run-actor-rejected",
+                "service-run-id-rejected"),
+        };
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-workflow-rejected",
+            CorrelationId = "corr-workflow-rejected",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not accepted*workflow-run*");
+        dispatchPort.Calls.Should().ContainSingle();
+        workflowPort.DestroyCalls.Should().ContainSingle().Which.Should().Be("workflow-run");
+        registry.Calls.Should().ContainSingle();
+        registry.StatusUpdates.Should().ContainSingle().Which.Should().Be((
+            "service-run-actor-rejected",
+            "service-run-id-rejected",
+            ServiceRunStatus.Failed));
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldMapChatLlmControlToWorkflowChatRequest()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
@@ -208,6 +306,252 @@ public sealed class DefaultServiceInvocationDispatcherTests
         var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
             .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
         workflowRequest.CallerCredential.BearerToken.Should().Be("connector-token");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ForScheduledWorkflow_ShouldIgnoreConnectorAuthorizationAndUseOwnerLlmToken()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-scheduled-auth",
+            ScheduleId = "schedule-1",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Bearer stale-schedule-token",
+                LlmControl = new LLMControlContextPayload
+                {
+                    NyxIdAccessToken = "owner-token",
+                    SenderNyxIdAccessToken = "sender-token",
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().Be("owner-token");
+        workflowRequest.LlmControl.SenderNyxIdAccessToken.Should().Be("sender-token");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ForScheduledWorkflowWithoutOwnerToken_ShouldNotUseConnectorAuthorization()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            new RecordingServiceRunRegistrationPort());
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-scheduled-no-owner",
+            ScheduleId = "schedule-1",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ConnectorHttpAuthorization = "Basic stale-schedule-token",
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldMapScheduledDurableCallerCredentialToWorkflowCallerCredential()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-durable",
+            ScheduleId = "schedule-1",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerDurableCredential = new DurableCallerCredentialRef
+                {
+                    Ref = "sec_scheduled",
+                    Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                    OwnerScopeKey = "schedule:schedule-1",
+                    SubjectId = "lark:tenant:user",
+                    SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                    ScheduledCallerNyxIdAuthority = new ScheduledCallerNyxIdAuthority
+                    {
+                        Platform = "lark",
+                        Tenant = "tenant-a",
+                        ExternalUserId = "external-user-42",
+                        Scope = "proxy",
+                    },
+                },
+            }),
+        });
+
+        var workflowRequest = dispatchPort.Calls.Should().ContainSingle().Which
+            .envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+        workflowRequest.CallerCredential.BearerToken.Should().BeEmpty();
+        workflowRequest.CallerCredential.DurableCallerCredential.Ref.Should().Be("sec_scheduled");
+        workflowRequest.CallerCredential.DurableCallerCredential.SourceKind
+            .Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        workflowRequest.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-a",
+                ExternalUserId = "external-user-42",
+                Scope = "proxy",
+            });
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldRejectCallerDurableCredentialWithoutScheduledDispatch()
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-forged-durable",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                CallerDurableCredential = new DurableCallerCredentialRef
+                {
+                    Ref = "sec_forged",
+                    Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+                    OwnerScopeKey = "schedule:schedule-1",
+                    SubjectId = "subject",
+                    SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+                },
+            }),
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*caller_durable_credential*scheduled dispatch*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        dispatchPort.Calls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DispatchAsync_ShouldRejectScheduledDurableCallerCredential_WhenRawCredentialOrReferenceIsInvalid(
+        bool includeRawCredential)
+    {
+        var dispatchPort = new RecordingDispatchPort();
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var registry = new RecordingServiceRunRegistrationPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort,
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = "hello",
+            CallerDurableCredential = includeRawCredential
+                ? CreateDurableCallerCredentialRef()
+                : new DurableCallerCredentialRef(),
+        };
+        if (includeRawCredential)
+            chatRequest.ConnectorHttpAuthorization = "Bearer raw-token";
+        var request = new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-durable-reject",
+            ScheduleId = "schedule-1",
+            Payload = Any.Pack(chatRequest),
+        };
+
+        var act = () => dispatcher.DispatchAsync(target, request);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage(includeRawCredential
+                ? "*caller_durable_credential*must not be combined*"
+                : "*caller_durable_credential*durable secret reference*");
+        workflowPort.CreateRunCalls.Should().BeEmpty();
+        dispatchPort.Calls.Should().BeEmpty();
+        registry.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -720,28 +1064,45 @@ public sealed class DefaultServiceInvocationDispatcherTests
             });
     }
 
+    private static DurableCallerCredentialRef CreateDurableCallerCredentialRef() =>
+        new()
+        {
+            Ref = "sec_scheduled",
+            Purpose = CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
+            OwnerScopeKey = "schedule:schedule-1",
+            SubjectId = "lark:tenant:user",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+        };
+
     private sealed class RecordingServiceRunRegistrationPort : IServiceRunRegistrationPort
     {
         public List<ServiceRunRecord> Calls { get; } = [];
+        public List<(string RunActorId, string RunId, ServiceRunStatus Status)> StatusUpdates { get; } = [];
+        public ServiceRunRegistrationResult? RegistrationResult { get; init; }
 
         public Task<ServiceRunRegistrationResult> RegisterAsync(ServiceRunRecord record, CancellationToken ct = default)
         {
             Calls.Add(record.Clone());
-            return Task.FromResult(new ServiceRunRegistrationResult($"service-run:{record.RunId}", record.RunId));
+            return Task.FromResult(
+                RegistrationResult ?? new ServiceRunRegistrationResult($"service-run:{record.RunId}", record.RunId));
         }
 
-        public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default) =>
-            Task.CompletedTask;
+        public Task UpdateStatusAsync(string runActorId, string runId, ServiceRunStatus status, CancellationToken ct = default)
+        {
+            StatusUpdates.Add((runActorId, runId, status));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingDispatchPort : IActorDispatchPort
     {
         public List<(string actorId, EventEnvelope envelope)> Calls { get; } = [];
+        public DispatchAdmission? Admission { get; init; }
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {
             Calls.Add((actorId, envelope));
-            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+            return Task.FromResult(Admission ?? DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 
@@ -780,6 +1141,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     private sealed class RecordingWorkflowRunActorPort : IWorkflowDefinitionProvisioningPort, IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
         public List<WorkflowDefinitionBinding> CreateRunCalls { get; } = [];
+        public List<string> DestroyCalls { get; } = [];
 
         public RecordingActor RunActor { get; } = new("workflow-run");
 
@@ -792,7 +1154,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
             return Task.FromResult(new WorkflowRunCreationReceipt(RunActor.Id, definition.DefinitionActorId, [RunActor.Id]));
         }
 
-        public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task DestroyAsync(string actorId, CancellationToken ct = default)
+        {
+            DestroyCalls.Add(actorId);
+            return Task.CompletedTask;
+        }
 
         public Task MarkStoppedAsync(string actorId, string runId, string reason, CancellationToken ct = default) =>
             Task.CompletedTask;

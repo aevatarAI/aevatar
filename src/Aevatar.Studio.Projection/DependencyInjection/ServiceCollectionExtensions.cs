@@ -1,3 +1,5 @@
+using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
@@ -8,6 +10,7 @@ using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.CommandServices;
+using Aevatar.Studio.Projection.Audit;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
@@ -15,6 +18,7 @@ using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Workspace;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -100,10 +104,6 @@ public static class ServiceCollectionExtensions
 
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
-            ChatHistoryIndexCurrentStateProjector>();
-
-        services.AddCurrentStateProjectionMaterializer<
-            StudioMaterializationContext,
             ChatConversationCurrentStateProjector>();
 
         services.AddCurrentStateProjectionMaterializer<
@@ -125,6 +125,31 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             StudioWorkspaceCurrentStateProjector>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberCreatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberImplementationUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberReassignedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberDeletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamCreatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamArchivedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberRenamedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberBindingCompletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberBindingFailedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioMemberBindingRejectedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, StudioTeamEntryMemberChangedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ActorRegisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ActorUnregisteredAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConnectorCatalogSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConnectorDraftSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConnectorDraftDeletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleCatalogSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleDraftSavedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, RoleDraftDeletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, UserConfigUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, UserConfigGithubUsernameUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, MemoryEntriesClearedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ConversationDeletedAuditTranslator>());
+        services.AddAuditCommittedFactMaterializer<StudioMaterializationContext>();
 
         services.AddProjectionArtifactMaterializer<
             StudioWorkflowBoardMaterializationContext,
@@ -155,10 +180,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<UserMemoryCurrentStateDocument>,
             UserMemoryCurrentStateDocumentMetadataProvider>();
-
-        services.TryAddSingleton<
-            IProjectionDocumentMetadataProvider<ChatHistoryIndexCurrentStateDocument>,
-            ChatHistoryIndexCurrentStateDocumentMetadataProvider>();
 
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<ChatConversationCurrentStateDocument>,
@@ -201,13 +222,16 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberBindingRunQueryPort, ProjectionStudioMemberBindingRunQueryPort>();
         services.TryAddSingleton<IStudioTeamQueryPort, ProjectionStudioTeamQueryPort>();
         services.TryAddSingleton<IStudioWorkspaceQueryPort, ProjectionStudioWorkspaceQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationMemberEvidenceQueryPort, ProjectionScheduledInvocationMemberQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationWorkflowEvidenceQueryPort, ProjectionScheduledInvocationWorkflowQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationConnectorEvidenceQueryPort, ProjectionScheduledInvocationConnectorQueryPort>();
+        services.TryAddSingleton<IScheduledInvocationOwnerLLMEvidenceQueryPort, ProjectionScheduledInvocationOwnerLLMQueryPort>();
 
         // Command services (write side)
         services.TryAddSingleton<IUserConfigCommandService, ActorDispatchUserConfigCommandService>();
         services.TryAddSingleton<IStudioMemberCommandPort, ActorDispatchStudioMemberCommandService>();
         services.TryAddSingleton<IStudioMemberPlatformBindingCommandPort, ScopeBindingStudioMemberPlatformBindingCommandService>();
         services.TryAddSingleton<IStudioTeamCommandPort, ActorDispatchStudioTeamCommandService>();
-
         return services;
     }
 }

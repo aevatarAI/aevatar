@@ -17,6 +17,8 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 
 public sealed class WorkflowProjectionMaterializationTests
 {
+    private const string AuditSentinel = "audit-secret-sentinel";
+
     [Fact]
     public void WorkflowRunInsightReportArtifactProjector_Ctor_ShouldThrow_WhenDependencyMissing()
     {
@@ -337,6 +339,107 @@ public sealed class WorkflowProjectionMaterializationTests
             "workflow.completed",
         ]);
     }
+
+    [Fact]
+    public async Task WorkflowRunInsightReportArtifactProjector_ShouldSanitizePayloadDerivedReportFields()
+    {
+        var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);
+        var graphWriter = new RecordingGraphWriter<WorkflowRunInsightReportDocument>(x => x.Id);
+        var projector = new WorkflowRunInsightReportArtifactProjector(store, store, graphWriter);
+        var context = new WorkflowExecutionMaterializationContext
+        {
+            RootActorId = "actor-1",
+            ProjectionKind = "workflow-execution-materialization",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                1,
+                new WorkflowRunExecutionStartedEvent
+                {
+                    RunId = "run-1",
+                    WorkflowName = "wf-1",
+                    Input = $$"""{"prompt":"go","access_token":"{{AuditSentinel}}"}""",
+                },
+                BuildState("running", input: $$"""{"prompt":"state","token":"{{AuditSentinel}}"}""")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                2,
+                new StepRequestEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    StepType = "tool_call",
+                    TargetRole = "assistant",
+                    Parameters = { ["api_key"] = AuditSentinel, ["query"] = $"Bearer {AuditSentinel}" },
+                },
+                BuildState("running")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                3,
+                new StepCompletedEvent
+                {
+                    RunId = "run-1",
+                    StepId = "step-1",
+                    Success = false,
+                    Output = $$"""{"answer":"partial","secret":"{{AuditSentinel}}"}""",
+                    Error = $"failed token={AuditSentinel}",
+                    AssignedVariable = "password",
+                    AssignedValue = AuditSentinel,
+                    Annotations = { ["authorization"] = $"Bearer {AuditSentinel}" },
+                },
+                BuildState("running")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                4,
+                new WorkflowRoleReplyRecordedEvent
+                {
+                    RunId = "run-1",
+                    RoleActorId = "role-1",
+                    SessionId = "session-1",
+                    Content = $"reply Bearer {AuditSentinel}",
+                    ToolCalls =
+                    {
+                        new WorkflowRoleReplyToolCall
+                        {
+                            ToolName = "search",
+                            CallId = "call-1",
+                            ArgumentsJson = $$"""{"api_key":"{{AuditSentinel}}"}""",
+                            ResultJson = $$"""{"access_token":"{{AuditSentinel}}"}""",
+                            Error = $"signature=sha256={new string('a', 16)}{AuditSentinel}",
+                        },
+                    },
+                },
+                BuildState("running")));
+        await projector.ProjectAsync(
+            context,
+            BuildCommittedEnvelope(
+                5,
+                new WorkflowCompletedEvent
+                {
+                    WorkflowName = "wf-1",
+                    Success = false,
+                    Output = $$"""{"final":"no","token":"{{AuditSentinel}}"}""",
+                    Error = $"Bearer {AuditSentinel}",
+                    RunId = "run-1",
+                },
+                BuildState(
+                    "failed",
+                    finalOutput: $$"""{"state":"final","token":"{{AuditSentinel}}"}""",
+                    finalError: $"state Bearer {AuditSentinel}")));
+
+        var report = store.Stored["actor-1"];
+        FlattenReportStrings(report).Should().NotContain(value => value.Contains(AuditSentinel, StringComparison.Ordinal));
+        report.Input.Should().NotContain(AuditSentinel);
+        report.Steps[0].RequestParameters["api_key"].Should().Be("[redacted]");
+        report.Steps[0].AssignedValue.Should().Be("[redacted]");
+        report.RoleReplies[0].ContentLength.Should().Be(report.RoleReplies[0].Content.Length);
+    }
+
 
     [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackSuspensionSignalAndStoppedBranches()
@@ -703,6 +806,7 @@ public sealed class WorkflowProjectionMaterializationTests
     private static WorkflowRunState BuildState(
         string status,
         string runId = "run-1",
+        string input = "hello",
         string finalOutput = "",
         string finalError = "") =>
         new()
@@ -712,11 +816,41 @@ public sealed class WorkflowProjectionMaterializationTests
             LastCommandId = "cmd-1",
             DefinitionActorId = "definition-1",
             Status = status,
-            Input = "hello",
+            Input = input,
             FinalOutput = finalOutput,
             FinalError = finalError,
             Compiled = true,
         };
+
+    private static IReadOnlyList<string> FlattenReportStrings(WorkflowRunInsightReportDocument report)
+    {
+        var values = new List<string>
+        {
+            report.Input,
+            report.FinalOutput,
+            report.FinalError,
+        };
+
+        foreach (var step in report.Steps)
+        {
+            values.Add(step.OutputPreview);
+            values.Add(step.Error);
+            values.Add(step.AssignedValue);
+            values.AddRange(step.RequestParameters.Values);
+            values.AddRange(step.CompletionAnnotations.Values);
+        }
+
+        foreach (var reply in report.RoleReplies)
+            values.Add(reply.Content);
+
+        foreach (var timelineEvent in report.Timeline)
+        {
+            values.Add(timelineEvent.Message);
+            values.AddRange(timelineEvent.Data.Values);
+        }
+
+        return values;
+    }
 
     private sealed class FixedClock : IProjectionClock
     {

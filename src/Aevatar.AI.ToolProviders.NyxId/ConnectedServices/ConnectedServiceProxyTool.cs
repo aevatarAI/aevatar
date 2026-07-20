@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Microsoft.Extensions.Logging;
@@ -39,7 +40,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         ApprovalMode = ResolveApprovalMode(operation.Marker);
         IsReadOnly = operation.Marker?.ReadOnly
                      ?? operation.Method is "GET" or "HEAD";
-        IsDestructive = operation.Marker?.Destructive ?? false;
+        IsDestructive = ResolveDestructive(operation);
 
         var summary = !string.IsNullOrWhiteSpace(operation.Summary)
             ? operation.Summary
@@ -60,6 +61,22 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
     public bool IsReadOnly { get; }
 
     public bool IsDestructive { get; }
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var resourceUri = ResolveResourceUri(argumentsJson);
+        return NyxIdAuthorizationReceiptFactory.TryCreate(
+            callId,
+            toolName,
+            _serviceSlug,
+            serviceLabel: null,
+            resourceUri,
+            resultJson);
+    }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -123,6 +140,17 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         }
 
         return true;
+    }
+
+    private string? ResolveResourceUri(string argumentsJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError || !TryBuildPath(args, out var path, out _))
+            return null;
+        if (!TryBuildQuery(args, out var query, out _))
+            return path;
+
+        return query.Count == 0 ? path : $"{path}?{string.Join("&", query)}";
     }
 
     private bool TryBuildQuery(ToolArgs args, out List<string> query, out string? error)
@@ -191,6 +219,26 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             _ => value.GetRawText(),
         };
     }
+
+    /// <summary>
+    /// Fail-closed destructive default: a write (any HTTP method other than the safe,
+    /// side-effect-free GET/HEAD/OPTIONS) is treated as destructive unless the spec marker
+    /// EXPLICITLY opts out with <c>destructive: false</c>. Read methods are never destructive.
+    /// This flips the historical fail-open default (<c>?? false</c>) so an unmarked
+    /// connected-service write requires approval under <see cref="ToolApprovalMode.Auto"/>.
+    /// </summary>
+    private static bool ResolveDestructive(ConnectedServiceToolOperation operation)
+    {
+        if (IsSafeMethod(operation.Method))
+            return false;
+
+        return operation.Marker?.Destructive ?? true;
+    }
+
+    private static bool IsSafeMethod(string method) =>
+        method.Equals("GET", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("HEAD", StringComparison.OrdinalIgnoreCase) ||
+        method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase);
 
     private static ToolApprovalMode ResolveApprovalMode(AevatarToolMarker? marker) =>
         marker?.Approval?.Trim().ToLowerInvariant() switch

@@ -1,3 +1,5 @@
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -14,7 +16,14 @@ internal static class WorkflowWebhookIngressEndpoints
     public static void Map(IEndpointRouteBuilder group)
     {
         group.MapPost("/workflow-webhooks/{routeKey}", HandleAsync)
-            .WithName("PostWorkflowWebhook");
+            .WithName("PostWorkflowWebhook")
+            .WithEndpointAudit(
+                "workflow.webhook.ingress",
+                AuditSensitivityLevel.Confidential,
+                "workflow_run",
+                // Static target: {routeKey} is an opaque webhook key, never recorded.
+                EndpointAuditTargetResolvers.Static("workflow_run", "webhook-ingress"),
+                captureUnauthenticated: true);
     }
 
     internal static async Task<IResult> HandleAsync(

@@ -134,6 +134,8 @@ public static class WebApplicationBuilderExtensions
         // whole pipeline and never emits a secret-bearing query string.
         app.UseMiddleware<RedactingRequestLoggingMiddleware>();
 
+        app.UseRouting();
+
         if (options.EnableCors)
             app.UseCors(options.CorsPolicyName);
 
@@ -143,6 +145,8 @@ public static class WebApplicationBuilderExtensions
         {
             app.UseAuthentication();
         }
+
+        app.UseMiddleware<EndpointAuditCaptureMiddleware>();
 
         // Authorization middleware must always run so that [Authorize] attributes produce
         // a proper 401/403 instead of an unhandled 500 when no auth scheme is configured.

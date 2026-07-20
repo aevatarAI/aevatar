@@ -89,16 +89,16 @@ The relay handles LLM route selection deterministically, without an LLM round-tr
 - `/model use <model-name>` — keep the current route and only override the model.
 - `/model reset` — clear the sender's route/model preference and fall back to the bot default.
 
-#### channel_registrations (Aevatar's local Lark mirror)
+#### channel_registrations (Aevatar's local channel mirror)
 
 Aevatar owns the local runtime and registration mirror.
-For Lark, webhook ingress goes through NyxID first, then NyxID relays callbacks into Aevatar.
+For channel relay platforms, webhook ingress goes through NyxID first, then NyxID relays callbacks into Aevatar.
 Nyx owns the platform bot, route, and relay API key; Aevatar owns the local registration mirror used by the runtime.
 Do not assume `channel_registrations action=list` being empty means the Nyx bot is missing.
 
 **Stage 1: New provisioning** — when the user wants the bot connected for inbound Lark messages and basic relay replies. Do not block on typed Lark tools or proactive outbound setup.
 
-`channel_registrations action=register_lark_via_nyx app_id=<app_id> app_secret=<app_secret> verification_token=<verification_token when available> webhook_base_url=https://<your-aevatar-host>`
+`channel_registrations action=register_channel_via_nyx platform=lark lark.app_id=<app_id> lark.app_secret=<app_secret> lark.verification_token=<verification_token when available> webhook_base_url=https://<your-aevatar-host>`
 
 → Returns the registration ID, the Nyx relay callback URL, and the Nyx webhook URL that must be configured in 开发者后台 → 事件与回调 → 事件配置 → 请求地址.
 
@@ -107,7 +107,7 @@ Add events: `im.message.receive_v1`, `card.action.trigger`.
 **Stage 2: Existing-bot inspection** — when Nyx already has the Lark bot/route but Aevatar no longer replies or `channel_registrations action=list` is empty.
 
 1. Inspect Nyx-side first: `nyxid_channel_bots action=list` / `show` / `routes`. (For NyxID-side details, `use_skill(skill="nyxid")`.)
-2. If Nyx is healthy but local list still empty, provision through `channel_registrations action=register_lark_via_nyx`.
+2. If Nyx is healthy but local list still empty, provision through `channel_registrations action=register_channel_via_nyx platform=lark`.
 
 **Stage 3: Advanced Lark capabilities** — only when the user needs proactive sends, typed Lark tools, delivery target bindings, spreadsheet appends, approval actions, or active chat lookup. Ensure NyxID has a usable Lark outbound provider slug (typically `api-lark-bot`); if not, `use_skill(skill="nyxid")` to drive the catalog connection flow.
 
@@ -134,9 +134,9 @@ Use `scheduled_agent_creator` to create a new caller-owned scheduled automation 
 
 For recurring automation, set `schedule_mode="cron"` and provide `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. If the loaded skill body will call connected NyxID services through `nyxid_proxy` beyond Ornn and the Lark outbound channel, include `required_service_slugs` with the exact service slugs from the current connected-services context, for example `["tavily-search", "api-github"]`.
 
-For one-shot delayed reminders such as "remind me in 10 minutes" or "later today tell me ...", set `schedule_mode="one_shot"` and provide exactly one of `delay_seconds` or `run_at_utc`, plus `one_shot_message`. Prefer `delay_seconds` when the user gave a relative delay. Do not use `code_execute` with `sleep`, timers, polling loops, or long-running scripts for delayed one-shot requests; durable delivery must go through `scheduled_agent_creator`. Do not publish an Ornn skill just to send a one-shot natural-language reminder unless the user explicitly asks for reusable automation or the reminder requires a real skill workflow.
+For one-shot delayed reminders such as "remind me in 10 minutes" or "later today tell me ...", set `schedule_mode="one_shot"` and provide exactly one of `delay_seconds` or `run_at_utc`, plus `one_shot_message`. Prefer `delay_seconds` when the user gave a relative delay. If the user explicitly selects a connected outbound delivery provider, set `nyx_provider_slug` to that provider slug, for example `api-lark-bot-2`; do not use `required_service_slugs` to choose the reminder delivery provider. Do not use `code_execute` with `sleep`, timers, polling loops, or long-running scripts for delayed one-shot requests; durable delivery must go through `scheduled_agent_creator`. Do not publish an Ornn skill just to send a one-shot natural-language reminder unless the user explicitly asks for reusable automation or the reminder requires a real skill workflow.
 
-Do not provide owner, scope, Lark target, Nyx provider slug, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; the tool derives context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
+Do not provide owner, scope, Lark target, API key, service IDs, inline skill content, or outbound credential fields. This write command does not request remote approval; except for the one-shot `nyx_provider_slug` selector, it derives delivery context from the current authenticated/channel turn, mints a scoped NyxID key, and returns only an accepted receipt or a typed tool error.
 
 `skill_ref` must be unversioned for now. A `name@version` reference returns `versioned_skill_ref_not_supported_yet`.
 

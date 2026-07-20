@@ -151,6 +151,43 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task QueryAsync_ShouldTranslateAnyOfFiltersToMinimumOneShouldMatch()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = false },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            AnyOfFilters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("active"),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("revocation-pending"),
+                },
+            ],
+        });
+
+        var body = handler.CapturedRequests.Should().ContainSingle().Subject.Body;
+        body.Should().Contain("\"should\"");
+        body.Should().Contain("\"minimum_should_match\":1");
+        body.Should().Contain("\"active\"");
+        body.Should().Contain("\"revocation-pending\"");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenTimestampDescriptorFieldIsUnmapped_ShouldInitializeItAsDate()
     {
         var handler = CreateSuccessfulUpsertHandler();

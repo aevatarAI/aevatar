@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package aevatar.workflow;
+
+option csharp_namespace = "Aevatar.Workflow.Abstractions";
+
+import "google/protobuf/timestamp.proto";
+
+enum WorkflowExternalActionApprovalPolicy {
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_POLICY_UNSPECIFIED = 0;
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_POLICY_REQUIRED = 1;
+}
+
+enum WorkflowExternalActionLifecycleStatus {
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_WAITING_APPROVAL = 1;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_APPROVED = 2;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_DENIED = 3;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_EXPIRED = 4;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_CANCELLED = 5;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_EXECUTING = 6;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_SUCCEEDED = 7;
+  WORKFLOW_EXTERNAL_ACTION_LIFECYCLE_STATUS_FAILED = 8;
+}
+
+enum WorkflowExternalActionApprovalStatus {
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_STATUS_PENDING = 1;
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_STATUS_APPROVED = 2;
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_STATUS_DENIED = 3;
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_STATUS_EXPIRED = 4;
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_STATUS_CANCELLED = 5;
+  WORKFLOW_EXTERNAL_ACTION_APPROVAL_STATUS_FAILED = 6;
+}
+
+enum WorkflowExternalActionExecutionStatus {
+  WORKFLOW_EXTERNAL_ACTION_EXECUTION_STATUS_UNSPECIFIED = 0;
+  WORKFLOW_EXTERNAL_ACTION_EXECUTION_STATUS_NOT_STARTED = 1;
+  WORKFLOW_EXTERNAL_ACTION_EXECUTION_STATUS_EXECUTING = 2;
+  WORKFLOW_EXTERNAL_ACTION_EXECUTION_STATUS_SUCCEEDED = 3;
+  WORKFLOW_EXTERNAL_ACTION_EXECUTION_STATUS_FAILED = 4;
+}
+
+message WorkflowExternalActionProvenance {
+  string scope_id = 1;
+  string team_id = 2;
+  string member_id = 3;
+  string workflow_id = 4;
+  string published_service_id = 5;
+  string workflow_actor_id = 6;
+  string run_id = 7;
+  string step_id = 8;
+  string execution_id = 9;
+  string requester_platform = 10;
+  string requester_tenant = 11;
+  string requester_external_user_id = 12;
+  string principal_subject = 13;
+  string requester_capability_scope = 14;
+}
+
+message WorkflowConnectorApprovalOptions {
+  WorkflowExternalActionApprovalPolicy policy = 1;
+  string service_ref = 2;
+  string node_id = 3;
+  string http_verb = 4;
+  string resource = 5;
+  string permission_scope = 6;
+  int32 expiration_seconds = 7;
+  int32 status_check_interval_seconds = 8;
+  bool destructive = 9;
+  string team_id = 10;
+  string member_id = 11;
+  string workflow_id = 12;
+  string published_service_id = 13;
+  string policy_reason = 14;
+}
+
+message WorkflowExternalActionPlan {
+  string schema_version = 1;
+  string action_id = 2;
+  string idempotency_key = 3;
+  WorkflowExternalActionProvenance provenance = 4;
+  string service_ref = 5;
+  string node_id = 6;
+  string connector_name = 7;
+  string connector_type = 8;
+  string operation = 9;
+  string http_verb = 10;
+  string resource = 11;
+  string permission_scope = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp expires_at = 14;
+  string material_digest_sha256 = 15;
+  string digest_algorithm = 16;
+  string summary = 17;
+  WorkflowExternalActionApprovalPolicy approval_policy = 18;
+  string policy_reason = 19;
+  bool destructive = 20;
+}
+
+message WorkflowExternalActionApprovalSnapshot {
+  WorkflowExternalActionPlan plan = 1;
+  string remote_approval_id = 2;
+  google.protobuf.Timestamp remote_expires_at = 3;
+  WorkflowExternalActionLifecycleStatus lifecycle_status = 4;
+  WorkflowExternalActionApprovalStatus approval_status = 5;
+  string approval_reason_code = 6;
+  google.protobuf.Timestamp approval_resolved_at = 7;
+  WorkflowExternalActionExecutionStatus execution_status = 8;
+  string execution_reason_code = 9;
+  google.protobuf.Timestamp execution_started_at = 10;
+  google.protobuf.Timestamp execution_completed_at = 11;
+}
+
+message WorkflowConnectorApprovalStatusCheckFiredEvent {
+  string action_id = 1;
+  string remote_approval_id = 2;
+  string material_digest_sha256 = 3;
+  string principal_subject = 4;
+  string scope_id = 5;
+  string node_id = 6;
+  int32 check_number = 7;
+  string service_ref = 8;
+  string permission_scope = 9;
+  google.protobuf.Timestamp remote_expires_at = 10;
+}

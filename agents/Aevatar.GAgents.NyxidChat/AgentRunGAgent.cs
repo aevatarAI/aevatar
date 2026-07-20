@@ -499,7 +499,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         // re-supplies them from the transient self-message request at execution time, so a
         // committed AgentRunReplyStepStateUpdatedEvent — and State.GenerationStep rebuilt from
         // it — keeps only identity/routing facts.
-        var persisted = AgentRunReplyStepCredentials.StripRuntimeCredentials(stepState);
+        var persisted = StripInlineMediaPayloads(
+            AgentRunReplyStepCredentials.StripRuntimeCredentials(stepState));
         await PersistDomainEventAsync(new AgentRunReplyStepStateUpdatedEvent
         {
             RunId = persisted.RunId,
@@ -508,6 +509,40 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             Attempt = persisted.Attempt,
             StepState = persisted,
         });
+    }
+
+    internal static AgentRunReplyStepState StripInlineMediaPayloads(AgentRunReplyStepState stepState)
+    {
+        var sanitized = stepState.Clone();
+        StripInlineMediaPayloads(sanitized.Messages);
+        StripInlineMediaPayloads(sanitized.PendingHistoryMessages);
+        StripInlineMediaPayloads(sanitized.AppendedHistory);
+        return sanitized;
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<AgentRunChatMessage> messages)
+    {
+        foreach (var message in messages)
+            StripInlineMediaPayloads(message.ContentParts);
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<ConversationHistoryEntry> messages)
+    {
+        foreach (var message in messages)
+            StripInlineMediaPayloads(message.ContentParts);
+    }
+
+    private static void StripInlineMediaPayloads(IEnumerable<Aevatar.AI.Abstractions.ChatContentPart> parts)
+    {
+        foreach (var part in parts)
+        {
+            if (part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text)
+            {
+                continue;
+            }
+
+            part.DataBase64 = string.Empty;
+        }
     }
 
     private Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
@@ -591,6 +626,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var hasReplyText = !string.IsNullOrWhiteSpace(stepState.AccumulatedText);
+        var terminalFailure = !hasReplyText;
         var emptyReplyDiagnostics = hasReplyText ? string.Empty : BuildEmptyReplyDiagnostics(stepState);
         if (!hasReplyText)
         {
@@ -614,7 +650,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 ? stepState.AccumulatedText
                 : "Sorry, I wasn't able to generate a response. Please try again.",
             stepState.OutboundIntent?.Clone(),
-            hasReplyText ? LlmReplyTerminalState.Completed : LlmReplyTerminalState.Failed,
+            terminalFailure ? LlmReplyTerminalState.Failed : LlmReplyTerminalState.Completed,
             hasReplyText ? string.Empty : "empty_reply",
             hasReplyText ? string.Empty : $"Reply generator returned an empty response ({emptyReplyDiagnostics}).",
             stepState.AppendedHistory.ToArray(),
@@ -1424,6 +1460,11 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (outbound is not null)
             produced.Outbound = outbound.Clone();
         produced.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
+        // Card delivery completion re-persists the produced payload after the initial
+        // AgentRunReplyProducedEvent (which carried the typed tool receipts) has already
+        // been committed. ApplyReplyProduced overwrites State.ToolReceipts from the event,
+        // so carry the committed receipts forward or this second event wipes them.
+        produced.ToolReceipts.AddRange(State.ToolReceipts.Select(receipt => receipt.Clone()));
 
         var deliveryProduced = BuildDeliveryProducedEvent(
             DeliveryKind.StreamingCard,
@@ -2280,7 +2321,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             DeliveryKind = kind,
             Target = BuildDeliveryTarget(activity, completion),
             Status = status,
-            LarkMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
+            ProviderMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
             CardId = NormalizeOptional(cardId) ?? string.Empty,
             RequestId = NormalizeOptional(completion.CommandId) ?? string.Empty,
             SourceEventId = NormalizeOptional(completion.CorrelationId) ?? string.Empty,
@@ -2299,16 +2340,16 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             Channel = conversation?.Channel?.Clone() ?? activity?.ChannelId?.Clone() ?? new ChannelId(),
             ConversationKey = conversation?.CanonicalKey ?? string.Empty,
             Platform = NormalizeOptional(extras?.NyxPlatform) ?? conversation?.Channel?.Value ?? activity?.ChannelId?.Value ?? string.Empty,
-            ReceiveId = NormalizeOptional(extras?.NyxLarkChatId) ??
+            AddressId = NormalizeOptional(extras?.NyxLarkChatId) ??
                         NormalizeOptional(extras?.NyxLarkUnionId) ??
                         string.Empty,
-            ReceiveIdType = ResolveReceiveIdType(extras),
+            AddressType = ResolveAddressType(extras),
             ConversationId = NormalizeOptional(extras?.NyxConversationId) ?? conversation?.CanonicalKey ?? string.Empty,
             ReplyMessageId = NormalizeOptional(completion.CardMessageId) ?? string.Empty,
         };
     }
 
-    private static string ResolveReceiveIdType(TransportExtras? extras)
+    private static string ResolveAddressType(TransportExtras? extras)
     {
         if (!string.IsNullOrWhiteSpace(extras?.NyxLarkChatId))
             return "chat_id";
@@ -2351,7 +2392,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             DeliveryKind = produced.DeliveryKind,
             Status = produced.Status,
             Target = produced.Target?.Clone() ?? new DeliveryTarget(),
-            LarkMessageId = produced.LarkMessageId ?? string.Empty,
+            ProviderMessageId = produced.ProviderMessageId ?? string.Empty,
             CardId = produced.CardId ?? string.Empty,
             RequestId = produced.RequestId ?? string.Empty,
             SourceEventId = produced.SourceEventId ?? string.Empty,

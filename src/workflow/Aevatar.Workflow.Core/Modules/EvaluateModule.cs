@@ -111,6 +111,8 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 SessionId = sessionId,
                 RunId = runId,
                 StepId = stepId,
+                ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+                ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
             };
             WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
             CopyParametersToIntent(request.Parameters, intent);

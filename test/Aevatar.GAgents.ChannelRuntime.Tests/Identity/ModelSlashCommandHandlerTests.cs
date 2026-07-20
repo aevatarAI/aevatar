@@ -202,12 +202,8 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task List_SelfHealsAndRebindsMessage_WhenBindingScopeMissing()
+    public async Task List_PreservesBindingAndGuidesGrantReview_WhenBindingScopeMissing()
     {
-        // NyxID rejects the binding's scope set: the binding was issued before
-        // aevatar's DCR started requesting `proxy`, so the broker can no longer
-        // mint LLM-API tokens for it. Self-heal by revoking the local actor so
-        // /init is unblocked, AND tell the user.
         var dispatchPort = new RecordingActorDispatchPort();
         var handler = CreateHandler(
             broker: new ThrowingCapabilityBroker(new BindingScopeMismatchException(Context().Subject)),
@@ -217,9 +213,30 @@ public sealed class ModelSlashCommandHandlerTests
 
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("缺少 LLM route 权限");
-        reply.Text.Should().Contain("清理已提交");
         reply.Text.Should().Contain("/init");
-        AssertRevokeBindingDispatched(dispatchPort, expectedReason: "auto_self_heal_scope_mismatch");
+        reply.Text.Should().NotContain("/unbind");
+        dispatchPort.Dispatched.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task List_PreservesBindingAndGuidesGrantReview_WhenBindingLacksRequiredService()
+    {
+        var context = Context();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var handler = CreateHandler(
+            broker: new ThrowingCapabilityBroker(new BindingServiceAccessMismatchException(
+                context.Subject,
+                ["https://nyxid.test/api/v1/proxy/s/aevatar"])),
+            actorDispatchPort: dispatchPort);
+
+        var reply = await handler.HandleAsync(context, default);
+
+        reply.Should().NotBeNull();
+        reply!.Text.Should().Contain("Ornn service");
+        reply.Text.Should().Contain("Sandbox service");
+        reply.Text.Should().Contain("/init");
+        reply.Text.Should().NotContain("/unbind");
+        dispatchPort.Dispatched.Should().BeEmpty();
     }
 
     [Fact]

@@ -83,7 +83,7 @@ wwwroot/assets/console/*                  -> shared assets
 `UseDefaultFiles()` serves `index.html` per directory; `UseStaticFiles()` serves assets. **Risk to verify (impl):** confirm nothing else in `wwwroot` (e.g. the Umi SPA dist or a fallback) shadows these paths; if the Umi app and this suite are deployed to the same host, define a non-colliding `wwwroot` layout (these explicit dir paths take precedence over a default-document fallback, but confirm on the deployed host).
 
 ### 4.3 Shared auth (`auth.js`)
-- Config reused from the Umi console env: `NYXID_BASE_URL`, `NYXID_CLIENT_ID`, `NYXID_REDIRECT_URI` (`/auth/callback`), `NYXID_SCOPE` (`openid profile email roles groups`).
+- Config comes from the Studio backend `/api/auth/nyxid/config`: OAuth authority, client id, and scope remain backend-owned. NyxID Consent owns the user's service grant, so this endpoint does not expose RFC 8707 resources and the browser does not send them. Only `NYXID_REDIRECT_URI` is an optional frontend callback override.
 - On load: read session from `localStorage['aevatar-console:nyxid:session']`; if absent/expired and not restorable → `loginWithRedirect()` to NyxID, return via `/auth/callback` (the suite must serve or share a callback handler — reuse the SPA's `/auth/callback` if same host, else add a minimal callback page).
 - `api.js#apiFetch` attaches `Authorization: Bearer <accessToken>`; on 401 → re-auth.
 - Logout clears the shared key (affects SPA too — intended: single session).
@@ -125,7 +125,7 @@ Per page, via shared helpers: loading, empty, error (surface backend error detai
 ## 8. Open questions / risks
 - Exact existing API endpoints per page (observatory/studio/schedules) — confirm against backend in impl.
 - `wwwroot` coexistence with the Umi SPA on the deployed host (path precedence / fallback).
-- NyxID OAuth client: `.env.example` had a blank `NYXID_CLIENT_ID`; confirm a client exists and allows these redirect URIs / this origin.
+- NyxID OAuth client: confirm the backend-provisioned client allows these redirect URIs / this origin.
 - `/auth/callback` ownership when suite + SPA share a host.
 - `/voice` realtime/WHIP/display panels remain stubbed until sub-projects ②③.
 

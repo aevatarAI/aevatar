@@ -97,6 +97,53 @@ public sealed class WorkflowExecutionContextAdapterTests
     }
 
     [Fact]
+    public void CallerNyxIdAuthority_ShouldExposeNormalizedSnapshotWithoutLeakingMutableState()
+    {
+        var host = new RecordingStateHost();
+        host.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+            {
+                Platform = " nyxid ",
+                Tenant = " tenant-a ",
+                ExternalUserId = " user-42 ",
+                Scope = " proxy ",
+            },
+        };
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        var authority = adapter.CallerNyxIdAuthority;
+
+        authority.Should().BeEquivalentTo(new WorkflowCallerNyxIdAuthority
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-a",
+            ExternalUserId = "user-42",
+            Scope = "proxy",
+        });
+        authority!.ExternalUserId = "mutated";
+        adapter.CallerNyxIdAuthority!.ExternalUserId.Should().Be("user-42");
+        host.ExecutionContextState.CallerCredential.NyxIdAuthority.ExternalUserId.Should().Be(" user-42 ");
+    }
+
+    [Fact]
+    public void CallerNyxIdAuthority_ShouldFailClosedForIncompleteState()
+    {
+        var host = new RecordingStateHost();
+        host.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "nyxid",
+                ExternalUserId = "user-42",
+            },
+        };
+        var adapter = WorkflowExecutionContextAdapter.Create(new RecordingEventHandlerContext(), host);
+
+        adapter.CallerNyxIdAuthority.Should().BeNull();
+    }
+
+    [Fact]
     public void LoadState_ShouldReturnSavedValue_AndFallbackToDefault()
     {
         var adapter = WorkflowExecutionContextAdapter.Create(

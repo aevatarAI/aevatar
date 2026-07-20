@@ -106,7 +106,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         Func<string, string> fieldPathResolver,
         Func<ProjectionDocumentFilter, string, string> exactMatchFieldPathResolver)
     {
-        if (query.Filters.Count == 0)
+        if (query.Filters.Count == 0 && query.AnyOfFilters.Count == 0)
         {
             return new Dictionary<string, object?>
             {
@@ -114,15 +114,22 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
             };
         }
 
-        return new Dictionary<string, object?>
+        var booleanQuery = new Dictionary<string, object?>();
+        if (query.Filters.Count > 0)
         {
-            ["bool"] = new Dictionary<string, object?>
-            {
-                ["filter"] = query.Filters
-                    .Select(filter => BuildSingleFilterSpec(filter, fieldPathResolver, exactMatchFieldPathResolver))
-                    .ToArray(),
-            },
-        };
+            booleanQuery["filter"] = query.Filters
+                .Select(filter => BuildSingleFilterSpec(filter, fieldPathResolver, exactMatchFieldPathResolver))
+                .ToArray();
+        }
+        if (query.AnyOfFilters.Count > 0)
+        {
+            booleanQuery["should"] = query.AnyOfFilters
+                .Select(filter => BuildSingleFilterSpec(filter, fieldPathResolver, exactMatchFieldPathResolver))
+                .ToArray();
+            booleanQuery["minimum_should_match"] = 1;
+        }
+
+        return new Dictionary<string, object?> { ["bool"] = booleanQuery };
     }
 
     private static object BuildSingleFilterSpec(

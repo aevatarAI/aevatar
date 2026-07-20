@@ -54,6 +54,7 @@ public sealed class ResponsesCommandFacadeTests
         toolContext.Caller.ScopeId.Should().Be("scope-1");
         toolContext.Caller.OwnerSubject.Should().Be("owner-1");
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
+        toolContext.Caller.OwnerScopeId.Should().Be("owner-1");
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
         toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
     }

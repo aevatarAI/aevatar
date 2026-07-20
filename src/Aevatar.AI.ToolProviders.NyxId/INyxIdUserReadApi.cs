@@ -1,6 +1,6 @@
 namespace Aevatar.AI.ToolProviders.NyxId;
 
-// 06-20-observatory-admin-cross-scope: narrow read seam over NyxIdApiClient so the platform-admin authorizer
+// Narrow read seam over NyxIdApiClient so the admin authorizer
 // and user directory are unit-testable without HTTP. NyxIdApiClient (sealed) implements this; tests fake it.
 // Both methods return the raw NyxID JSON string; non-2xx is encoded by NyxIdApiClient as {"error":true,...}.
 public interface INyxIdUserReadApi

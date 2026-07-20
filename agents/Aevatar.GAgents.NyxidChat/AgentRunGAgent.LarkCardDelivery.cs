@@ -13,15 +13,7 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed partial class AgentRunGAgent : IReplyOperationActorContext
 {
     private static readonly TimeSpan LarkCardOperationTimeout = TimeSpan.FromSeconds(10);
-
-    // Per-run (run-scoped grain) in-memory render throttle for the text-edit fallback path.
-    // After card.create fails, every interim reply chunk is forwarded as a Lark message edit;
-    // Lark caps edits per message (code 230072), so the count is bounded by
-    // StreamingMaxInterimChunks and the interval by StreamingFlushIntervalMs. The final chunk is
-    // always forwarded (it carries the complete reply text), so reply completeness never depends
-    // on these counters surviving a mid-turn reactivation — only on the is_final marker.
-    private int _fallbackInterimEditsForwarded;
-    private long _lastFallbackInterimAtUnixMs;
+    private const string LarkCardTextFallbackStatusText = "Processing your request. Please wait...";
 
     private sealed record LarkCardOperationInFlight(
         LarkCardOperationPhase Operation,
@@ -42,7 +34,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         string? PendingAccumulatedText,
         string? PendingFinalizeText,
         string? PendingFinalizeCommandId,
-        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory)
+        IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory,
+        AgentRunLarkCardTextFallbackPhase TextFallbackPhase)
     {
         public const string DefaultStreamingElementId = "streaming_main";
 
@@ -60,7 +53,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             PendingAccumulatedText: null,
             PendingFinalizeText: null,
             PendingFinalizeCommandId: null,
-            PendingAppendedHistory: []);
+            PendingAppendedHistory: [],
+            TextFallbackPhase: AgentRunLarkCardTextFallbackPhase.Idle);
 
         public bool AllowsInterimEdit =>
             Phase is AgentRunLarkCardDeliveryPhase.Idle
@@ -97,7 +91,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
             return;
 
-        await DispatchTextFallbackChunkAsync(ToTextStreamChunk(evt), evt.IsFinal);
+        await ForwardLarkCardTextFallbackSnapshotAsync(evt, correlationId);
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -419,6 +413,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 evt.CorrelationId,
                 result.ErrorCode,
                 TrimLogValue(result.ErrorSummary, 512));
+            var pendingFinalText = NormalizeOptional(state.PendingFinalizeText);
             await TransitionLarkCardDeliveryPhaseAsync(
                 correlationId,
                 state,
@@ -426,7 +421,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 terminalReason: $"create_failed:{result.ErrorCode}",
                 fieldUpdate: s => s with { InFlight = null });
             if (evt.Chunk is not null)
-                await DispatchTextFallbackChunkAsync(ToTextStreamChunk(evt.Chunk), evt.Chunk.IsFinal);
+                await ForwardLarkCardTextFallbackSnapshotAsync(evt.Chunk, correlationId, pendingFinalText);
             return;
         }
 
@@ -822,30 +817,57 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         return completed;
     }
 
-    private async Task DispatchTextFallbackChunkAsync(LlmReplyStreamChunkEvent chunk, bool isFinal)
+    private async Task ForwardLarkCardTextFallbackSnapshotAsync(
+        LlmReplyCardStreamChunkEvent chunk,
+        string correlationId,
+        string? pendingFinalText = null)
+    {
+        var state = GetOrInitLarkCardDeliveryState();
+        if (state.Phase is not AgentRunLarkCardDeliveryPhase.CreationFailed)
+            return;
+
+        if (NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase)
+            is AgentRunLarkCardTextFallbackPhase.Idle)
+        {
+            await DispatchTextFallbackChunkAsync(ToTextStreamChunk(chunk, LarkCardTextFallbackStatusText));
+            state = await TransitionLarkCardDeliveryPhaseAsync(
+                correlationId,
+                state,
+                state.Phase,
+                fieldUpdate: s => s with
+                {
+                    TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.StatusForwarded,
+                });
+        }
+
+        if (NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase)
+            is AgentRunLarkCardTextFallbackPhase.FinalForwarded)
+        {
+            return;
+        }
+
+        var finalText = NormalizeOptional(pendingFinalText)
+                        ?? NormalizeOptional(state.PendingFinalizeText)
+                        ?? (chunk.IsFinal ? NormalizeOptional(chunk.AccumulatedText) : null);
+        if (finalText is null)
+            return;
+
+        await DispatchTextFallbackChunkAsync(ToTextStreamChunk(chunk, finalText));
+        await TransitionLarkCardDeliveryPhaseAsync(
+            correlationId,
+            state,
+            state.Phase,
+            fieldUpdate: s => s with
+            {
+                TextFallbackPhase = AgentRunLarkCardTextFallbackPhase.FinalForwarded,
+            });
+    }
+
+    private async Task DispatchTextFallbackChunkAsync(LlmReplyStreamChunkEvent chunk)
     {
         var targetActorId = NormalizeOptional(State.TargetActorId);
         if (targetActorId is null)
             return;
-
-        var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-        if (!isFinal)
-        {
-            // Interim edits on the text-edit fallback are bounded so a long reply cannot exhaust
-            // Lark's per-message edit cap (code 230072). The final chunk below is exempt so the
-            // complete reply text always lands.
-            var maxInterimEdits = Math.Max(0, _relayOptions?.StreamingMaxInterimChunks ?? 15);
-            if (_fallbackInterimEditsForwarded >= maxInterimEdits)
-                return;
-
-            var flushIntervalMs = Math.Max(0, _relayOptions?.StreamingFlushIntervalMs ?? 750);
-            if (_fallbackInterimEditsForwarded > 0
-                && flushIntervalMs > 0
-                && nowMs - _lastFallbackInterimAtUnixMs < flushIntervalMs)
-            {
-                return;
-            }
-        }
 
         try
         {
@@ -858,13 +880,6 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 "Failed to dispatch card fallback text chunk to conversation actor; dropping. runId={RunId} correlation={CorrelationId}",
                 State.RunId,
                 chunk.CorrelationId);
-            return;
-        }
-
-        if (!isFinal)
-        {
-            _fallbackInterimEditsForwarded++;
-            _lastFallbackInterimAtUnixMs = nowMs;
         }
     }
 
@@ -996,7 +1011,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             NormalizeOptional(state.PendingAccumulatedText),
             NormalizeOptional(state.PendingFinalizeText),
             NormalizeOptional(state.PendingFinalizeCommandId),
-            state.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray());
+            state.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray(),
+            NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase));
     }
 
     private async Task<LarkCardDeliveryRuntimeState> TransitionLarkCardDeliveryPhaseAsync(
@@ -1112,6 +1128,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             evt.FinalizeCommandId = updated.PendingFinalizeCommandId ?? string.Empty;
         if (!HistoryEntriesEqual(current.PendingAppendedHistory, updated.PendingAppendedHistory))
             evt.AppendedHistory.AddRange(updated.PendingAppendedHistory.Select(entry => entry.Clone()));
+        if (current.TextFallbackPhase != updated.TextFallbackPhase)
+            evt.TextFallbackPhase = updated.TextFallbackPhase;
 
         return evt;
     }
@@ -1154,6 +1172,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             state.PendingFinalizeText = evt.FinalizeText ?? string.Empty;
         if (evt.HasFinalizeCommandId)
             state.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
+        if (evt.HasTextFallbackPhase)
+            state.TextFallbackPhase = NormalizeLarkCardTextFallbackPhase(evt.TextFallbackPhase);
         if (evt.AppendedHistory.Count > 0)
         {
             state.PendingAppendedHistory.Clear();
@@ -1271,7 +1291,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         from = NormalizeLarkCardDeliveryPhase(from);
         to = NormalizeLarkCardDeliveryPhase(to);
         if (from == to && from is AgentRunLarkCardDeliveryPhase.Creating
-                         or AgentRunLarkCardDeliveryPhase.Streaming)
+                         or AgentRunLarkCardDeliveryPhase.Streaming
+                         or AgentRunLarkCardDeliveryPhase.CreationFailed)
         {
             return true;
         }
@@ -1293,6 +1314,12 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         AgentRunLarkCardDeliveryPhase phase) =>
         phase == AgentRunLarkCardDeliveryPhase.Unspecified
             ? AgentRunLarkCardDeliveryPhase.Idle
+            : phase;
+
+    private static AgentRunLarkCardTextFallbackPhase NormalizeLarkCardTextFallbackPhase(
+        AgentRunLarkCardTextFallbackPhase phase) =>
+        phase == AgentRunLarkCardTextFallbackPhase.Unspecified
+            ? AgentRunLarkCardTextFallbackPhase.Idle
             : phase;
 
     private long NextLarkCardOperationGeneration(LarkCardDeliveryRuntimeState state) =>
@@ -1360,13 +1387,15 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         return durable;
     }
 
-    private static LlmReplyStreamChunkEvent ToTextStreamChunk(LlmReplyCardStreamChunkEvent evt) =>
+    private static LlmReplyStreamChunkEvent ToTextStreamChunk(
+        LlmReplyCardStreamChunkEvent evt,
+        string accumulatedText) =>
         new()
         {
             CorrelationId = evt.CorrelationId,
             RegistrationId = evt.RegistrationId,
             Activity = evt.Activity?.Clone(),
-            AccumulatedText = evt.AccumulatedText,
+            AccumulatedText = accumulatedText ?? string.Empty,
             ChunkAtUnixMs = evt.ChunkAtUnixMs,
             ReplyToken = evt.ReplyToken,
             ReplyTokenExpiresAtUnixMs = evt.ReplyTokenExpiresAtUnixMs,

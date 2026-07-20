@@ -67,7 +67,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                     Delta = "hello",
                 },
             }, ct);
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -117,7 +117,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                 },
             }, ct);
 
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -162,7 +162,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 

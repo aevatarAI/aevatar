@@ -20,6 +20,12 @@ namespace Aevatar.AI.Tests;
 public class NyxIdChatGAgentTests
 {
     [Fact]
+    public void StoredChatMessage_ShouldExposeTypedTurnIdentity()
+    {
+        typeof(StoredChatMessage).GetProperty("TurnId").Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldPinNyxIdProviderOnFirstInitialization()
     {
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
@@ -254,7 +260,8 @@ public class NyxIdChatGAgentTests
             null,
             null,
             null,
-            null));
+            null,
+            "session-history"));
         saved.Messages[1].Should().BeEquivalentTo(new StoredChatMessage(
             "session-history-assistant",
             "assistant",
@@ -264,7 +271,150 @@ public class NyxIdChatGAgentTests
             null,
             null,
             null,
-            null));
+            null,
+            "session-history"));
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_DifferentTurnsOnSameActor_ShouldShareHistoryAndArchiveTurnIds()
+    {
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(historyCommandPort: history);
+        var llmProviderFactory = new StreamingToolLoopProviderFactory(
+            [
+                [new LLMStreamChunk { DeltaContent = "first answer" }],
+                [new LLMStreamChunk { DeltaContent = "second answer" }],
+            ]);
+        var agent = CreateAgent(provider, "nyxid-chat-multi-turn", llmProviderFactory);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "first prompt",
+            SessionId = "turn-first",
+        });
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "second prompt",
+            SessionId = "turn-second",
+        });
+
+        llmProviderFactory.StreamRequests.Should().HaveCount(2);
+        llmProviderFactory.StreamRequests[1].Messages
+            .Where(static message => message.Role != "system")
+            .Select(static message => (message.Role, message.Content))
+            .Should()
+            .ContainInOrder(
+                ("user", "first prompt"),
+                ("assistant", "first answer"),
+                ("user", "second prompt"));
+        agent.State.Sessions["turn-first"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+        agent.State.Sessions["turn-second"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+
+        history.Saved.Should().HaveCount(2);
+        history.Saved[0].ConversationId.Should().Be("nyxid-chat-multi-turn");
+        history.Saved[1].ConversationId.Should().Be("nyxid-chat-multi-turn");
+        history.Saved[0].Messages.Select(static message => message.Id)
+            .Should().Equal("turn-first-user", "turn-first-assistant");
+        history.Saved[1].Messages.Select(static message => message.Id)
+            .Should().Equal("turn-second-user", "turn-second-assistant");
+        history.Saved[0].Messages.Should().OnlyContain(static message => message.TurnId == "turn-first");
+        history.Saved[1].Messages.Should().OnlyContain(static message => message.TurnId == "turn-second");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_AuthorizationBlockedTurn_ShouldArchiveBlockerAndAdmitNextTurn()
+    {
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(historyCommandPort: history);
+        var llmProviderFactory = new StreamingToolLoopProviderFactory(
+            [
+                [
+                    new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = "call-auth",
+                            Name = "authorization_required_history_tool",
+                            ArgumentsJson = "{}",
+                        },
+                    },
+                ],
+                [new LLMStreamChunk { DeltaContent = "follow-up answer" }],
+            ]);
+        var agent = CreateAgent(
+            provider,
+            "nyxid-chat-blocked-history",
+            llmProviderFactory,
+            [new StaticToolSource([new AuthorizationRequiredHistoryTool()])]);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "read private repository",
+            SessionId = "turn-blocked",
+        });
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "ordinary follow-up",
+            SessionId = "turn-after-block",
+        });
+
+        llmProviderFactory.StreamRequests.Should().HaveCount(2);
+        llmProviderFactory.StreamRequests[1].Messages.Should().Contain(message =>
+            message.Role == "user" && message.Content == "read private repository");
+        llmProviderFactory.StreamRequests[1].Messages
+            .Select(static message => message.ToString())
+            .Should()
+            .NotContain(text => text.Contains("bearer-secret", StringComparison.Ordinal));
+        agent.State.Sessions["turn-blocked"].Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+        agent.State.Sessions["turn-blocked"].ToolReceipts
+            .Should()
+            .OnlyContain(receipt => !receipt.ToString().Contains("bearer-secret", StringComparison.Ordinal));
+        agent.State.Sessions["turn-after-block"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+
+        history.Saved.Should().HaveCount(2);
+        var blockedAssistant = history.Saved[0].Messages.Should()
+            .ContainSingle(static message => message.Role == "assistant").Which;
+        blockedAssistant.Id.Should().Be("turn-blocked-assistant");
+        blockedAssistant.Status.Should().Be("blocked");
+        blockedAssistant.Error.Should().Be("Connect or reauthorize api-github to continue.");
+        blockedAssistant.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
+        history.Saved[1].Messages.Should().ContainSingle(message =>
+            message.Role == "assistant" &&
+            message.Status == "completed" &&
+            message.Content == "follow-up answer");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_WhenProviderFails_ShouldArchiveOnlySafeFailureMessage()
+    {
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(historyCommandPort: history);
+        var agent = CreateAgent(
+            provider,
+            "nyxid-chat-safe-failure-history",
+            new ThrowingStreamingProviderFactory(
+                new InvalidOperationException("provider failed with bearer-secret credential")));
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "hello",
+            SessionId = "turn-failed",
+        });
+
+        var assistant = history.Saved.Should().ContainSingle().Which.Messages
+            .Should().ContainSingle(static message => message.Role == "assistant").Which;
+        assistant.Status.Should().Be("error");
+        assistant.Content.Should().Be("The chat request failed. Please try again.");
+        assistant.Error.Should().Be("The chat request failed. Please try again.");
+        assistant.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
     }
 
     [Fact]
@@ -590,6 +740,26 @@ public class NyxIdChatGAgentTests
         }
     }
 
+    private sealed class ThrowingStreamingProviderFactory(Exception exception)
+        : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => NyxIdChatServiceDefaults.ProviderName;
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk();
+            await Task.Yield();
+            throw exception;
+        }
+    }
+
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
@@ -604,6 +774,34 @@ public class NyxIdChatGAgentTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
+    }
+
+    private sealed class AuthorizationRequiredHistoryTool : IAgentTool
+    {
+        public string Name => "authorization_required_history_tool";
+        public string Description => "Returns a typed authorization blocker.";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"error":true,"status":403,"credential":"bearer-secret"}""");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.AuthorizationRequired,
+                AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                {
+                    ServiceSlug = "api-github",
+                    ReasonCode = "NYXID_FORBIDDEN",
+                    SafeMessage = "Connect or reauthorize api-github to continue.",
+                },
+            };
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher

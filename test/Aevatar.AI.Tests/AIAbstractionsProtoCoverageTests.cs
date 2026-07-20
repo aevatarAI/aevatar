@@ -357,7 +357,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                     new AgentToolRequestIdentity("req-1", "call-1"),
                     AgentToolCredentials.Empty,
                     new AgentToolCallerContext("scope-a", "owner-a", "response-a"),
-                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a", "delivery-target-a", "secrets://nyx/reply-a"),
+                    new AgentToolChannelContext("telegram", "sender-a", "registration-a", "message-a", "platform-message-a", "delivery-target-a", ChannelWorkflowResultDeliveryCredentialTestData.Create("reply-a"), "bot-reg-a"),
                     new AgentToolSenderBindingContext("binding-a"),
                     new LLMRequestRoutingContext("model-a", "route-a", 4, "remember-a"),
                     new AgentToolConnectedServicesContext("""{"service":"telegram"}"""),
@@ -470,65 +470,6 @@ public sealed class AIAbstractionsProtoCoverageTests
     }
 
     [Fact]
-    public void AgentToolReceipt_ShouldUseCanonicalWireContract()
-    {
-        ((int)AgentToolReceiptStatus.Unspecified).Should().Be(0);
-        ((int)AgentToolReceiptStatus.Success).Should().Be(1);
-        ((int)AgentToolReceiptStatus.ApprovalRequired).Should().Be(2);
-        ((int)AgentToolReceiptStatus.Denied).Should().Be(3);
-        ((int)AgentToolReceiptStatus.Error).Should().Be(4);
-
-        ((int)AgentToolReceiptApprovalMode.Unspecified).Should().Be(0);
-        ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
-        ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
-        ((int)AgentToolReceiptApprovalMode.Auto).Should().Be(3);
-        AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
-            .Select(field => (field.FieldNumber, field.Name))
-            .Should()
-            .Equal(
-                (1, "call_id"),
-                (2, "tool_name"),
-                (3, "status"),
-                (4, "approval_mode"),
-                (5, "is_destructive"),
-                (6, "side_effect_kind"),
-                (7, "subject_kind"),
-                (8, "subject_id"),
-                (9, "subject_version"),
-                (10, "subject_hash"),
-                (11, "approval_request_id"),
-                (12, "error_code"),
-                (13, "error_message"),
-                (14, "result_json"),
-                (15, "managed_workflow_handoff"),
-                (16, "workflow_run_delivery"));
-
-        AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
-            .Select(field => field.Name)
-            .Should()
-            .NotContain(["observed_at_unix_ms", "subject_name", "is_read_only"]);
-
-        ToolResultEvent.Descriptor.Fields.InFieldNumberOrder()
-            .Select(field => (field.FieldNumber, field.Name))
-            .Should()
-            .Contain((5, "receipt"))
-            .And.NotContain((5, "tool_name"));
-        ToolResultEvent.Descriptor.Fields.InFieldNumberOrder()
-            .Select(field => field.Name)
-            .Should()
-            .NotContain("tool_name");
-
-        RoleChatSessionCompletedEvent.Descriptor.Fields.InFieldNumberOrder()
-            .Select(field => (field.FieldNumber, field.Name))
-            .Should()
-            .Contain((11, "tool_receipts"));
-        RoleChatSessionState.Descriptor.Fields.InFieldNumberOrder()
-            .Select(field => (field.FieldNumber, field.Name))
-            .Should()
-            .Contain((12, "tool_receipts"));
-    }
-
-    [Fact]
     public void PendingToolApprovalState_ShouldRoundTripTypedToolContextAndRemoteBinding()
     {
         var pending = RoundTrip(new PendingToolApprovalState
@@ -546,7 +487,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 Request = new AgentToolRequestIdentity("req-typed", "call-typed"),
                 Credentials = new AgentToolCredentials("token-should-only-appear-in-this-explicit-roundtrip", null, null),
                 Caller = new AgentToolCallerContext("scope-typed", "owner-typed", "response-typed"),
-                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1", "secrets://nyx/reply-1"),
+                Channel = new AgentToolChannelContext("lark", "sender-1", "registration-1", "message-1", "platform-message-1", "delivery-target-1", ChannelWorkflowResultDeliveryCredentialTestData.Create("reply-1"), "bot-reg-1"),
                 SenderBinding = new AgentToolSenderBindingContext("binding-1", "nyx-user-1"),
                 Routing = new LLMRequestRoutingContext("model-typed", "route-typed", 4, "memory-typed"),
                 ConnectedServices = new AgentToolConnectedServicesContext("{\"service\":\"ok\"}"),

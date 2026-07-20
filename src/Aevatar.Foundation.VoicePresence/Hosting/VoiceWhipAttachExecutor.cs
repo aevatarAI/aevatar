@@ -70,7 +70,7 @@ public sealed class VoiceWhipAttachExecutor
 
             return new VoiceWhipAttachResult(transportSession.AnswerSdp, resourceLocation);
         }
-        catch (InvalidOperationException ex) when (!attached)
+        catch (VoiceTransportAlreadyAttachedException ex) when (!attached)
         {
             if (realtimeSubscription != null)
                 await realtimeSubscription.DisposeAsync();

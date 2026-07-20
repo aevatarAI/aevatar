@@ -577,7 +577,12 @@ public sealed class ToolCallLoop
             executor.AddTool(executionState, call);
 
         await foreach (var result in executor.GetRemainingResultsAsync(executionState, ct))
-            messages.Add(BuildToolResultMessage(result.CallId, result.ToolName, result.Result));
+        {
+            messages.Add(BuildToolResultMessage(
+                result.CallId,
+                result.ToolName,
+                ToolExecutionResultHistory.ResolveSafeContent(result)));
+        }
     }
 
     private static ChatMessage BuildAssistantToolCallMessage(

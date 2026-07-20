@@ -4,9 +4,9 @@ namespace Aevatar.Workflow.Application.Abstractions.Runs;
 
 public interface IWorkflowChatRunInteractionPort
 {
-    Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+    Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
         WorkflowChatRunRequest request,
         Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
-        Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+        Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
         CancellationToken ct = default);
 }

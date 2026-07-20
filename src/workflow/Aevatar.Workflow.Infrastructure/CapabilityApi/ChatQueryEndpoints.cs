@@ -241,7 +241,51 @@ public static class ChatQueryEndpoints
             snapshot.TotalSteps,
             snapshot.RequestedSteps,
             snapshot.CompletedSteps,
-            snapshot.RoleReplyCount);
+            snapshot.RoleReplyCount,
+            snapshot.ConnectorApprovals.Select(MapConnectorApproval).ToList());
+
+    private static WorkflowExternalActionApprovalHttpResponse MapConnectorApproval(
+        WorkflowExternalActionApprovalSnapshot snapshot)
+    {
+        var plan = snapshot.Plan ?? new WorkflowExternalActionPlan();
+        var provenance = plan.Provenance ?? new WorkflowExternalActionProvenance();
+        return new WorkflowExternalActionApprovalHttpResponse(
+            plan.ActionId,
+            plan.Summary,
+            plan.ServiceRef,
+            plan.NodeId,
+            plan.ConnectorName,
+            plan.ConnectorType,
+            plan.Operation,
+            plan.HttpVerb,
+            plan.Resource,
+            plan.PermissionScope,
+            provenance.ScopeId,
+            provenance.TeamId,
+            provenance.MemberId,
+            provenance.WorkflowId,
+            provenance.PublishedServiceId,
+            provenance.WorkflowActorId,
+            provenance.RunId,
+            provenance.StepId,
+            provenance.ExecutionId,
+            provenance.RequesterPlatform,
+            provenance.RequesterTenant,
+            provenance.RequesterExternalUserId,
+            provenance.PrincipalSubject,
+            provenance.RequesterCapabilityScope,
+            plan.CreatedAt?.ToDateTimeOffset(),
+            plan.ExpiresAt?.ToDateTimeOffset(),
+            snapshot.RemoteExpiresAt?.ToDateTimeOffset(),
+            snapshot.LifecycleStatus,
+            snapshot.ApprovalStatus,
+            snapshot.ApprovalReasonCode,
+            snapshot.ApprovalResolvedAt?.ToDateTimeOffset(),
+            snapshot.ExecutionStatus,
+            snapshot.ExecutionReasonCode,
+            snapshot.ExecutionStartedAt?.ToDateTimeOffset(),
+            snapshot.ExecutionCompletedAt?.ToDateTimeOffset());
+    }
 
     private static WorkflowCompensationDeadLetterHttpResponse? MapDeadLetter(WorkflowActorSnapshot snapshot)
     {
@@ -339,7 +383,48 @@ public sealed record WorkflowActorCurrentStateHttpResponse(
     int TotalSteps,
     int RequestedSteps,
     int CompletedSteps,
-    int RoleReplyCount);
+    int RoleReplyCount,
+    IReadOnlyList<WorkflowExternalActionApprovalHttpResponse> ConnectorApprovals);
+
+public sealed record WorkflowExternalActionApprovalHttpResponse(
+    string ActionId,
+    string Summary,
+    string ServiceRef,
+    string NodeId,
+    string ConnectorName,
+    string ConnectorType,
+    string Operation,
+    string HttpVerb,
+    string Resource,
+    string PermissionScope,
+    string ScopeId,
+    string TeamId,
+    string MemberId,
+    string WorkflowId,
+    string PublishedServiceId,
+    string WorkflowActorId,
+    string RunId,
+    string StepId,
+    string ExecutionId,
+    string RequesterPlatform,
+    string RequesterTenant,
+    string RequesterExternalUserId,
+    string PrincipalSubject,
+    string RequesterCapabilityScope,
+    DateTimeOffset? CreatedAt,
+    DateTimeOffset? ExpiresAt,
+    DateTimeOffset? RemoteExpiresAt,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
+    WorkflowExternalActionLifecycleStatus LifecycleStatus,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
+    WorkflowExternalActionApprovalStatus ApprovalStatus,
+    string ApprovalReasonCode,
+    DateTimeOffset? ApprovalResolvedAt,
+    [property: JsonConverter(typeof(JsonStringEnumConverter))]
+    WorkflowExternalActionExecutionStatus ExecutionStatus,
+    string ExecutionReasonCode,
+    DateTimeOffset? ExecutionStartedAt,
+    DateTimeOffset? ExecutionCompletedAt);
 
 public sealed record WorkflowCompensationDeadLetterHttpResponse(
     string FailedCompensationStepId,

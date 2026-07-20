@@ -18,6 +18,10 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.InvalidWorkflowYaml, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.WorkflowNameMismatch, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.InvalidCallerCredential, StatusCodes.Status400BadRequest)]
+    [InlineData(WorkflowChatRunStartError.InvalidConversationInput, StatusCodes.Status400BadRequest)]
+    [InlineData(WorkflowChatRunStartError.InvalidConversationId, StatusCodes.Status400BadRequest)]
+    [InlineData(WorkflowChatRunStartError.ConversationNotFound, StatusCodes.Status404NotFound)]
+    [InlineData(WorkflowChatRunStartError.ChatHistoryReservationUnavailable, StatusCodes.Status503ServiceUnavailable)]
     [InlineData(WorkflowChatRunStartError.None, StatusCodes.Status400BadRequest)]
     public void ToHttpStatusCode_ShouldMapExpectedCode(
         WorkflowChatRunStartError error,
@@ -74,5 +78,21 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be("INVALID_CALLER_CREDENTIAL");
         mapped.Message.Should().Be("Caller credential is invalid.");
+    }
+
+    [Theory]
+    [InlineData(WorkflowChatRunStartError.InvalidConversationInput, "INVALID_CONVERSATION_INPUT", "Conversation input is invalid.")]
+    [InlineData(WorkflowChatRunStartError.InvalidConversationId, "INVALID_CONVERSATION_ID", "Conversation id is invalid.")]
+    [InlineData(WorkflowChatRunStartError.ConversationNotFound, "CONVERSATION_NOT_FOUND", "Conversation was not found.")]
+    [InlineData(WorkflowChatRunStartError.ChatHistoryReservationUnavailable, "CHAT_HISTORY_RESERVATION_UNAVAILABLE", "Chat history reservation is unavailable.")]
+    public void ToCommandError_ConversationErrors_ShouldMapExpectedPayload(
+        WorkflowChatRunStartError error,
+        string expectedCode,
+        string expectedMessage)
+    {
+        var mapped = ChatRunStartErrorMapper.ToCommandError(error);
+
+        mapped.Code.Should().Be(expectedCode);
+        mapped.Message.Should().Be(expectedMessage);
     }
 }

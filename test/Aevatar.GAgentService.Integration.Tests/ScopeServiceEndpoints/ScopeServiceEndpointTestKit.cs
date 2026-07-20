@@ -4,6 +4,12 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Hosting.EndpointAudit;
+using Aevatar.Audit;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -250,6 +256,7 @@ public abstract class ScopeServiceEndpointTestKit
             FakeServiceTrafficViewQueryReader trafficViewReader,
             FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
             FakeServiceRevisionCatalogQueryReader revisionCatalog,
+            FakeMemberPublishedServiceResolver memberPublishedServiceResolver,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
             FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
@@ -261,7 +268,8 @@ public abstract class ScopeServiceEndpointTestKit
             RecordingRetryCompensationDispatchService retryCompensationDispatchService,
             RecordingServiceRunRegistrationPort serviceRunRegistrationPort,
             FakeServiceRunQueryPort serviceRunQueryPort,
-            RecordingWorkflowFileIngressPort workflowFileIngressPort)
+            RecordingWorkflowFileIngressPort workflowFileIngressPort,
+            RecordingAuditTrailAppender auditTrailAppender)
         {
             _app = app;
             Client = client;
@@ -276,6 +284,7 @@ public abstract class ScopeServiceEndpointTestKit
             TrafficViewReader = trafficViewReader;
             InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
+            MemberPublishedServiceResolver = memberPublishedServiceResolver;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
             StaticGAgentStreamInvocationPort = staticGAgentStreamInvocationPort;
@@ -288,6 +297,7 @@ public abstract class ScopeServiceEndpointTestKit
             ServiceRunRegistrationPort = serviceRunRegistrationPort;
             ServiceRunQueryPort = serviceRunQueryPort;
             WorkflowFileIngressPort = workflowFileIngressPort;
+            AuditTrailAppender = auditTrailAppender;
         }
 
         public HttpClient Client { get; }
@@ -322,6 +332,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
+        public FakeMemberPublishedServiceResolver MemberPublishedServiceResolver { get; }
+
         public FakeTeamEntryMemberResolver TeamEntryMemberResolver { get; }
 
         public FakeCommandInteractionService InteractionService { get; }
@@ -346,6 +358,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public RecordingWorkflowFileIngressPort WorkflowFileIngressPort { get; }
 
+        public RecordingAuditTrailAppender AuditTrailAppender { get; }
+
         public static async Task<ScopeServiceEndpointTestHost> StartAsync(
             bool authenticationEnabled = true,
             IUserConfigQueryPort? userConfigQueryPort = null)
@@ -368,6 +382,7 @@ public abstract class ScopeServiceEndpointTestKit
             var trafficViewReader = new FakeServiceTrafficViewQueryReader();
             var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(serviceCatalogReader, trafficViewReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+            var memberPublishedServiceResolver = new FakeMemberPublishedServiceResolver();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
@@ -397,6 +412,7 @@ public abstract class ScopeServiceEndpointTestKit
                 LinkedQueryPort = serviceRunQueryPort,
             };
             var workflowFileIngressPort = new RecordingWorkflowFileIngressPort();
+            var auditTrailAppender = new RecordingAuditTrailAppender();
             builder.Services.AddSingleton<IServiceGovernanceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceGovernanceQueryPort>(queryPort);
             builder.Services.AddSingleton<IScopeBindingCommandPort>(scopeBindingPort);
@@ -404,7 +420,7 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<IServiceInvocationPort>(invocationPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(lifecycleQueryPort);
             builder.Services.AddSingleton<IServiceServingQueryPort>(servingQueryPort);
-            builder.Services.AddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
+            builder.Services.AddSingleton<IMemberPublishedServiceResolver>(memberPublishedServiceResolver);
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(serviceCatalogReader);
             builder.Services.AddSingleton<IServiceTrafficViewQueryReader>(trafficViewReader);
             builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
@@ -427,7 +443,9 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IServiceRunRegistrationPort>(serviceRunRegistrationPort);
             builder.Services.AddSingleton<IServiceRunQueryPort>(serviceRunQueryPort);
-            builder.Services.AddSingleton<IWorkflowFileIngressPort>(workflowFileIngressPort);
+            builder.Services.AddSingleton<IFileArtifactIngressPort>(workflowFileIngressPort);
+            builder.Services.AddSingleton<IAuditTrailAppender>(auditTrailAppender);
+            builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
             builder.Services.AddSingleton<WorkflowMultipartFileInputParser>();
             builder.Services.AddSingleton(Options.Create(new WorkflowMultipartFileIngressOptions()));
             builder.Services.AddSingleton(Options.Create(new WorkflowFormFileIngressOptions()));
@@ -448,6 +466,7 @@ public abstract class ScopeServiceEndpointTestKit
             }
 
             var app = builder.Build();
+            app.UseRouting();
             if (authenticationEnabled)
             {
                 app.UseAuthentication();
@@ -508,6 +527,7 @@ public abstract class ScopeServiceEndpointTestKit
                     await next();
                 });
             }
+            app.UseMiddleware<EndpointAuditCaptureMiddleware>();
             app.UseAuthorization();
             app.MapScopeServiceEndpoints();
             await app.StartAsync();
@@ -536,6 +556,7 @@ public abstract class ScopeServiceEndpointTestKit
                 trafficViewReader,
                 invocationCatalogReader,
                 revisionCatalog,
+                memberPublishedServiceResolver,
                 teamEntryMemberResolver,
                 interactionService,
                 staticGAgentStreamInvocationPort,
@@ -547,7 +568,8 @@ public abstract class ScopeServiceEndpointTestKit
                 retryCompensationDispatchService,
                 serviceRunRegistrationPort,
                 serviceRunQueryPort,
-                workflowFileIngressPort);
+                workflowFileIngressPort,
+                auditTrailAppender);
         }
 
         private static bool TryGetRequestedScopeId(string? path, out string scopeId)
@@ -625,6 +647,36 @@ public abstract class ScopeServiceEndpointTestKit
                     ? null
                     : new ScopeBindingGAgentResult(
                         request.GAgent.AgentKind)));
+        }
+    }
+
+    protected sealed class RecordingAuditTrailAppender : IAuditTrailAppender
+    {
+        public List<AuditRecord> Records { get; } = [];
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            return Task.FromResult(AuditTrailAppendResult.Appended(
+                record.AuditId,
+                record.AuditActorId,
+                record.OccurredAt.ToDateTimeOffset()));
+        }
+    }
+
+    private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey)
+        {
+            return new AuditActorIdentity($"hashed:{canonicalActorKey}", "kid-test");
+        }
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId)
+        {
+            return auditActorId == $"hashed:{canonicalActorKey}" &&
+                   identityKeyId == "kid-test";
         }
     }
 
@@ -823,6 +875,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public IReadOnlyList<ServiceRunSnapshot> Snapshots => _snapshots;
 
+        public List<ServiceRunQuery> Queries { get; } = [];
+
         public void Upsert(ServiceRunSnapshot snapshot)
         {
             _snapshots.RemoveAll(x =>
@@ -859,6 +913,7 @@ public abstract class ScopeServiceEndpointTestKit
 
         public Task<IReadOnlyList<ServiceRunSnapshot>> ListAsync(ServiceRunQuery query, CancellationToken ct = default)
         {
+            Queries.Add(query);
             var bridged = MaterializeForQuery(query.ScopeId, query.ServiceId).ToList();
             IEnumerable<ServiceRunSnapshot> results = bridged;
             if (!string.IsNullOrWhiteSpace(query.ScopeId))
@@ -940,6 +995,30 @@ public abstract class ScopeServiceEndpointTestKit
                 UpdatedAt: binding.UpdatedAt ?? DateTimeOffset.UtcNow,
                 LastOutput: string.Empty,
                 LastError: string.Empty);
+    }
+
+    protected sealed class FakeMemberPublishedServiceResolver : IMemberPublishedServiceResolver
+    {
+        private readonly DefaultMemberPublishedServiceResolver _fallback = new();
+
+        public List<MemberPublishedServiceResolveRequest> Calls { get; } = [];
+
+        public MemberPublishedServiceResolution? Result { get; set; }
+
+        public Exception? Exception { get; set; }
+
+        public Task<MemberPublishedServiceResolution> ResolveAsync(
+            MemberPublishedServiceResolveRequest request,
+            CancellationToken ct = default)
+        {
+            Calls.Add(request);
+            if (Exception != null)
+                throw Exception;
+
+            return Result == null
+                ? _fallback.ResolveAsync(request, ct)
+                : Task.FromResult(Result);
+        }
     }
 
     protected sealed class FakeTeamEntryMemberResolver : ITeamEntryMemberResolver
@@ -1284,15 +1363,15 @@ public abstract class ScopeServiceEndpointTestKit
     {
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 
-        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
             (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                     .Failure(WorkflowChatRunStartError.AgentNotFound));
 
-        public Task<CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
-            Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
+            Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
             CancellationToken ct = default)
         {
             LastRequest = request;
@@ -1715,17 +1794,17 @@ public abstract class ScopeServiceEndpointTestKit
         }
     }
 
-    protected sealed class RecordingWorkflowFileIngressPort : IWorkflowFileIngressPort
+    protected sealed class RecordingWorkflowFileIngressPort : IFileArtifactIngressPort
     {
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
             var index = Requests.Count;
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
             {
                 FileId = $"file-{index}",
                 ArtifactId = $"workflow-file://file-{index}",

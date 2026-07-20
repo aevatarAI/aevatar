@@ -2,6 +2,7 @@ syntax = "proto3";
 package aevatar.ai;
 option csharp_namespace = "Aevatar.AI.Abstractions";
 
+import "Credentials/credential_secret_references.proto";
 import "Protos/voice_presence.proto";
 
 enum ChatContentPartKind {
@@ -12,6 +13,15 @@ enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_VIDEO = 4;
 }
 
+enum ChatFileSourceKind {
+  CHAT_FILE_SOURCE_KIND_UNSPECIFIED = 0;
+  CHAT_FILE_SOURCE_KIND_CHAT_INPUT = 1;
+  CHAT_FILE_SOURCE_KIND_FORM_UPLOAD = 2;
+  CHAT_FILE_SOURCE_KIND_CONNECTED_SERVICE_RESOURCE = 3;
+  CHAT_FILE_SOURCE_KIND_EXTERNAL_RESOURCE = 4;
+  CHAT_FILE_SOURCE_KIND_GENERATED = 5;
+}
+
 message ChatContentPart {
   ChatContentPartKind kind = 1;
   string text = 2;
@@ -19,6 +29,23 @@ message ChatContentPart {
   string media_type = 4;
   string uri = 5;
   string name = 6;
+  ChatFileRef file_ref = 7;
+}
+
+message ChatFileRef {
+  string file_id = 1;
+  string artifact_id = 2;
+  ChatFileSourceKind source_kind = 3;
+  string source_message_id = 4;
+  string source_resource_key = 5;
+  string file_name = 6;
+  string media_type = 7;
+  int64 size_bytes = 8;
+  string sha256 = 9;
+  int64 created_at_unix_ms = 10;
+  int64 expires_at_unix_ms = 11;
+  string owner_run_id = 12;
+  string owner_scope_id = 13;
 }
 
 message ChatRequestEvent  {
@@ -37,6 +64,7 @@ message ChatRequestEvent  {
   LLMControlContextPayload llm_control = 10;
   // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
   string connector_http_authorization = 11;
+  aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 12;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
@@ -101,6 +129,19 @@ message AgentToolExecutionContextPayload {
   AgentSkillRecoveryContextPayload skill_recovery = 9;
   AgentWorkflowRuntimeContextPayload workflow_runtime = 10;
   AgentToolVisibilityScopePayload tool_visibility = 11;
+  AgentToolCredentialSourcePayload credential_source = 12;
+  AgentToolScheduleContextPayload schedule = 13;
+  AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 14;
+}
+
+enum AgentToolCredentialSourcePayload {
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_NYXID_ASSERTION = 1;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_BEARER_TOKEN = 2;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_CHANNEL_REGISTRATION = 3;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SCHEDULED_RUN = 4;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SYSTEM = 5;
+  AGENT_TOOL_CREDENTIAL_SOURCE_PAYLOAD_SERVICE_ACCOUNT = 6;
 }
 
 message AgentSkillRecoveryContextPayload {
@@ -134,16 +175,34 @@ message AgentToolCallerContextPayload {
   string scope_id = 1;
   string owner_subject = 2;
   string response_id = 3;
+  string owner_scope_id = 4;
+}
+
+message AgentToolNyxIdAuthorityContextPayload {
+  string platform = 1;
+  string tenant = 2;
+  string external_user_id = 3;
 }
 
 message AgentToolChannelContextPayload {
+  reserved 7;
+  reserved "durable_reply_credential_ref";
   string platform = 1;
   string sender_id = 2;
   string registration_scope_id = 3;
   string message_id = 4;
   string platform_message_id = 5;
   string delivery_target_id = 6;
-  string durable_reply_credential_ref = 7;
+  ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 8;
+  string bot_registration_id = 9;
+}
+
+// Typed handle for a channel bot's workflow terminal-result delivery credential.
+// Carries the vault SecretReference plus the NyxID agent api-key id it authorizes
+// (the vault subject); never the secret material itself.
+message ChannelWorkflowResultDeliveryCredential {
+  aevatar.credentials.SecretReference secret_reference = 1;
+  string subject_id = 2;
 }
 
 message AgentToolSenderBindingContextPayload {
@@ -176,6 +235,10 @@ message AgentWorkflowRuntimeContextPayload {
   int32 depth = 5;
 }
 
+message AgentToolScheduleContextPayload {
+  string schedule_id = 1;
+}
+
 message TextMessageStartEvent   { string session_id = 1; string agent_id = 2; }
 message TextMessageContentEvent { string delta = 1; string session_id = 2; }
 message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
@@ -190,6 +253,7 @@ enum AgentToolReceiptStatus {
   AGENT_TOOL_RECEIPT_STATUS_APPROVAL_REQUIRED = 2;
   AGENT_TOOL_RECEIPT_STATUS_DENIED = 3;
   AGENT_TOOL_RECEIPT_STATUS_ERROR = 4;
+  AGENT_TOOL_RECEIPT_STATUS_AUTHORIZATION_REQUIRED = 5;
 }
 
 enum AgentToolReceiptApprovalMode {
@@ -197,6 +261,14 @@ enum AgentToolReceiptApprovalMode {
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_NEVER_REQUIRE = 1;
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_ALWAYS_REQUIRE = 2;
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
+}
+
+message NyxIdAuthorizationRequiredEvent {
+  string service_slug = 1;
+  optional string service_label = 2;
+  optional string resource_uri = 3;
+  string reason_code = 4;
+  string safe_message = 5;
 }
 
 message AgentToolReceipt {
@@ -216,6 +288,7 @@ message AgentToolReceipt {
   string result_json = 14;
   ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
+  NyxIdAuthorizationRequiredEvent authorization_required = 17;
 }
 
 message ManagedWorkflowHandoffReceipt {
@@ -228,8 +301,8 @@ message ManagedWorkflowHandoffReceipt {
 }
 
 message WorkflowRunBackgroundDeliveryReceipt {
-  reserved 10;
-  reserved "bot_agent_key_id";
+  reserved 10, 12;
+  reserved "bot_agent_key_id", "durable_reply_credential_ref";
   string delivery_actor_id = 1;
   string workflow_actor_id = 2;
   string workflow_run_id = 3;
@@ -240,7 +313,6 @@ message WorkflowRunBackgroundDeliveryReceipt {
   string reply_message_id = 8;
   string platform_message_id = 9;
   string registration_scope_id = 11;
-  string durable_reply_credential_ref = 12;
 }
 
 message ToolResultEvent {
@@ -265,6 +337,26 @@ message RoleChatSessionStartedEvent {
   string prompt = 2;
   repeated ChatContentPart input_parts = 3;
 }
+
+enum RoleChatSessionConflictReason {
+  ROLE_CHAT_SESSION_CONFLICT_REASON_UNSPECIFIED = 0;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_PROMPT_MISMATCH = 1;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_INPUT_PARTS_MISMATCH = 2;
+}
+
+message RoleChatSessionConflictEvent {
+  string session_id = 1;
+  RoleChatSessionConflictReason reason = 2;
+  string safe_message = 3;
+}
+
+enum RoleChatSessionOutcome {
+  ROLE_CHAT_SESSION_OUTCOME_UNSPECIFIED = 0;
+  ROLE_CHAT_SESSION_OUTCOME_COMPLETED = 1;
+  ROLE_CHAT_SESSION_OUTCOME_FAILED = 2;
+  ROLE_CHAT_SESSION_OUTCOME_BLOCKED = 3;
+}
+
 message RoleChatSessionCompletedEvent {
   string session_id = 1;
   string content = 2;
@@ -277,6 +369,10 @@ message RoleChatSessionCompletedEvent {
   TokenUsagePayload usage = 9;
   string model = 10;
   repeated AgentToolReceipt tool_receipts = 11;
+  RoleChatSessionOutcome outcome = 12;
+  string failure_code = 13;
+  string safe_message = 14;
+  NyxIdAuthorizationRequiredEvent authorization_required = 15;
 }
 
 message InitializeRoleAgentEvent {
@@ -365,9 +461,11 @@ message ToolApprovalRequestEvent {
 // 前端 → Agent：审批决策
 message ToolApprovalDecisionEvent {
   string request_id = 1;
-  string session_id = 2;
+  reserved 2;
+  reserved "session_id";
   bool approved = 3;
   string reason = 4;
+  string continuation_turn_id = 5;
 }
 
 message RoleChatSessionState {
@@ -383,6 +481,10 @@ message RoleChatSessionState {
   TokenUsagePayload usage = 10;
   string model = 11;
   repeated AgentToolReceipt tool_receipts = 12;
+  RoleChatSessionOutcome outcome = 13;
+  NyxIdAuthorizationRequiredEvent authorization_required = 14;
+  string failure_code = 15;
+  string safe_message = 16;
 }
 
 message RoleGAgentState {
@@ -425,6 +527,7 @@ message PendingToolApprovalState {
   reserved "remote_status_check_callback_id";
   int32 remote_status_check_attempt = 12;
   int64 remote_approval_expires_at_unix_ms = 13;
+  string scope_id = 15;
 }
 
 // Domain event: approval pending persisted.

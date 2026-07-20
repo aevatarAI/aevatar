@@ -17,22 +17,22 @@ public sealed class ChannelRegistrationToolSource : IAgentToolSource
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
-    private readonly INyxLarkProvisioningService _provisioningService;
+    private readonly ChannelRelayRegistrationFacade _registrationFacade;
 
     public ChannelRegistrationToolSource(
         IChannelBotRegistrationQueryPort queryPort,
         ChannelRegistrationCommandFacade commandFacade,
-        INyxLarkProvisioningService provisioningService)
+        ChannelRelayRegistrationFacade registrationFacade)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
-        _provisioningService = provisioningService ?? throw new ArgumentNullException(nameof(provisioningService));
+        _registrationFacade = registrationFacade ?? throw new ArgumentNullException(nameof(registrationFacade));
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        IReadOnlyList<IAgentTool> tools = [new ChannelRegistrationTool(_queryPort, _commandFacade, _provisioningService)];
+        IReadOnlyList<IAgentTool> tools = [new ChannelRegistrationTool(_queryPort, _commandFacade, _registrationFacade)];
         return Task.FromResult(tools);
     }
 }

@@ -39,9 +39,9 @@ public static class AevatarConfigLoader
         builder.AddJsonFile(AevatarPaths.ConfigJson, optional: true, reloadOnChange: true);
 
         // secrets.json — 敏感配置（高优先级，覆盖 config.json 的同名 key）
-        // 生产入口（mainnet）必须显式禁用：禁止把 secrets 落地到本地文件。
+        // 通过 AevatarSecretsStore 读取，沿用加密 envelope 与 plaintext 显式 opt-in 策略。
         if (allowLocalFileStore)
-            builder.AddJsonFile(AevatarPaths.SecretsJson, optional: true, reloadOnChange: false);
+            builder.Add(new AevatarSecretsConfigurationSource());
 
         // mcp.json — MCP 服务器配置（Cursor 兼容格式）
         builder.AddJsonFile(AevatarPaths.MCPJson, optional: true, reloadOnChange: true);

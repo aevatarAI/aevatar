@@ -1,23 +1,29 @@
+using Aevatar.GAgents.Scheduled;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
-using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using NSubstitute;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -89,6 +95,12 @@ public sealed class ServiceCollectionExtensionsTests
             .Should().Be(0);
         services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
             .Should().Be(2);
+        provider.GetServices<IChannelNativeMessageSender>()
+            .Select(sender => sender.GetType())
+            .Should()
+            .Contain(typeof(LarkChannelNativeMessageSender))
+            .And
+            .Contain(typeof(TelegramChannelNativeMessageSender));
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ChannelRelayRegistrationFacade));
         services.Should().Contain(descriptor =>
@@ -96,6 +108,42 @@ public sealed class ServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>));
         registry.Get(ChannelId.From("telegram")).Should().BeOfType<Aevatar.GAgents.Platform.Telegram.TelegramMessageComposer>();
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldNotOwnPlatformNativeMessageSenders()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdRelayChannel();
+
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(IChannelNativeMessageSender));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(LarkChannelNativeMessageSender));
+        services.Should().NotContain(descriptor =>
+            descriptor.ServiceType == typeof(TelegramChannelNativeMessageSender));
+        services.Any(IsLarkOutboundRelayDispatcherDescriptor).Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddLarkAndTelegramPlatform_ShouldRegisterPlatformNativeMessageSenders()
+    {
+        var services = new ServiceCollection();
+
+        services.AddLarkPlatform();
+        services.AddTelegramPlatform();
+
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(LarkChannelNativeMessageSender));
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(TelegramChannelNativeMessageSender));
+        services.Count(descriptor => descriptor.ServiceType == typeof(IChannelNativeMessageSender))
+            .Should()
+            .Be(2);
+        services.Should().Contain(descriptor =>
+            descriptor.ServiceType == typeof(ILarkOutboundDispatcher) &&
+            descriptor.ImplementationType == typeof(LarkOutboundDispatcher));
     }
 
     [Fact]
@@ -120,6 +168,14 @@ public sealed class ServiceCollectionExtensionsTests
         var implementationTypeName = descriptor.ImplementationType?.FullName;
         return serviceTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true ||
                implementationTypeName?.Contains("VoiceDemo", StringComparison.Ordinal) == true;
+    }
+
+    private static bool IsLarkOutboundRelayDispatcherDescriptor(ServiceDescriptor descriptor)
+    {
+        var serviceTypeName = descriptor.ServiceType.FullName;
+        var implementationTypeName = descriptor.ImplementationType?.FullName;
+        return serviceTypeName?.Contains("LarkOutboundRelayDispatcher", StringComparison.Ordinal) == true ||
+               implementationTypeName?.Contains("LarkOutboundRelayDispatcher", StringComparison.Ordinal) == true;
     }
 
     [Fact]
@@ -158,11 +214,21 @@ public sealed class ServiceCollectionExtensionsTests
     public void AddChannelIdentity_RegistersCommittedStateProjectionActivationProvider()
     {
         var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] =
+                    " https://api.example.test/// ",
+            })
+            .Build();
 
-        services.AddChannelIdentity(new ConfigurationBuilder().Build());
+        services.AddChannelIdentity(configuration);
+        using var provider = services.BuildServiceProvider();
 
         AssertProjectionActivationProviderRegistered<ChannelIdentityCommittedStateProjectionActivationPlanProvider>(
             services);
+        provider.GetRequiredService<IOptions<NyxIdBrokerOptions>>()
+            .Value.ResourceServerBaseUrl.Should().Be("https://api.example.test");
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&
             descriptor.ImplementationType == typeof(AevatarOAuthClientEsAclStartupGuard));
@@ -185,6 +251,61 @@ public sealed class ServiceCollectionExtensionsTests
         provider.GetRequiredService<IInteractiveReplyCollector>().Should().NotBeNull();
         registry.GetNativeProducer(ChannelId.From("lark")).Should().BeOfType<LarkChannelNativeMessageProducer>();
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldReplaceInteractionNotificationPortWithChannelNeutralRelay()
+    {
+        var services = new ServiceCollection();
+        var existingNotificationPort = Substitute.For<IChannelInteractionNotificationPort>();
+        services.AddSingleton(existingNotificationPort);
+
+        services.AddNyxIdRelayChannel();
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(IChannelInteractionNotificationPort))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationType
+            .Should()
+            .Be(typeof(NyxIdRelayChannelInteractionNotificationPort));
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldReplaceRemoteApprovalNotificationPortWithChannelRelay()
+    {
+        var services = new ServiceCollection();
+        var existingNotificationPort = Substitute.For<IRemoteToolApprovalNotificationPort>();
+        services.AddSingleton(existingNotificationPort);
+
+        services.AddNyxIdRelayChannel();
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(IRemoteToolApprovalNotificationPort))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationType
+            .Should()
+            .Be(typeof(NyxIdRelayRemoteToolApprovalNotificationPort));
+    }
+
+    [Fact]
+    public void AddNyxIdRelayChannel_ShouldReplaceNyxIdChatTailTextFallback()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        services.AddNyxIdRelayChannel();
+        services.AddLarkPlatform();
+
+        services.Where(descriptor => descriptor.ServiceType == typeof(IChannelRelayTailTextSender))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationFactory
+            .Should()
+            .NotBeNull();
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IChannelRelayTailTextSender>()
+            .Should()
+            .BeOfType<LarkChannelRelayTailTextSender>();
     }
 
     private static void AssertNoRetiredLarkConversationInboxRegistration(IServiceCollection services)

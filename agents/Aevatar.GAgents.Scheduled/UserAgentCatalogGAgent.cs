@@ -16,16 +16,45 @@ namespace Aevatar.GAgents.Scheduled;
 public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
 {
     public const string WellKnownId = UserAgentCatalogStorageContracts.StoreActorId;
+    private const int MaxApiKeyRevocationAttempts = 3;
+    private readonly IScheduledAgentCredentialRevocationExecutor _credentialRevocationExecutor;
+
+    public UserAgentCatalogGAgent(IScheduledAgentCredentialRevocationExecutor credentialRevocationExecutor)
+    {
+        _credentialRevocationExecutor = credentialRevocationExecutor ??
+            throw new ArgumentNullException(nameof(credentialRevocationExecutor));
+    }
 
     protected override UserAgentCatalogState TransitionState(UserAgentCatalogState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
             .On<UserAgentCatalogUpsertedEvent>(ApplyUpserted)
             .On<UserAgentCatalogTombstonedEvent>(ApplyTombstoned)
+            .On<UserAgentCatalogApiKeyRevocationRequestedEvent>(ApplyApiKeyRevocationRequested)
+            .On<UserAgentCatalogCredentialRevocationsMigratedEvent>(ApplyCredentialRevocationsMigrated)
+            .On<UserAgentCatalogApiKeyRevocationAttemptRecordedEvent>(ApplyApiKeyRevocationAttemptRecorded)
+            .On<UserAgentCatalogCredentialRevocationRepairedEvent>(ApplyCredentialRevocationRepaired)
             .On<UserAgentCatalogTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .On<UserAgentCatalogSharedEvent>(ApplyShared)
             .On<UserAgentCatalogUnsharedEvent>(ApplyUnshared)
             .OrCurrent();
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        var migratedRevocations = State.PendingApiKeyRevocations
+            .Where(RequiresCredentialRevocationMigration)
+            .Select(NormalizeRevocation)
+            .ToArray();
+        if (migratedRevocations.Length > 0)
+        {
+            await PersistDomainEventAsync(new UserAgentCatalogCredentialRevocationsMigratedEvent
+            {
+                Revocations = { migratedRevocations },
+            }, ct);
+        }
+
+        await base.OnActivateAsync(ct);
+    }
 
     [EventHandler]
     public async Task HandleUpsertAsync(UserAgentCatalogUpsertCommand command)
@@ -51,9 +80,10 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             AgentId = command.AgentId.Trim(),
             ConversationId = MergeNonEmpty(command.ConversationId, existing?.ConversationId),
             NyxProviderSlug = MergeNonEmpty(command.NyxProviderSlug, existing?.NyxProviderSlug),
-#pragma warning disable CS0612 // legacy credential field preserved for internal delivery compatibility
-            NyxApiKey = MergeNonEmpty(command.NyxApiKey, existing?.NyxApiKey),
+#pragma warning disable CS0612 // legacy credential field must remain empty on new writes
+            NyxApiKey = string.Empty,
 #pragma warning restore CS0612
+            NyxApiKeyReference = command.NyxApiKeyReference?.Clone() ?? existing?.NyxApiKeyReference?.Clone(),
             CreatedAt = existing?.CreatedAt ?? now,
             UpdatedAt = now,
             Tombstoned = false,
@@ -63,14 +93,26 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             ApiKeyId = MergeNonEmpty(command.ApiKeyId, existing?.ApiKeyId),
             ScheduleCron = MergeNonEmpty(command.ScheduleCron, existing?.ScheduleCron),
             ScheduleTimezone = MergeNonEmpty(command.ScheduleTimezone, existing?.ScheduleTimezone),
-            LarkReceiveId = MergeNonEmpty(command.LarkReceiveId, existing?.LarkReceiveId),
-            LarkReceiveIdType = MergeNonEmpty(command.LarkReceiveIdType, existing?.LarkReceiveIdType),
-            LarkReceiveIdFallback = MergeNonEmpty(command.LarkReceiveIdFallback, existing?.LarkReceiveIdFallback),
-            LarkReceiveIdTypeFallback = MergeNonEmpty(command.LarkReceiveIdTypeFallback, existing?.LarkReceiveIdTypeFallback),
             SharingGrant = existing?.SharingGrant?.Clone(),
             TargetPlatform = MergeNonEmpty(command.TargetPlatform, existing?.TargetPlatform),
-            OutputFormat = command.OutputFormat == SkillRunnerOutputFormat.Auto
-                ? existing?.OutputFormat ?? SkillRunnerOutputFormat.Auto
+            ChannelAddress = UserAgentCatalogChannelAddress.Merge(
+                command.ChannelAddress,
+                existing?.ChannelAddress,
+                command.TargetPlatform,
+                command.NyxProviderSlug,
+                command.ConversationId,
+#pragma warning disable CS0612 // deprecated fields are read only as a channel_address compatibility bridge
+                command.LarkReceiveId,
+                command.LarkReceiveIdType,
+                command.LarkReceiveIdFallback,
+                command.LarkReceiveIdTypeFallback,
+                existing?.LarkReceiveId,
+                existing?.LarkReceiveIdType,
+                existing?.LarkReceiveIdFallback,
+                existing?.LarkReceiveIdTypeFallback),
+#pragma warning restore CS0612
+            OutputFormat = command.OutputFormat == ScheduledAgentOutputFormat.Auto
+                ? existing?.OutputFormat ?? ScheduledAgentOutputFormat.Auto
                 : command.OutputFormat,
         };
 
@@ -134,12 +176,236 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             return;
         }
 
+        var existing = State.Entries.First(x => string.Equals(x.AgentId, command.AgentId, StringComparison.Ordinal));
+        UserAgentApiKeyRevocation? revocation = null;
+        if (!existing.Tombstoned && ShouldRequestApiKeyRevocation(existing))
+        {
+            var requestedRevocation = BuildApiKeyRevocation(existing);
+            var currentRevocation = FindRevocationByIdentity(State.PendingApiKeyRevocations, requestedRevocation);
+            if (currentRevocation is not null)
+            {
+                revocation = currentRevocation.Clone();
+            }
+            else if (HasRevocationAliasConflict(State.PendingApiKeyRevocations, requestedRevocation))
+            {
+                Logger.LogWarning(
+                    "Cannot replace pending credential revocation with an alias: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
+                    requestedRevocation.AgentId,
+                    requestedRevocation.ApiKeyId,
+                    ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(requestedRevocation));
+            }
+            else
+            {
+                revocation = requestedRevocation;
+                await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
+                {
+                    Revocation = revocation,
+                });
+            }
+        }
+
         await PersistDomainEventAsync(new UserAgentCatalogTombstonedEvent
         {
             AgentId = command.AgentId.Trim(),
             TombstoneStateVersion = NextCommittedVersion(),
         });
+
+        if (revocation is not null)
+            await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, revocation);
     }
+
+    [EventHandler]
+    public async Task HandleRecordApiKeyRevocationAttemptAsync(
+        UserAgentCatalogRecordApiKeyRevocationAttemptCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.AgentId) || string.IsNullOrWhiteSpace(command.ApiKeyId))
+        {
+            Logger.LogWarning("Cannot record API key revocation attempt with empty agent id or API key id");
+            return;
+        }
+
+        var secretReferenceRef = command.SecretReferenceRef?.Trim() ?? string.Empty;
+        var pending = State.PendingApiKeyRevocations.FirstOrDefault(revocation =>
+            MatchesRevocationIdentity(
+                revocation,
+                command.AgentId,
+                command.ApiKeyId,
+                secretReferenceRef));
+        if (pending is null)
+        {
+            Logger.LogWarning(
+                "Cannot record API key revocation attempt without the matching pending revocation: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
+                command.AgentId.Trim(),
+                command.ApiKeyId.Trim(),
+                secretReferenceRef);
+            return;
+        }
+
+        var track = ResolveTrack(pending, command.Track);
+        if (track is null ||
+            IsTerminal(track) ||
+            track.Status == ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef)
+            return;
+
+        if (!command.Completed && track.AttemptCount >= MaxApiKeyRevocationAttempts)
+        {
+            Logger.LogWarning(
+                "Cannot record API key revocation retry after max attempts: agentId={AgentId} apiKeyId={ApiKeyId}",
+                command.AgentId.Trim(),
+                command.ApiKeyId.Trim());
+            return;
+        }
+
+        await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationAttemptRecordedEvent
+        {
+            AgentId = command.AgentId.Trim(),
+            ApiKeyId = command.ApiKeyId.Trim(),
+            Completed = command.Completed,
+            HttpStatus = command.HttpStatus,
+            Error = command.Error?.Trim() ?? string.Empty,
+            FailureKind = command.Completed
+                ? UserAgentApiKeyRevocationFailureKind.None
+                : command.FailureKind,
+            AttemptedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Track = command.Track,
+            SecretReferenceRef = secretReferenceRef,
+        });
+    }
+
+    [EventHandler]
+    public async Task HandleRequestCredentialRevocationAsync(UserAgentCatalogRequestCredentialRevocationCommand command)
+    {
+        if (command.Intent is null)
+            return;
+
+        var revocation = BuildApiKeyRevocation(command.Intent);
+        if (revocation is null)
+            return;
+
+        var currentRevocation = FindRevocationByIdentity(State.PendingApiKeyRevocations, revocation);
+        if (currentRevocation is not null)
+        {
+            await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, currentRevocation.Clone());
+            return;
+        }
+
+        if (HasRevocationAliasConflict(State.PendingApiKeyRevocations, revocation))
+        {
+            Logger.LogWarning(
+                "Cannot request credential revocation with an aliased identity: agentId={AgentId} apiKeyId={ApiKeyId} secretReference={SecretReference}",
+                revocation.AgentId,
+                revocation.ApiKeyId,
+                ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation));
+            return;
+        }
+
+        await PersistDomainEventAsync(new UserAgentCatalogApiKeyRevocationRequestedEvent
+        {
+            Revocation = revocation,
+        });
+        await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, revocation);
+    }
+
+    [EventHandler]
+    public async Task HandleRetryCredentialRevocationsAsync(UserAgentCatalogRetryCredentialRevocationsCommand command)
+    {
+        if (command.OwnerScope is null)
+            return;
+
+        var pendingRevocations = State.PendingApiKeyRevocations
+            .Where(revocation =>
+                revocation.OwnerScope is not null &&
+                command.OwnerScope.MatchesStrictly(revocation.OwnerScope))
+            .Select(static revocation => revocation.Clone())
+            .ToArray();
+        foreach (var pending in pendingRevocations)
+            await _credentialRevocationExecutor.ExecutePendingAsync(command.BearerToken, pending);
+    }
+
+    [EventHandler]
+    public async Task HandleRepairCredentialRevocationAsync(UserAgentCatalogRepairCredentialRevocationCommand command)
+    {
+        var requestId = command.RequestId?.Trim() ?? string.Empty;
+        var agentId = command.AgentId?.Trim() ?? string.Empty;
+        var apiKeyId = command.ApiKeyId?.Trim() ?? string.Empty;
+        var secretSubjectId = command.SecretSubjectId?.Trim() ?? string.Empty;
+        var repairReason = command.RepairReason?.Trim() ?? string.Empty;
+        var requestedBySubjectId = command.RequestedBySubjectId?.Trim() ?? string.Empty;
+        var reference = command.SecretReference;
+        if (string.IsNullOrEmpty(agentId) ||
+            string.IsNullOrEmpty(apiKeyId) ||
+            string.IsNullOrEmpty(requestId) ||
+            !string.Equals(apiKeyId, secretSubjectId, StringComparison.Ordinal) ||
+            string.IsNullOrEmpty(repairReason) ||
+            string.IsNullOrEmpty(requestedBySubjectId) ||
+            !IsCompleteReference(reference))
+        {
+            await PersistRepairRejectedAsync(
+                requestId,
+                agentId,
+                apiKeyId,
+                UserAgentCatalogCredentialRevocationRepairRejectionReason.InvalidRequest);
+            return;
+        }
+
+        var pending = State.PendingApiKeyRevocations.FirstOrDefault(revocation =>
+            MatchesRevocationIdentity(revocation, agentId, apiKeyId, string.Empty));
+        if (pending?.VaultTrack?.Status != ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef)
+        {
+            await PersistRepairRejectedAsync(
+                requestId,
+                agentId,
+                apiKeyId,
+                UserAgentCatalogCredentialRevocationRepairRejectionReason.NotBlocked);
+            return;
+        }
+
+        var aliasConflict = State.PendingApiKeyRevocations.Any(revocation =>
+            !ReferenceEquals(revocation, pending) &&
+            (string.Equals(revocation.ApiKeyId, apiKeyId, StringComparison.Ordinal) ||
+             string.Equals(
+                 ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation),
+                 reference.Ref.Trim(),
+                 StringComparison.Ordinal)));
+        if (aliasConflict)
+        {
+            await PersistRepairRejectedAsync(
+                requestId,
+                agentId,
+                apiKeyId,
+                UserAgentCatalogCredentialRevocationRepairRejectionReason.AliasConflict);
+            return;
+        }
+
+        await PersistDomainEventAsync(new UserAgentCatalogCredentialRevocationRepairedEvent
+        {
+            RequestId = requestId,
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            SecretReference = reference.Clone(),
+            SecretSubjectId = secretSubjectId,
+            RepairReason = repairReason,
+            RequestedBySubjectId = requestedBySubjectId,
+            RepairRequestedAtUnixMs = command.RepairRequestedAtUnixMs,
+        });
+
+        var repaired = State.PendingApiKeyRevocations.First(revocation =>
+            MatchesRevocationIdentity(revocation, agentId, apiKeyId, reference.Ref));
+        await _credentialRevocationExecutor.ExecutePendingAsync(string.Empty, repaired);
+    }
+
+    private Task PersistRepairRejectedAsync(
+        string requestId,
+        string agentId,
+        string apiKeyId,
+        UserAgentCatalogCredentialRevocationRepairRejectionReason reason) =>
+        PersistDomainEventAsync(new UserAgentCatalogCredentialRevocationRepairRejectedEvent
+        {
+            RequestId = requestId,
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            Reason = reason,
+        });
 
     [EventHandler]
     public async Task HandleShareAsync(UserAgentCatalogShareCommand command)
@@ -252,6 +518,116 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
         return next;
     }
 
+    private static UserAgentCatalogState ApplyApiKeyRevocationRequested(
+        UserAgentCatalogState current,
+        UserAgentCatalogApiKeyRevocationRequestedEvent evt)
+    {
+        if (evt.Revocation is null ||
+            string.IsNullOrWhiteSpace(evt.Revocation.AgentId) ||
+            string.IsNullOrWhiteSpace(evt.Revocation.ApiKeyId))
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        var requested = NormalizeRevocation(evt.Revocation);
+        if (FindRevocationByIdentity(next.PendingApiKeyRevocations, requested) is not null ||
+            HasRevocationAliasConflict(next.PendingApiKeyRevocations, requested))
+        {
+            return next;
+        }
+
+        next.PendingApiKeyRevocations.Add(requested);
+        return next;
+    }
+
+    private static UserAgentCatalogState ApplyCredentialRevocationsMigrated(
+        UserAgentCatalogState current,
+        UserAgentCatalogCredentialRevocationsMigratedEvent evt)
+    {
+        if (evt.Revocations.Count == 0)
+            return current;
+
+        var next = current.Clone();
+        for (var index = 0; index < next.PendingApiKeyRevocations.Count; index++)
+        {
+            var existing = next.PendingApiKeyRevocations[index];
+            var migrated = evt.Revocations.FirstOrDefault(candidate =>
+                MatchesRevocationIdentity(
+                    existing,
+                    candidate.AgentId,
+                    candidate.ApiKeyId,
+                    ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(candidate)));
+            if (migrated is not null)
+                next.PendingApiKeyRevocations[index] = NormalizeRevocation(migrated);
+        }
+
+        return next;
+    }
+
+    private static UserAgentCatalogState ApplyApiKeyRevocationAttemptRecorded(
+        UserAgentCatalogState current,
+        UserAgentCatalogApiKeyRevocationAttemptRecordedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = next.PendingApiKeyRevocations.FirstOrDefault(revocation =>
+            MatchesRevocationIdentity(
+                revocation,
+                evt.AgentId,
+                evt.ApiKeyId,
+                evt.SecretReferenceRef));
+        if (existing is null)
+            return current;
+
+        var track = ResolveTrack(existing, evt.Track);
+        if (track is null || track.Status == ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef)
+            return next;
+
+        track.AttemptCount++;
+        track.LastAttemptAt = evt.AttemptedAt?.Clone();
+        track.LastHttpStatus = evt.HttpStatus;
+        track.LastError = evt.Error ?? string.Empty;
+        track.FailureKind = evt.FailureKind;
+        track.Status = evt.Completed
+            ? ScheduledCredentialRevocationTrackStatus.Completed
+            : ScheduledCredentialRevocationTrackStatus.Pending;
+
+        existing.AttemptCount = existing.NyxIdTrack?.AttemptCount ?? 0;
+        existing.LastAttemptAt = existing.NyxIdTrack?.LastAttemptAt?.Clone();
+        existing.LastHttpStatus = existing.NyxIdTrack?.LastHttpStatus ?? 0;
+        existing.LastError = existing.NyxIdTrack?.LastError ?? string.Empty;
+        existing.FailureKind = existing.NyxIdTrack?.FailureKind ?? UserAgentApiKeyRevocationFailureKind.Unspecified;
+        if (IsTerminal(existing.NyxIdTrack) && IsTerminal(existing.VaultTrack))
+            next.PendingApiKeyRevocations.Remove(existing);
+        return next;
+    }
+
+    private static UserAgentCatalogState ApplyCredentialRevocationRepaired(
+        UserAgentCatalogState current,
+        UserAgentCatalogCredentialRevocationRepairedEvent evt)
+    {
+        var next = current.Clone();
+        var existing = next.PendingApiKeyRevocations.FirstOrDefault(revocation =>
+            MatchesRevocationIdentity(revocation, evt.AgentId, evt.ApiKeyId, string.Empty));
+        if (existing is null)
+            return next;
+
+        existing.NyxApiKeyReference = evt.SecretReference?.Clone();
+        existing.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+            evt.SecretReference,
+            evt.SecretSubjectId);
+        existing.SecretSubjectId = evt.SecretSubjectId ?? string.Empty;
+        existing.RepairReason = evt.RepairReason ?? string.Empty;
+        existing.RequestedBySubjectId = evt.RequestedBySubjectId ?? string.Empty;
+        existing.RepairRequestedAtUnixMs = evt.RepairRequestedAtUnixMs;
+        existing.VaultTrack = new ScheduledCredentialRevocationTrack
+        {
+            Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            FailureKind = UserAgentApiKeyRevocationFailureKind.Unspecified,
+        };
+        return next;
+    }
+
     private static UserAgentCatalogState ApplyTombstonesCompacted(
         UserAgentCatalogState current,
         UserAgentCatalogTombstonesCompactedEvent evt)
@@ -306,6 +682,242 @@ public sealed class UserAgentCatalogGAgent : GAgentBase<UserAgentCatalogState>
             string.Equals(entry.AgentId, normalizedAgentId, StringComparison.Ordinal) &&
             ownerScope.MatchesStrictly(entry.OwnerScope));
     }
+
+    private static bool ShouldRequestApiKeyRevocation(UserAgentCatalogEntry entry) =>
+        !string.IsNullOrWhiteSpace(entry.ApiKeyId);
+
+    private static UserAgentApiKeyRevocation BuildApiKeyRevocation(UserAgentCatalogEntry entry)
+    {
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            AgentId = entry.AgentId.Trim(),
+            ApiKeyId = entry.ApiKeyId.Trim(),
+            RequestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            FailureKind = UserAgentApiKeyRevocationFailureKind.Unspecified,
+            SecretSubjectId = entry.ApiKeyId.Trim(),
+            NyxIdTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            },
+            VaultTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = entry.NyxApiKeyReference is null || string.IsNullOrWhiteSpace(entry.NyxApiKeyReference.Ref)
+                    ? ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef
+                    : ScheduledCredentialRevocationTrackStatus.Pending,
+            },
+        };
+
+        if (entry.NyxApiKeyReference is not null)
+        {
+            revocation.NyxApiKeyReference = entry.NyxApiKeyReference.Clone();
+            revocation.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+                entry.NyxApiKeyReference,
+                entry.ApiKeyId);
+        }
+        if (entry.OwnerScope is not null)
+            revocation.OwnerScope = entry.OwnerScope.Clone();
+
+        return revocation;
+    }
+
+    private static UserAgentApiKeyRevocation? BuildApiKeyRevocation(
+        ScheduledAgentCredentialRevocationIntent intent)
+    {
+        var agentId = intent.AgentId?.Trim() ?? string.Empty;
+        var apiKeyId = intent.ApiKeyId?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(agentId) ||
+            string.IsNullOrEmpty(apiKeyId) ||
+            intent.OwnerScope is null)
+        {
+            return null;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var revocation = new UserAgentApiKeyRevocation
+        {
+            AgentId = agentId,
+            ApiKeyId = apiKeyId,
+            OwnerScope = intent.OwnerScope.Clone(),
+            RequestedAt = Timestamp.FromDateTimeOffset(now),
+            SecretSubjectId = apiKeyId,
+            NyxIdTrack = new ScheduledCredentialRevocationTrack
+            {
+                Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            },
+        };
+
+        if (IsCompleteReference(intent.NyxApiKeyReference))
+        {
+            revocation.NyxApiKeyReference = intent.NyxApiKeyReference.Clone();
+            revocation.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+                intent.NyxApiKeyReference,
+                apiKeyId);
+        }
+        else if (intent.VaultRevocationDescriptor is not null)
+        {
+            revocation.VaultRevocationDescriptor = intent.VaultRevocationDescriptor.Clone();
+            NormalizeVaultDescriptor(revocation.VaultRevocationDescriptor);
+        }
+
+        revocation.VaultTrack = new ScheduledCredentialRevocationTrack
+        {
+            Status = revocation.VaultRevocationDescriptor?.ReferenceAvailability ==
+                ScheduledCredentialVaultReferenceAvailability.NotApplicable
+                    ? ScheduledCredentialRevocationTrackStatus.NotApplicable
+                    : HasExecutableVaultDescriptor(revocation)
+                        ? ScheduledCredentialRevocationTrackStatus.Pending
+                        : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef,
+        };
+        return revocation;
+    }
+
+    private static UserAgentApiKeyRevocation NormalizeRevocation(UserAgentApiKeyRevocation source)
+    {
+        var revocation = source.Clone();
+        revocation.AgentId = revocation.AgentId?.Trim() ?? string.Empty;
+        revocation.ApiKeyId = revocation.ApiKeyId?.Trim() ?? string.Empty;
+        revocation.SecretSubjectId = string.IsNullOrWhiteSpace(revocation.SecretSubjectId)
+            ? revocation.ApiKeyId
+            : revocation.SecretSubjectId.Trim();
+        if (revocation.VaultRevocationDescriptor is not null)
+            NormalizeVaultDescriptor(revocation.VaultRevocationDescriptor);
+        if (IsCompleteReference(revocation.NyxApiKeyReference))
+        {
+            revocation.VaultRevocationDescriptor = BuildConfirmedVaultDescriptor(
+                revocation.NyxApiKeyReference,
+                revocation.SecretSubjectId);
+        }
+        revocation.NyxIdTrack ??= new ScheduledCredentialRevocationTrack
+        {
+            Status = ScheduledCredentialRevocationTrackStatus.Pending,
+            AttemptCount = revocation.AttemptCount,
+            LastAttemptAt = revocation.LastAttemptAt?.Clone(),
+            LastHttpStatus = revocation.LastHttpStatus,
+            LastError = revocation.LastError ?? string.Empty,
+            FailureKind = revocation.FailureKind,
+        };
+        if (revocation.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified)
+            revocation.NyxIdTrack.Status = ScheduledCredentialRevocationTrackStatus.Pending;
+
+        var derivedVaultStatus = revocation.VaultRevocationDescriptor?.ReferenceAvailability ==
+            ScheduledCredentialVaultReferenceAvailability.NotApplicable
+                ? ScheduledCredentialRevocationTrackStatus.NotApplicable
+                : HasExecutableVaultDescriptor(revocation)
+                    ? ScheduledCredentialRevocationTrackStatus.Pending
+                    : ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef;
+        revocation.VaultTrack ??= new ScheduledCredentialRevocationTrack
+        {
+            Status = derivedVaultStatus,
+        };
+        if (revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified)
+            revocation.VaultTrack.Status = derivedVaultStatus;
+        if (!HasExecutableVaultDescriptor(revocation) &&
+            revocation.VaultRevocationDescriptor?.ReferenceAvailability !=
+                ScheduledCredentialVaultReferenceAvailability.NotApplicable &&
+            revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Pending)
+        {
+            revocation.VaultTrack.Status = ScheduledCredentialRevocationTrackStatus.BlockedMissingSecretRef;
+        }
+        return revocation;
+    }
+
+    private static bool RequiresCredentialRevocationMigration(UserAgentApiKeyRevocation revocation) =>
+        revocation.NyxIdTrack is null ||
+        revocation.NyxIdTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified ||
+        revocation.VaultTrack is null ||
+        revocation.VaultTrack.Status == ScheduledCredentialRevocationTrackStatus.Unspecified ||
+        string.IsNullOrWhiteSpace(revocation.SecretSubjectId) ||
+        (IsCompleteReference(revocation.NyxApiKeyReference) &&
+         !HasExecutableVaultDescriptor(revocation));
+
+    private static void NormalizeVaultDescriptor(ScheduledCredentialVaultRevocationDescriptor descriptor)
+    {
+        descriptor.Ref = descriptor.Ref?.Trim() ?? string.Empty;
+        descriptor.Purpose = descriptor.Purpose?.Trim() ?? string.Empty;
+        descriptor.OwnerScopeKey = descriptor.OwnerScopeKey?.Trim() ?? string.Empty;
+        descriptor.SubjectId = descriptor.SubjectId?.Trim() ?? string.Empty;
+    }
+
+    private static UserAgentApiKeyRevocation? FindRevocationByIdentity(
+        IEnumerable<UserAgentApiKeyRevocation> revocations,
+        UserAgentApiKeyRevocation candidate) =>
+        revocations.FirstOrDefault(revocation =>
+            MatchesRevocationIdentity(
+                revocation,
+                candidate.AgentId,
+                candidate.ApiKeyId,
+                ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(candidate)));
+
+    private static bool HasRevocationAliasConflict(
+        IEnumerable<UserAgentApiKeyRevocation> revocations,
+        UserAgentApiKeyRevocation candidate)
+    {
+        var candidateReference = ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(candidate);
+        return revocations.Any(revocation =>
+            string.Equals(revocation.ApiKeyId, candidate.ApiKeyId, StringComparison.Ordinal) ||
+            (!string.IsNullOrEmpty(candidateReference) &&
+             string.Equals(
+                 ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation),
+                 candidateReference,
+                 StringComparison.Ordinal)));
+    }
+
+    private static bool MatchesRevocationIdentity(
+        UserAgentApiKeyRevocation revocation,
+        string agentId,
+        string apiKeyId,
+        string secretReferenceRef) =>
+        string.Equals(revocation.AgentId, agentId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(revocation.ApiKeyId, apiKeyId?.Trim(), StringComparison.Ordinal) &&
+        string.Equals(
+            ScheduledAgentCredentialRevocationIdentity.ResolveSecretReferenceRef(revocation),
+            secretReferenceRef?.Trim() ?? string.Empty,
+            StringComparison.Ordinal);
+
+    private static ScheduledCredentialRevocationTrack? ResolveTrack(
+        UserAgentApiKeyRevocation revocation,
+        UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track track) =>
+        track switch
+        {
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.NyxId => revocation.NyxIdTrack,
+            UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Types.Track.Vault => revocation.VaultTrack,
+            _ => null,
+        };
+
+    private static bool IsTerminal(ScheduledCredentialRevocationTrack? track) =>
+        track?.Status is ScheduledCredentialRevocationTrackStatus.Completed or
+            ScheduledCredentialRevocationTrackStatus.NotApplicable;
+
+    private static bool IsCompleteReference(Aevatar.Foundation.Abstractions.Credentials.SecretReference? reference) =>
+        reference is not null &&
+        !string.IsNullOrWhiteSpace(reference.Ref) &&
+        !string.IsNullOrWhiteSpace(reference.Purpose) &&
+        !string.IsNullOrWhiteSpace(reference.OwnerScopeKey) &&
+        reference.Version > 0 &&
+        !string.IsNullOrWhiteSpace(reference.Fingerprint);
+
+    private static bool HasExecutableVaultDescriptor(UserAgentApiKeyRevocation revocation) =>
+        revocation.VaultRevocationDescriptor is
+        {
+            ReferenceAvailability: ScheduledCredentialVaultReferenceAvailability.RequestedNotConfirmed or
+                ScheduledCredentialVaultReferenceAvailability.Confirmed,
+        } descriptor &&
+        !string.IsNullOrWhiteSpace(descriptor.Ref) &&
+        !string.IsNullOrWhiteSpace(descriptor.Purpose) &&
+        !string.IsNullOrWhiteSpace(descriptor.OwnerScopeKey) &&
+        !string.IsNullOrWhiteSpace(descriptor.SubjectId);
+
+    private static ScheduledCredentialVaultRevocationDescriptor BuildConfirmedVaultDescriptor(
+        Aevatar.Foundation.Abstractions.Credentials.SecretReference? reference,
+        string? subjectId) =>
+        new()
+        {
+            Ref = reference?.Ref?.Trim() ?? string.Empty,
+            Purpose = reference?.Purpose?.Trim() ?? string.Empty,
+            OwnerScopeKey = reference?.OwnerScopeKey?.Trim() ?? string.Empty,
+            SubjectId = subjectId?.Trim() ?? string.Empty,
+            ReferenceAvailability = ScheduledCredentialVaultReferenceAvailability.Confirmed,
+        };
 
     private long NextCommittedVersion() =>
         (EventSourcing ?? throw new InvalidOperationException("Event sourcing must be configured before computing the next committed version."))

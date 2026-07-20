@@ -41,6 +41,18 @@ public sealed partial class ScheduledDispatchState
         set => DeletedAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
     }
 
+    public DateTimeOffset? OneShotFireAt
+    {
+        get => OneShotFireAtUtcValue == null ? null : OneShotFireAtUtcValue.ToDateTimeOffset();
+        set => OneShotFireAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
+    }
+
+    public DateTimeOffset? CompletedAt
+    {
+        get => CompletedAtUtcValue == null ? null : CompletedAtUtcValue.ToDateTimeOffset();
+        set => CompletedAtUtcValue = value.HasValue ? ToTimestamp(value.Value) : null;
+    }
+
     private static Timestamp ToTimestamp(DateTimeOffset value) =>
         Timestamp.FromDateTimeOffset(value.ToUniversalTime());
 

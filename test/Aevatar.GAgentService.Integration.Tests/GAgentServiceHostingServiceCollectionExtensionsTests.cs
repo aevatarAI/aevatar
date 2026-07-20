@@ -1,11 +1,15 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Core.Ports;
@@ -14,8 +18,10 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
+using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -80,11 +86,12 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType != null &&
             x.ImplementationType.FullName == "Aevatar.GAgentService.Hosting.Demo.GAgentServiceDemoBootstrapHostedService");
-        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(3);
+        // Scripting was not composed first, so the scripting bridge (adapter/hook) is absent.
+        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(2);
         services.Should().Contain(x => x.ImplementationType == typeof(StaticServiceImplementationAdapter));
-        services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().NotContain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
         services.Should().Contain(x => x.ImplementationType == typeof(WorkflowServiceImplementationAdapter));
-        services.Should().Contain(x =>
+        services.Should().NotContain(x =>
             x.ServiceType == typeof(ICommittedStatePublicationHook) &&
             x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
         services.Should().NotContain(x =>
@@ -127,6 +134,39 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddGAgentServiceCapability_WithoutBindingQueryPort_ShouldResolveNoopScheduledCredentialAdmissionPort()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScheduledDispatchCredentialAdmissionPort>()
+            .Should()
+            .BeOfType<NoopScheduledDispatchCredentialAdmissionPort>();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithBindingQueryPort_ShouldResolveNyxIdScheduledCredentialAdmissionPort()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddSingleton<IExternalIdentityBindingQueryPort>(new UnusedExternalIdentityBindingQueryPort());
+
+        services.AddGAgentServiceCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScheduledDispatchCredentialAdmissionPort>()
+            .Should()
+            .BeOfType<NyxIdScheduledDispatchCredentialAdmissionPort>();
+    }
+
+    [Fact]
     public void AddGAgentServiceCapability_WhenWorkflowAndScriptingAlreadyRegistered_ShouldReuseExistingRegistrations()
     {
         var services = new ServiceCollection();
@@ -148,6 +188,59 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Count(x => x.ServiceType == typeof(IWorkflowCatalogPort))
             .Should()
             .Be(workflowRegistrationsBefore);
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithoutScriptingCapability_ShouldNotRegisterScriptingBridge()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+        services.AddGAgentServiceCapability(configuration);
+
+        // No pull-back: the bundle must not compose the scripting capability on its own.
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptQueryPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptCommandPort));
+        services.Should().NotContain(x => x.ServiceType == typeof(IScopeScriptSaveObservationPort));
+        services.Should().NotContain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().NotContain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().NotContain(service =>
+            ServiceTypeContains(service.ServiceType, "ScriptServiceRun"));
+
+        // Services with optional scripting dependencies still compose without it.
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IScopeBindingCommandPort>().Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddGAgentServiceCapability_WithScriptingCapability_ShouldRegisterScriptingBridge()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        services.AddScriptCapability(configuration);
+        services.AddGAgentServiceCapability(configuration);
+
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptQueryPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptCommandPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IScopeScriptSaveObservationPort));
+        services.Should().Contain(x => x.ImplementationType == typeof(ScriptingServiceImplementationAdapter));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommittedStatePublicationHook) &&
+            x.ImplementationType == typeof(ScriptingServiceRevisionRepublishHook));
+        services.Should().Contain(service =>
+            ServiceTypeContains(service.ServiceType, "ScriptServiceRun"));
+        services.Count(x => x.ServiceType == typeof(IServiceImplementationAdapter)).Should().Be(3);
     }
 
     [Fact]
@@ -698,5 +791,11 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             throw new InvalidOperationException("The hosting startup test must not execute LLM requests.");
 
         public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class UnusedExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default) =>
+            throw new NotSupportedException("The DI test only resolves the scheduled credential-admission adapter.");
     }
 }
