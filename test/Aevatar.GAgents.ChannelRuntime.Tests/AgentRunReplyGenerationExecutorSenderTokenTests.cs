@@ -373,9 +373,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
                 history: new ChatHistory(),
                 toolLoop: new ToolCallLoop(new ToolManager()),
                 hooks: null,
-                requestBuilder: static () => new LLMRequest { Messages = [] });
+                requestBuilder: static _ => new LLMRequest { Messages = [] });
             var plan = new AgentRunReplyStepPlan(
-                runtime.CreateStepExecutor(),
+                runtime.CreateStepExecutor(turnCatalog: null),
                 new Dictionary<string, string>(metadata, StringComparer.Ordinal),
                 control,
                 projectedToolContext,

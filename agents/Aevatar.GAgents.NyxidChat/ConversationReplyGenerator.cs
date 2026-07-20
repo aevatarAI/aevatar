@@ -349,7 +349,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(),
+            runtime.CreateStepExecutor(turnCatalog: null),
             externalMetadata,
             replyPlan.PrimaryControl,
             effectiveToolContext,
@@ -429,7 +429,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 toolMiddlewares: BuildToolMiddlewaresForTurn(),
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages =
                 [
@@ -465,6 +465,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                            activity.Id,
                            llmControl,
                            toolContext,
+                           turnCatalog: null,
                            externalMetadata,
                            ct))
         {
@@ -1084,7 +1085,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 toolMiddlewares: BuildToolMiddlewaresForTurn(),
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages =
                 [

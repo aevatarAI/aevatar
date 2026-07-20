@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -23,6 +24,11 @@ namespace Aevatar.AI.Tests;
 
 public class NyxIdChatGAgentTests
 {
+    private const string ExactSkillGuid = "11111111-1111-1111-1111-111111111111";
+    private const string ExactSkillVersion = "1.2";
+    private const string ExactSkillName = "skill-alpha";
+    private const string ExactSkillPublisher = "publisher-alpha";
+
     [Fact]
     public async Task CreateTargetResolver_ShouldCopySelectedProfileForMatchingDirectRoute()
     {
@@ -477,6 +483,256 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_BoundTurn_ShouldMaterializeCatalogOnce()
+    {
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        var registry = new CountingToolSetRegistry();
+        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        const string actorId = "nyxid-chat-catalog-bound";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1", "profile.route") });
+        var agent = CreateAgent(provider, actorId, llm, turnCatalogMaterializer: materializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "catalog-bound-session",
+        });
+
+        registry.ResolveCount.Should().Be(1);
+        llm.StreamRequests.Should().ContainSingle();
+        llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_BoundTurnCatalogTimeout_ShouldCommitFailureAndPublishTerminalFrame()
+    {
+        const int timeoutMs = 1_000;
+        const string actorId = "nyxid-chat-catalog-timeout";
+        const string sessionId = "catalog-timeout-session";
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var blockingSource = new ReleasableBlockingToolSource();
+        var registry = new BlockingProfileToolSetRegistry("profile.route", blockingSource);
+        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "must not run" }],
+        ]);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1", "profile.route") });
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            timeProvider: timeProvider,
+            turnCatalogMaterializer: materializer);
+        var eventPublisher = new RecordingEventPublisher();
+        agent.EventPublisher = eventPublisher;
+
+        await agent.ActivateAsync();
+        var handling = agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "wait for catalog",
+            SessionId = sessionId,
+            TimeoutMs = timeoutMs,
+        });
+        await blockingSource.Started;
+
+        try
+        {
+            timeProvider.PendingTimerCount.Should().Be(1);
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await handling;
+        }
+        finally
+        {
+            blockingSource.Release();
+            await handling;
+        }
+
+        blockingSource.CancellationObserved.Should().BeTrue();
+        llm.StreamRequests.Should().BeEmpty();
+        var completion = (await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Should().ContainSingle().Subject.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        completion.SessionId.Should().Be(sessionId);
+        completion.Content.Should().Contain($"LLM request timed out after {timeoutMs}ms");
+        eventPublisher.Published.OfType<TextMessageStartEvent>()
+            .Should().ContainSingle(start => start.SessionId == sessionId);
+        eventPublisher.Published.OfType<TextMessageEndEvent>()
+            .Should().ContainSingle(end => end.SessionId == sessionId && end.Content == completion.Content);
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_BoundTurn_ShouldPropagateTokenCatalogPromptAndAdmission()
+    {
+        const string turnToken = "turn-token-alpha";
+        var hiddenExecuteCount = 0;
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+            new DelegateTool("hidden", _ =>
+            {
+                hiddenExecuteCount++;
+                return "must not execute";
+            }),
+        };
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "forged-hidden-call",
+                    Name = "hidden",
+                    ArgumentsJson = "{}",
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        var registry = new StaticProfileToolSetRegistry("profile.route", tools);
+        var fetcher = new RecordingExactFetcher(ExactRemoteSkillFetchResult.Success(
+            ExactSkillGuid,
+            ExactSkillVersion,
+            ExactSkillName,
+            ExactSkillPublisher,
+            "hash-alpha",
+            "---\nname: skill-alpha\n---\nSelected turn instructions."));
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            registry,
+            new NoMatchClassifier(),
+            fetcher);
+        const string actorId = "nyxid-chat-catalog-success";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedEnforcedProfile() });
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            [new StaticToolSource(tools)],
+            turnCatalogMaterializer: materializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "/alpha run",
+            SessionId = "catalog-success-session",
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload { NyxIdAccessToken = turnToken },
+            },
+        });
+
+        registry.ResolveCount.Should().Be(1);
+        fetcher.CallCount.Should().Be(1);
+        fetcher.AccessToken.Should().Be(turnToken);
+        fetcher.SkillRef.Should().BeEquivalentTo(new ExactRemoteSkillRef
+        {
+            Guid = ExactSkillGuid,
+            LiteralVersion = ExactSkillVersion,
+        });
+        llm.StreamRequests.Should().HaveCount(2);
+        var firstRequest = llm.StreamRequests[0];
+        firstRequest.Tools!.Select(static tool => tool.Name).Should().BeEquivalentTo("recovery", "task");
+        firstRequest.ToolContext!.ToolVisibility.Allows("hidden").Should().BeFalse();
+        firstRequest.Messages.Single(static message => message.Role == "system").Content
+            .Should().Contain("Selected turn instructions.");
+        hiddenExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_BoundTurnWithoutMaterializer_ShouldRejectAllTools()
+    {
+        await AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
+            turnCatalogMaterializer: null,
+            "nyxid-chat-catalog-materializer-missing");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_BoundTurnWhenMaterializerThrows_ShouldRejectAllTools()
+    {
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new ThrowingNameToolSetRegistry(),
+            new NoMatchClassifier());
+
+        await AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
+            materializer,
+            "nyxid-chat-catalog-materializer-throws");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_UnboundTurn_ShouldNotMaterializeCatalog()
+    {
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        var registry = new CountingToolSetRegistry();
+        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var agent = CreateAgent(
+            provider,
+            "nyxid-chat-catalog-unbound",
+            llm,
+            turnCatalogMaterializer: materializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "catalog-unbound-session",
+        });
+
+        registry.ResolveCount.Should().Be(0);
+        llm.StreamRequests.Should().ContainSingle();
+        llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_CompletedReplay_ShouldNotRematerializeCatalog()
+    {
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        var registry = new CountingToolSetRegistry();
+        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        const string actorId = "nyxid-chat-catalog-replay";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1", "profile.route") });
+        var agent = CreateAgent(provider, actorId, llm, turnCatalogMaterializer: materializer);
+        var request = new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "catalog-replay-session",
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(request);
+        await agent.HandleChatRequest(request.Clone());
+
+        registry.ResolveCount.Should().Be(1);
+        llm.StreamRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldUseConfiguredRelayCallbackUrlInSystemPrompt()
     {
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
@@ -702,14 +958,16 @@ public class NyxIdChatGAgentTests
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdRelayOptions? relayOptions = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null)
     {
         var agent = new NyxIdChatGAgent(
             new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider(),
             llmProviderFactory: llmProviderFactory,
             toolSources: toolSources,
             relayOptions: relayOptions,
-            timeProvider: timeProvider)
+            timeProvider: timeProvider,
+            turnCatalogMaterializer: turnCatalogMaterializer)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -719,6 +977,59 @@ public class NyxIdChatGAgentTests
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
         return agent;
+    }
+
+    private static async Task AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        string actorId)
+    {
+        var executeCount = 0;
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("forged", _ =>
+            {
+                executeCount++;
+                return "must not execute";
+            }),
+        };
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "forged-call",
+                    Name = "forged",
+                    ArgumentsJson = "{}",
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1", "profile.route") });
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            [new StaticToolSource(tools)],
+            turnCatalogMaterializer: turnCatalogMaterializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "run forged tool",
+            SessionId = $"{actorId}-session",
+        });
+
+        llm.StreamRequests.Should().HaveCount(2);
+        var firstRequest = llm.StreamRequests[0];
+        firstRequest.Tools.Should().BeNull();
+        firstRequest.ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
+        firstRequest.ToolContext.ToolVisibility.Allows("forged").Should().BeFalse();
+        executeCount.Should().Be(0);
     }
 
     private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) => new()
@@ -762,6 +1073,45 @@ public class NyxIdChatGAgentTests
             AgentKind = "nyxid.chat",
             RouteToolSetRef = routeToolSetRef,
         });
+
+    private static AgentProfileSnapshot BuildSealedEnforcedProfile()
+    {
+        var member = new AgentProfileSkillMember
+        {
+            IntentId = "intent-alpha",
+            RoutingDescription = "Route alpha requests.",
+            SkillRef = new ExactRemoteSkillRef
+            {
+                Guid = ExactSkillGuid,
+                LiteralVersion = ExactSkillVersion,
+            },
+            TaskToolPolicy = new AgentProfileToolPolicy(),
+            SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+            ExpectedSkillName = ExactSkillName,
+            ReviewedPublisherId = ExactSkillPublisher,
+        };
+        member.ExplicitTriggerAliases.Add("/alpha");
+        member.TaskToolPolicy.ToolNames.Add("task");
+
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = "profile-v1",
+            AgentKind = "nyxid.chat",
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy(),
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ClassifierTimeoutMs = 600,
+            ExactSkillFetchTimeoutMs = 1_500,
+            MaxSelectedSkillBytes = 256,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.MaximumToolPolicy.ToolNames.Add(["recovery", "task", "hidden"]);
+        profile.RecoveryToolPolicy.ToolNames.Add("recovery");
+        profile.Members.Add(member);
+        return AgentProfileSnapshotCodec.Seal(profile);
+    }
 
     private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
     {
@@ -992,6 +1342,134 @@ public class NyxIdChatGAgentTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult(tools);
+    }
+
+    private sealed class CountingToolSetRegistry : IToolSetRegistry
+    {
+        public int ResolveCount { get; private set; }
+
+        public IReadOnlyList<string> GetRegisteredNames() => [];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        {
+            ResolveCount++;
+            var name = toolSetRef?.Name ?? string.Empty;
+            return ToolSetResolveResult.Failure(new ToolSetResolveError(
+                ToolSetResolveError.UnknownNameCode,
+                name,
+                "missing",
+                []));
+        }
+    }
+
+    private sealed class StaticProfileToolSetRegistry(
+        string name,
+        IReadOnlyList<IAgentTool> tools) : IToolSetRegistry
+    {
+        public int ResolveCount { get; private set; }
+
+        public IReadOnlyList<string> GetRegisteredNames() => [name];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        {
+            ResolveCount++;
+            return string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(name, [new StaticToolSource(tools)])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    toolSetRef?.Name ?? string.Empty,
+                    "missing",
+                    GetRegisteredNames()));
+        }
+    }
+
+    private sealed class BlockingProfileToolSetRegistry(
+        string name,
+        IAgentToolSource source) : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => [name];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+            string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(name, [source])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    toolSetRef?.Name ?? string.Empty,
+                    "missing",
+                    GetRegisteredNames()));
+    }
+
+    private sealed class ReleasableBlockingToolSource : IAgentToolSource
+    {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+        public bool CancellationObserved { get; private set; }
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            _started.TrySetResult();
+            try
+            {
+                await _released.Task.WaitAsync(ct);
+                return [];
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
+        }
+
+        public void Release() => _released.TrySetResult();
+    }
+
+    private sealed class ThrowingNameToolSetRegistry : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => ["profile.route"];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+            ToolSetResolveResult.Success(
+                toolSetRef?.Name ?? string.Empty,
+                [new StaticToolSource([new ThrowingNameTool()])]);
+    }
+
+    private sealed class ThrowingNameTool : IAgentTool
+    {
+        public string Name => throw new InvalidOperationException("tool name unavailable");
+        public string Description => "unreachable";
+        public string ParametersSchema => "{}";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
+    }
+
+    private sealed class NoMatchClassifier : IAgentProfileTurnClassifier
+    {
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(AgentProfileTurnClassificationResult.NoMatch());
+    }
+
+    private sealed class RecordingExactFetcher(ExactRemoteSkillFetchResult result) : IExactRemoteSkillFetcher
+    {
+        public int CallCount { get; private set; }
+        public string? AccessToken { get; private set; }
+        public ExactRemoteSkillRef? SkillRef { get; private set; }
+
+        public Task<ExactRemoteSkillFetchResult> FetchAsync(
+            string accessToken,
+            ExactRemoteSkillRef skillRef,
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            AccessToken = accessToken;
+            SkillRef = skillRef.Clone();
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool

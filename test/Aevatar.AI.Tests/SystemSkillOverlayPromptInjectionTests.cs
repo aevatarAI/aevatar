@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
@@ -27,7 +28,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var provider = new StubSystemSkillOverlayProvider(OverlayMarkdown);
         var agent = await CreateActivatedNyxIdChatAgentAsync(provider, "nyxid-chat-overlay");
 
-        var prompt = DecorateViaReflection(agent, "kernel invariant");
+        var prompt = DecorateViaReflection(agent, "kernel invariant", turnCatalog: null);
 
         prompt.Should().Contain("built-in prompt floor");
         prompt.IndexOf("kernel invariant", StringComparison.Ordinal).Should().BeLessThan(
@@ -44,8 +45,8 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var agent = await CreateActivatedNyxIdChatAgentAsync(
             new StubSystemSkillOverlayProvider("   "), "nyxid-chat-overlay-empty");
 
-        DecorateViaReflection(agent, "kernel invariant").Should().StartWith("kernel invariant");
-        DecorateViaReflection(agent, "kernel invariant").Should().NotContain(OverlayMarkdown);
+        DecorateViaReflection(agent, "kernel invariant", turnCatalog: null).Should().StartWith("kernel invariant");
+        DecorateViaReflection(agent, "kernel invariant", turnCatalog: null).Should().NotContain(OverlayMarkdown);
     }
 
     [Fact]
@@ -53,7 +54,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
     {
         var agent = await CreateActivatedNyxIdChatAgentAsync(overlayProvider: null, "nyxid-chat-overlay-none");
 
-        var prompt = DecorateViaReflection(agent, "kernel invariant");
+        var prompt = DecorateViaReflection(agent, "kernel invariant", turnCatalog: null);
         prompt.Should().Contain("kernel invariant");
         prompt.Should().Contain("built-in prompt floor");
     }
@@ -67,7 +68,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var provider = new StubSystemSkillOverlayProvider(OverlayMarkdown);
         var agent = await CreateActivatedAgentAsync(provider, "role-overlay-isolated");
 
-        agent.DecorateForTest("kernel invariant").Should().Be("kernel invariant");
+        agent.DecorateForTest("kernel invariant", turnCatalog: null).Should().Be("kernel invariant");
         provider.GetCurrentCalls.Should().Be(0, "the base role agent must not even consult the provider");
     }
 
@@ -87,7 +88,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         AssignActorId(agent, "classifier-overlay-isolated");
         await agent.ActivateAsync();
 
-        var prompt = DecorateViaReflection(agent, "classifier kernel");
+        var prompt = DecorateViaReflection(agent, "classifier kernel", turnCatalog: null);
 
         prompt.Should().Be("classifier kernel");
         provider.GetCurrentCalls.Should().Be(0);
@@ -105,7 +106,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         var replay = async () => await agent.PersistLegacyMaterializedEventAsync("## stale actor-state overlay");
         await replay.Should().NotThrowAsync();
 
-        agent.DecorateForTest("kernel invariant").Should().Be("kernel invariant");
+        agent.DecorateForTest("kernel invariant", turnCatalog: null).Should().Be("kernel invariant");
     }
 
     [Fact]
@@ -121,7 +122,7 @@ public sealed class SystemSkillOverlayPromptInjectionTests
             new SystemSkillOverlayRefreshFiredEvent { Attempt = 3 });
         await absorb.Should().NotThrowAsync();
 
-        agent.DecorateForTest("kernel invariant").Should().Be("kernel invariant");
+        agent.DecorateForTest("kernel invariant", turnCatalog: null).Should().Be("kernel invariant");
     }
 
     private static async Task<NyxIdChatGAgent> CreateActivatedNyxIdChatAgentAsync(
@@ -141,13 +142,16 @@ public sealed class SystemSkillOverlayPromptInjectionTests
         return agent;
     }
 
-    private static string DecorateViaReflection(RoleGAgent agent, string basePrompt)
+    private static string DecorateViaReflection(
+        RoleGAgent agent,
+        string basePrompt,
+        AgentProfileTurnCatalog? turnCatalog)
     {
         var decorate = agent.GetType().GetMethod(
             "DecorateSystemPrompt",
             BindingFlags.Instance | BindingFlags.NonPublic);
         decorate.Should().NotBeNull();
-        return (string)decorate!.Invoke(agent, [basePrompt])!;
+        return (string)decorate!.Invoke(agent, [basePrompt, turnCatalog])!;
     }
 
     private static async Task<TestRoleGAgent> CreateActivatedAgentAsync(
@@ -207,7 +211,8 @@ public sealed class SystemSkillOverlayPromptInjectionTests
                 },
             });
 
-        public string DecorateForTest(string basePrompt) => DecorateSystemPrompt(basePrompt);
+        public string DecorateForTest(string basePrompt, AgentProfileTurnCatalog? turnCatalog) =>
+            DecorateSystemPrompt(basePrompt, turnCatalog);
     }
 
     private sealed class StubSystemSkillOverlayProvider(string overlayMarkdown) : ISystemSkillOverlayProvider
