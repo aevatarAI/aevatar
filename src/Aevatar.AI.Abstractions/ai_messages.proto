@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.AI.Abstractions";
 
 import "Credentials/credential_secret_references.proto";
 import "Protos/voice_presence.proto";
+import "google/protobuf/timestamp.proto";
 
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
@@ -373,6 +374,7 @@ message RoleChatSessionCompletedEvent {
   string failure_code = 13;
   string safe_message = 14;
   NyxIdAuthorizationRequiredEvent authorization_required = 15;
+  google.protobuf.Timestamp terminal_time = 16;
 }
 
 message InitializeRoleAgentEvent {
@@ -485,6 +487,7 @@ message RoleChatSessionState {
   NyxIdAuthorizationRequiredEvent authorization_required = 14;
   string failure_code = 15;
   string safe_message = 16;
+  google.protobuf.Timestamp terminal_time = 17;
 }
 
 message RoleGAgentState {

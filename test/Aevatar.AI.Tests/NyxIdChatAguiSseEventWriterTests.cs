@@ -178,7 +178,7 @@ public class NyxIdChatAguiSseEventWriterTests
         {
             ServiceSlug = "api-github",
             ResourceUri = "/repos/private",
-            ReasonCode = "NYXID_FORBIDDEN",
+            ReasonCode = "NYXID_UNAUTHORIZED",
             SafeMessage = "Connect or reauthorize api-github to continue.",
         };
 
@@ -206,7 +206,7 @@ public class NyxIdChatAguiSseEventWriterTests
         var payload = frames[0].GetProperty("custom").GetProperty("payload");
         payload.GetProperty("serviceSlug").GetString().Should().Be("api-github");
         payload.GetProperty("resourceUri").GetString().Should().Be("/repos/private");
-        payload.GetProperty("reasonCode").GetString().Should().Be("NYXID_FORBIDDEN");
+        payload.GetProperty("reasonCode").GetString().Should().Be("NYXID_UNAUTHORIZED");
         frames[1].GetProperty("turnId").GetString().Should().Be("turn-blocked");
         frames[1].GetProperty("runFinished").GetProperty("status").GetString().Should().Be("blocked");
     }

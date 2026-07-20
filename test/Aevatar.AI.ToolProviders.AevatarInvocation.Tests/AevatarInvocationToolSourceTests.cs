@@ -801,11 +801,11 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task InvokeTeam_ShouldResolveTeamInRegistrationScope_WhenChannelSenderBindingIsPresent()
+    public async Task InvokeTeam_ShouldResolveTeamInOwnerScope_WhenChannelOwnerScopeIdIsPresentWithoutSenderNyxUserId()
     {
         var harness = new Harness();
         harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
-            "registration-scope-1",
+            "owner-scope-1",
             "team-1",
             "member-1",
             "service-1");
@@ -814,6 +814,7 @@ public sealed class AevatarInvocationToolSourceTests
         using var _ = PushContext(
             callId: "call-team-bound-sender",
             scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
             senderBindingId: "binding-1");
         var output = await tool.ExecuteAsync("""
             {
@@ -825,15 +826,17 @@ public sealed class AevatarInvocationToolSourceTests
             """);
 
         ErrorCodeOrNull(output).Should().BeNull(output);
-        harness.TeamResolver.LastScopeId.Should().Be("registration-scope-1");
+        harness.TeamResolver.LastScopeId.Should().Be("owner-scope-1");
         harness.TeamInvocation.Request.Should().NotBeNull();
-        harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("registration-scope-1");
-        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("registration-scope-1");
+        harness.TeamInvocation.Request!.Identity.TenantId.Should().Be("owner-scope-1");
+        harness.TeamInvocation.Request.Input.Caller!.TenantId.Should().Be("owner-scope-1");
         harness.TeamInvocation.Request.Input.ToolContext!.Caller.ScopeId.Should().Be("registration-scope-1");
+        harness.TeamInvocation.Request.Input.ToolContext.Caller.OwnerScopeId.Should().Be("owner-scope-1");
         harness.TeamInvocation.Request.Input.ToolContext.SenderBinding.BindingId.Should().Be("binding-1");
+        harness.TeamInvocation.Request.Input.ToolContext.SenderBinding.NyxUserId.Should().BeNull();
 
         var result = Read(output);
-        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/registration-scope-1/services/service-1/runs/team-command");
+        result.GetProperty("stream_topic").GetString().Should().Be("aevatar://scopes/owner-scope-1/services/service-1/runs/team-command");
     }
 
     [Fact]
@@ -2804,6 +2807,7 @@ public sealed class AevatarInvocationToolSourceTests
         string? accessToken = "access-token",
         string? senderNyxUserId = null,
         string? senderBindingId = "binding-1",
+        string? ownerScopeId = null,
         AgentWorkflowRuntimeContext? workflowRuntime = null,
         string? durableReplyCredentialRef = "secrets://nyx/default-reply",
         long durableReplyCredentialExpiresAtUnixMs = 0,
@@ -2811,7 +2815,7 @@ public sealed class AevatarInvocationToolSourceTests
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
-            new AgentToolCallerContext(scopeId, "owner-1", "response-1"),
+            new AgentToolCallerContext(scopeId, "owner-1", "response-1", ownerScopeId),
             new AgentToolChannelContext(
                 "telegram",
                 "sender-1",

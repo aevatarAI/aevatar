@@ -425,6 +425,49 @@ public sealed class UnifyCallerScopeAcceptanceTests
     }
 
     [Fact]
+    public async Task ChannelMetadataCallerScopeResolver_OwnerScopeIdPresent_DoesNotCallNyxIdMe()
+    {
+        var inner = Substitute.For<INyxIdCurrentUserResolver>();
+        inner.ResolveCurrentUserIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<string?>(null));
+        var resolver = new ChannelMetadataCallerScopeResolver(inner);
+
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "proxy-token-that-users-me-would-reject",
+            },
+            Caller = new AgentToolCallerContext(
+                "registration-scope-1",
+                "registration-scope-1",
+                "message-1",
+                OwnerScopeId: "owner-scope-1"),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "ou_sender_1",
+                "registration-scope-1",
+                "message-1",
+                "platform-message-1"),
+        };
+        try
+        {
+            var scope = await resolver.TryResolveAsync();
+
+            scope.Should().NotBeNull();
+            scope!.NyxUserId.Should().Be("owner-scope-1");
+            scope.Platform.Should().Be("lark");
+            scope.RegistrationScopeId.Should().Be("registration-scope-1");
+            scope.SenderId.Should().Be("ou_sender_1");
+            await inner.DidNotReceiveWithAnyArgs().ResolveCurrentUserIdAsync(default!, default);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task CompositeCallerScopeResolver_RequireAsync_FailsClosedWhenAllReturnNull()
     {
         var a = Substitute.For<ICallerScopeResolver>();

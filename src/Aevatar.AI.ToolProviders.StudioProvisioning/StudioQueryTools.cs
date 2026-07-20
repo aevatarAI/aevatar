@@ -45,7 +45,7 @@ internal sealed class ListStudioTeamsTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -139,7 +139,7 @@ internal sealed class GetStudioTeamTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -233,7 +233,7 @@ internal sealed class ListStudioMembersTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -335,7 +335,7 @@ internal sealed class GetStudioMemberTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -434,7 +434,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -550,7 +550,7 @@ internal sealed class GetStudioScheduleTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(

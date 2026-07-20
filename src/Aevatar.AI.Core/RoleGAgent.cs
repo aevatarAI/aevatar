@@ -23,6 +23,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 namespace Aevatar.AI.Core;
@@ -38,6 +39,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
+    private readonly TimeProvider _timeProvider;
     // Per-turn NyxID token, stashed before ChatStreamAsync so chartered direct-chat subclasses can
     // hand it to per-turn context consumers (DecorateSystemPrompt has no context param). The base
     // role agent itself never resolves capability overlays — see CurrentTurnNyxIdAccessToken.
@@ -59,7 +61,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IEnumerable<IAgentToolSource>? toolSources = null,
         IToolApprovalHandler? approvalHandler = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
-        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null)
+        IRemoteToolApprovalNotificationPort? remoteToolApprovalNotificationPort = null,
+        TimeProvider? timeProvider = null)
         : base(
             llmProviderFactory,
             additionalHooks,
@@ -75,6 +78,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     {
         RemoteToolApprovalPort = remoteToolApprovalPort;
         RemoteToolApprovalNotificationPort = remoteToolApprovalNotificationPort;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Role name.</summary>
@@ -1106,7 +1110,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             {
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
+                ArgumentsJson = ShouldRedactToolCallArguments(toolCall.Id, toolReceipts)
+                    ? string.Empty
+                    : toolCall.ArgumentsJson,
             }, TopologyAudience.Parent);
         }
 
@@ -1218,7 +1224,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             ReasoningContent = reasoningContent,
             Prompt = request.Prompt,
             ContentEmitted = contentEmitted,
-            ToolCalls = { ToToolCallEvents(toolCalls) },
+            ToolCalls = { ToToolCallEvents(toolCalls, toolReceipts ?? []) },
             OutputParts = { ContentPartProtoMapper.ToProtoList(contentParts) },
             ToolReceipts = { (toolReceipts ?? []).Select(receipt => receipt.Clone()) },
             Usage = ToTokenUsagePayload(usage),
@@ -1227,6 +1233,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             FailureCode = failureCode ?? string.Empty,
             SafeMessage = safeMessage ?? string.Empty,
             AuthorizationRequired = authorizationRequired?.Clone(),
+            TerminalTime = CreateTerminalTimestamp(),
         });
     }
 
@@ -1306,6 +1313,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             Outcome = RoleChatSessionOutcome.Failed,
             FailureCode = reasonCode.ToUpperInvariant(),
             SafeMessage = safeReason,
+            TerminalTime = CreateTerminalTimestamp(),
         });
     }
 
@@ -1324,6 +1332,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             Outcome = RoleChatSessionOutcome.Failed,
             FailureCode = "APPROVAL_REQUEST_NOT_PENDING",
             SafeMessage = "This approval request is no longer pending.",
+            TerminalTime = CreateTerminalTimestamp(),
         });
 
     private async Task ReplayCompletedSessionAsync(string sessionId, RoleChatSessionState trackedSession)
@@ -1345,6 +1354,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             FailureCode = trackedSession.FailureCode ?? string.Empty,
             SafeMessage = trackedSession.SafeMessage ?? string.Empty,
             AuthorizationRequired = trackedSession.AuthorizationRequired?.Clone(),
+            TerminalTime = trackedSession.TerminalTime?.Clone(),
         });
 
         await PublishAsync(new TextMessageStartEvent
@@ -1619,12 +1629,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.AuthorizationRequired = evt.AuthorizationRequired?.Clone();
         session.FailureCode = evt.FailureCode ?? string.Empty;
         session.SafeMessage = evt.SafeMessage ?? string.Empty;
+        session.TerminalTime = evt.TerminalTime?.Clone();
         next.Sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
     }
 
-    private static IEnumerable<ToolCallEvent> ToToolCallEvents(IEnumerable<ToolCall> toolCalls)
+    private static IEnumerable<ToolCallEvent> ToToolCallEvents(
+        IEnumerable<ToolCall> toolCalls,
+        IReadOnlyList<AgentToolReceipt> toolReceipts)
     {
         foreach (var toolCall in toolCalls)
         {
@@ -1632,10 +1645,24 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             {
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
-                ArgumentsJson = toolCall.ArgumentsJson,
+                ArgumentsJson = ShouldRedactToolCallArguments(toolCall.Id, toolReceipts)
+                    ? string.Empty
+                    : toolCall.ArgumentsJson,
             };
         }
     }
+
+    private static bool ShouldRedactToolCallArguments(
+        string? callId,
+        IReadOnlyList<AgentToolReceipt> toolReceipts) =>
+        toolReceipts.Any(receipt =>
+            string.Equals(receipt.CallId, callId, StringComparison.Ordinal) &&
+            receipt.Status is AgentToolReceiptStatus.Error or
+                AgentToolReceiptStatus.Denied or
+                AgentToolReceiptStatus.AuthorizationRequired);
+
+    private Timestamp CreateTerminalTimestamp() =>
+        Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
 
     private void RestoreHistoryFromCommittedSessions()
     {

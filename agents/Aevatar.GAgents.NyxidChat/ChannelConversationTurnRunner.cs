@@ -178,6 +178,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var typingReactionTask = TrySendImmediateLarkReactionAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
+        var hasSlashCommand = TryParseSlashCommand(inbound.Text, out var observedCommandName, out _);
+        _logger.LogInformation(
+            "Channel inbound routing started: activity={ActivityId}, type={ActivityType}, platform={Platform}, chatType={ChatType}, conversation={CanonicalKey}, hasText={HasText}, slashCommand={SlashCommand}, hasRelayDelivery={HasRelayDelivery}",
+            activity.Id,
+            activity.Type,
+            inbound.Platform,
+            inbound.ChatType,
+            activity.Conversation?.CanonicalKey,
+            !string.IsNullOrWhiteSpace(inbound.Text),
+            hasSlashCommand ? observedCommandName : string.Empty,
+            HasRelayDelivery(inbound));
         // Workflow resume is the structured-payload path (card_action etc) and
         // takes priority over slash-command parsing — a card-action with text
         // that looks like /init is still a card-action. (deepseek-v4-pro L65)
@@ -339,19 +350,43 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var handler = ResolveSlashCommandHandler(commandName);
         var bindingLookup = await ResolveSlashBindingAsync(commandName, inbound, registration, queryPort, ct)
             .ConfigureAwait(false);
+        _logger.LogInformation(
+            "Slash command routing checked: activity={ActivityId}, command={Command}, handlerFound={HandlerFound}, requiresBinding={RequiresBinding}, identityEnabled={IdentityEnabled}, subjectResolved={SubjectResolved}, bindingFound={BindingFound}",
+            activity.Id,
+            commandName,
+            handler is not null,
+            handler?.RequiresBinding ?? false,
+            bindingLookup.IdentityEnabled,
+            bindingLookup.SubjectResolved,
+            bindingLookup.BindingId is not null);
 
         if (handler is null)
         {
             if (bindingLookup.IdentityEnabled && bindingLookup.SubjectResolved && bindingLookup.BindingId is null)
+            {
+                _logger.LogInformation(
+                    "Unknown slash command routed to binding prompt: activity={ActivityId}, command={Command}",
+                    activity.Id,
+                    commandName);
                 return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
+            }
 
             // Unknown slash command for bound senders falls through to the Ornn
             // skill-discovery rewrite in BuildLlmReplyRequestAsync.
+            _logger.LogInformation(
+                "Unknown slash command falling through to LLM skill recovery: activity={ActivityId}, command={Command}, bindingFound={BindingFound}",
+                activity.Id,
+                commandName,
+                bindingLookup.BindingId is not null);
             return null;
         }
 
         if (handler.RequiresBinding && bindingLookup.BindingId is null)
         {
+            _logger.LogInformation(
+                "Registered slash command routed to binding prompt: activity={ActivityId}, command={Command}",
+                activity.Id,
+                commandName);
             return await SendBindingPromptAsync(activity, inbound, registration, runtimeContext, ct).ConfigureAwait(false);
         }
 
@@ -2421,6 +2456,23 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 SkillRecovery = skillRecovery,
             }).ToPayload();
+            _logger.LogInformation(
+                "LLM reply request includes skill recovery: activity={ActivityId}, command={Command}, primarySkill={PrimarySkill}, requireInitialSearch={RequireInitialSearch}, defaultSkillName={DefaultSkillName}, senderBindingFound={SenderBindingFound}",
+                activity.Id,
+                skillRecovery.CommandName,
+                skillRecovery.PrimarySkillName,
+                skillRecovery.RequireInitialOrnnSearch,
+                defaultSkillName ?? string.Empty,
+                senderBinding is not null);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "LLM reply request has no skill recovery: activity={ActivityId}, allowSkillInvocationPrompt={AllowSkillInvocationPrompt}, defaultSkillName={DefaultSkillName}, senderBindingFound={SenderBindingFound}",
+                activity.Id,
+                allowSkillInvocationPrompt,
+                defaultSkillName ?? string.Empty,
+                senderBinding is not null);
         }
 
         request.LlmControl = (await BuildOwnerLlmControlAsync(
@@ -2751,7 +2803,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Failed to resolve sender NyxID user id from short-lived token; team invocation will fall back to registration scope. subject={Platform}:{Tenant}:{User}",
+                "Failed to resolve sender NyxID user id from short-lived token; preserving typed owner scope and continuing without sender NyxID user id enrichment. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);

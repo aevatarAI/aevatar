@@ -125,6 +125,27 @@ public sealed class ToolProviderHttpClientRegistrationTests
         receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
         receipt.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
         receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
+        receipt.ResultJson.Should().Contain("NYXID_UNAUTHORIZED");
+        receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("access_token");
+    }
+
+    [Fact]
+    public void NyxIdProxyTool_ForbiddenError_ShouldRemainCredentialFreeTypedFailure()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" });
+        var tool = new NyxIdProxyTool(client);
+        const string arguments =
+            """{"slug":"api-github","path":"/repos/private?access_token=bearer-secret#details"}""";
+        const string result =
+            """{"error":true,"status":403,"body":"{\"error\":\"forbidden\",\"error_code\":1002,\"message\":\"approval timed out bearer-secret\"}"}""";
+
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.AuthorizationRequired.Should().BeNull();
+        receipt.ErrorCode.Should().Be("NYXID_PROXY_FORBIDDEN");
+        receipt.ResultJson.Should().Contain("NYXID_PROXY_FORBIDDEN");
         receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("access_token");
     }
 

@@ -422,8 +422,11 @@ public sealed class StreamingToolExecutor
             var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or
                 AgentToolReceiptStatus.AuthorizationRequired;
+            var safeToolResult = isErrorReceipt && !string.IsNullOrWhiteSpace(receipt?.ResultJson)
+                ? receipt.ResultJson
+                : toolResult;
 
-            toolCtx.ToolResult = toolResult;
+            toolCtx.ToolResult = safeToolResult;
             toolCtx.Duration = Stopwatch.GetElapsedTime(toolStartedAt);
             try { if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct); }
             catch (Exception ex)
@@ -444,7 +447,7 @@ public sealed class StreamingToolExecutor
                 new ToolExecutionResult(
                     call.Id,
                     call.Name,
-                    toolResult,
+                    safeToolResult,
                     IsError: isErrorReceipt,
                     Receipt: receipt),
                 SchedulerFault: false);

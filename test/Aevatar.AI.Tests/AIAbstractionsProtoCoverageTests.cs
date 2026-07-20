@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -263,6 +264,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 TotalTokens = 36,
             },
             Model = "nyxid-model",
+            TerminalTime = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-20T01:02:03Z")),
             ToolCalls =
             {
                 new ToolCallEvent
@@ -288,6 +290,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         sessionCompleted.ContentEmitted.Should().BeTrue();
         sessionCompleted.Usage.TotalTokens.Should().Be(36);
         sessionCompleted.Model.Should().Be("nyxid-model");
+        sessionCompleted.TerminalTime.ToDateTimeOffset().Should()
+            .Be(DateTimeOffset.Parse("2026-07-20T01:02:03Z"));
         sessionCompleted.ToolCalls.Should().ContainSingle();
         sessionCompleted.ToolReceipts.Should().ContainSingle(x => x.SubjectHash == "hash-1");
         sessionCompleted.OutputParts.Should().ContainSingle();

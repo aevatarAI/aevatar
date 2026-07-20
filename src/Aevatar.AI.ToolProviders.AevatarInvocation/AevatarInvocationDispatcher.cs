@@ -1759,7 +1759,8 @@ public sealed class AevatarInvocationDispatcher
             return baseScope;
 
         var context = AgentToolRequestContext.Current;
-        var senderNyxUserId = Normalize(context?.SenderBinding.NyxUserId);
+        var senderNyxUserId = Normalize(context?.SenderBinding.NyxUserId) ??
+                              Normalize(context?.Caller.OwnerScopeId);
         if (senderNyxUserId == null)
             return baseScope;
 

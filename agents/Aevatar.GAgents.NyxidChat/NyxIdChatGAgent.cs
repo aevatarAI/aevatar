@@ -38,7 +38,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly NyxIdRelayOptions? _relayOptions;
-    private readonly TimeProvider _timeProvider;
     private int _systemSkillOverlayPromptLogCounter;
 
     public NyxIdChatGAgent(
@@ -55,11 +54,11 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         TimeProvider? timeProvider = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                remoteToolApprovalPort: remoteToolApprovalPort,
-               remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
+               remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort,
+               timeProvider: timeProvider)
     {
         _localSkillCatalog = localSkillCatalog;
         _relayOptions = relayOptions;
-        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
@@ -443,7 +442,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 ? "The chat request failed. Please try again."
                 : safeError
             : completion;
-        var completedAt = _timeProvider.GetUtcNow();
+        var completedAt = completedSession.TerminalTime?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch;
         var timestamp = completedAt.ToUnixTimeMilliseconds();
         var messages = new[]
         {

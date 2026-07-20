@@ -69,7 +69,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         string resultJson)
     {
         var resourceUri = ResolveResourceUri(argumentsJson);
-        return NyxIdAuthorizationReceiptFactory.TryCreate(
+        return NyxIdProxyReceiptFactory.TryCreate(
             callId,
             toolName,
             _serviceSlug,
@@ -108,8 +108,8 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         var fullPath = query.Count > 0 ? $"{path}?{string.Join("&", query)}" : path;
 
         _logger.LogInformation(
-            "[{Tool}] proxy {Method} slug={Slug} path={Path} tokenSource={Source}",
-            Name, _operation.Method, _serviceSlug, fullPath, _preferOrgToken ? "org" : "user");
+            "[{Tool}] proxy {Method} slug={Slug} tokenSource={Source}",
+            Name, _operation.Method, _serviceSlug, _preferOrgToken ? "org" : "user");
 
         return await _client.ProxyRequestAsync(token, _serviceSlug, fullPath, _operation.Method, body, headers, ct);
     }
