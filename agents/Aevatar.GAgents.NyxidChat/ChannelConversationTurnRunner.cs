@@ -2803,7 +2803,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Failed to resolve sender NyxID user id from short-lived token; team invocation will fall back to registration scope. subject={Platform}:{Tenant}:{User}",
+                "Failed to resolve sender NyxID user id from short-lived token; preserving typed owner scope and continuing without sender NyxID user id enrichment. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
