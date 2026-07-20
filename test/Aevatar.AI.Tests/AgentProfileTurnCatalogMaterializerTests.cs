@@ -209,12 +209,15 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     {
         var tools = NewTools("recovery", "task", "extra");
         var profile = BuildProfile(withAlias: true);
-        profile.ExactSkillFetchTimeoutMs = 20;
+        profile.ExactSkillFetchTimeoutMs = 1_000;
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var fetcher = new CancellationBlockingFetcher();
 
-        var catalog = await NewMaterializer(
+        var materialization = NewMaterializer(
                 RegistryWithRoute(tools),
                 new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
-                new CancellationBlockingFetcher())
+                fetcher,
+                timeProvider)
             .MaterializeAsync(
                 SealProfile(profile),
                 "/alpha",
@@ -222,12 +225,17 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 tools,
                 ToolContext(),
                 CancellationToken.None);
+        await fetcher.Started;
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(profile.ExactSkillFetchTimeoutMs));
+        var catalog = await materialization;
 
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
         catalog.SelectedSkillPromptLayer.Should().BeNull();
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed &&
             diagnostic.Detail == "timeout");
+        fetcher.CancellationObserved.Should().BeTrue();
     }
 
     [Fact]
@@ -467,8 +475,9 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     private static AgentProfileTurnCatalogMaterializer NewMaterializer(
         IToolSetRegistry registry,
         IAgentProfileTurnClassifier classifier,
-        IExactRemoteSkillFetcher? fetcher) =>
-        new(registry, classifier, fetcher);
+        IExactRemoteSkillFetcher? fetcher,
+        TimeProvider? timeProvider = null) =>
+        new(registry, classifier, fetcher, timeProvider: timeProvider);
 
     private static AgentProfileSnapshot BuildProfile(bool withAlias = false)
     {
@@ -573,17 +582,32 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
 
     private sealed class CancellationBlockingFetcher : IExactRemoteSkillFetcher
     {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+        public bool CancellationObserved { get; private set; }
+
         public async Task<ExactRemoteSkillFetchResult> FetchAsync(
             string accessToken,
             ExactRemoteSkillRef skillRef,
             CancellationToken ct = default)
         {
+            _started.TrySetResult();
             var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = ct.Register(
                 static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
                 canceled);
-            await canceled.Task;
-            return SuccessfulFetch();
+            try
+            {
+                await canceled.Task;
+                return SuccessfulFetch();
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
         }
     }
 

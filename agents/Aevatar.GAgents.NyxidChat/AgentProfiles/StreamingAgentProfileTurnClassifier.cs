@@ -13,10 +13,14 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
     internal const int MaximumOutputUtf8Bytes = 4 * 1024;
 
     private readonly ILLMProviderFactory _providerFactory;
+    private readonly TimeProvider _timeProvider;
 
-    public StreamingAgentProfileTurnClassifier(ILLMProviderFactory providerFactory)
+    public StreamingAgentProfileTurnClassifier(
+        ILLMProviderFactory providerFactory,
+        TimeProvider? timeProvider = null)
     {
         _providerFactory = providerFactory ?? throw new ArgumentNullException(nameof(providerFactory));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<AgentProfileTurnClassificationResult> ClassifyAsync(
@@ -49,15 +53,15 @@ public sealed class StreamingAgentProfileTurnClassifier : IAgentProfileTurnClass
             Temperature = 0,
         };
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(request.Timeout);
+        using var timeoutCts = new CancellationTokenSource(request.Timeout, _timeProvider);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         var output = new StringBuilder();
         var outputBytes = 0;
         try
         {
             await foreach (var chunk in _providerFactory.GetDefault()
-                               .ChatStreamAsync(llmRequest, timeoutCts.Token)
-                               .WithCancellation(timeoutCts.Token))
+                               .ChatStreamAsync(llmRequest, linkedCts.Token)
+                               .WithCancellation(linkedCts.Token))
             {
                 if (chunk.DeltaToolCall is not null)
                     return AgentProfileTurnClassificationResult.Failed("tool_call_not_allowed");

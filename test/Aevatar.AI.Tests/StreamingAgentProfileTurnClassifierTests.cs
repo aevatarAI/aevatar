@@ -85,13 +85,21 @@ public sealed class StreamingAgentProfileTurnClassifierTests
     [Fact]
     public async Task ClassifyAsync_InternalTimeout_ShouldFailClosed()
     {
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var provider = new CancellationBlockingProvider();
         var classifier = new StreamingAgentProfileTurnClassifier(
-            new StubProviderFactory(new CancellationBlockingProvider()));
+            new StubProviderFactory(provider),
+            timeProvider);
 
-        var result = await classifier.ClassifyAsync(
-            NewRequest() with { Timeout = TimeSpan.FromMilliseconds(20) });
+        var classification = classifier.ClassifyAsync(
+            NewRequest() with { Timeout = TimeSpan.FromSeconds(1) });
+        await provider.Started;
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        var result = await classification;
 
         result.Should().Be(AgentProfileTurnClassificationResult.Failed("timeout"));
+        provider.CancellationObserved.Should().BeTrue();
     }
 
     [Fact]
@@ -119,66 +127,60 @@ public sealed class StreamingAgentProfileTurnClassifierTests
     }
 
     [Fact]
-    public async Task ClassifyAsync_ShouldFailClosedForRejectedOutputShapes()
+    public async Task ClassifyAsync_ToolCallOutput_ShouldFailClosed()
     {
-        var cases = new[]
-        {
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new StubProvider(
+            [
+                new LLMStreamChunk
                 {
                     DeltaToolCall = new ToolCall { Id = "call", Name = "tool", ArgumentsJson = "{}" },
-                }],
-                Failure: "tool_call_not_allowed"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[],
-                Failure: "empty_output"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk { DeltaContent = " \t\n" }],
-                Failure: "empty_output"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk { DeltaContent = "not-json" }],
-                Failure: "malformed_output"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
-                {
-                    DeltaContent = "{\"status\":\"matched\",\"intent_id\":\"intent-a\",\"extra\":true}",
-                }],
-                Failure: "unexpected_output_field"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
-                {
-                    DeltaContent = "{\"intent_id\":\"intent-a\"}",
-                }],
-                Failure: "status_missing"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
-                {
-                    DeltaContent = "{\"status\":1,\"intent_id\":\"intent-a\"}",
-                }],
-                Failure: "status_missing"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
-                {
-                    DeltaContent = "{\"status\":\"matched\",\"intent_id\":\"unknown\"}",
-                }],
-                Failure: "unknown_intent"),
-            (
-                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
+                },
+            ])));
+
+        var result = await classifier.ClassifyAsync(NewRequest());
+
+        result.Should().Be(AgentProfileTurnClassificationResult.Failed("tool_call_not_allowed"));
+    }
+
+    [Theory]
+    [InlineData(null, "empty_output")]
+    [InlineData(" \t\n", "empty_output")]
+    [InlineData("not-json", "malformed_output")]
+    [InlineData("{\"status\":\"matched\",\"intent_id\":\"intent-a\",\"extra\":true}", "unexpected_output_field")]
+    [InlineData("{\"intent_id\":\"intent-a\"}", "status_missing")]
+    [InlineData("{\"status\":1,\"intent_id\":\"intent-a\"}", "status_missing")]
+    [InlineData("{\"status\":\"matched\",\"intent_id\":\"unknown\"}", "unknown_intent")]
+    public async Task ClassifyAsync_RejectedTextOutput_ShouldFailClosed(
+        string? deltaContent,
+        string failureCode)
+    {
+        IReadOnlyList<LLMStreamChunk> chunks = deltaContent is null
+            ? []
+            : [new LLMStreamChunk { DeltaContent = deltaContent }];
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new StubProvider(chunks)));
+
+        var result = await classifier.ClassifyAsync(NewRequest());
+
+        result.Should().Be(AgentProfileTurnClassificationResult.Failed(failureCode));
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_OversizedOutput_ShouldFailClosed()
+    {
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new StubProvider(
+            [
+                new LLMStreamChunk
                 {
                     DeltaContent = new string('x', StreamingAgentProfileTurnClassifier.MaximumOutputUtf8Bytes + 1),
-                }],
-                Failure: "output_too_large"),
-        };
+                },
+            ])));
 
-        foreach (var testCase in cases)
-        {
-            var classifier = new StreamingAgentProfileTurnClassifier(
-                new StubProviderFactory(new StubProvider(testCase.Chunks)));
+        var result = await classifier.ClassifyAsync(NewRequest());
 
-            var result = await classifier.ClassifyAsync(NewRequest());
-
-            result.Should().Be(AgentProfileTurnClassificationResult.Failed(testCase.Failure));
-        }
+        result.Should().Be(AgentProfileTurnClassificationResult.Failed("output_too_large"));
     }
 
     private static AgentProfileTurnClassificationRequest NewRequest() =>
@@ -218,17 +220,31 @@ public sealed class StreamingAgentProfileTurnClassifierTests
 
     private sealed class CancellationBlockingProvider : ILLMProvider
     {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public string Name => "blocking-classifier-test";
+        public Task Started => _started.Task;
+        public bool CancellationObserved { get; private set; }
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            _started.TrySetResult();
             var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var registration = ct.Register(
                 static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
                 canceled);
-            await canceled.Task;
+            try
+            {
+                await canceled.Task;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
             yield break;
         }
     }
@@ -244,5 +260,125 @@ public sealed class StreamingAgentProfileTurnClassifierTests
             ct.ThrowIfCancellationRequested();
             yield return await Task.FromException<LLMStreamChunk>(exception);
         }
+    }
+}
+
+internal sealed class ManualDeadlineTimeProvider : TimeProvider
+{
+    private readonly object _gate = new();
+    private readonly List<ManualTimer> _timers = [];
+    private DateTimeOffset _utcNow = DateTimeOffset.UnixEpoch;
+
+    public override DateTimeOffset GetUtcNow()
+    {
+        lock (_gate)
+        {
+            return _utcNow;
+        }
+    }
+
+    public void Advance(TimeSpan delta)
+    {
+        ManualTimer[] timers;
+        lock (_gate)
+        {
+            _utcNow = _utcNow.Add(delta);
+            timers = _timers.ToArray();
+        }
+
+        foreach (var timer in timers)
+            timer.FireIfDue();
+    }
+
+    public override ITimer CreateTimer(
+        TimerCallback callback,
+        object? state,
+        TimeSpan dueTime,
+        TimeSpan period)
+    {
+        var timer = new ManualTimer(this, callback, state, dueTime, period);
+        lock (_gate)
+        {
+            _timers.Add(timer);
+        }
+
+        timer.FireIfDue();
+        return timer;
+    }
+
+    private void Remove(ManualTimer timer)
+    {
+        lock (_gate)
+        {
+            _timers.Remove(timer);
+        }
+    }
+
+    private sealed class ManualTimer(
+        ManualDeadlineTimeProvider owner,
+        TimerCallback callback,
+        object? state,
+        TimeSpan dueTime,
+        TimeSpan period) : ITimer
+    {
+        private readonly object _gate = new();
+        private TimeSpan _period = period;
+        private DateTimeOffset? _dueAt = ResolveDueAt(owner.GetUtcNow(), dueTime);
+        private bool _disposed;
+
+        public bool Change(TimeSpan dueTime, TimeSpan period)
+        {
+            lock (_gate)
+            {
+                if (_disposed)
+                    return false;
+
+                _period = period;
+                _dueAt = ResolveDueAt(owner.GetUtcNow(), dueTime);
+            }
+
+            FireIfDue();
+            return true;
+        }
+
+        public void FireIfDue()
+        {
+            while (true)
+            {
+                lock (_gate)
+                {
+                    if (_disposed || !_dueAt.HasValue || owner.GetUtcNow() < _dueAt.Value)
+                        return;
+
+                    _dueAt = _period == Timeout.InfiniteTimeSpan
+                        ? null
+                        : owner.GetUtcNow().Add(_period);
+                }
+
+                callback(state);
+            }
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                if (_disposed)
+                    return;
+
+                _disposed = true;
+            }
+
+            owner.Remove(this);
+        }
+
+        private static DateTimeOffset? ResolveDueAt(DateTimeOffset now, TimeSpan dueTime) =>
+            dueTime == Timeout.InfiniteTimeSpan ? null : now.Add(dueTime);
     }
 }

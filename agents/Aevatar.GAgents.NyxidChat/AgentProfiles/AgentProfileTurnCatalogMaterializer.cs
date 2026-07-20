@@ -18,19 +18,22 @@ public sealed class AgentProfileTurnCatalogMaterializer
     private readonly IExactRemoteSkillFetcher? _exactRemoteSkillFetcher;
     private readonly SkillFrontmatterParser _frontmatterParser;
     private readonly ILogger<AgentProfileTurnCatalogMaterializer> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public AgentProfileTurnCatalogMaterializer(
         IToolSetRegistry toolSetRegistry,
         IAgentProfileTurnClassifier classifier,
         IExactRemoteSkillFetcher? exactRemoteSkillFetcher = null,
         SkillFrontmatterParser? frontmatterParser = null,
-        ILogger<AgentProfileTurnCatalogMaterializer>? logger = null)
+        ILogger<AgentProfileTurnCatalogMaterializer>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         _toolSetRegistry = toolSetRegistry ?? throw new ArgumentNullException(nameof(toolSetRegistry));
         _classifier = classifier ?? throw new ArgumentNullException(nameof(classifier));
         _exactRemoteSkillFetcher = exactRemoteSkillFetcher;
         _frontmatterParser = frontmatterParser ?? new SkillFrontmatterParser();
         _logger = logger ?? NullLogger<AgentProfileTurnCatalogMaterializer>.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<AgentProfileTurnCatalog> MaterializeAsync(
@@ -216,14 +219,16 @@ public sealed class AgentProfileTurnCatalogMaterializer
         }
 
         ExactRemoteSkillFetchResult fetchResult;
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(profile.ExactSkillFetchTimeoutMs));
+        using var timeoutCts = new CancellationTokenSource(
+            TimeSpan.FromMilliseconds(profile.ExactSkillFetchTimeoutMs),
+            _timeProvider);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         try
         {
             fetchResult = await _exactRemoteSkillFetcher.FetchAsync(
                 accessToken,
                 candidate.SkillRef,
-                timeoutCts.Token);
+                linkedCts.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

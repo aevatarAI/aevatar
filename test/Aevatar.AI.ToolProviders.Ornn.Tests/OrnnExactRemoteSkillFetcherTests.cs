@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -141,13 +142,18 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     [Fact]
     public async Task FetchAsync_InternalTimeout_ShouldReturnTypedTimeout()
     {
-        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+        var handler = new CancellationObservingHttpMessageHandler();
+        var timeProvider = new FakeTimeProvider();
 
-        var result = await CreateFetcher(handler, TimeSpan.FromMilliseconds(20))
+        var fetch = CreateFetcher(handler, TimeSpan.FromSeconds(1), timeProvider)
             .FetchAsync("token", ExactRef());
+        await handler.Started;
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        var result = await fetch;
 
         result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.Timeout);
-        handler.Requests.Should().ContainSingle();
+        handler.CancellationObserved.Should().BeTrue();
     }
 
     [Fact]
@@ -181,15 +187,16 @@ public sealed class OrnnExactRemoteSkillFetcherTests
             _ => OrnnTestHttpMessageHandler.JsonResponse(SkillJson()));
 
     private static OrnnExactRemoteSkillFetcher CreateFetcher(
-        OrnnTestHttpMessageHandler handler,
-        TimeSpan? perCallTimeout = null)
+        HttpMessageHandler handler,
+        TimeSpan? perCallTimeout = null,
+        TimeProvider? timeProvider = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler));
         var options = new OrnnOptions { NyxIdSlug = "ornn" };
         var client = perCallTimeout.HasValue
-            ? new OrnnSkillClient(options, nyxClient, perCallTimeout.Value)
+            ? new OrnnSkillClient(options, nyxClient, perCallTimeout.Value, timeProvider: timeProvider)
             : new OrnnSkillClient(options, nyxClient);
         return new OrnnExactRemoteSkillFetcher(client);
     }
@@ -212,4 +219,35 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         string filesJson = "{\"SKILL.md\":\"# Skill Alpha\\n\\nInstructions.\"}") =>
         "{\"data\":{\"name\":\"skill-alpha\",\"version\":\"" + version +
         "\",\"files\":" + filesJson + "}}";
+
+    private sealed class CancellationObservingHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+        public bool CancellationObserved { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _started.TrySetResult();
+            var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(
+                static state => ((TaskCompletionSource)state!).TrySetCanceled(),
+                canceled);
+            try
+            {
+                await canceled.Task;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
+
+            throw new InvalidOperationException("The cancellation-only handler completed without cancellation.");
+        }
+    }
 }

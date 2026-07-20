@@ -20,6 +20,7 @@ public sealed class OrnnSkillClient
     private readonly NyxIdApiClient _nyxApi;
     private readonly OrnnOptions _options;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -52,7 +53,8 @@ public sealed class OrnnSkillClient
         OrnnOptions options,
         NyxIdApiClient nyxApi,
         TimeSpan perCallTimeout,
-        ILogger<OrnnSkillClient>? logger = null)
+        ILogger<OrnnSkillClient>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _nyxApi = nyxApi ?? throw new ArgumentNullException(nameof(nyxApi));
@@ -60,6 +62,7 @@ public sealed class OrnnSkillClient
             throw new ArgumentOutOfRangeException(nameof(perCallTimeout), "Per-call timeout must be positive.");
         _perCallTimeout = perCallTimeout;
         _logger = logger ?? NullLogger<OrnnSkillClient>.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Search skills.</summary>
@@ -91,7 +94,7 @@ public sealed class OrnnSkillClient
 
         var path = $"/api/v1/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
 
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try

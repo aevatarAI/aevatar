@@ -593,6 +593,26 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_BoundTurnWithoutMaterializer_ShouldRejectAllTools()
+    {
+        await AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
+            turnCatalogMaterializer: null,
+            "nyxid-chat-catalog-materializer-missing");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_BoundTurnWhenMaterializerThrows_ShouldRejectAllTools()
+    {
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new ThrowingNameToolSetRegistry(),
+            new NoMatchClassifier());
+
+        await AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
+            materializer,
+            "nyxid-chat-catalog-materializer-throws");
+    }
+
+    [Fact]
     public async Task HandleChatRequest_UnboundTurn_ShouldNotMaterializeCatalog()
     {
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
@@ -895,6 +915,59 @@ public class NyxIdChatGAgentTests
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
         return agent;
+    }
+
+    private static async Task AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
+        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        string actorId)
+    {
+        var executeCount = 0;
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("forged", _ =>
+            {
+                executeCount++;
+                return "must not execute";
+            }),
+        };
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "forged-call",
+                    Name = "forged",
+                    ArgumentsJson = "{}",
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1", "profile.route") });
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            [new StaticToolSource(tools)],
+            turnCatalogMaterializer: turnCatalogMaterializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "run forged tool",
+            SessionId = $"{actorId}-session",
+        });
+
+        llm.StreamRequests.Should().HaveCount(2);
+        var firstRequest = llm.StreamRequests[0];
+        firstRequest.Tools.Should().BeNull();
+        firstRequest.ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
+        firstRequest.ToolContext.ToolVisibility.Allows("forged").Should().BeFalse();
+        executeCount.Should().Be(0);
     }
 
     private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) => new()
@@ -1246,6 +1319,25 @@ public class NyxIdChatGAgentTests
                     "missing",
                     GetRegisteredNames()));
         }
+    }
+
+    private sealed class ThrowingNameToolSetRegistry : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => ["profile.route"];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+            ToolSetResolveResult.Success(
+                toolSetRef?.Name ?? string.Empty,
+                [new StaticToolSource([new ThrowingNameTool()])]);
+    }
+
+    private sealed class ThrowingNameTool : IAgentTool
+    {
+        public string Name => throw new InvalidOperationException("tool name unavailable");
+        public string Description => "unreachable";
+        public string ParametersSchema => "{}";
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private sealed class NoMatchClassifier : IAgentProfileTurnClassifier
