@@ -1,4 +1,7 @@
+using System.Reflection;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -29,6 +32,38 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddStudioApplication_ShouldResolveDefaultAutomationPortsToSameSingleton()
+    {
+        var services = new ServiceCollection();
+        AddSchedulePortDependencies(services);
+        services.AddStudioApplication();
+
+        using var provider = services.BuildServiceProvider();
+        var concretePort = provider.GetRequiredService<StudioMemberWorkflowSchedulePort>();
+        var mutationPort = provider.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
+        var queryPort = provider.GetRequiredService<IStudioMemberAutomationQueryPort>();
+
+        mutationPort.Should().BeSameAs(concretePort);
+        queryPort.Should().BeSameAs(mutationPort);
+    }
+
+    [Fact]
+    public void AddStudioApplication_ShouldResolveAutomationQueryThroughHostMutationPortOverride()
+    {
+        var services = new ServiceCollection();
+        var hostMutationPort = Stub<IStudioMemberWorkflowSchedulePort>();
+        services.AddSingleton(hostMutationPort);
+        services.AddStudioApplication();
+
+        using var provider = services.BuildServiceProvider();
+        var mutationPort = provider.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
+        var queryPort = provider.GetRequiredService<IStudioMemberAutomationQueryPort>();
+
+        mutationPort.Should().BeSameAs(hostMutationPort);
+        queryPort.Should().BeSameAs(hostMutationPort);
+    }
+
+    [Fact]
     public void AddStudioApplication_ShouldRegisterAuthoritativeTeamEntryMemberResolver()
     {
         var services = new ServiceCollection();
@@ -44,5 +79,23 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowBoardClock));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
+    }
+
+    private static void AddSchedulePortDependencies(IServiceCollection services)
+    {
+        services.AddSingleton(Stub<IStudioMemberService>());
+        services.AddSingleton(Stub<IScheduledDispatchApplicationService>());
+        services.AddSingleton(Stub<IScheduledInvocationAuthorizationPlanner>());
+        services.AddSingleton(Stub<IScheduledInvocationAuthorizationRevalidator>());
+        services.AddSingleton(Stub<IStudioScheduledCredentialMaterializer>());
+    }
+
+    private static T Stub<T>() where T : class =>
+        DispatchProxy.Create<T, ThrowingDispatchProxy>();
+
+    public class ThrowingDispatchProxy : DispatchProxy
+    {
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) =>
+            throw new NotSupportedException($"{targetMethod?.Name} is not used by this DI test.");
     }
 }
