@@ -65,20 +65,27 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     }
 
     [Fact]
-    public async Task FetchAsync_IdentityMismatch_ShouldFailWithoutFallback()
+    public async Task FetchAsync_DetailGuidMismatch_ShouldFailWithoutFallback()
     {
-        var handler = new OrnnTestHttpMessageHandler(
-            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson()),
-            _ => OrnnTestHttpMessageHandler.JsonResponse(SkillJson(version: "1.3")));
-        var fetcher = CreateFetcher(handler);
+        await AssertIdentityMismatchWithoutFallbackAsync(
+            DetailJson(guid: "22222222-2222-2222-2222-222222222222"),
+            SkillJson());
+    }
 
-        var result = await fetcher.FetchAsync("token", ExactRef());
+    [Fact]
+    public async Task FetchAsync_VersionMismatch_ShouldFailWithoutFallback()
+    {
+        await AssertIdentityMismatchWithoutFallbackAsync(
+            DetailJson(),
+            SkillJson(version: "1.3"));
+    }
 
-        result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.IdentityMismatch);
-        handler.Requests.Should().HaveCount(2);
-        handler.Requests.Should().OnlyContain(request =>
-            request.RequestUri!.Query == "?version=1.2" &&
-            !request.RequestUri.AbsoluteUri.Contains("latest", StringComparison.OrdinalIgnoreCase));
+    [Fact]
+    public async Task FetchAsync_DetailAndJsonNameMismatch_ShouldFailWithoutFallback()
+    {
+        await AssertIdentityMismatchWithoutFallbackAsync(
+            DetailJson(name: "skill-alpha"),
+            SkillJson(name: "skill-beta"));
     }
 
     [Fact]
@@ -208,17 +215,36 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     };
 
     private static string DetailJson(
+        string guid = SkillGuid,
+        string name = "skill-alpha",
         string publisher = "publisher-alpha",
         string hash = "hash-alpha") =>
-        "{\"data\":{\"guid\":\"" + SkillGuid +
-        "\",\"name\":\"skill-alpha\",\"skillHash\":\"" + hash +
+        "{\"data\":{\"guid\":\"" + guid +
+        "\",\"name\":\"" + name + "\",\"skillHash\":\"" + hash +
         "\",\"createdBy\":\"" + publisher + "\"}}";
 
     private static string SkillJson(
+        string name = "skill-alpha",
         string version = LiteralVersion,
         string filesJson = "{\"SKILL.md\":\"# Skill Alpha\\n\\nInstructions.\"}") =>
-        "{\"data\":{\"name\":\"skill-alpha\",\"version\":\"" + version +
+        "{\"data\":{\"name\":\"" + name + "\",\"version\":\"" + version +
         "\",\"files\":" + filesJson + "}}";
+
+    private static async Task AssertIdentityMismatchWithoutFallbackAsync(
+        string detailJson,
+        string skillJson)
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(detailJson),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(skillJson));
+
+        var result = await CreateFetcher(handler).FetchAsync("token", ExactRef());
+
+        result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.IdentityMismatch);
+        handler.Requests.Select(request => request.RequestUri!.AbsoluteUri).Should().Equal(
+            $"https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/{SkillGuid}?version=1.2",
+            $"https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/{SkillGuid}/json?version=1.2");
+    }
 
     private sealed class CancellationObservingHttpMessageHandler : HttpMessageHandler
     {

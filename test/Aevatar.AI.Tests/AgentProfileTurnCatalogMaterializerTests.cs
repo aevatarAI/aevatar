@@ -39,6 +39,64 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_DuplicateAlias_ShouldUseRecoveryWithoutFetching()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var profile = BuildProfile(withAlias: true);
+        var collidingMember = profile.Members[0].Clone();
+        collidingMember.IntentId = "intent-beta";
+        collidingMember.RoutingDescription = "Route beta requests.";
+        profile.Members.Add(collidingMember);
+        var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().BeNull();
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Detail == "alias_collision");
+        classifier.CallCount.Should().Be(0);
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_AliasPrefixWithoutBoundary_ShouldUseClassifierAndRecovery()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alphabet",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().BeNull();
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierNoMatch);
+        classifier.CallCount.Should().Be(1);
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_ClassifierMatch_ShouldSelectExactMember()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -178,6 +236,63 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch ||
                 diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid);
         }
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_EmptySelectedSkillBody_ShouldUseRecoveryWithoutPromptInjection()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var fetcher = new RecordingFetcher(SuccessfulFetch("---\nname: skill-alpha\n---\n   "));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().Be("intent-alpha");
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid &&
+            diagnostic.Detail == "frontmatter_identity_invalid");
+        fetcher.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_SelectedSkillFrontmatterNameMismatch_ShouldUseRecoveryWithoutPromptInjection()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var fetcher = new RecordingFetcher(SuccessfulFetch(
+            "---\nname: skill-beta\n---\nSelected instructions."));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().Be("intent-alpha");
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid &&
+            diagnostic.Detail == "frontmatter_identity_invalid");
+        fetcher.CallCount.Should().Be(1);
     }
 
     [Fact]
@@ -518,14 +633,14 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     private static AgentProfileSnapshot SealProfile(AgentProfileSnapshot profile) =>
         AgentProfileSnapshotCodec.Seal(profile);
 
-    private static ExactRemoteSkillFetchResult SuccessfulFetch() =>
+    private static ExactRemoteSkillFetchResult SuccessfulFetch(string skillMarkdown = SkillMarkdown) =>
         ExactRemoteSkillFetchResult.Success(
             SkillGuid,
             SkillVersion,
             SkillName,
             PublisherId,
             "hash-alpha",
-            SkillMarkdown);
+            skillMarkdown);
 
     private static AgentToolExecutionContext ToolContext(string? accessToken = "token") =>
         AgentToolExecutionContext.Empty with
