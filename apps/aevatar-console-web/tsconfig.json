@@ -2,7 +2,6 @@
   "compilerOptions": {
     "baseUrl": "./",
     "target": "esnext",
-    "module": "esnext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "esModuleInterop": true,

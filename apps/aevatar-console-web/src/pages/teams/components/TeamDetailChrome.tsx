@@ -2,7 +2,7 @@ import { MoreOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Space, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
-import type { TeamDetailTabId } from "@/shared/teams/teamDetailTabs";
+import type { TeamDetailTab } from "@/shared/navigation/teamRoutes";
 import {
   AevatarInspectorEmpty,
   type AevatarBreadcrumbItem,
@@ -13,7 +13,7 @@ import { AEVATAR_INTERACTIVE_CHIP_CLASS } from "@/shared/ui/interactionStandards
 
 export type TeamTabOption = {
   readonly label: string;
-  readonly value: TeamDetailTabId;
+  readonly value: TeamDetailTab;
 };
 
 type TeamActionRailProps = {
@@ -32,20 +32,20 @@ type TeamActionRailProps = {
 };
 
 type TeamTabBarProps = {
-  readonly activeTab: TeamDetailTabId;
-  readonly onSelectTab: (tab: TeamDetailTabId) => void;
+  readonly activeTab: TeamDetailTab;
+  readonly onSelectTab: (tab: TeamDetailTab) => void;
   readonly tabOptions: readonly TeamTabOption[];
 };
 
 type TeamDetailShellProps = {
-  readonly activeTab: TeamDetailTabId;
+  readonly activeTab: TeamDetailTab;
   readonly activeTabLabel: string;
   readonly actionRail: React.ReactNode;
   readonly breadcrumbTeamTitle?: React.ReactNode;
   readonly children: React.ReactNode;
   readonly initialLoading: boolean;
   readonly onOpenTeamsList: () => void;
-  readonly onSelectTab: (tab: TeamDetailTabId) => void;
+  readonly onSelectTab: (tab: TeamDetailTab) => void;
   readonly statusBadge: React.ReactNode;
   readonly tabOptions: readonly TeamTabOption[];
   readonly teamMeta?: React.ReactNode;
@@ -69,9 +69,7 @@ export const TeamDetailEmptyState: React.FC = () => {
     >
       <AevatarPanel title={intl.formatMessage({ id: "teams.detail.empty.panel" })}>
         <AevatarInspectorEmpty
-          description={intl.formatMessage({
-            id: "teams.detail.empty.description",
-          })}
+          description={intl.formatMessage({ id: "teams.detail.empty.description" })}
         />
       </AevatarPanel>
     </AevatarPageShell>
@@ -143,9 +141,7 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
         >
           <span title={archiveTeamDisabled ? archiveTeamHint : undefined}>
             <Button
-              aria-label={intl.formatMessage({
-                id: "teams.detail.actions.moreAria",
-              })}
+              aria-label={intl.formatMessage({ id: "teams.detail.actions.moreAria" })}
               disabled={archiveTeamDisabled}
               icon={<MoreOutlined />}
               style={{ ...topActionButtonStyle, paddingInline: 14 }}
@@ -158,42 +154,13 @@ export const TeamActionRail: React.FC<TeamActionRailProps> = ({
   );
 };
 
-export const TeamTabBar: React.FC<TeamTabBarProps> = ({ activeTab, onSelectTab, tabOptions }) => {
+export const TeamTabBar: React.FC<TeamTabBarProps> = ({
+  activeTab,
+  onSelectTab,
+  tabOptions,
+}) => {
   const intl = useIntl();
   const { token } = theme.useToken();
-  const tabRefs = React.useRef(new Map<TeamDetailTabId, HTMLButtonElement>());
-
-  const selectAdjacentTab = React.useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
-      let nextIndex: number | null = null;
-      switch (event.key) {
-        case "ArrowLeft":
-          nextIndex = (currentIndex - 1 + tabOptions.length) % tabOptions.length;
-          break;
-        case "ArrowRight":
-          nextIndex = (currentIndex + 1) % tabOptions.length;
-          break;
-        case "Home":
-          nextIndex = 0;
-          break;
-        case "End":
-          nextIndex = tabOptions.length - 1;
-          break;
-        default:
-          return;
-      }
-
-      const nextOption = tabOptions[nextIndex];
-      if (!nextOption) {
-        return;
-      }
-
-      event.preventDefault();
-      tabRefs.current.get(nextOption.value)?.focus();
-      onSelectTab(nextOption.value);
-    },
-    [onSelectTab, tabOptions],
-  );
 
   return (
     <div
@@ -206,46 +173,31 @@ export const TeamTabBar: React.FC<TeamTabBarProps> = ({ activeTab, onSelectTab, 
         borderRadius: 20,
         boxShadow: token.boxShadowSecondary,
         display: "flex",
-        flexWrap: "nowrap",
+        flexWrap: "wrap",
         gap: 10,
-        overflowX: "auto",
         padding: 8,
-        scrollbarWidth: "thin",
       }}
     >
-      {tabOptions.map((option, index) => {
+      {tabOptions.map((option) => {
         const active = option.value === activeTab;
 
         return (
           <button
-            aria-controls={`team-detail-tabpanel-${option.value}`}
-            aria-selected={active}
+            aria-current={active ? "page" : undefined}
             className={AEVATAR_INTERACTIVE_CHIP_CLASS}
-            id={`team-detail-tab-${option.value}`}
             key={option.value}
-            onKeyDown={(event) => selectAdjacentTab(event, index)}
             onClick={() => onSelectTab(option.value)}
-            ref={(node) => {
-              if (node) {
-                tabRefs.current.set(option.value, node);
-              } else {
-                tabRefs.current.delete(option.value);
-              }
-            }}
-            role="tab"
             style={{
               background: active ? token.colorPrimary : "transparent",
               border: `1px solid ${active ? token.colorPrimary : "transparent"}`,
               borderRadius: 999,
               color: active ? token.colorWhite : token.colorTextSecondary,
               cursor: "pointer",
-              flex: "0 0 auto",
               fontSize: 14,
               fontWeight: active ? 700 : 500,
               padding: "10px 16px",
-              whiteSpace: "nowrap",
+              transition: "all 160ms ease",
             }}
-            tabIndex={active ? 0 : -1}
             type="button"
           >
             {option.label}
@@ -288,7 +240,7 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
           ? breadcrumbTeamTitle
           : typeof teamTitle === "string"
             ? teamTitle
-            : intl.formatMessage({ id: "teams.detail.breadcrumb.detail" }),
+          : intl.formatMessage({ id: "teams.detail.breadcrumb.detail" }),
     },
     {
       current: true,
@@ -346,7 +298,11 @@ export const TeamDetailShell: React.FC<TeamDetailShellProps> = ({
       extra={actionRail}
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <TeamTabBar activeTab={activeTab} onSelectTab={onSelectTab} tabOptions={tabOptions} />
+        <TeamTabBar
+          activeTab={activeTab}
+          onSelectTab={onSelectTab}
+          tabOptions={tabOptions}
+        />
         {children}
         {initialLoading ? (
           <Typography.Text type="secondary">

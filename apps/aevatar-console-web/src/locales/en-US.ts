@@ -201,10 +201,6 @@ const enUSMessages = {
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
   'teams.home.actions.createWorkflowMember': 'Create workflow member',
-  'teams.home.actions.debugEntryWorkflow': 'Debug entry workflow',
-  'teams.home.actions.debugWorkflow': 'Debug workflow',
-  'teams.home.actions.editEntryMember': 'Edit entry member',
-  'teams.home.actions.editMember': 'Edit member',
   'teams.home.actions.manageMembers': 'Manage members',
   'teams.home.actions.viewMembers': 'View members',
   'teams.home.actions.viewTeam': 'View team',
@@ -425,9 +421,6 @@ const enUSMessages = {
   'teams.detail.status.unknown': 'Unknown status',
   'teams.detail.tabList.label': 'Team detail tabs',
   'teams.detail.tabs.automations': 'Automations',
-  'teams.detail.tabs.loadFailure.description':
-    'The Team shell is still available. Choose another tab or refresh the page to try again.',
-  'teams.detail.tabs.loadFailure.title': '{tabLabel} could not load',
   'teams.detail.tabs.members': 'Team members',
   'teams.detail.tabs.overview': 'Overview',
   'teams.detail.test.actions.retry': 'Retry',
@@ -766,8 +759,6 @@ const enUSMessages = {
   'teams.automations.actions.pause': 'Pause',
   'teams.automations.actions.resume': 'Resume',
   'teams.automations.actions.runNow': 'Run now',
-  'teams.automations.actions.retryRevocation': 'Retry cleanup',
-  'teams.automations.actions.viewRuns': 'View runs',
   'teams.automations.columns.actions': 'Actions',
   'teams.automations.columns.automation': 'Automation',
   'teams.automations.columns.member': 'Member',
@@ -798,28 +789,6 @@ const enUSMessages = {
   'teams.automations.error.title': 'Automations could not load',
   'teams.automations.form.cadence': 'Cadence',
   'teams.automations.form.cadenceAria': 'Automation cadence',
-  'teams.automations.form.agentKeyConsent':
-    'I consent to Aevatar creating an automation-dedicated Agent Key for this schedule.',
-  'teams.automations.form.agentKeyDedicated': 'Dedicated to this schedule',
-  'teams.automations.form.agentKeyDeleteRevokes': 'Delete revokes the Agent Key',
-  'teams.automations.form.agentKeyExpiry': 'Expires {time}',
-  'teams.automations.form.agentKeyManaged': 'Aevatar managed',
-  'teams.automations.form.agentKeyMode': 'Credential mode · {mode}',
-  'teams.automations.form.agentKeyNodeAllowlist':
-    'Exact node allowlist · allow all disabled',
-  'teams.automations.form.agentKeyNoRawKey':
-    'Browser never receives the raw Agent Key',
-  'teams.automations.form.agentKeyNodePermissionSet':
-    'Node IDs are an exact permission set',
-  'teams.automations.form.agentKeyPausePreserves':
-    'Pause and resume preserve the Agent Key',
-  'teams.automations.form.agentKeyPlan':
-    'Automation dedicated Agent Key',
-  'teams.automations.form.agentKeyServiceAllowlist':
-    'Exact service allowlist · allow all disabled',
-  'teams.automations.form.agentKeyScopes': 'NyxID scopes · {scopes}',
-  'teams.automations.form.backendRequired': 'Creation unavailable',
-  'teams.automations.form.close': 'Close',
   'teams.automations.form.create': 'Create automation',
   'teams.automations.form.cron': 'Cron expression',
   'teams.automations.form.cronAria': 'Cron expression',
@@ -839,23 +808,11 @@ const enUSMessages = {
     "Targets the member's published service.",
   'teams.automations.form.member': 'Member',
   'teams.automations.form.memberAria': 'Automation member',
-  'teams.automations.form.nodeGrants': 'Node grants',
-  'teams.automations.form.nodeGrantFallback':
-    'NyxID fallback node for {userServiceId}',
-  'teams.automations.form.nodeGrantPrimary':
-    'NyxID primary node for {userServiceId}',
-  'teams.automations.form.permissionDigest':
-    'Permission digest · {permissionDigest}',
-  'teams.automations.form.planChanged':
-    'The authorization plan changed. Refresh the review before creating.',
-  'teams.automations.form.policyVersion':
-    'Policy version · {policyVersion}',
   'teams.automations.form.preset.custom': 'Custom cron',
   'teams.automations.form.preset.dailyMorning': 'Daily · 09:00',
   'teams.automations.form.preset.hourly': 'Hourly',
   'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
   'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
-  'teams.automations.form.preparingReview': 'Preparing review',
   'teams.automations.form.preview': 'Preview next runs',
   'teams.automations.form.previewEmpty':
     'Preview the cadence to confirm the next scheduled runs.',
@@ -867,25 +824,8 @@ const enUSMessages = {
     'Optional. Up to {maxLength} characters.',
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
-  'teams.automations.form.refreshReview': 'Refresh review',
-  'teams.automations.form.reviewErrorBody':
-    'The authorization service could not prepare the review. Keep the draft and try again.',
-  'teams.automations.form.reviewErrorTitle':
-    'Permission review needs attention',
-  'teams.automations.form.reviewPermissions': 'Review permissions',
-  'teams.automations.form.reviewPlaceholder':
-    'Review is prepared after the draft cadence and target are ready.',
-  'teams.automations.form.previewOnlyNotice':
-    'No automation or Agent Key is created until you confirm this review.',
-  'teams.automations.form.authorizeAndCreate': 'Authorize & create automation',
-  'teams.automations.form.reauthorize': 'Authorize replacement',
-  'teams.automations.form.reauthorizeTitle': 'Re-authorize automation',
   'teams.automations.form.save': 'Save changes',
   'teams.automations.form.scheduleReadsAs': 'Schedule reads as',
-  'teams.automations.form.section.permissionReview':
-    '4. Review Agent Key consent',
-  'teams.automations.form.section.permissionReviewHint':
-    'Review the backend authorization facts before confirming credential provisioning.',
   'teams.automations.form.section.schedule': '3. Schedule',
   'teams.automations.form.section.scheduleHint':
     'Choose a common cadence or switch to custom cron for advanced schedules.',
@@ -895,9 +835,6 @@ const enUSMessages = {
   'teams.automations.form.section.work': '2. Work to run',
   'teams.automations.form.section.workHint':
     'Name the automation and optionally add a prompt for each run.',
-  'teams.automations.form.serviceGrants': 'Service grants',
-  'teams.automations.form.serviceGrant': 'NyxID service {serviceSlug}',
-  'teams.automations.form.serviceGrantAccess': 'NyxID service access',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
@@ -908,48 +845,25 @@ const enUSMessages = {
   'teams.automations.member.unknown': 'Unknown member',
   'teams.automations.member.workflowOnly':
     'Only workflow members can have recurring work.',
-  'teams.automations.member.chooseTitle': 'Choose a member',
-  'teams.automations.member.chooseDescription':
-    "Open a member's automation surface to view or change its recurring work.",
-  'teams.automations.actions.reauthorize': 'Re-authorize',
-  'teams.automations.messages.createAccepted':
-    'Automation creation was accepted. Waiting for committed state.',
   'teams.automations.messages.createFailed':
     'Automation was not created: {message}',
   'teams.automations.messages.createSuccess': 'Automation created.',
   'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
-  'teams.automations.messages.deleteSuccess':
-    'Deletion accepted. Waiting for credential revocation.',
-  'teams.automations.messages.deleteFailed': 'Deletion was not accepted: {message}',
-  'teams.automations.messages.pauseFailed': 'Automation was not paused: {message}',
-  'teams.automations.messages.resumeFailed': 'Automation was not resumed: {message}',
-  'teams.automations.messages.retryRevocationAccepted':
-    'Credential cleanup retry accepted.',
-  'teams.automations.messages.retryRevocationFailed':
-    'Credential cleanup retry failed: {message}',
-  'teams.automations.messages.reauthorizeAccepted':
-    'Re-authorization was accepted. Waiting for committed state.',
-  'teams.automations.messages.reauthorizeFailed':
-    'Authorization was not replaced: {message}',
-  'teams.automations.messages.disableSuccess':
-    'Pause accepted. Waiting for committed state.',
-  'teams.automations.messages.enableSuccess':
-    'Resume accepted. Waiting for committed state.',
+  'teams.automations.messages.deleteSuccess': 'Automation deleted.',
+  'teams.automations.messages.disableSuccess': 'Automation paused.',
+  'teams.automations.messages.enableSuccess': 'Automation resumed.',
   'teams.automations.messages.previewFailed': 'Preview failed: {message}',
   'teams.automations.messages.promptTooLong':
     'Recurring prompt must be {maxLength} characters or fewer.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
-  'teams.automations.messages.runNowSuccess': 'Run request accepted.',
+  'teams.automations.messages.runNowSuccess': 'Run requested.',
   'teams.automations.messages.serviceIdentityLoading':
     'Service identity is still loading.',
   'teams.automations.messages.serviceIdentityMissing':
     'The selected member does not have a service identity yet.',
-  'teams.automations.messages.reviewFailed':
-    'Permission review could not be prepared: {message}',
   'teams.automations.messages.updateFailed':
     'Automation was not updated: {message}',
-  'teams.automations.messages.updateSuccess':
-    'Update accepted. Waiting for committed state.',
+  'teams.automations.messages.updateSuccess': 'Automation updated.',
   'teams.automations.noPublishedMember.description':
     'Automations need a member with a published service identity before they can run.',
   'teams.automations.noPublishedMember.title': 'Publish a member first',
@@ -976,16 +890,10 @@ const enUSMessages = {
   'teams.automations.row.awaitingReadModel': 'Waiting for schedule sync',
   'teams.automations.row.manualRunRequested': 'Run requested {time}',
   'teams.automations.row.noNextRun': 'No next run',
-  'teams.automations.row.publishedService': 'Published service · {serviceId}',
-  'teams.automations.row.revocationPending':
-    'Credential revocation is still converging',
   'teams.automations.row.target': 'Workflow chat · {endpoint}',
   'teams.automations.status.active': 'Active',
   'teams.automations.status.error': 'Error',
-  'teams.automations.status.needsAuthorization': 'Needs authorization',
-  'teams.automations.status.pending': 'Authorizing',
   'teams.automations.status.paused': 'Paused',
-  'teams.automations.status.revocationPending': 'Revocation pending',
   'teams.automations.status.runRequested': 'Run requested',
   'teams.automations.summary.active': 'Active',
   'teams.automations.summary.needsAttention': 'Need attention',

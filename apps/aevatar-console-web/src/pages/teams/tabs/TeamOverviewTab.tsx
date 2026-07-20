@@ -59,7 +59,7 @@ type OverviewRunRow = {
   readonly workflowMetaLabel: string;
 };
 
-export type TeamOverviewTabProps = {
+type TeamOverviewTabProps = {
   readonly configurationDetailRows: readonly OverviewConfigurationRow[];
   readonly compositionRows: readonly OverviewCompositionRow[];
   readonly currentDeploymentPillStyle: React.CSSProperties;

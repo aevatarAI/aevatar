@@ -28,7 +28,6 @@ import {
 } from "@/shared/navigation/history";
 import { sanitizeReturnTo } from "@/shared/auth/session";
 import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
-import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import {
   buildRuntimeExplorerHref,
   buildRuntimeMissionControlHref,
@@ -1094,7 +1093,7 @@ const RunsPage: React.FC = () => {
 
     return buildTeamDetailHref({
       scopeId,
-      tab: builtInTeamDetailTabIds.overview,
+      tab: "overview",
       runId: session.runId || undefined,
     });
   }, [requestedReturnTo, resolveRunScopeId, session.runId]);

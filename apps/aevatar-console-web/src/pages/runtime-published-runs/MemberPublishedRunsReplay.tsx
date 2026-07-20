@@ -38,7 +38,6 @@ import {
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
-import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import type {
   StudioGraphEdgeData,
@@ -1310,13 +1309,13 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
   const selectedRunDisplayName = getRunDisplayName(selectedRun);
   const teamOverviewHref = buildTeamDetailHref({
     scopeId,
-    tab: builtInTeamDetailTabIds.overview,
+    tab: "overview",
     teamId: normalizedTeamId,
   });
   const teamMembersHref = buildTeamDetailHref({
     memberId,
     scopeId,
-    tab: builtInTeamDetailTabIds.members,
+    tab: "members",
     teamId: normalizedTeamId,
   });
   const backToTeamMembersLabel = t(

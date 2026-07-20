@@ -156,9 +156,14 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
   esbuildMinifyIIFE: true,
   define: {
     'process.env.CI': JSON.stringify(process.env.CI),
+    'process.env.NYXID_BASE_URL': JSON.stringify(process.env.NYXID_BASE_URL),
+    'process.env.NYXID_CLIENT_ID': JSON.stringify(
+      process.env.NYXID_CLIENT_ID,
+    ),
     'process.env.NYXID_REDIRECT_URI': JSON.stringify(
       process.env.NYXID_REDIRECT_URI,
     ),
+    'process.env.NYXID_SCOPE': JSON.stringify(process.env.NYXID_SCOPE),
     'process.env.ORNN_BASE_URL': JSON.stringify(process.env.ORNN_BASE_URL),
     'process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED': JSON.stringify(
       process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED,
