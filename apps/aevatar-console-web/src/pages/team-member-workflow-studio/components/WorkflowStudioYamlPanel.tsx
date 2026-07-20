@@ -18,6 +18,7 @@ type WorkflowStudioYamlPanelProps = {
   readonly onBufferChange: (yaml: string) => void;
   readonly onClose: () => void;
   readonly open: boolean;
+  readonly serializing: boolean;
   readonly width: number;
 };
 
@@ -193,6 +194,7 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
   onBufferChange,
   onClose,
   open,
+  serializing,
   width,
 }) => {
   const [messageApi, contextHolder] = message.useMessage();
@@ -331,7 +333,7 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
           )}
           autoFocus
           onChange={(event) => {
-            if (!applying) {
+            if (!applying && !serializing) {
               onBufferChange(event.target.value);
             }
           }}
@@ -340,7 +342,7 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
               gutterRef.current.scrollTop = event.currentTarget.scrollTop;
             }
           }}
-          readOnly={applying}
+          readOnly={applying || serializing}
           spellCheck={false}
           style={textareaStyle}
           value={buffer}

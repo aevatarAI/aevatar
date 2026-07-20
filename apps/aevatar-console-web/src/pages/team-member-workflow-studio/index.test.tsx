@@ -445,6 +445,17 @@ async function flushAsyncWork() {
   }
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, reject, resolve };
+}
+
 function clickYamlAction(name: "Edit YAML" = "Edit YAML") {
   fireEvent.click(screen.getByRole("button", { name }));
 }
@@ -1442,6 +1453,105 @@ describe("TeamMemberWorkflowStudioPage", () => {
     clickYamlAction("Edit YAML");
     await screen.findByLabelText("Workflow YAML editor");
     expect(studioApi.serializeYaml).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens the YAML editor panel while serialization is still loading", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+    const firstSerialization = createDeferred<unknown>();
+    const secondSerialization = createDeferred<unknown>();
+    (studioApi.serializeYaml as jest.Mock)
+      .mockReturnValueOnce(firstSerialization.promise)
+      .mockReturnValueOnce(secondSerialization.promise);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    clickYamlAction("Edit YAML");
+
+    const yamlPanel = await screen.findByLabelText("Workflow YAML panel");
+    const yamlEditor = within(yamlPanel).getByLabelText(
+      "Workflow YAML editor",
+    ) as HTMLTextAreaElement;
+    expect(studioApi.serializeYaml).toHaveBeenCalledTimes(1);
+    expect(yamlEditor).toHaveValue("");
+    expect(yamlEditor).toHaveProperty("readOnly", true);
+    expect(yamlPanel.querySelector(".ant-spin")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Apply to draft" })).toBeDisabled();
+
+    clickYamlAction("Edit YAML");
+    await waitFor(() => {
+      expect(studioApi.serializeYaml).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async () => {
+      secondSerialization.resolve({
+        document: {
+          ...mockWorkflowDocument,
+          name: "Second serialized workflow",
+        },
+        findings: [],
+        yaml: "name: Second serialized workflow\nsteps: []\n",
+      });
+    });
+
+    await waitFor(() => {
+      expect(yamlEditor).toHaveProperty("readOnly", false);
+      expect(yamlEditor.value).toContain("Second serialized workflow");
+    });
+
+    await act(async () => {
+      firstSerialization.resolve({
+        document: {
+          ...mockWorkflowDocument,
+          name: "First serialized workflow",
+        },
+        findings: [],
+        yaml: "name: First serialized workflow\nsteps: []\n",
+      });
+    });
+    await flushAsyncWork();
+
+    expect(yamlEditor.value).toContain("Second serialized workflow");
+    expect(yamlEditor.value).not.toContain("First serialized workflow");
   });
 
   it("surfaces current YAML serialization failure in the editor panel", async () => {
@@ -5162,6 +5272,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     clickYamlAction("Edit YAML");
     const editor = await screen.findByLabelText("Workflow YAML editor");
+    await waitFor(() => {
+      expect(editor).toHaveProperty("readOnly", false);
+    });
     fireEvent.change(editor, {
       target: {
         value: "name: bad-step\nsteps:\n  - id: bad-step\n    type: llm_call\n",

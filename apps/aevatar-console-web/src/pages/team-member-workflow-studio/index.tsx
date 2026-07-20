@@ -397,6 +397,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           onBufferChange={studio.setYamlEditBuffer}
           onClose={studio.closeYamlPanel}
           open={studio.yamlPanelOpen}
+          serializing={studio.yamlEditSerializing}
           width={sidePanelWidth}
         />
         {studio.draftRunPanelOpen ||

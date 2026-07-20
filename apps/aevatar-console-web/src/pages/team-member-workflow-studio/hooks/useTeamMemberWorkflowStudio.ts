@@ -251,6 +251,7 @@ type TeamMemberWorkflowStudioState = {
   readonly yamlEditHasConflict: boolean;
   readonly yamlEditHasUnappliedChanges: boolean;
   readonly yamlEditPending: boolean;
+  readonly yamlEditSerializing: boolean;
   readonly yamlPanelOpen: boolean;
 };
 
@@ -1101,6 +1102,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   >([]);
   const [yamlEditError, setYamlEditError] = React.useState("");
   const [yamlEditPending, setYamlEditPending] = React.useState(false);
+  const [yamlEditSerializing, setYamlEditSerializing] = React.useState(false);
   const [yamlEditApplying, setYamlEditApplying] = React.useState(false);
   const yamlEditApplyingRef = React.useRef(false);
   const [yamlEditParsedDocument, setYamlEditParsedDocument] =
@@ -1123,6 +1125,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
   const latestSourceKeyRef = React.useRef("");
+  const yamlEditSerializationPendingRef = React.useRef(false);
   const teamsHref = buildTeamsHref();
   const advanceDraftRevision = React.useCallback(() => {
     const nextRevision = draftRevisionRef.current + 1;
@@ -1149,7 +1152,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return false;
     }
 
+    yamlEditRequestIdRef.current += 1;
+    yamlEditValidationRequestIdRef.current += 1;
+    yamlEditSerializationPendingRef.current = false;
     setYamlPanelOpen(false);
+    setYamlEditPending(false);
+    setYamlEditSerializing(false);
     setYamlEditError("");
     return true;
   }, [yamlEditHasUnappliedChanges]);
@@ -1419,11 +1427,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setSelectedEdgeId("");
     setSelectedNodeId("");
     closeDraftRunPanel();
+    yamlEditRequestIdRef.current += 1;
+    yamlEditValidationRequestIdRef.current += 1;
+    yamlEditSerializationPendingRef.current = false;
     setYamlPanelOpen(false);
     setYamlEditBufferState("");
     setYamlEditSnapshot("");
     setYamlEditDiagnostics([]);
     setYamlEditError("");
+    setYamlEditPending(false);
+    setYamlEditSerializing(false);
     setYamlEditParsedDocument(null);
     setYamlEditValidatedBuffer("");
     markDraftClean();
@@ -1898,12 +1911,17 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setYamlEditError("");
 
     if (!editableDocument) {
+      yamlEditRequestIdRef.current += 1;
+      yamlEditValidationRequestIdRef.current += 1;
+      yamlEditSerializationPendingRef.current = false;
       setYamlEditBufferState("");
       setYamlEditSnapshot("");
       setYamlEditDiagnostics([]);
       setYamlEditParsedDocument(null);
       setYamlEditValidatedBuffer("");
       setYamlEditError("Load the workflow draft before editing YAML.");
+      setYamlEditPending(false);
+      setYamlEditSerializing(false);
       setYamlPanelOpen(true);
       return;
     }
@@ -1914,9 +1932,20 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       routeFallbackTitle;
     const requestId = yamlEditRequestIdRef.current + 1;
     yamlEditRequestIdRef.current = requestId;
+    yamlEditValidationRequestIdRef.current += 1;
+    yamlEditSerializationPendingRef.current = true;
     const baseRevision = draftRevisionRef.current;
     const baseSourceKey = appliedSourceKeyRef.current;
+    setYamlEditBufferState("");
+    setYamlEditSnapshot("");
+    setYamlEditDiagnostics([]);
+    setYamlEditParsedDocument(null);
+    setYamlEditValidatedBuffer("");
+    setYamlEditBaseRevision(0);
+    setYamlEditBaseSourceKey("");
+    setYamlPanelOpen(true);
     setYamlEditPending(true);
+    setYamlEditSerializing(true);
 
     try {
       const serialized = await studioApi.serializeYaml({
@@ -1955,7 +1984,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
     } finally {
       if (yamlEditRequestIdRef.current === requestId) {
+        yamlEditSerializationPendingRef.current = false;
         setYamlEditPending(false);
+        setYamlEditSerializing(false);
       }
     }
   }, [
@@ -2091,7 +2122,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditValidatedBuffer,
   ]);
   React.useEffect(() => {
-    if (!yamlPanelOpen) {
+    if (!yamlPanelOpen || yamlEditSerializationPendingRef.current) {
       return;
     }
 
@@ -3291,6 +3322,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditHasConflict,
     yamlEditHasUnappliedChanges,
     yamlEditPending,
+    yamlEditSerializing,
     yamlPanelOpen,
   };
 }
