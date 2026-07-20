@@ -16,7 +16,7 @@ public sealed class RunScriptRuntimeCommandEnvelopeFactory
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
-        return ScriptingActorRequestEnvelopeFactory.Create(
+        var envelope = ScriptingActorRequestEnvelopeFactory.Create(
             context.TargetId,
             context.CorrelationId,
             new RunScriptRequestedEvent
@@ -29,6 +29,10 @@ public sealed class RunScriptRuntimeCommandEnvelopeFactory
                 CommandId = context.CommandId ?? string.Empty,
                 CorrelationId = context.CorrelationId ?? string.Empty,
                 ScopeId = command.ScopeId ?? string.Empty,
+                CompletionNotificationActorId = command.CompletionNotificationActorId ?? string.Empty,
             });
+        envelope.Id = context.CommandId;
+        envelope.EnsureRuntime().EnsureDeduplication().OperationId = context.CommandId;
+        return envelope;
     }
 }

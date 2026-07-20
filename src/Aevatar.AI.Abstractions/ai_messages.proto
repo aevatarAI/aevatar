@@ -66,8 +66,16 @@ message ChatRequestEvent  {
   // Refactor (iter169/cluster-issue1551): Old pattern: connector HTTP authorization used Metadata["connector.http.authorization"] as an authority carrier. New principle: connector authorization is a typed command payload field owned by workflow execution.
   string connector_http_authorization = 11;
   aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 12;
+  RoleChatRunContext run_context = 13;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
+
+message RoleChatRunContext {
+  string run_id = 1;
+  string command_id = 2;
+  string correlation_id = 3;
+  string completion_notification_actor_id = 4;
+}
 
 message LLMControlContextPayload {
   string nyx_id_access_token = 1;
@@ -337,6 +345,7 @@ message RoleChatSessionStartedEvent {
   string session_id = 1;
   string prompt = 2;
   repeated ChatContentPart input_parts = 3;
+  RoleChatRunContext run_context = 4;
 }
 
 enum RoleChatSessionConflictReason {
@@ -375,6 +384,14 @@ message RoleChatSessionCompletedEvent {
   string safe_message = 14;
   NyxIdAuthorizationRequiredEvent authorization_required = 15;
   google.protobuf.Timestamp terminal_time = 16;
+  RoleChatRunContext run_context = 17;
+  string actor_id = 18;
+}
+
+message RoleChatCompletionNotificationDispatchedEvent {
+  string session_id = 1;
+  RoleChatRunContext run_context = 2;
+  int64 dispatched_at_unix_time_ms = 3;
 }
 
 message InitializeRoleAgentEvent {
@@ -488,6 +505,8 @@ message RoleChatSessionState {
   string failure_code = 15;
   string safe_message = 16;
   google.protobuf.Timestamp terminal_time = 17;
+  RoleChatRunContext run_context = 18;
+  bool completion_notification_dispatched = 19;
 }
 
 message RoleGAgentState {

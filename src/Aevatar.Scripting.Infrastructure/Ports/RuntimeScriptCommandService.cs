@@ -53,6 +53,7 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
             definitionActorId,
             requestedEventType,
             scopeId,
+            completionNotificationActorId: null,
             ct);
 
     // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
@@ -68,6 +69,31 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
         string definitionActorId,
         string requestedEventType,
         string? scopeId,
+        CancellationToken ct) =>
+        await RunRuntimeAsync(
+            runtimeActorId,
+            runId,
+            commandId,
+            correlationId,
+            inputPayload,
+            scriptRevision,
+            definitionActorId,
+            requestedEventType,
+            scopeId,
+            completionNotificationActorId: null,
+            ct);
+
+    public async Task RunRuntimeAsync(
+        string runtimeActorId,
+        string runId,
+        string commandId,
+        string correlationId,
+        Any? inputPayload,
+        string scriptRevision,
+        string definitionActorId,
+        string requestedEventType,
+        string? scopeId,
+        string? completionNotificationActorId,
         CancellationToken ct)
     {
         var command = new RunScriptRuntimeCommand(
@@ -79,7 +105,10 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
             requestedEventType ?? string.Empty,
             scopeId,
             string.IsNullOrWhiteSpace(commandId) ? null : commandId.Trim(),
-            string.IsNullOrWhiteSpace(correlationId) ? null : correlationId.Trim());
+            string.IsNullOrWhiteSpace(correlationId) ? null : correlationId.Trim(),
+            string.IsNullOrWhiteSpace(completionNotificationActorId)
+                ? null
+                : completionNotificationActorId.Trim());
         var result = await _dispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime dispatch failed.");

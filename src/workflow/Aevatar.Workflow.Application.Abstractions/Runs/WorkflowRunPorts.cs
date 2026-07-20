@@ -220,6 +220,34 @@ public interface IWorkflowRunProvisioningPort
     Task DestroyAsync(string actorId, CancellationToken ct = default);
 }
 
+/// <summary>
+/// Narrow capability for provisioning a workflow Run at a caller-supplied
+/// stable identity. Kept separate from random Run creation so callers cannot
+/// accidentally imply exact-id semantics through the general provisioning port.
+/// </summary>
+public interface IWorkflowRunIdentityProvisioningPort
+{
+    Task<WorkflowRunCreationReceipt> EnsureRunAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Narrow capability for atomically validating an exact Run binding and
+/// executing its first command in the same actor turn.
+/// </summary>
+public interface IWorkflowRunIdentityExecutionPort
+{
+    Task<WorkflowRunCreationReceipt> EnsureRunAndDispatchAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        WorkflowChatRequestEvent executionRequest,
+        string commandId,
+        string correlationId,
+        CancellationToken ct = default);
+}
+
 public interface IWorkflowDefinitionParser
 {
     /// <summary>

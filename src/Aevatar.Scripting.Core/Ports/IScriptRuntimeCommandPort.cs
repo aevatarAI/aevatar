@@ -7,11 +7,36 @@ public interface IScriptRuntimeCommandPort
     Task RunRuntimeAsync(
         string runtimeActorId,
         string runId,
+        string commandId,
+        string correlationId,
         Any? inputPayload,
         string scriptRevision,
         string definitionActorId,
         string requestedEventType,
+        string? scopeId,
+        string? completionNotificationActorId,
         CancellationToken ct);
+
+    Task RunRuntimeAsync(
+        string runtimeActorId,
+        string runId,
+        Any? inputPayload,
+        string scriptRevision,
+        string definitionActorId,
+        string requestedEventType,
+        CancellationToken ct) =>
+        RunRuntimeAsync(
+            runtimeActorId,
+            runId,
+            string.Empty,
+            string.Empty,
+            inputPayload,
+            scriptRevision,
+            definitionActorId,
+            requestedEventType,
+            scopeId: null,
+            completionNotificationActorId: null,
+            ct);
 
     Task RunRuntimeAsync(
         string runtimeActorId,
@@ -25,10 +50,14 @@ public interface IScriptRuntimeCommandPort
         RunRuntimeAsync(
             runtimeActorId,
             runId,
+            string.Empty,
+            string.Empty,
             inputPayload,
             scriptRevision,
             definitionActorId,
             requestedEventType,
+            scopeId,
+            completionNotificationActorId: null,
             ct);
 
     // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
@@ -48,10 +77,13 @@ public interface IScriptRuntimeCommandPort
         RunRuntimeAsync(
             runtimeActorId,
             runId,
+            commandId,
+            correlationId,
             inputPayload,
             scriptRevision,
             definitionActorId,
             requestedEventType,
             scopeId,
+            completionNotificationActorId: null,
             ct);
 }

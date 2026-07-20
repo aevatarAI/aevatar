@@ -20,6 +20,8 @@ namespace Aevatar.Workflow.Infrastructure.Runs;
 internal sealed class WorkflowRunActorPort :
     IWorkflowDefinitionProvisioningPort,
     IWorkflowRunProvisioningPort,
+    IWorkflowRunIdentityProvisioningPort,
+    IWorkflowRunIdentityExecutionPort,
     IWorkflowDefinitionParser
 {
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
@@ -118,6 +120,104 @@ internal sealed class WorkflowRunActorPort :
         }
         catch
         {
+            await TryDestroyActorsAsync(createdActorIds);
+            throw;
+        }
+    }
+
+    public Task<WorkflowRunCreationReceipt> EnsureRunAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        CancellationToken ct = default) =>
+        EnsureRunCoreAsync(
+            definition,
+            requestedRunId,
+            executionRequest: null,
+            commandId: null,
+            correlationId: null,
+            ct);
+
+    public Task<WorkflowRunCreationReceipt> EnsureRunAndDispatchAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        WorkflowChatRequestEvent executionRequest,
+        string commandId,
+        string correlationId,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(executionRequest);
+        ArgumentException.ThrowIfNullOrWhiteSpace(commandId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
+        return EnsureRunCoreAsync(
+            definition,
+            requestedRunId,
+            executionRequest,
+            commandId.Trim(),
+            correlationId.Trim(),
+            ct);
+    }
+
+    private async Task<WorkflowRunCreationReceipt> EnsureRunCoreAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        WorkflowChatRequestEvent? executionRequest,
+        string? commandId,
+        string? correlationId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        var normalizedRunId = NormalizeActorId(requestedRunId)
+            ?? throw new ArgumentException("Requested Run id is required.", nameof(requestedRunId));
+        if (string.IsNullOrWhiteSpace(definition.WorkflowYaml) ||
+            string.IsNullOrWhiteSpace(definition.WorkflowName))
+        {
+            throw new InvalidOperationException(
+                "Workflow Run identity provisioning requires a valid workflow definition binding.");
+        }
+
+        DefinitionActorResolutionResult definitionResolution = default;
+        var createdActorIds = new List<string>(1);
+        try
+        {
+            definitionResolution = await EnsureDefinitionActorAsync(
+                definition,
+                NormalizeActorId(definition.DefinitionActorId),
+                ct);
+            if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
+                createdActorIds.Add(definitionResolution.ActorId);
+
+            var runActor = await _runtime.CreateAsync<WorkflowRunGAgent>(normalizedRunId, ct: ct);
+
+            var admission = await _dispatchPort.DispatchAsync(
+                runActor.Id,
+                CreateWorkflowRunEnsureEnvelope(
+                    definitionResolution.ActorId,
+                    runActor.Id,
+                    definition.WorkflowYaml,
+                    definition.WorkflowName,
+                    definition.InlineWorkflowYamls,
+                    definition.ScopeId,
+                    definition.RunOrigin,
+                    definition.ScheduleId,
+                    executionRequest,
+                    commandId,
+                    correlationId),
+                ct);
+            if (!admission.Accepted)
+            {
+                throw new InvalidOperationException(
+                    $"Workflow Run ensure dispatch was not accepted for actor '{runActor.Id}'.");
+            }
+
+            return new WorkflowRunCreationReceipt(
+                runActor.Id,
+                definitionResolution.ActorId,
+                createdActorIds);
+        }
+        catch
+        {
+            // The stable Run actor is intentionally not destroyed here: a
+            // concurrent or previously accepted caller may already own it.
             await TryDestroyActorsAsync(createdActorIds);
             throw;
         }
@@ -478,6 +578,54 @@ internal sealed class WorkflowRunActorPort :
                 CorrelationId = Guid.NewGuid().ToString("N"),
             },
         };
+
+    private static EventEnvelope CreateWorkflowRunEnsureEnvelope(
+        string definitionActorId,
+        string runId,
+        string workflowYaml,
+        string workflowName,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        string? scopeId,
+        string? runOrigin,
+        string? scheduleId,
+        WorkflowChatRequestEvent? executionRequest = null,
+        string? commandId = null,
+        string? correlationId = null)
+    {
+        var envelopeId = executionRequest == null
+            ? $"ensure-workflow-run-{runId}"
+            : commandId?.Trim() ?? string.Empty;
+        var ensure = new EnsureWorkflowRunDefinitionEvent
+        {
+            Binding = BuildBindWorkflowRunDefinitionEvent(
+                definitionActorId,
+                runId,
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                scopeId,
+                runOrigin,
+                scheduleId),
+        };
+        if (executionRequest != null)
+            ensure.ExecutionRequest = executionRequest.Clone();
+
+        return new EventEnvelope
+        {
+            Id = envelopeId,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(ensure),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                WorkflowRunActorPortPublisherId,
+                TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = executionRequest == null
+                    ? envelopeId
+                    : correlationId?.Trim() ?? string.Empty,
+            },
+        };
+    }
 
     private static EventEnvelope CreateWorkflowRunStoppedEnvelope(
         string actorId,
