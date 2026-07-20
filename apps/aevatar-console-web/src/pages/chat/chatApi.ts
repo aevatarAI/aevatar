@@ -1,14 +1,26 @@
 import type { AGUIEvent } from "@aevatar-react-sdk/types";
 import { normalizeBackendSseFrame } from "@/shared/agui/sseFrameNormalizer";
-import { readResponseError } from "@/shared/api/http/error";
+import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { authFetch } from "@/shared/auth/fetch";
-import type { ChatStudioTarget, ChatUsageSummary } from "./chatTypes";
+import type {
+  ChatHistoryContext,
+  ChatStudioTarget,
+  ChatUsageSummary,
+} from "./chatTypes";
 
 type JsonRecord = Record<string, unknown>;
 
+const CHAT_HISTORY_CONTEXT_NAME = "aevatar.chat.context";
+const CHAT_HISTORY_CONTEXT_TYPE_URL =
+  "type.googleapis.com/aevatar.workflow.runs.WorkflowChatContextPayload";
+
+export type ChatConversationIntent = {
+  conversationId?: string | null;
+};
+
 export type ChatStreamRequest = {
   prompt: string;
-  scopeId?: string;
+  conversation?: ChatConversationIntent;
   sessionId: string;
 };
 
@@ -16,6 +28,18 @@ export type ChatStreamFrame = {
   event: AGUIEvent | null;
   raw: unknown;
 };
+
+export class ChatApiError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = "ChatApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
@@ -189,10 +213,35 @@ function unpackAnyPayload(value: unknown): JsonRecord | undefined {
   return unpacked;
 }
 
+export function extractChatHistoryContext(
+  raw: unknown
+): ChatHistoryContext | null {
+  const frame = asRecord(raw);
+  const custom = asRecord(frame?.custom);
+  if (custom?.name !== CHAT_HISTORY_CONTEXT_NAME) {
+    return null;
+  }
+
+  const payload = asRecord(custom.payload);
+  if (payload?.["@type"] !== CHAT_HISTORY_CONTEXT_TYPE_URL) {
+    return null;
+  }
+
+  const context: ChatHistoryContext = {
+    conversationId: readString(payload, "conversationId"),
+    scopeId: readString(payload, "scopeId"),
+    turnId: readString(payload, "turnId"),
+  };
+
+  return Object.values(context).every(Boolean) ? context : null;
+}
+
 export function extractChatStreamArtifacts(frames: readonly unknown[]): {
+  chatHistoryContext?: ChatHistoryContext;
   target?: ChatStudioTarget;
   usage?: ChatUsageSummary;
 } {
+  let chatHistoryContext: ChatHistoryContext | undefined;
   let target: ChatStudioTarget | undefined;
   let usage: ChatUsageSummary | undefined;
 
@@ -210,6 +259,12 @@ export function extractChatStreamArtifacts(frames: readonly unknown[]): {
     usage = mergeUsage(usage, normalizeUsage(asRecord(result?.usage)));
     target = mergeTarget(target, normalizeTarget(result));
 
+    const nextChatHistoryContext = extractChatHistoryContext(frame);
+    if (nextChatHistoryContext) {
+      chatHistoryContext = nextChatHistoryContext;
+      continue;
+    }
+
     const custom = asRecord(frame.custom);
     const customPayload =
       unpackAnyPayload(custom?.payload) ?? asRecord(custom?.payload);
@@ -221,7 +276,43 @@ export function extractChatStreamArtifacts(frames: readonly unknown[]): {
     target = mergeTarget(target, normalizeTarget(rawObserved));
   }
 
-  return { target, usage };
+  return compactObject({ chatHistoryContext, target, usage });
+}
+
+function normalizeConversationIntent(
+  conversation: ChatConversationIntent | undefined
+): ChatConversationIntent | undefined {
+  if (conversation === undefined) {
+    return undefined;
+  }
+
+  const record = asRecord(conversation);
+  if (
+    !record ||
+    Object.keys(record).some((key) => key !== "conversationId") ||
+    (record.conversationId != null &&
+      typeof record.conversationId !== "string")
+  ) {
+    throw new ChatApiError(
+      "Conversation input is invalid.",
+      400,
+      "INVALID_CONVERSATION_INPUT"
+    );
+  }
+
+  const conversationId =
+    typeof record.conversationId === "string"
+      ? record.conversationId.trim()
+      : undefined;
+  if (record.conversationId != null && !conversationId) {
+    throw new ChatApiError(
+      "Conversation id is invalid.",
+      400,
+      "INVALID_CONVERSATION_ID"
+    );
+  }
+
+  return conversationId ? { conversationId } : {};
 }
 
 export async function startChatStream(
@@ -231,8 +322,8 @@ export async function startChatStream(
   const response = await authFetch("/api/chat", {
     body: JSON.stringify(
       compactObject({
+        conversation: normalizeConversationIntent(request.conversation),
         prompt: request.prompt.trim(),
-        scopeId: request.scopeId?.trim() || undefined,
         sessionId: request.sessionId.trim(),
         workflow: "studio",
       })
@@ -246,10 +337,63 @@ export async function startChatStream(
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    const details = await readResponseErrorDetails(response);
+    throw new ChatApiError(details.message, details.status, details.code);
   }
 
   return response;
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (delayMs <= 0) {
+    return signal.aborted
+      ? Promise.reject(new DOMException("Aborted", "AbortError"))
+      : Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = globalThis.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, delayMs);
+    const handleAbort = () => {
+      globalThis.clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+export async function startChatStreamWithProjectionRetry(
+  request: ChatStreamRequest,
+  signal: AbortSignal,
+  retryDelaysMs: readonly number[] = [0, 300, 900]
+): Promise<Response> {
+  const attempts = retryDelaysMs.length > 0 ? retryDelaysMs : [0];
+  const isContinuation = Boolean(request.conversation?.conversationId?.trim());
+
+  for (let attempt = 0; attempt < attempts.length; attempt += 1) {
+    if (attempt > 0) {
+      await abortableDelay(attempts[attempt], signal);
+    }
+
+    try {
+      return await startChatStream(request, signal);
+    } catch (error) {
+      const canRetry =
+        isContinuation &&
+        error instanceof ChatApiError &&
+        error.status === 404 &&
+        error.code === "CONVERSATION_NOT_FOUND" &&
+        attempt < attempts.length - 1;
+      if (!canRetry) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("Chat stream could not be started.");
 }
 
 export async function* readChatStreamFrames(

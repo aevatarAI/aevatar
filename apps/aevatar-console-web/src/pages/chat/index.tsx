@@ -1,23 +1,33 @@
 import {
   DeleteOutlined,
-  EditOutlined,
+  HistoryOutlined,
   MessageOutlined,
   PlusOutlined,
+  ReloadOutlined,
   SendOutlined,
 } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Button,
+  Drawer,
   Empty,
-  Input,
   Modal,
   Space,
+  Spin,
   Tag,
+  Tooltip,
   Typography,
   theme,
 } from "antd";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { studioApi } from "@/shared/studio/api";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
@@ -27,16 +37,12 @@ import {
   isRawObserved,
 } from "./chatEventAdapter";
 import {
+  extractChatHistoryContext,
   extractChatStreamArtifacts,
   readChatStreamFrames,
-  startChatStream,
+  startChatStreamWithProjectionRetry,
 } from "./chatApi";
 import { chatHistoryApi } from "./chatHistoryApi";
-import {
-  createConversationId,
-  hydrateChatMessages,
-  serializeChatMessages,
-} from "./chatHistory";
 import { ChatInput, ChatMessageBubble } from "./chatPresentation";
 import type {
   ChatMessage,
@@ -47,6 +53,7 @@ import type {
   LocalChatStatus,
   RuntimeEvent,
   StepInfo,
+  StoredChatMessage,
   ToolCallInfo,
 } from "./chatTypes";
 import { history } from "@/shared/navigation/history";
@@ -57,13 +64,30 @@ import {
 import { t } from "@/shared/i18n/messages";
 
 type ConversationState = {
-  id: string;
+  clientId: string;
+  conversationId?: string;
+  expectedTurnCount: number;
+  latestTurnId?: string;
   messages: ChatMessage[];
+  sessionId: string;
   status: LocalChatStatus;
   target?: ChatStudioTarget;
   title: string;
   usage?: ChatUsageSummary;
 };
+
+const EMPTY_CONVERSATION_IDS: ReadonlySet<string> = new Set();
+const EMPTY_PENDING_CONVERSATIONS: ReadonlyMap<string, ConversationState> =
+  new Map();
+
+type ConversationListItem = ConversationMeta & {
+  liveStatus?: LocalChatStatus;
+};
+
+type DetailLoadState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { message: string; status: "error" };
 
 type StudioJump = {
   href: string;
@@ -81,6 +105,68 @@ function createClientId(): string {
   return globalThis.crypto?.randomUUID?.()
     ? globalThis.crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createDraftConversation(): ConversationState {
+  return {
+    clientId: createClientId(),
+    expectedTurnCount: 0,
+    messages: [],
+    sessionId: createClientId(),
+    status: "draft",
+    title: t("pages.chat.index.newChat", "New chat"),
+  };
+}
+
+export function hydrateStoredMessages(
+  messages: readonly StoredChatMessage[]
+): ChatMessage[] {
+  return messages.map((message) => ({
+    authorId: message.authorId,
+    authorName: message.authorName,
+    content: message.content,
+    error: message.error || undefined,
+    id: message.id,
+    role: message.role,
+    status: message.error?.trim() ? "error" : message.status,
+    thinking: message.thinking || undefined,
+    timestamp: message.timestamp,
+  }));
+}
+
+function resolveStoredConversationStatus(
+  messages: readonly StoredChatMessage[]
+): LocalChatStatus {
+  return messages.some(
+    (message) => message.status === "error" || Boolean(message.error?.trim())
+  )
+    ? "error"
+    : "completed_text";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (delayMs <= 0) {
+    return signal.aborted
+      ? Promise.reject(new DOMException("Aborted", "AbortError"))
+      : Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve();
+    }, delayMs);
+    const handleAbort = () => {
+      window.clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 function createChatMessage(
@@ -230,42 +316,6 @@ function shouldAskForConfirmation(content: string): boolean {
   );
 }
 
-function composePromptWithHistory(
-  messages: readonly ChatMessage[],
-  currentPrompt: string
-): string {
-  const priorMessages = messages
-    .filter(
-      (message) =>
-        message.status !== "streaming" &&
-        (message.role === "user" || message.role === "assistant") &&
-        message.content.trim()
-    )
-    .slice(-10);
-
-  if (priorMessages.length === 0) {
-    return currentPrompt;
-  }
-
-  const transcript = priorMessages
-    .map(
-      (message) =>
-        `${message.role === "user" ? "User" : "Assistant"}: ${message.content.trim()}`
-    )
-    .join("\n")
-    .slice(-6000);
-
-  return [
-    "Use the previous transcript only to keep context. Do not repeat it unless needed.",
-    "<conversation_history>",
-    transcript,
-    "</conversation_history>",
-    "",
-    "Latest user message:",
-    currentPrompt,
-  ].join("\n");
-}
-
 function resolveStudioJump(target: ChatStudioTarget | undefined): StudioJump | null {
   if (!target) {
     return null;
@@ -327,10 +377,6 @@ function isEmptyDraftConversation(
   );
 }
 
-function isEmptyDraftMeta(conversation: ConversationMeta): boolean {
-  return conversation.status === "draft" && conversation.messageCount === 0;
-}
-
 function formatRelativeTime(isoString: string): string {
   const timestamp = Date.parse(isoString);
   if (!Number.isFinite(timestamp)) {
@@ -359,18 +405,40 @@ function formatRelativeTime(isoString: string): string {
   });
 }
 
+function formatTurnCount(count: number): string {
+  return t("pages.chat.index.turnCount", "{count} turns", { count });
+}
+
 const ChatPage: React.FC = () => {
   const { token } = theme.useToken();
+  const queryClient = useQueryClient();
   const activeConversationRef = useRef<ConversationState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const detailRequestRef = useRef("");
+  const reconciliationControllersRef = useRef(
+    new Map<string, AbortController>()
+  );
+  const scopeEpochRef = useRef(0);
+  const scopeIdentityRef = useRef("");
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
-  const [activeConversation, setActiveConversation] =
+  const [storedActiveConversation, setActiveConversation] =
     useState<ConversationState | null>(null);
-  const [conversations, setConversations] = useState<ConversationMeta[]>([]);
+  const [conversationStateScopeId, setConversationStateScopeId] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<ConversationMeta | null>(null);
+  const [deletingConversation, setDeletingConversation] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deletedConversationIds, setDeletedConversationIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const [pendingConversations, setPendingConversations] = useState<
+    ReadonlyMap<string, ConversationState>
+  >(() => new Map());
+  const [detailLoadState, setDetailLoadState] = useState<DetailLoadState>({
+    status: "idle",
+  });
+  const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [, setSession] = useState<ChatSessionState>(createIdleSession());
-  const [renameTarget, setRenameTarget] = useState<ConversationMeta | null>(null);
-  const [renameValue, setRenameValue] = useState("");
 
   const authSessionQuery = useQuery({
     queryKey: ["chat", "auth-session"],
@@ -387,31 +455,136 @@ const ChatPage: React.FC = () => {
     [authSessionQuery.data]
   );
   const scopeId = routeScopeId || resolvedScope?.scopeId || "";
+  if (scopeIdentityRef.current !== scopeId) {
+    scopeIdentityRef.current = scopeId;
+    scopeEpochRef.current += 1;
+  }
+  const scopeStateIsCurrent = conversationStateScopeId === scopeId;
+  const activeConversation = scopeStateIsCurrent
+    ? storedActiveConversation
+    : null;
+  const scopedDeletedConversationIds = scopeStateIsCurrent
+    ? deletedConversationIds
+    : EMPTY_CONVERSATION_IDS;
+  const scopedPendingConversations = scopeStateIsCurrent
+    ? pendingConversations
+    : EMPTY_PENDING_CONVERSATIONS;
+  const conversationsQuery = useQuery({
+    enabled: Boolean(scopeId),
+    queryFn: () => chatHistoryApi.listConversationMetas(scopeId),
+    queryKey: ["chat-history", scopeId],
+    retry: false,
+  });
+  const conversations = (conversationsQuery.data ?? []).filter(
+    (conversation) => !scopedDeletedConversationIds.has(conversation.id)
+  );
   const isStreaming =
     activeConversation?.status === "streaming" ||
     activeConversation?.status === "creating";
   const studioJump = resolveStudioJump(activeConversation?.target);
+  const visibleConversations = useMemo<ConversationListItem[]>(() => {
+    const activeConversationId = activeConversation?.conversationId;
+    const liveConversations = [
+      ...(activeConversationId && activeConversation
+        ? [activeConversation]
+        : []),
+      ...[...scopedPendingConversations.values()].filter(
+        (conversation) =>
+          conversation.conversationId !== activeConversationId &&
+          !scopedDeletedConversationIds.has(conversation.conversationId ?? "")
+      ),
+    ];
+    const liveById = new Map(
+      liveConversations.flatMap((conversation) =>
+        conversation.conversationId
+          ? [[conversation.conversationId, conversation] as const]
+          : []
+      )
+    );
+    const serverIds = new Set(conversations.map((conversation) => conversation.id));
+    const serverItems = conversations.map((conversation) => ({
+      ...conversation,
+      ...(liveById.has(conversation.id)
+        ? { liveStatus: liveById.get(conversation.id)?.status }
+        : {}),
+    }));
+    const overlayItems = liveConversations.flatMap<ConversationListItem>(
+      (conversation) => {
+        const conversationId = conversation.conversationId;
+        if (!conversationId || serverIds.has(conversationId)) {
+          return [];
+        }
 
-  const refreshConversations = useCallback(async () => {
-    if (!scopeId) {
-      setConversations([]);
-      return;
-    }
+        const timestamps = conversation.messages.map((message) => message.timestamp);
+        return [
+          {
+            createdAt: new Date(timestamps[0] ?? Date.now()).toISOString(),
+            id: conversationId,
+            liveStatus: conversation.status,
+            messageCount: conversation.expectedTurnCount,
+            serviceId: "",
+            serviceKind: "",
+            title: conversation.title,
+            updatedAt: new Date(
+              timestamps[timestamps.length - 1] ?? Date.now()
+            ).toISOString(),
+          },
+        ];
+      }
+    );
+    return [...overlayItems, ...serverItems];
+  }, [
+    activeConversation,
+    conversations,
+    scopedDeletedConversationIds,
+    scopedPendingConversations,
+  ]);
 
-    setConversations(await chatHistoryApi.listConversationMetas(scopeId));
-  }, [scopeId]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     abortControllerRef.current?.abort();
+    for (const controller of reconciliationControllersRef.current.values()) {
+      controller.abort();
+    }
+    reconciliationControllersRef.current.clear();
+    detailRequestRef.current = createClientId();
+    activeConversationRef.current = null;
+    setConversationStateScopeId(scopeId);
     setActiveConversation(null);
+    setDeleteTarget(null);
+    setDeleteError("");
+    setDeletingConversation(false);
+    setDeletedConversationIds(new Set());
+    setPendingConversations(new Map());
+    setDetailLoadState({ status: "idle" });
+    setHistoryDrawerOpen(false);
     setPrompt("");
     setSession(createIdleSession(scopeId));
-    void refreshConversations();
-  }, [refreshConversations, scopeId]);
+  }, [scopeId]);
 
   useEffect(() => {
     activeConversationRef.current = activeConversation;
   }, [activeConversation]);
+
+  useEffect(() => {
+    const serverConversations = conversationsQuery.data ?? [];
+    setPendingConversations((current) => {
+      const next = new Map(current);
+      let changed = false;
+      for (const [conversationId, pendingConversation] of current) {
+        const serverMeta = serverConversations.find(
+          (conversation) => conversation.id === conversationId
+        );
+        if (
+          serverMeta &&
+          serverMeta.messageCount >= pendingConversation.expectedTurnCount
+        ) {
+          next.delete(conversationId);
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [conversationsQuery.data]);
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView?.({
@@ -422,7 +595,12 @@ const ChatPage: React.FC = () => {
 
   useEffect(
     () => () => {
+      scopeEpochRef.current += 1;
       abortControllerRef.current?.abort();
+      for (const controller of reconciliationControllersRef.current.values()) {
+        controller.abort();
+      }
+      reconciliationControllersRef.current.clear();
     },
     []
   );
@@ -438,156 +616,250 @@ const ChatPage: React.FC = () => {
     };
   }, []);
 
-  const persistConversation = useCallback(
-    async (conversation: ConversationState) => {
-      if (!scopeId) {
-        return;
-      }
-
-      const now = new Date().toISOString();
-      const existing = conversations.find((item) => item.id === conversation.id);
-      const storedMessages = serializeChatMessages(conversation.messages);
-      const meta: ConversationMeta = {
-        createdAt: existing?.createdAt || now,
-        id: conversation.id,
-        messageCount: storedMessages.length,
-        scopeId,
-        serviceId: "chat",
-        serviceKind: "chat",
-        status: conversation.status,
-        target: conversation.target,
-        title: conversation.title,
-        updatedAt: now,
-        usage: conversation.usage,
-      };
-
-      setConversations((current) => [
-        meta,
-        ...current.filter((item) => item.id !== conversation.id),
-      ]);
-      await chatHistoryApi.saveConversation(scopeId, meta, storedMessages);
-    },
-    [conversations, scopeId]
-  );
-
-  const commitConversation = useCallback(
-    (conversation: ConversationState) => {
-      activeConversationRef.current = conversation;
-      setActiveConversation(conversation);
-      void persistConversation(conversation);
-    },
-    [persistConversation]
-  );
-
   const restoreConversation = useCallback(
     async (conversationId: string) => {
-      if (!scopeId) {
+      if (!scopeId || isStreaming) {
         return;
       }
 
       abortControllerRef.current?.abort();
+      const pendingConversation = pendingConversations.get(conversationId);
+      if (pendingConversation) {
+        detailRequestRef.current = createClientId();
+        activeConversationRef.current = pendingConversation;
+        setActiveConversation(pendingConversation);
+        setDetailLoadState({ status: "idle" });
+        setPrompt("");
+        setSession(createIdleSession(scopeId));
+        return;
+      }
+
       const meta = conversations.find((item) => item.id === conversationId);
-      const messages = hydrateChatMessages(
-        await chatHistoryApi.loadConversation(scopeId, conversationId)
-      );
-      const restoredConversation: ConversationState = {
-        id: conversationId,
-        messages,
-        status: meta?.status || "draft",
-        target: meta?.target,
+      const requestId = createClientId();
+      const placeholder: ConversationState = {
+        clientId: createClientId(),
+        conversationId,
+        expectedTurnCount: meta?.messageCount ?? 0,
+        messages: [],
+        sessionId: createClientId(),
+        status: "completed_text",
         title: meta?.title || t("pages.chat.index.newChat", "New chat"),
-        usage: meta?.usage,
       };
-      activeConversationRef.current = restoredConversation;
-      setActiveConversation(restoredConversation);
+      detailRequestRef.current = requestId;
+      activeConversationRef.current = placeholder;
+      setActiveConversation(placeholder);
+      setDetailLoadState({ status: "loading" });
       setPrompt("");
-      setSession({
-        ...createIdleSession(scopeId),
-        eventCount: messages.flatMap((message) => message.events ?? []).length,
-        runId: meta?.target?.runId || meta?.runId || "",
-        status:
-          meta?.status === "error"
-            ? "error"
-            : messages.length > 0
-              ? "success"
-              : "idle",
-        updatedAt: meta?.updatedAt ? Date.parse(meta.updatedAt) : undefined,
-      });
+      setSession(createIdleSession(scopeId));
+
+      try {
+        const storedMessages = await chatHistoryApi.loadConversation(
+          scopeId,
+          conversationId
+        );
+        if (detailRequestRef.current !== requestId) {
+          return;
+        }
+
+        const restoredConversation: ConversationState = {
+          ...placeholder,
+          messages: hydrateStoredMessages(storedMessages),
+          status: resolveStoredConversationStatus(storedMessages),
+        };
+        activeConversationRef.current = restoredConversation;
+        setActiveConversation(restoredConversation);
+        setDetailLoadState({ status: "idle" });
+        setSession({
+          ...createIdleSession(scopeId),
+          status: storedMessages.length > 0 ? "success" : "idle",
+          updatedAt: meta?.updatedAt ? Date.parse(meta.updatedAt) : undefined,
+        });
+      } catch (error) {
+        if (detailRequestRef.current !== requestId) {
+          return;
+        }
+
+        setDetailLoadState({ message: errorMessage(error), status: "error" });
+      }
     },
-    [conversations, scopeId]
+    [conversations, isStreaming, pendingConversations, scopeId]
   );
 
   const handleNewChat = useCallback(() => {
-    const currentConversation = activeConversationRef.current;
-    if (isEmptyDraftConversation(currentConversation)) {
+    if (isStreaming) {
       return;
     }
 
-    const reusableDraft = conversations.find(isEmptyDraftMeta);
-    if (reusableDraft) {
-      void restoreConversation(reusableDraft.id);
+    const currentConversation = activeConversationRef.current;
+    if (isEmptyDraftConversation(currentConversation)) {
+      setHistoryDrawerOpen(false);
       return;
     }
 
     abortControllerRef.current?.abort();
-    const conversation: ConversationState = {
-      id: createConversationId(),
-      messages: [],
-      status: "draft",
-      title: t("pages.chat.index.newChat", "New chat"),
-    };
+    detailRequestRef.current = createClientId();
+    const conversation = createDraftConversation();
+    activeConversationRef.current = conversation;
+    setActiveConversation(conversation);
+    setDetailLoadState({ status: "idle" });
+    setHistoryDrawerOpen(false);
     setPrompt("");
     setSession(createIdleSession(scopeId));
-    commitConversation(conversation);
-  }, [commitConversation, conversations, restoreConversation, scopeId]);
+  }, [isStreaming, scopeId]);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
-      await restoreConversation(conversationId);
-    },
-    [restoreConversation]
-  );
-
-  const handleDeleteConversation = useCallback(
-    async (conversationId: string) => {
-      if (!scopeId) {
+      if (isStreaming) {
         return;
       }
 
-      setConversations((current) =>
-        current.filter((item) => item.id !== conversationId)
-      );
-      if (activeConversation?.id === conversationId) {
-        activeConversationRef.current = null;
-        setActiveConversation(null);
-        setSession(createIdleSession(scopeId));
+      setHistoryDrawerOpen(false);
+      if (
+        activeConversationRef.current?.conversationId === conversationId &&
+        detailLoadState.status !== "error"
+      ) {
+        return;
       }
 
-      await chatHistoryApi.deleteConversation(scopeId, conversationId);
+      await restoreConversation(conversationId);
     },
-    [activeConversation?.id, scopeId]
+    [detailLoadState.status, isStreaming, restoreConversation]
   );
 
-  const handleRename = useCallback(async () => {
-    if (!scopeId || !renameTarget || !renameValue.trim()) {
+  const handleDeleteConversation = useCallback(async () => {
+    if (!scopeId || !deleteTarget || deletingConversation || isStreaming) {
       return;
     }
 
-    const title = trimTitle(renameValue);
-    await chatHistoryApi.renameConversation(scopeId, renameTarget.id, title);
-    setConversations((current) =>
-      current.map((item) =>
-        item.id === renameTarget.id
-          ? { ...item, title, updatedAt: new Date().toISOString() }
-          : item
-      )
-    );
-    setActiveConversation((current) =>
-      current?.id === renameTarget.id ? { ...current, title } : current
-    );
-    setRenameTarget(null);
-    setRenameValue("");
-  }, [renameTarget, renameValue, scopeId]);
+    setDeleteError("");
+    setDeletingConversation(true);
+    const deleteScopeEpoch = scopeEpochRef.current;
+    try {
+      await chatHistoryApi.deleteConversation(scopeId, deleteTarget.id);
+      if (scopeEpochRef.current !== deleteScopeEpoch) {
+        return;
+      }
+      await queryClient.cancelQueries({ queryKey: ["chat-history", scopeId] });
+      setDeletedConversationIds((current) => {
+        const next = new Set(current);
+        next.add(deleteTarget.id);
+        return next;
+      });
+      setPendingConversations((current) => {
+        const next = new Map(current);
+        next.delete(deleteTarget.id);
+        return next;
+      });
+      reconciliationControllersRef.current.get(deleteTarget.id)?.abort();
+      reconciliationControllersRef.current.delete(deleteTarget.id);
+      if (activeConversationRef.current?.conversationId === deleteTarget.id) {
+        activeConversationRef.current = null;
+        setActiveConversation(null);
+        setDetailLoadState({ status: "idle" });
+        setSession(createIdleSession(scopeId));
+      }
+      setDeleteTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ["chat-history", scopeId] });
+    } catch (error) {
+      if (scopeEpochRef.current !== deleteScopeEpoch) {
+        return;
+      }
+      setDeleteError(errorMessage(error));
+    } finally {
+      if (scopeEpochRef.current === deleteScopeEpoch) {
+        setDeletingConversation(false);
+      }
+    }
+  }, [deleteTarget, deletingConversation, isStreaming, queryClient, scopeId]);
+
+  const reconcileConversation = useCallback(
+    (conversation: ConversationState) => {
+      if (!scopeId || !conversation.conversationId) {
+        return;
+      }
+
+      const conversationId = conversation.conversationId;
+      reconciliationControllersRef.current.get(conversationId)?.abort();
+      const controller = new AbortController();
+      reconciliationControllersRef.current.set(conversationId, controller);
+      const reconciliationScopeEpoch = scopeEpochRef.current;
+      const delaysMs = [0, 300, 900, 1_800];
+
+      void (async () => {
+        for (const delayMs of delaysMs) {
+          try {
+            await abortableDelay(delayMs, controller.signal);
+            const [nextConversations, storedMessages] = await Promise.all([
+              chatHistoryApi.listConversationMetas(scopeId),
+              chatHistoryApi.loadConversation(scopeId, conversationId),
+            ]);
+            if (
+              controller.signal.aborted ||
+              scopeEpochRef.current !== reconciliationScopeEpoch
+            ) {
+              return;
+            }
+
+            queryClient.setQueryData(
+              ["chat-history", scopeId],
+              nextConversations
+            );
+            const serverMeta = nextConversations.find(
+              (item) => item.id === conversationId
+            );
+            const observedExpectedTurn =
+              Boolean(
+                serverMeta &&
+                  serverMeta.messageCount >= conversation.expectedTurnCount
+              ) ||
+              (conversation.latestTurnId
+                ? storedMessages.some(
+                  (message) =>
+                    message.id === `${conversation.latestTurnId}:assistant`
+                )
+                : false);
+            if (!serverMeta || !observedExpectedTurn) {
+              continue;
+            }
+
+            setPendingConversations((current) => {
+              const next = new Map(current);
+              next.delete(conversationId);
+              return next;
+            });
+            setActiveConversation((current) => {
+              if (current?.clientId !== conversation.clientId) {
+                return current;
+              }
+
+              const next = {
+                ...current,
+                expectedTurnCount: serverMeta.messageCount,
+                title: serverMeta.title || current.title,
+              };
+              activeConversationRef.current = next;
+              return next;
+            });
+            return;
+          } catch {
+            if (
+              controller.signal.aborted ||
+              scopeEpochRef.current !== reconciliationScopeEpoch
+            ) {
+              return;
+            }
+          }
+        }
+      })().finally(() => {
+        if (
+          reconciliationControllersRef.current.get(conversationId) === controller
+        ) {
+          reconciliationControllersRef.current.delete(conversationId);
+        }
+      });
+    },
+    [queryClient, scopeId]
+  );
 
   const runChat = useCallback(
     async (conversation: ConversationState, input: string) => {
@@ -600,6 +872,9 @@ const ChatPage: React.FC = () => {
         return;
       }
 
+      const runScopeEpoch = scopeEpochRef.current;
+      detailRequestRef.current = createClientId();
+      setDetailLoadState({ status: "idle" });
       const userMessage = createChatMessage("user", trimmedInput);
       const assistantMessageId = createClientId();
       const assistantMessage: ChatMessage = {
@@ -625,21 +900,23 @@ const ChatPage: React.FC = () => {
         status: nextStatus,
         title,
       };
-      const promptWithHistory = composePromptWithHistory(
-        conversation.messages,
-        trimmedInput
-      );
       const rawFrames: unknown[] = [];
       const accumulator = createRuntimeEventAccumulator();
+      let receivedChatHistoryContext = false;
       let streamingConversation = startedConversation;
 
       abortControllerRef.current?.abort();
+      if (conversation.conversationId) {
+        reconciliationControllersRef.current
+          .get(conversation.conversationId)
+          ?.abort();
+        reconciliationControllersRef.current.delete(conversation.conversationId);
+      }
       const controller = new AbortController();
       abortControllerRef.current = controller;
       setPrompt("");
       activeConversationRef.current = startedConversation;
       setActiveConversation(startedConversation);
-      void persistConversation(startedConversation);
       setSession({
         ...createIdleSession(scopeId),
         status: "running",
@@ -647,11 +924,13 @@ const ChatPage: React.FC = () => {
       });
 
       try {
-        const response = await startChatStream(
+        const response = await startChatStreamWithProjectionRetry(
           {
-            prompt: promptWithHistory,
-            scopeId,
-            sessionId: conversation.id,
+            conversation: conversation.conversationId
+              ? { conversationId: conversation.conversationId }
+              : {},
+            prompt: trimmedInput,
+            sessionId: conversation.sessionId,
           },
           controller.signal
         );
@@ -659,7 +938,37 @@ const ChatPage: React.FC = () => {
         for await (const frame of readChatStreamFrames(response, {
           signal: controller.signal,
         })) {
+          if (scopeEpochRef.current !== runScopeEpoch) {
+            controller.abort();
+            return;
+          }
           rawFrames.push(frame.raw);
+          const chatHistoryContext = extractChatHistoryContext(frame.raw);
+          if (chatHistoryContext) {
+            receivedChatHistoryContext = true;
+            if (chatHistoryContext.scopeId !== scopeId) {
+              throw new Error("Chat History context does not match the active scope.");
+            }
+            if (
+              conversation.conversationId &&
+              chatHistoryContext.conversationId !== conversation.conversationId
+            ) {
+              throw new Error("Chat History returned a different conversation identity.");
+            }
+
+            streamingConversation = {
+              ...streamingConversation,
+              conversationId: chatHistoryContext.conversationId,
+              expectedTurnCount: conversation.expectedTurnCount + 1,
+              latestTurnId: chatHistoryContext.turnId,
+            };
+            activeConversationRef.current = streamingConversation;
+            setActiveConversation((current) =>
+              current?.clientId === conversation.clientId
+                ? streamingConversation
+                : current
+            );
+          }
           if (!frame.event) {
             continue;
           }
@@ -684,13 +993,12 @@ const ChatPage: React.FC = () => {
           streamingConversation = patchedConversation;
           activeConversationRef.current = patchedConversation;
           setActiveConversation((current) => {
-            if (!current || current.id !== conversation.id) {
+            if (!current || current.clientId !== conversation.clientId) {
               return current;
             }
 
             return patchedConversation;
           });
-          void persistConversation(patchedConversation);
           setSession(
             buildSessionFromAccumulator(
               scopeId,
@@ -700,12 +1008,27 @@ const ChatPage: React.FC = () => {
           );
         }
 
+        if (controller.signal.aborted) {
+          throw controller.signal.reason;
+        }
+        if (scopeEpochRef.current !== runScopeEpoch) {
+          return;
+        }
+        if (!receivedChatHistoryContext) {
+          throw new Error(
+            t(
+              "pages.chat.index.missingChatHistoryContext",
+              "Chat completed without a conversation context."
+            )
+          );
+        }
+
         const artifacts = extractChatStreamArtifacts(rawFrames);
         const finalAssistantStatus: ChatMessage["status"] = accumulator.errorText
           ? "error"
           : "complete";
-        const finalTarget = artifacts.target || conversation.target;
-        const finalUsage = artifacts.usage || conversation.usage;
+        const finalTarget = artifacts.target || streamingConversation.target;
+        const finalUsage = artifacts.usage || streamingConversation.usage;
         const finalContent = accumulator.finalOutput || accumulator.assistantText;
         const finalStatus: LocalChatStatus = accumulator.errorText
           ? "error"
@@ -715,8 +1038,8 @@ const ChatPage: React.FC = () => {
               ? "needs_confirmation"
               : "completed_text";
         const finalConversation: ConversationState = {
-          ...startedConversation,
-          messages: startedConversation.messages.map((message) =>
+          ...streamingConversation,
+          messages: streamingConversation.messages.map((message) =>
             message.id === assistantMessageId
               ? {
                   ...message,
@@ -731,8 +1054,17 @@ const ChatPage: React.FC = () => {
           target: finalTarget,
           usage: finalUsage,
         };
-        setActiveConversation(finalConversation);
-        await persistConversation(finalConversation);
+        if (finalConversation.conversationId) {
+          setPendingConversations((current) => {
+            const next = new Map(current);
+            next.set(finalConversation.conversationId as string, finalConversation);
+            return next;
+          });
+        }
+        activeConversationRef.current = finalConversation;
+        setActiveConversation((current) =>
+          current?.clientId === conversation.clientId ? finalConversation : current
+        );
         setSession(
           buildSessionFromAccumulator(
             scopeId,
@@ -740,7 +1072,11 @@ const ChatPage: React.FC = () => {
             accumulator.errorText ? "error" : "success"
           )
         );
+        reconcileConversation(finalConversation);
       } catch (error) {
+        if (scopeEpochRef.current !== runScopeEpoch) {
+          return;
+        }
         const message =
           controller.signal.aborted && !accumulator.errorText
             ? t("pages.chat.index.chatStopped", "Chat stopped.")
@@ -749,8 +1085,8 @@ const ChatPage: React.FC = () => {
               : String(error);
         accumulator.errorText = message;
         const failedConversation: ConversationState = {
-          ...startedConversation,
-          messages: startedConversation.messages.map((entry) =>
+          ...streamingConversation,
+          messages: streamingConversation.messages.map((entry) =>
             entry.id === assistantMessageId
               ? {
                   ...entry,
@@ -760,27 +1096,32 @@ const ChatPage: React.FC = () => {
           ),
           status: "error",
         };
-        setActiveConversation(failedConversation);
-        await persistConversation(failedConversation);
+        if (receivedChatHistoryContext && failedConversation.conversationId) {
+          setPendingConversations((current) => {
+            const next = new Map(current);
+            next.set(failedConversation.conversationId as string, failedConversation);
+            return next;
+          });
+        }
+        activeConversationRef.current = failedConversation;
+        setActiveConversation((current) =>
+          current?.clientId === conversation.clientId ? failedConversation : current
+        );
         setSession(buildSessionFromAccumulator(scopeId, accumulator, "error"));
+        if (failedConversation.conversationId) {
+          reconcileConversation(failedConversation);
+        }
       } finally {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
         }
       }
     },
-    [isStreaming, persistConversation, scopeId]
+    [isStreaming, reconcileConversation, scopeId]
   );
 
   const handleSend = useCallback(() => {
-    const conversation =
-      activeConversation ??
-      ({
-        id: createConversationId(),
-        messages: [],
-        status: "draft",
-        title: t("pages.chat.index.newChat", "New chat"),
-      } satisfies ConversationState);
+    const conversation = activeConversation ?? createDraftConversation();
 
     void runChat(conversation, prompt);
   }, [activeConversation, prompt, runChat]);
@@ -809,110 +1150,131 @@ const ChatPage: React.FC = () => {
   }, [studioJump]);
 
   const messageCount = activeConversation?.messages.length ?? 0;
-
-  return (
-    <AevatarPageShell
-      layoutMode="viewport"
-      pageHeaderRender={false}
-      title={t("pages.chat.index.title", "Chat")}
-    >
+  const historyRail = (
+    <>
       <div
-        className="aevatar-chat-page"
         style={{
-          background: token.colorBgContainer,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadius,
-          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
-          display: "grid",
-          flex: 1,
-          gridTemplateColumns: "260px minmax(0, 1fr)",
-          height: "100%",
-          minHeight: 0,
-          overflow: "hidden",
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          padding: 12,
         }}
       >
-        <aside
-          style={{
-            background: token.colorBgContainer,
-            borderRight: `1px solid ${token.colorBorderSecondary}`,
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-          }}
+        <Button
+          block
+          disabled={isStreaming}
+          icon={<PlusOutlined />}
+          onClick={handleNewChat}
+          style={{ minHeight: 44 }}
+          type="primary"
         >
-          <div
-            style={{
-              borderBottom: `1px solid ${token.colorBorderSecondary}`,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-              padding: 12,
-            }}
-          >
-            <Button
-              block
-              icon={<PlusOutlined />}
-              onClick={handleNewChat}
-              style={{ height: 36 }}
-              type="primary"
-            >
-              {t("pages.chat.index.newChatAction", "New Chat")}
-            </Button>
-            <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
-              {t(
-                "pages.chat.index.historyStoredLocally",
-                "History is stored in this browser."
-              )}
-            </Typography.Text>
-          </div>
+          {t("pages.chat.index.newChatAction", "New Chat")}
+        </Button>
+        <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
+          {t(
+            "pages.chat.index.historyStoredInWorkspace",
+            "History is saved to this workspace."
+          )}
+        </Typography.Text>
+      </div>
 
+      <div
+        aria-busy={conversationsQuery.isLoading}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "auto",
+          padding: "8px 6px 10px",
+        }}
+      >
+        {conversationsQuery.isLoading ? (
           <div
             style={{
-              flex: 1,
-              minHeight: 0,
-              overflow: "auto",
-              padding: "8px 6px 10px",
+              alignItems: "center",
+              display: "flex",
+              justifyContent: "center",
+              minHeight: 120,
             }}
           >
-            {conversations.length === 0 ? (
-              <Empty
-                description={t("pages.chat.index.noChatHistory", "No chat history")}
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                style={{ marginTop: 24 }}
+            <Spin
+              description={t(
+                "pages.chat.index.loadingHistory",
+                "Loading chat history"
+              )}
+              size="small"
+            />
+          </div>
+        ) : conversationsQuery.isError ? (
+          <Alert
+            action={
+              <Button
+                aria-label={t("pages.chat.index.retryHistory", "Retry chat history")}
+                icon={<ReloadOutlined />}
+                onClick={() => void conversationsQuery.refetch()}
+                size="small"
+                type="text"
               />
-            ) : null}
-            <Space direction="vertical" size={6} style={{ width: "100%" }}>
-              {conversations.map((conversation) => {
-                const active = conversation.id === activeConversation?.id;
-                return (
-                  <div
+            }
+            description={errorMessage(conversationsQuery.error)}
+            message={t(
+              "pages.chat.index.failedToLoadHistory",
+              "Chat history could not be loaded"
+            )}
+            showIcon
+            type="error"
+          />
+        ) : visibleConversations.length === 0 ? (
+          <Empty
+            description={t("pages.chat.index.noChatHistory", "No chat history")}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            style={{ marginTop: 24 }}
+          />
+        ) : (
+          <Space direction="vertical" size={6} style={{ width: "100%" }}>
+            {visibleConversations.map((conversation) => {
+              const active =
+                conversation.id === activeConversation?.conversationId;
+              return (
+                <div
+                  className="aevatar-chat-history-item"
+                  key={conversation.id}
+                  style={{
+                    background: active ? token.colorPrimaryBg : "transparent",
+                    border: `1px solid ${
+                      active ? token.colorPrimaryBorder : "transparent"
+                    }`,
+                    borderRadius: token.borderRadius,
+                    boxShadow: active
+                      ? `inset 3px 0 0 ${token.colorPrimary}`
+                      : undefined,
+                    display: "flex",
+                    gap: 4,
+                    padding: 4,
+                    width: "100%",
+                  }}
+                >
+                  <button
+                    aria-current={active ? "page" : undefined}
                     aria-label={conversation.title}
-                    key={conversation.id}
+                    className="aevatar-chat-history-select"
+                    disabled={isStreaming}
                     onClick={() => void handleSelectConversation(conversation.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        void handleSelectConversation(conversation.id);
-                      }
-                    }}
-                    role="button"
                     style={{
-                      background: active ? token.colorPrimaryBg : "transparent",
-                      border: `1px solid ${
-                        active ? token.colorPrimaryBorder : "transparent"
-                      }`,
-                      borderRadius: token.borderRadius,
-                      boxShadow: active
-                        ? `inset 3px 0 0 ${token.colorPrimary}`
-                        : undefined,
-                      cursor: "pointer",
+                      alignItems: "flex-start",
+                      background: "transparent",
+                      border: 0,
+                      color: "inherit",
+                      cursor: isStreaming ? "not-allowed" : "pointer",
                       display: "flex",
+                      flex: 1,
                       gap: 8,
-                      padding: "9px 8px",
+                      minHeight: 40,
+                      minWidth: 0,
+                      padding: "5px 4px",
                       textAlign: "left",
-                      width: "100%",
                     }}
-                    tabIndex={0}
+                    type="button"
                   >
                     <MessageOutlined
                       style={{
@@ -948,53 +1310,80 @@ const ChatPage: React.FC = () => {
                           marginTop: 3,
                         }}
                       >
-                        <span>{formatStatusLabel(conversation.status || "draft")}</span>
+                        <span>
+                          {conversation.liveStatus === "streaming" ||
+                          conversation.liveStatus === "creating"
+                            ? formatStatusLabel(conversation.liveStatus)
+                            : formatTurnCount(conversation.messageCount)}
+                        </span>
                         <span>{formatRelativeTime(conversation.updatedAt)}</span>
                       </span>
                     </span>
-                    <span
-                      style={{
-                        alignItems: "center",
-                        display: "flex",
-                        flex: "0 0 auto",
-                        gap: 2,
+                  </button>
+                  <Tooltip
+                    title={t("pages.chat.index.deleteChat", "Delete {title}", {
+                      title: conversation.title,
+                    })}
+                  >
+                    <Button
+                      aria-label={t("pages.chat.index.deleteChat", "Delete {title}", {
+                        title: conversation.title,
+                      })}
+                      danger
+                      disabled={isStreaming}
+                      icon={<DeleteOutlined />}
+                      onClick={() => {
+                        setDeleteError("");
+                        setDeleteTarget(conversation);
                       }}
-                    >
-                      <Button
-                        aria-label={t("pages.chat.index.renameChat", "Rename {title}", {
-                          title: conversation.title,
-                        })}
-                        icon={<EditOutlined />}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setRenameTarget(conversation);
-                          setRenameValue(conversation.title);
-                        }}
-                        size="small"
-                        type="text"
-                      />
-                      <Button
-                        aria-label={t("pages.chat.index.deleteChat", "Delete {title}", {
-                          title: conversation.title,
-                        })}
-                        danger
-                        icon={<DeleteOutlined />}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void handleDeleteConversation(conversation.id);
-                        }}
-                        size="small"
-                        type="text"
-                      />
-                    </span>
-                  </div>
-                );
-              })}
-            </Space>
-          </div>
+                      style={{ minHeight: 40, minWidth: 40 }}
+                      type="text"
+                    />
+                  </Tooltip>
+                </div>
+              );
+            })}
+          </Space>
+        )}
+      </div>
+    </>
+  );
+
+  return (
+    <AevatarPageShell
+      layoutMode="viewport"
+      pageHeaderRender={false}
+      title={t("pages.chat.index.title", "Chat")}
+    >
+      <div
+        className="aevatar-chat-page"
+        style={{
+          background: token.colorBgContainer,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadius,
+          boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+          display: "grid",
+          flex: 1,
+          height: "100%",
+          minHeight: 0,
+          overflow: "hidden",
+        }}
+      >
+        <aside
+          className="aevatar-chat-history-desktop"
+          style={{
+            background: token.colorBgContainer,
+            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+          }}
+        >
+          {historyRail}
         </aside>
 
         <main
+          className="aevatar-chat-main"
           style={{
             background: token.colorBgContainer,
             display: "flex",
@@ -1003,6 +1392,7 @@ const ChatPage: React.FC = () => {
           }}
         >
           <div
+            className="aevatar-chat-main-header"
             style={{
               alignItems: "center",
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
@@ -1013,7 +1403,19 @@ const ChatPage: React.FC = () => {
               padding: "10px 14px",
             }}
           >
-            <div style={{ minWidth: 0 }}>
+            <Tooltip
+              title={t("pages.chat.index.openHistory", "Open chat history")}
+            >
+              <Button
+                aria-label={t("pages.chat.index.openHistory", "Open chat history")}
+                className="aevatar-chat-history-trigger"
+                icon={<HistoryOutlined />}
+                onClick={() => setHistoryDrawerOpen(true)}
+                style={{ minHeight: 44, minWidth: 44 }}
+                type="text"
+              />
+            </Tooltip>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <Typography.Text
                 strong
                 style={{
@@ -1042,7 +1444,7 @@ const ChatPage: React.FC = () => {
                   : t("pages.chat.index.resolvingScope", "Resolving scope")}
               </Typography.Text>
             </div>
-            <Space>
+            <Space className="aevatar-chat-main-actions" wrap>
               {activeConversation ? (
                 <Tag color={resolveStatusTone(activeConversation.status)}>
                   {formatStatusLabel(activeConversation.status)}
@@ -1078,7 +1480,50 @@ const ChatPage: React.FC = () => {
               padding: 16,
             }}
           >
-            {messageCount === 0 ? (
+            {detailLoadState.status === "loading" ? (
+              <div
+                aria-live="polite"
+                style={{
+                  alignItems: "center",
+                  display: "flex",
+                  flex: 1,
+                  justifyContent: "center",
+                  minHeight: 180,
+                }}
+              >
+                <Spin
+                  description={t(
+                    "pages.chat.index.loadingConversation",
+                    "Loading conversation"
+                  )}
+                />
+              </div>
+            ) : detailLoadState.status === "error" ? (
+              <Alert
+                action={
+                  activeConversation?.conversationId ? (
+                    <Button
+                      icon={<ReloadOutlined />}
+                      onClick={() =>
+                        void restoreConversation(
+                          activeConversation.conversationId as string
+                        )
+                      }
+                      size="small"
+                    >
+                      {t("pages.chat.index.retry", "Retry")}
+                    </Button>
+                  ) : null
+                }
+                description={detailLoadState.message}
+                message={t(
+                  "pages.chat.index.failedToLoadConversation",
+                  "Conversation could not be loaded"
+                )}
+                showIcon
+                type="error"
+              />
+            ) : messageCount === 0 ? (
               <div
                 style={{
                   alignItems: "center",
@@ -1185,7 +1630,7 @@ const ChatPage: React.FC = () => {
               </Space>
             ) : null}
             <ChatInput
-              disabled={!scopeId}
+              disabled={!scopeId || detailLoadState.status === "loading"}
               isStreaming={isStreaming}
               onChange={setPrompt}
               onSend={handleSend}
@@ -1200,24 +1645,62 @@ const ChatPage: React.FC = () => {
         </main>
       </div>
 
-      <Modal
+      <Drawer
+        className="aevatar-chat-history-drawer"
         destroyOnHidden
-        okButtonProps={{ disabled: !renameValue.trim() }}
-        onCancel={() => {
-          setRenameTarget(null);
-          setRenameValue("");
-        }}
-        onOk={() => void handleRename()}
-        open={Boolean(renameTarget)}
-        title={t("pages.chat.index.renameChatTitle", "Rename chat")}
+        onClose={() => setHistoryDrawerOpen(false)}
+        open={historyDrawerOpen}
+        placement="left"
+        size="min(320px, calc(100vw - 48px))"
+        title={t("pages.chat.index.historyTitle", "Chat history")}
       >
-        <Input
-          aria-label={t("pages.chat.index.conversationTitle", "Conversation title")}
-          autoFocus
-          onChange={(event) => setRenameValue(event.target.value)}
-          onPressEnter={() => void handleRename()}
-          value={renameValue}
-        />
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            height: "100%",
+            minHeight: 0,
+          }}
+        >
+          {historyRail}
+        </div>
+      </Drawer>
+
+      <Modal
+        cancelButtonProps={{ disabled: deletingConversation }}
+        cancelText={t("pages.chat.index.cancel", "Cancel")}
+        confirmLoading={deletingConversation}
+        destroyOnHidden
+        okButtonProps={{ danger: true, disabled: isStreaming }}
+        onCancel={() => {
+          if (!deletingConversation) {
+            setDeleteTarget(null);
+            setDeleteError("");
+          }
+        }}
+        onOk={() => void handleDeleteConversation()}
+        okText={t("pages.chat.index.delete", "Delete")}
+        open={Boolean(deleteTarget)}
+        title={t("pages.chat.index.deleteChatTitle", "Delete conversation?")}
+      >
+        <Typography.Paragraph>
+          {t(
+            "pages.chat.index.deleteChatDescription",
+            'Delete "{title}" permanently? This conversation cannot be recovered.',
+            { title: deleteTarget?.title || "" }
+          )}
+        </Typography.Paragraph>
+        {deleteError ? (
+          <Alert
+            description={deleteError}
+            message={t(
+              "pages.chat.index.deleteChatFailed",
+              "Conversation could not be deleted"
+            )}
+            showIcon
+            type="error"
+          />
+        ) : null}
       </Modal>
     </AevatarPageShell>
   );
