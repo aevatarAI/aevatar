@@ -6,8 +6,8 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ContentArtifacts;
-using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.DependencyInjection;
 using Aevatar.Studio.Projection.Orchestration;
 using Aevatar.Studio.Projection.Projectors;
@@ -193,6 +193,191 @@ public sealed class ContentArtifactProjectionTests
             .WithMessage("*not authorized to read*");
     }
 
+    [Fact]
+    public async Task GetRevisionContentAsync_ShouldReadAndVerifyBackingContent()
+    {
+        var document = ContentArtifactCurrentStateProjector.ToDocument(
+            ActorId,
+            new StateEvent { Version = 7, EventId = "event-7" },
+            BuildState(DateTimeOffset.Parse("2026-07-20T09:00:00Z")),
+            DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        var backed = document.Revisions[1];
+        backed.InlineContent = ByteString.Empty;
+        backed.ContentLocationKind = "backing_object";
+        backed.BackingProvider = "workflow-file";
+        backed.BackingObjectKey = "runs/run-1/revision-2.md";
+        var backingContentPort = new RecordingBackingContentPort("revision two");
+        var queryPort = new ProjectionContentArtifactQueryPort(
+            new RecordingDocumentReader(document),
+            backingContentPort);
+
+        var result = await queryPort.GetRevisionContentAsync(
+            ScopeId,
+            ArtifactId,
+            "revision-2",
+            Principal("reader-1"));
+
+        result.Content.Should().Equal(ByteString.CopyFromUtf8("revision two").ToByteArray());
+        backingContentPort.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(new
+        {
+            ScopeId,
+            RunId = "run-1",
+        });
+        backingContentPort.Requests[0].Reference.Provider.Should().Be("workflow-file");
+        backingContentPort.Requests[0].Reference.ObjectKey.Should().Be("runs/run-1/revision-2.md");
+    }
+
+    [Fact]
+    public async Task GetAndContentRead_ShouldFailClosedForMismatchedOrUnavailableSnapshots()
+    {
+        var document = ContentArtifactCurrentStateProjector.ToDocument(
+            ActorId,
+            new StateEvent { Version = 7, EventId = "event-7" },
+            BuildState(DateTimeOffset.Parse("2026-07-20T09:00:00Z")),
+            DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        var mismatched = document.Clone();
+        mismatched.ScopeId = "scope-other";
+        var mismatchedPort = new ProjectionContentArtifactQueryPort(new RecordingDocumentReader(mismatched));
+
+        (await mismatchedPort.GetAsync(ScopeId, ArtifactId)).Should().BeNull();
+        var mismatchedRead = () => mismatchedPort.GetRevisionContentAsync(
+            ScopeId,
+            ArtifactId,
+            "revision-1",
+            Principal("owner-1"));
+        await mismatchedRead.Should().ThrowAsync<ContentArtifactNotFoundException>();
+
+        var tombstoned = document.Clone();
+        tombstoned.LifecycleStatus = ContentArtifactLifecycleStatusNames.Tombstoned;
+        var tombstonedRead = () => new ProjectionContentArtifactQueryPort(new RecordingDocumentReader(tombstoned))
+            .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-1", Principal("owner-1"));
+        await tombstonedRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
+            .WithMessage("*artifact is tombstoned*");
+
+        var missingRevisionRead = () => new ProjectionContentArtifactQueryPort(new RecordingDocumentReader(document))
+            .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-missing", Principal("owner-1"));
+        await missingRevisionRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
+            .WithMessage("*revision was not found*");
+
+        var redacted = document.Clone();
+        redacted.Revisions[0].Availability = ContentArtifactRevisionAvailabilityNames.Redacted;
+        var redactedRead = () => new ProjectionContentArtifactQueryPort(new RecordingDocumentReader(redacted))
+            .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-1", Principal("owner-1"));
+        await redactedRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
+            .WithMessage("*redacted*");
+
+        var missingLocation = document.Clone();
+        missingLocation.Revisions[0].ContentLocationKind = string.Empty;
+        var missingLocationRead = () => new ProjectionContentArtifactQueryPort(
+                new RecordingDocumentReader(missingLocation))
+            .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-1", Principal("owner-1"));
+        await missingLocationRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
+            .WithMessage("*content location is unavailable*");
+
+        var missingProvider = document.Clone();
+        missingProvider.Revisions[0].ContentLocationKind = "backing_object";
+        var missingProviderRead = () => new ProjectionContentArtifactQueryPort(
+                new RecordingDocumentReader(missingProvider))
+            .GetRevisionContentAsync(ScopeId, ArtifactId, "revision-1", Principal("owner-1"));
+        await missingProviderRead.Should().ThrowAsync<ContentArtifactContentUnavailableException>()
+            .WithMessage("*backing content provider is unavailable*");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldIgnoreEnvelopesWithoutCommittedContentArtifactState()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ContentArtifactCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-20T10:00:00Z")));
+
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = ActorId,
+                ProjectionKind = ContentArtifactGAgent.ProjectionKind,
+            },
+            new EventEnvelope { Payload = Any.Pack(new StringValue { Value = "not committed state" }) });
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ToDocument_ShouldMapAllContentArtifactWireVariants()
+    {
+        var observedAt = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        var state = BuildState(observedAt.AddMinutes(-5));
+        state.AccessPolicy = null;
+        state.RetentionPolicy = null;
+        state.Kind = ContentArtifactKind.Text;
+        state.LifecycleStatus = ContentArtifactLifecycleStatus.Tombstoned;
+        state.Revisions["revision-1"].Availability = ContentArtifactRevisionAvailability.Redacted;
+        state.Revisions["revision-1"].Content = null;
+        state.Revisions["revision-1"].Provenance = null;
+        state.Revisions["revision-2"].Availability = ContentArtifactRevisionAvailability.RetentionExpired;
+        state.Revisions["revision-2"].Content = new ContentArtifactRevisionContent
+        {
+            BackingObject = new ContentArtifactBackingObjectReference
+            {
+                Provider = "workflow-file",
+                ObjectKey = "runs/run-1/revision-2.md",
+            },
+        };
+
+        var document = ContentArtifactCurrentStateProjector.ToDocument(
+            ActorId,
+            new StateEvent { Version = 8, EventId = "event-8" },
+            state,
+            observedAt);
+
+        document.Kind.Should().Be("text");
+        document.LifecycleStatus.Should().Be(ContentArtifactLifecycleStatusNames.Tombstoned);
+        document.OwnerPrincipalId.Should().BeEmpty();
+        document.RetentionPolicyId.Should().BeEmpty();
+        document.Revisions[0].Availability.Should().Be(ContentArtifactRevisionAvailabilityNames.Redacted);
+        document.Revisions[0].ContentLocationKind.Should().BeEmpty();
+        document.Revisions[0].ProvenanceScopeId.Should().BeEmpty();
+        document.Revisions[1].Availability.Should().Be(ContentArtifactRevisionAvailabilityNames.RetentionExpired);
+        document.Revisions[1].ContentLocationKind.Should().Be("backing_object");
+
+        state.Kind = ContentArtifactKind.StructuredDocument;
+        ContentArtifactCurrentStateProjector.ToDocument(ActorId, new StateEvent(), state, observedAt)
+            .Kind.Should().Be("structured_document");
+        state.Kind = ContentArtifactKind.OtherContent;
+        ContentArtifactCurrentStateProjector.ToDocument(ActorId, new StateEvent(), state, observedAt)
+            .Kind.Should().Be("other_content");
+        state.Kind = ContentArtifactKind.Unspecified;
+        state.LifecycleStatus = ContentArtifactLifecycleStatus.Unspecified;
+        state.Revisions["revision-1"].Availability = ContentArtifactRevisionAvailability.Unspecified;
+        var unspecified = ContentArtifactCurrentStateProjector.ToDocument(
+            ActorId,
+            new StateEvent(),
+            state,
+            observedAt);
+        unspecified.Kind.Should().BeEmpty();
+        unspecified.LifecycleStatus.Should().BeEmpty();
+        unspecified.Revisions[0].Availability.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void CurrentStateDocument_ShouldExposeProjectionIdentityAndAuthoritativeVersion()
+    {
+        var updatedAt = DateTimeOffset.Parse("2026-07-20T10:00:00Z");
+        IProjectionReadModel readModel = new ContentArtifactCurrentStateDocument
+        {
+            Id = ActorId,
+            ActorId = ActorId,
+            StateVersion = 9,
+            LastEventId = "event-9",
+            UpdatedAt = Timestamp.FromDateTimeOffset(updatedAt),
+        };
+
+        readModel.ActorId.Should().Be(ActorId);
+        readModel.StateVersion.Should().Be(9);
+        readModel.LastEventId.Should().Be("event-9");
+        readModel.UpdatedAt.Should().Be(updatedAt);
+    }
+
     private static ContentArtifactState BuildState(DateTimeOffset updatedAt)
     {
         var firstContent = ByteString.CopyFromUtf8("revision one");
@@ -354,5 +539,23 @@ public sealed class ContentArtifactProjectionTests
             ContentArtifactBackingContentRequest request,
             CancellationToken ct = default) =>
             throw new FileNotFoundException("missing backing content");
+    }
+
+    private sealed class RecordingBackingContentPort(string content) : IContentArtifactBackingContentPort
+    {
+        public List<ContentArtifactBackingContentRequest> Requests { get; } = [];
+
+        public Task<ContentArtifactBackingContentDescriptor> DescribeAsync(
+            ContentArtifactBackingContentRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<Stream> OpenReadAsync(
+            ContentArtifactBackingContentRequest request,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult<Stream>(new MemoryStream(ByteString.CopyFromUtf8(content).ToByteArray()));
+        }
     }
 }

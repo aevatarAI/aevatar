@@ -74,6 +74,94 @@ public sealed class ServiceRunContentArtifactTests
     }
 
     [Fact]
+    public async Task AttachResultArtifacts_ShouldRejectConflictingRevisionMediaType()
+    {
+        var actor = CreateAgent(new InMemoryEventStore());
+        await actor.ActivateAsync();
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = BuildRecord() });
+        var reference = BuildReference("artifact-1", "revision-1", 'a');
+        await actor.HandleAttachResultArtifactsAsync(new AttachServiceRunResultArtifactsRequested
+        {
+            RunId = "run-1",
+            ExpectedStateVersion = 1,
+            ResultArtifacts = { reference },
+        });
+        var conflicting = reference.Clone();
+        conflicting.MediaType = "application/json";
+
+        var act = () => actor.HandleAttachResultArtifactsAsync(new AttachServiceRunResultArtifactsRequested
+        {
+            RunId = "run-1",
+            ExpectedStateVersion = 2,
+            ResultArtifacts = { conflicting },
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*artifact-1*revision-1*conflicting media type*");
+    }
+
+    [Fact]
+    public async Task AttachResultArtifacts_ShouldValidateReferenceFieldsBeforePersisting()
+    {
+        var actor = CreateAgent(new InMemoryEventStore());
+        await actor.ActivateAsync();
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = BuildRecord() });
+
+        async Task AssertRejectedAsync(ContentArtifactReference reference, string expectedMessage)
+        {
+            var act = () => actor.HandleAttachResultArtifactsAsync(new AttachServiceRunResultArtifactsRequested
+            {
+                RunId = "run-1",
+                ExpectedStateVersion = 1,
+                ResultArtifacts = { reference },
+            });
+            await act.Should().ThrowAsync<InvalidOperationException>().WithMessage(expectedMessage);
+        }
+
+        var missingArtifact = BuildReference(string.Empty, "revision-1", 'a');
+        await AssertRejectedAsync(missingArtifact, "*artifact_id is required*");
+        var missingRevision = BuildReference("artifact-1", string.Empty, 'a');
+        await AssertRejectedAsync(missingRevision, "*revision_id is required*");
+        var missingMediaType = BuildReference("artifact-1", "revision-1", 'a');
+        missingMediaType.MediaType = string.Empty;
+        await AssertRejectedAsync(missingMediaType, "*media_type is required*");
+        var shortHash = BuildReference("artifact-1", "revision-1", 'a');
+        shortHash.ContentHash = "abc";
+        await AssertRejectedAsync(shortHash, "*content_hash must be a SHA-256 hex digest*");
+        var invalidHex = BuildReference("artifact-1", "revision-1", 'z');
+        await AssertRejectedAsync(invalidHex, "*content_hash must be a SHA-256 hex digest*");
+
+        actor.State.LastAppliedEventVersion.Should().Be(1);
+        actor.State.Record!.ResultArtifacts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AttachResultArtifacts_ShouldRejectUnregisteredOrMismatchedRunIdentity()
+    {
+        var actor = CreateAgent(new InMemoryEventStore());
+        await actor.ActivateAsync();
+        var reference = BuildReference("artifact-1", "revision-1", 'a');
+        var unregistered = () => actor.HandleAttachResultArtifactsAsync(new AttachServiceRunResultArtifactsRequested
+        {
+            RunId = "run-1",
+            ExpectedStateVersion = 0,
+            ResultArtifacts = { reference },
+        });
+        await unregistered.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*no registered run; result artifact attachment rejected*");
+
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = BuildRecord() });
+        var mismatched = () => actor.HandleAttachResultArtifactsAsync(new AttachServiceRunResultArtifactsRequested
+        {
+            RunId = "run-other",
+            ExpectedStateVersion = 1,
+            ResultArtifacts = { reference },
+        });
+        await mismatched.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot apply result artifact attachment for run 'run-other'*");
+    }
+
+    [Fact]
     public async Task TerminalStatus_ShouldPreserveTypedResultReferencesWithoutEmbeddingContent()
     {
         var actor = CreateAgent(new InMemoryEventStore());
