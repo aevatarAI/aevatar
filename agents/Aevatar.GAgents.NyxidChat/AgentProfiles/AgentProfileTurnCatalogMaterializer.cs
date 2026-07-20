@@ -281,7 +281,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
         }
 
         var parsed = _frontmatterParser.Parse(skillMarkdown);
-        if (profile.MaxSelectedSkillBytes < 0)
+        if (string.IsNullOrWhiteSpace(parsed.Body) ||
+            (!string.IsNullOrWhiteSpace(parsed.Name) &&
+             !string.Equals(parsed.Name, candidate.ExpectedSkillName, StringComparison.Ordinal)))
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid,
