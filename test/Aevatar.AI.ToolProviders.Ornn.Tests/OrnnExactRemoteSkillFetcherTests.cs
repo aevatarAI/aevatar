@@ -3,6 +3,7 @@ using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Microsoft.Extensions.Time.Testing;
+using System.Net;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -144,6 +145,37 @@ public sealed class OrnnExactRemoteSkillFetcherTests
 
         result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.InvalidResponse);
         handler.Requests.Should().HaveCount(2);
+    }
+
+    [Theory]
+    [InlineData(true, HttpStatusCode.Forbidden, ExactRemoteSkillFetchFailureCode.AccessDenied)]
+    [InlineData(false, HttpStatusCode.NotFound, ExactRemoteSkillFetchFailureCode.NotFound)]
+    public async Task FetchAsync_ExactEndpointProxyFailure_ShouldPreserveTypedFailureWithoutFallback(
+        bool failDetailEndpoint,
+        HttpStatusCode statusCode,
+        ExactRemoteSkillFetchFailureCode expectedFailureCode)
+    {
+        var handler = failDetailEndpoint
+            ? new OrnnTestHttpMessageHandler(
+                _ => OrnnTestHttpMessageHandler.JsonResponse("{\"error\":\"denied\"}", statusCode))
+            : new OrnnTestHttpMessageHandler(
+                _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson()),
+                _ => OrnnTestHttpMessageHandler.JsonResponse("{\"error\":\"missing\"}", statusCode));
+
+        var result = await CreateFetcher(handler).FetchAsync("token", ExactRef());
+
+        result.FailureCode.Should().Be(expectedFailureCode);
+        var expectedUris = failDetailEndpoint
+            ? new[]
+            {
+                $"https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/{SkillGuid}?version=1.2",
+            }
+            : new[]
+            {
+                $"https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/{SkillGuid}?version=1.2",
+                $"https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/{SkillGuid}/json?version=1.2",
+            };
+        handler.Requests.Select(request => request.RequestUri!.AbsoluteUri).Should().Equal(expectedUris);
     }
 
     [Fact]

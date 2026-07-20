@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.AgentProfiles;
@@ -77,6 +78,59 @@ public sealed class AgentProfileTurnRuntimeTests
         request.Tools.Should().ContainSingle(tool => tool.Name == "visible");
         hidden.ExecuteCount.Should().Be(0);
         visible.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MainTurn_LlmMiddlewareShouldNotRestoreToolsOutsideCatalog()
+    {
+        var visible = new CountingTool("visible");
+        var hidden = new CountingTool("hidden");
+        var tools = NewToolManager(visible, hidden);
+        var provider = new RecordingProvider();
+        var runtime = NewRuntime(
+            provider,
+            tools,
+            [new ExpandingRequestMiddleware(tools.GetAll())]);
+
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["visible"])));
+
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle(tool => tool.Name == "visible");
+        request.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
+        request.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task StepTurn_LlmMiddlewareShouldNotRestoreToolsOutsideCatalog()
+    {
+        var visible = new CountingTool("visible");
+        var hidden = new CountingTool("hidden");
+        var tools = NewToolManager(visible, hidden);
+        var provider = new RecordingProvider();
+        var runtime = NewRuntime(
+            provider,
+            tools,
+            [new ExpandingRequestMiddleware(tools.GetAll())]);
+        var executor = runtime.CreateStepExecutor(NewCatalog(["visible"]));
+        var request = executor.BuildLlmStepRequest(
+            [ChatMessage.User("run")],
+            requestId: null,
+            metadata: null,
+            toolContext: null,
+            llmControl: null,
+            round: 0,
+            finalNoTools: false);
+
+        await executor.ExecuteLlmStepAsync(
+            provider,
+            request,
+            onChunkAsync: null,
+            CancellationToken.None);
+
+        var providerRequest = provider.Requests.Should().ContainSingle().Subject;
+        providerRequest.Tools.Should().ContainSingle(tool => tool.Name == "visible");
+        providerRequest.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
+        providerRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
     }
 
     [Fact]
@@ -170,7 +224,10 @@ public sealed class AgentProfileTurnRuntimeTests
         return manager;
     }
 
-    private static ChatRuntime NewRuntime(ILLMProvider provider, ToolManager tools)
+    private static ChatRuntime NewRuntime(
+        ILLMProvider provider,
+        ToolManager tools,
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
     {
         var history = new ChatHistory();
         return new ChatRuntime(
@@ -182,7 +239,8 @@ public sealed class AgentProfileTurnRuntimeTests
             {
                 Messages = history.BuildMessages("system"),
                 Tools = tools.GetAll(),
-            });
+            },
+            llmMiddlewares: llmMiddlewares);
     }
 
     private static async Task DrainAsync(IAsyncEnumerable<LLMStreamChunk> stream)
@@ -219,6 +277,20 @@ public sealed class AgentProfileTurnRuntimeTests
             await Task.Yield();
             yield return new LLMStreamChunk { DeltaContent = "done" };
             yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class ExpandingRequestMiddleware(IReadOnlyList<IAgentTool> tools) : ILLMCallMiddleware
+    {
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            context.Request = new LLMRequest
+            {
+                Messages = context.Request.Messages,
+                ToolContext = AgentToolExecutionContext.Empty,
+                Tools = tools,
+            };
+            await next();
         }
     }
 

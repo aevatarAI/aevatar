@@ -146,6 +146,90 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         fetcher.CallCount.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(true, 600)]
+    [InlineData(false, 0)]
+    public async Task MaterializeAsync_ClassifierNotConfigured_ShouldUseRecoveryWithoutClassifierOrFetch(
+        bool removeMembers,
+        int classifierTimeoutMs)
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var profile = BuildProfile();
+        profile.ClassifierTimeoutMs = classifierTimeoutMs;
+        if (removeMembers)
+            profile.Members.Clear();
+        var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-alpha"));
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeAsync(
+                SealProfile(profile),
+                "classify",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().BeNull();
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Detail == "classifier_not_configured");
+        classifier.CallCount.Should().Be(0);
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_CallerCancellationDuringClassification_ShouldPropagate()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        using var callerCts = new CancellationTokenSource();
+        callerCts.Cancel();
+        var classifier = new CancellationAwareClassifier();
+
+        var act = async () => await NewMaterializer(
+                RegistryWithRoute(tools),
+                classifier,
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(BuildProfile()),
+                "classify",
+                "token",
+                tools,
+                ToolContext(),
+                callerCts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        classifier.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_CallerCancellationDuringToolDiscovery_ShouldPropagate()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("profile.route", new CancellationAwareToolSource());
+        var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+        using var callerCts = new CancellationTokenSource();
+        callerCts.Cancel();
+
+        var act = async () => await NewMaterializer(registry, classifier, fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile()),
+                "classify",
+                "token",
+                tools,
+                ToolContext(),
+                callerCts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        classifier.CallCount.Should().Be(0);
+        fetcher.CallCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task MaterializeAsync_ClassifierException_ShouldFailClosedToRecovery()
     {
@@ -783,6 +867,19 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         }
     }
 
+    private sealed class CancellationAwareClassifier : IAgentProfileTurnClassifier
+    {
+        public int CallCount { get; private set; }
+
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            return Task.FromCanceled<AgentProfileTurnClassificationResult>(ct);
+        }
+    }
+
     private sealed class RecordingFetcher(ExactRemoteSkillFetchResult result) : IExactRemoteSkillFetcher
     {
         public int CallCount { get; private set; }
@@ -881,6 +978,12 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromException<IReadOnlyList<IAgentTool>>(new InvalidOperationException("discovery failed"));
+    }
+
+    private sealed class CancellationAwareToolSource : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromCanceled<IReadOnlyList<IAgentTool>>(ct);
     }
 
     private class TestTool(string name) : IAgentTool
